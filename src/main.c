@@ -1,0 +1,2600 @@
+#include "game.h"
+#include "render.h"
+#include "vg.h"
+#include "vg_text_fx.h"
+#include "wavetable_poly_synth_lib.h"
+
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_vulkan.h>
+#include <vulkan/vulkan.h>
+
+#include <stdint.h>
+#include <math.h>
+#include <limits.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+#ifndef V_TYPE_HAS_POST_SHADERS
+#define V_TYPE_HAS_POST_SHADERS 0
+#endif
+
+#if V_TYPE_HAS_POST_SHADERS
+#include "demo_bloom_frag_spv.h"
+#include "demo_composite_frag_spv.h"
+#include "demo_fullscreen_vert_spv.h"
+#endif
+
+#define APP_WIDTH 1280
+#define APP_HEIGHT 720
+#define APP_MAX_SWAPCHAIN_IMAGES 8
+#define ACOUSTICS_SLOTS_PATH "acoustics_slots.cfg"
+#define SETTINGS_PATH "settings.cfg"
+#define ACOUSTICS_SCOPE_HISTORY_SAMPLES 8192
+
+typedef struct video_resolution {
+    int w;
+    int h;
+} video_resolution;
+
+static const video_resolution k_video_resolutions[VIDEO_MENU_RES_COUNT] = {
+    {1280, 720},
+    {1366, 768},
+    {1600, 900},
+    {1920, 1080},
+    {2560, 1440},
+    {3840, 2160}
+};
+
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
+typedef struct post_pc {
+    float p0[4]; /* texel.x, texel.y, bloom_strength, bloom_radius */
+    float p1[4]; /* vignette, barrel, scanline, noise */
+    float p2[4]; /* time_s, ui_enable, ui_x, ui_y */
+    float p3[4]; /* ui_w, ui_h, pad0, pad1 */
+} post_pc;
+
+typedef struct app {
+    SDL_Window* window;
+
+    VkInstance instance;
+    VkSurfaceKHR surface;
+    VkPhysicalDevice physical_device;
+    VkDevice device;
+    VkQueue graphics_queue;
+    VkQueue present_queue;
+    uint32_t graphics_queue_family;
+    uint32_t present_queue_family;
+
+    VkSwapchainKHR swapchain;
+    VkFormat swapchain_format;
+    VkExtent2D swapchain_extent;
+    uint32_t swapchain_image_count;
+    VkImage swapchain_images[APP_MAX_SWAPCHAIN_IMAGES];
+    VkImageView swapchain_image_views[APP_MAX_SWAPCHAIN_IMAGES];
+
+    VkRenderPass present_render_pass;
+    VkFramebuffer present_framebuffers[APP_MAX_SWAPCHAIN_IMAGES];
+
+    VkImage scene_image;
+    VkDeviceMemory scene_memory;
+    VkImageView scene_view;
+    VkFramebuffer scene_fb;
+    VkRenderPass scene_render_pass;
+
+    VkImage bloom_image;
+    VkDeviceMemory bloom_memory;
+    VkImageView bloom_view;
+    VkFramebuffer bloom_fb;
+    VkRenderPass bloom_render_pass;
+
+    VkSampler post_sampler;
+    VkDescriptorSetLayout post_desc_layout;
+    VkDescriptorPool post_desc_pool;
+    VkDescriptorSet post_desc_set;
+    VkPipelineLayout post_layout;
+    VkPipeline bloom_pipeline;
+    VkPipeline composite_pipeline;
+
+    VkCommandPool command_pool;
+    VkCommandBuffer command_buffers[APP_MAX_SWAPCHAIN_IMAGES];
+
+    VkSemaphore image_available;
+    VkSemaphore render_finished;
+    VkFence in_flight;
+
+    vg_context* vg;
+    game_state game;
+    vg_text_fx_typewriter wave_tty;
+    SDL_AudioDeviceID audio_dev;
+    SDL_AudioSpec audio_have;
+    int audio_ready;
+    char wave_tty_visible[640];
+    wtp_instrument_t weapon_synth;
+    wtp_instrument_t thruster_synth;
+    wtp_ringbuffer_t beep_rb;
+    wtp_ringbuffer_t scope_rb;
+    float* audio_mix_tmp_a;
+    float* audio_mix_tmp_b;
+    uint32_t audio_mix_tmp_cap;
+    float scope_window[ACOUSTICS_SCOPE_SAMPLES];
+    float scope_history[ACOUSTICS_SCOPE_HISTORY_SAMPLES];
+    uint32_t fire_note_id;
+    int32_t thruster_note_id;
+    uint32_t audio_rng;
+    atomic_uint pending_fire_events;
+    atomic_uint pending_thruster_tests;
+    atomic_int thrust_gate;
+    atomic_int audio_weapon_level;
+    uint32_t thruster_test_frames_left;
+    int force_clear_frames;
+    int show_crt_ui;
+    int crt_ui_selected;
+    int crt_ui_mouse_drag;
+    int show_acoustics;
+    int show_video_menu;
+    int video_menu_selected;
+    int video_menu_fullscreen;
+    int palette_mode;
+    float video_dial_01[VIDEO_MENU_DIAL_COUNT];
+    int video_menu_dial_drag;
+    float video_menu_dial_drag_start_y;
+    float video_menu_dial_drag_start_value;
+    int swapchain_needs_recreate;
+    int acoustics_selected;
+    int acoustics_fire_slot_selected;
+    int acoustics_thr_slot_selected;
+    uint8_t acoustics_fire_slot_defined[ACOUSTICS_SLOT_COUNT];
+    uint8_t acoustics_thr_slot_defined[ACOUSTICS_SLOT_COUNT];
+    float acoustics_fire_slots[ACOUSTICS_SLOT_COUNT][8];
+    float acoustics_thr_slots[ACOUSTICS_SLOT_COUNT][6];
+    int acoustics_mouse_drag;
+    float acoustics_value_01[ACOUSTICS_SLIDER_COUNT];
+    int thruster_note_on;
+} app;
+
+static int check_vk(VkResult r, const char* what) {
+    if (r != VK_SUCCESS) {
+        fprintf(stderr, "%s failed (VkResult=%d)\n", what, (int)r);
+        return 0;
+    }
+    return 1;
+}
+
+static float clampf(float v, float lo, float hi) {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+static float lerpf(float a, float b, float t) {
+    return a + (b - a) * t;
+}
+
+static float rand01_from_state(uint32_t* s) {
+    *s = (*s * 1664525u) + 1013904223u;
+    return (float)((*s >> 8) & 0x00ffffffu) / 16777215.0f;
+}
+
+static int resolution_index_from_wh(int w, int h) {
+    for (int i = 0; i < VIDEO_MENU_RES_COUNT; ++i) {
+        if (k_video_resolutions[i].w == w && k_video_resolutions[i].h == h) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static void map_mouse_to_scene_coords(const app* a, int mouse_x, int mouse_y, float* out_x, float* out_y);
+
+static void video_menu_dial_geometry(const app* a, vg_vec2 centers[VIDEO_MENU_DIAL_COUNT], float* radius_px) {
+    const float w = (float)a->swapchain_extent.width;
+    const float h = (float)a->swapchain_extent.height;
+    const vg_rect panel = {w * 0.09f, h * 0.08f, w * 0.82f, h * 0.84f};
+    const vg_rect lab = {panel.x + panel.w * 0.42f, panel.y + panel.h * 0.07f, panel.w * 0.54f, panel.h * 0.86f};
+    *radius_px = lab.w * 0.070f;
+    for (int i = 0; i < VIDEO_MENU_DIAL_COUNT; ++i) {
+        const int row = i / 3;
+        const int col = i % 3;
+        const float cx = lab.x + lab.w * (0.18f + 0.32f * (float)col);
+        const float cy = lab.y + lab.h * (0.72f - 0.29f * (float)row);
+        centers[i] = (vg_vec2){cx, cy};
+    }
+}
+
+static void apply_video_lab_controls(app* a) {
+    if (!a || !a->vg) {
+        return;
+    }
+    vg_crt_profile crt;
+    vg_get_crt_profile(a->vg, &crt);
+    crt.bloom_strength = lerpf(0.20f, 1.80f, clampf(a->video_dial_01[0], 0.0f, 1.0f));
+    crt.persistence_decay = lerpf(0.70f, 0.92f, clampf(a->video_dial_01[1], 0.0f, 1.0f));
+    crt.jitter_amount = lerpf(0.0f, 0.30f, clampf(a->video_dial_01[2], 0.0f, 1.0f));
+    crt.flicker_amount = lerpf(0.0f, 0.18f, clampf(a->video_dial_01[3], 0.0f, 1.0f));
+    crt.scanline_strength = lerpf(0.02f, 0.42f, clampf(a->video_dial_01[4], 0.0f, 1.0f));
+    crt.noise_strength = lerpf(0.0f, 0.12f, clampf(a->video_dial_01[5], 0.0f, 1.0f));
+    crt.vignette_strength = lerpf(0.0f, 0.45f, clampf(a->video_dial_01[6], 0.0f, 1.0f));
+    crt.barrel_distortion = lerpf(0.0f, 0.08f, clampf(a->video_dial_01[7], 0.0f, 1.0f));
+    crt.beam_intensity = lerpf(0.60f, 1.40f, clampf(a->video_dial_01[8], 0.0f, 1.0f));
+    vg_set_crt_profile(a->vg, &crt);
+}
+
+static int update_video_menu_dial_drag(app* a, int mouse_x, int mouse_y) {
+    if (!a || a->video_menu_dial_drag < 0 || a->video_menu_dial_drag >= VIDEO_MENU_DIAL_COUNT) {
+        return 0;
+    }
+    float mx = 0.0f;
+    float my = 0.0f;
+    map_mouse_to_scene_coords(a, mouse_x, mouse_y, &mx, &my);
+    const float h = fmaxf((float)a->swapchain_extent.height, 1.0f);
+    const float dy = my - a->video_menu_dial_drag_start_y;
+    const float t = a->video_menu_dial_drag_start_value + (-dy / h) * 1.8f;
+    a->video_dial_01[a->video_menu_dial_drag] = clampf(t, 0.0f, 1.0f);
+    apply_video_lab_controls(a);
+    a->force_clear_frames = 1;
+    return 1;
+}
+
+static int ensure_dir_recursive(const char* path) {
+    if (!path || path[0] == '\0') {
+        return 0;
+    }
+    char tmp[PATH_MAX];
+    size_t n = strlen(path);
+    if (n >= sizeof(tmp)) {
+        return 0;
+    }
+    memcpy(tmp, path, n + 1u);
+    for (size_t i = 1; i < n; ++i) {
+        if (tmp[i] == '/') {
+            tmp[i] = '\0';
+            if (tmp[0] != '\0') {
+                if (mkdir(tmp, 0755) != 0 && errno != EEXIST) {
+                    return 0;
+                }
+            }
+            tmp[i] = '/';
+        }
+    }
+    if (mkdir(tmp, 0755) != 0 && errno != EEXIST) {
+        return 0;
+    }
+    return 1;
+}
+
+static int make_xdg_settings_path(char* out, size_t out_cap) {
+    if (!out || out_cap == 0u) {
+        return 0;
+    }
+    const char* xdg = getenv("XDG_CONFIG_HOME");
+    if (xdg && xdg[0] != '\0') {
+        int n = snprintf(out, out_cap, "%s/VectorSwarm/%s", xdg, SETTINGS_PATH);
+        return (n > 0 && (size_t)n < out_cap) ? 1 : 0;
+    }
+    const char* home = getenv("HOME");
+    if (!home || home[0] == '\0') {
+        return 0;
+    }
+    int n = snprintf(out, out_cap, "%s/.config/VectorSwarm/%s", home, SETTINGS_PATH);
+    return (n > 0 && (size_t)n < out_cap) ? 1 : 0;
+}
+
+static int save_settings_to_path(const app* a, const char* path) {
+    if (!a || !path || path[0] == '\0') {
+        return 0;
+    }
+    FILE* f = fopen(path, "w");
+    if (!f) {
+        return 0;
+    }
+    const int sel = a->video_menu_selected;
+    int w = APP_WIDTH;
+    int h = APP_HEIGHT;
+    if (sel > 0 && sel <= VIDEO_MENU_RES_COUNT) {
+        w = k_video_resolutions[sel - 1].w;
+        h = k_video_resolutions[sel - 1].h;
+    }
+    fprintf(f, "fullscreen=%d\n", a->video_menu_fullscreen ? 1 : 0);
+    fprintf(f, "selected=%d\n", sel);
+    fprintf(f, "width=%d\n", w);
+    fprintf(f, "height=%d\n", h);
+    fprintf(f, "palette=%d\n", a->palette_mode);
+    for (int i = 0; i < VIDEO_MENU_DIAL_COUNT; ++i) {
+        fprintf(f, "dial%d=%.6f\n", i, clampf(a->video_dial_01[i], 0.0f, 1.0f));
+    }
+    fclose(f);
+    return 1;
+}
+
+static int save_settings(const app* a) {
+    int ok = 0;
+    if (save_settings_to_path(a, SETTINGS_PATH)) {
+        ok = 1;
+    }
+    char xdg_path[PATH_MAX];
+    if (make_xdg_settings_path(xdg_path, sizeof(xdg_path))) {
+        char dir[PATH_MAX];
+        snprintf(dir, sizeof(dir), "%s", xdg_path);
+        char* slash = strrchr(dir, '/');
+        if (slash) {
+            *slash = '\0';
+            (void)ensure_dir_recursive(dir);
+        }
+        if (save_settings_to_path(a, xdg_path)) {
+            ok = 1;
+        }
+    }
+    return ok;
+}
+
+static int load_settings_from_path(app* a, const char* path) {
+    if (!a || !path) {
+        return 0;
+    }
+    FILE* f = fopen(path, "r");
+    if (!f) {
+        return 0;
+    }
+    int fullscreen = a->video_menu_fullscreen;
+    int selected = a->video_menu_selected;
+    int width = -1;
+    int height = -1;
+    char line[128];
+    while (fgets(line, sizeof(line), f)) {
+        char key[64];
+        char value[64];
+        if (sscanf(line, "%63[^=]=%63s", key, value) != 2) {
+            continue;
+        }
+        if (strcmp(key, "fullscreen") == 0) {
+            fullscreen = (atoi(value) != 0) ? 1 : 0;
+        } else if (strcmp(key, "selected") == 0) {
+            selected = atoi(value);
+        } else if (strcmp(key, "width") == 0) {
+            width = atoi(value);
+        } else if (strcmp(key, "height") == 0) {
+            height = atoi(value);
+        } else if (strcmp(key, "palette") == 0) {
+            a->palette_mode = atoi(value);
+        } else {
+            int dial = -1;
+            if (sscanf(key, "dial%d", &dial) == 1 && dial >= 0 && dial < VIDEO_MENU_DIAL_COUNT) {
+                a->video_dial_01[dial] = clampf(strtof(value, NULL), 0.0f, 1.0f);
+            }
+        }
+    }
+    fclose(f);
+
+    if (selected < 0 || selected > VIDEO_MENU_RES_COUNT) {
+        selected = 1;
+    }
+    if (width > 0 && height > 0) {
+        int idx = resolution_index_from_wh(width, height);
+        if (idx >= 0) {
+            selected = idx + 1;
+        }
+    }
+    if (!fullscreen && selected == 0) {
+        selected = 1;
+    }
+    if (a->palette_mode < 0 || a->palette_mode > 2) {
+        a->palette_mode = 0;
+    }
+    a->video_menu_fullscreen = fullscreen ? 1 : 0;
+    a->video_menu_selected = a->video_menu_fullscreen ? 0 : selected;
+    return 1;
+}
+
+static int load_settings(app* a) {
+    if (!a) {
+        return 0;
+    }
+    if (load_settings_from_path(a, SETTINGS_PATH)) {
+        return 1;
+    }
+    char xdg_path[PATH_MAX];
+    if (make_xdg_settings_path(xdg_path, sizeof(xdg_path))) {
+        if (load_settings_from_path(a, xdg_path)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void map_mouse_to_scene_coords(const app* a, int mouse_x, int mouse_y, float* out_x, float* out_y) {
+    if (!a || !out_x || !out_y) {
+        return;
+    }
+    const float w = (float)a->swapchain_extent.width;
+    const float h = (float)a->swapchain_extent.height;
+    if (w <= 1.0f || h <= 1.0f) {
+        *out_x = (float)mouse_x;
+        *out_y = 0.0f;
+        return;
+    }
+
+    int win_w = 0;
+    int win_h = 0;
+    SDL_GetWindowSize(a->window, &win_w, &win_h);
+    if (win_w <= 0) win_w = (int)w;
+    if (win_h <= 0) win_h = (int)h;
+
+    const float sx = w / (float)win_w;
+    const float sy = h / (float)win_h;
+    float x = clampf((float)mouse_x * sx, 0.0f, w);
+    float y = clampf(((float)win_h - (float)mouse_y) * sy, 0.0f, h);
+    if (a->show_acoustics || a->show_crt_ui || a->show_video_menu) {
+        vg_crt_profile crt;
+        vg_get_crt_profile(a->vg, &crt);
+        const float k = clampf(crt.barrel_distortion, 0.0f, 0.30f);
+        const float u = x / w;
+        const float v = y / h;
+        float qx = u * 2.0f - 1.0f;
+        float qy = v * 2.0f - 1.0f;
+        const float r2 = qx * qx + qy * qy;
+        const float m = 1.0f + k * r2;
+        qx *= m;
+        qy *= m;
+        x = clampf((qx * 0.5f + 0.5f) * w, 0.0f, w);
+        y = clampf((qy * 0.5f + 0.5f) * h, 0.0f, h);
+    }
+    *out_x = x;
+    *out_y = y;
+}
+
+static void set_tty_message(app* a, const char* msg) {
+    if (!a || !msg) {
+        return;
+    }
+    vg_text_fx_typewriter_set_text(&a->wave_tty, msg);
+    vg_text_fx_typewriter_reset(&a->wave_tty);
+    a->wave_tty.timer_s = 0.02f;
+}
+
+static void trigger_fire_test(app* a) {
+    if (!a || !a->audio_ready) {
+        return;
+    }
+    atomic_fetch_add_explicit(&a->pending_fire_events, 1u, memory_order_acq_rel);
+}
+
+static void trigger_thruster_test(app* a) {
+    if (!a || !a->audio_ready) {
+        return;
+    }
+    atomic_fetch_add_explicit(&a->pending_thruster_tests, 1u, memory_order_acq_rel);
+}
+
+enum acoustics_slider_id {
+    ACOUST_FIRE_WAVE = 0,
+    ACOUST_FIRE_PITCH = 1,
+    ACOUST_FIRE_ATTACK = 2,
+    ACOUST_FIRE_DECAY = 3,
+    ACOUST_FIRE_CUTOFF = 4,
+    ACOUST_FIRE_RESONANCE = 5,
+    ACOUST_FIRE_SWEEP_ST = 6,
+    ACOUST_FIRE_SWEEP_DECAY = 7,
+    ACOUST_THR_LEVEL = 8,
+    ACOUST_THR_PITCH = 9,
+    ACOUST_THR_ATTACK = 10,
+    ACOUST_THR_RELEASE = 11,
+    ACOUST_THR_CUTOFF = 12,
+    ACOUST_THR_RESONANCE = 13
+};
+
+static void apply_acoustics(app* a);
+static void trigger_fire_test(app* a);
+static void trigger_thruster_test(app* a);
+static int create_swapchain(app* a);
+static int create_render_passes(app* a);
+static int create_offscreen_targets(app* a);
+static int create_present_framebuffers(app* a);
+static int create_commands(app* a);
+static int create_sync(app* a);
+static int create_post_resources(app* a);
+static int create_vg_context(app* a);
+static int apply_video_mode(app* a);
+static void map_mouse_to_scene_coords(const app* a, int mouse_x, int mouse_y, float* out_x, float* out_y);
+
+static float acoustics_value_to_display(int id, float t01) {
+    const float t = clampf(t01, 0.0f, 1.0f);
+    switch (id) {
+        case ACOUST_FIRE_WAVE: return floorf(t * 4.0f + 0.5f);
+        case ACOUST_FIRE_PITCH: return lerpf(90.0f, 420.0f, t);
+        case ACOUST_FIRE_ATTACK: return lerpf(0.2f, 28.0f, t);
+        case ACOUST_FIRE_DECAY: return lerpf(12.0f, 220.0f, t);
+        case ACOUST_FIRE_CUTOFF: return lerpf(600.0f, 10000.0f, t);
+        case ACOUST_FIRE_RESONANCE: return lerpf(0.05f, 0.98f, t);
+        case ACOUST_FIRE_SWEEP_ST: return lerpf(-24.0f, 24.0f, t);
+        case ACOUST_FIRE_SWEEP_DECAY: return lerpf(2.0f, 260.0f, t);
+        case ACOUST_THR_LEVEL: return lerpf(0.04f, 0.60f, t);
+        case ACOUST_THR_PITCH: return lerpf(30.0f, 180.0f, t);
+        case ACOUST_THR_ATTACK: return lerpf(4.0f, 140.0f, t);
+        case ACOUST_THR_RELEASE: return lerpf(18.0f, 650.0f, t);
+        case ACOUST_THR_CUTOFF: return lerpf(120.0f, 3200.0f, t);
+        case ACOUST_THR_RESONANCE: return lerpf(0.02f, 0.90f, t);
+        default: return t;
+    }
+}
+
+static float round_to(float v, float step) {
+    if (step <= 0.0f) {
+        return v;
+    }
+    return floorf(v / step + 0.5f) * step;
+}
+
+static float acoustics_value_to_ui_display(int id, float t01) {
+    const float v = acoustics_value_to_display(id, t01);
+    switch (id) {
+        case ACOUST_FIRE_WAVE:
+            return v;
+        case ACOUST_FIRE_PITCH:
+        case ACOUST_FIRE_ATTACK:
+        case ACOUST_FIRE_DECAY:
+        case ACOUST_FIRE_SWEEP_DECAY:
+        case ACOUST_THR_PITCH:
+        case ACOUST_THR_ATTACK:
+        case ACOUST_THR_RELEASE:
+            return round_to(v, 1.0f);
+        case ACOUST_FIRE_CUTOFF:
+        case ACOUST_THR_CUTOFF:
+            return round_to(v * 0.001f, 0.01f);
+        case ACOUST_FIRE_RESONANCE:
+        case ACOUST_THR_RESONANCE:
+        case ACOUST_THR_LEVEL:
+            return round_to(v, 0.01f);
+        case ACOUST_FIRE_SWEEP_ST:
+            return round_to(v, 0.1f);
+        default:
+            return round_to(v, 0.01f);
+    }
+}
+
+static void acoustics_defaults(app* a) {
+    /* Seed first-install defaults from current tuned build/acoustics_slots.cfg:
+       fire slot 3 (fsel=3) and thruster slot 1 (tsel=1). */
+    a->acoustics_value_01[ACOUST_FIRE_WAVE] = 0.275879592f;
+    a->acoustics_value_01[ACOUST_FIRE_PITCH] = 0.602183819f;
+    a->acoustics_value_01[ACOUST_FIRE_ATTACK] = 0.003753547f;
+    a->acoustics_value_01[ACOUST_FIRE_DECAY] = 0.460912049f;
+    a->acoustics_value_01[ACOUST_FIRE_CUTOFF] = 0.100429699f;
+    a->acoustics_value_01[ACOUST_FIRE_RESONANCE] = 0.985629857f;
+    a->acoustics_value_01[ACOUST_FIRE_SWEEP_ST] = 0.949483037f;
+    a->acoustics_value_01[ACOUST_FIRE_SWEEP_DECAY] = 0.827205420f;
+    a->acoustics_value_01[ACOUST_THR_LEVEL] = 0.570973873f;
+    a->acoustics_value_01[ACOUST_THR_PITCH] = 0.997384906f;
+    a->acoustics_value_01[ACOUST_THR_ATTACK] = 0.814027071f;
+    a->acoustics_value_01[ACOUST_THR_RELEASE] = 0.294867337f;
+    a->acoustics_value_01[ACOUST_THR_CUTOFF] = 0.035423841f;
+    a->acoustics_value_01[ACOUST_THR_RESONANCE] = 0.998682797f;
+}
+
+static void acoustics_slot_defaults(app* a) {
+    if (!a) {
+        return;
+    }
+    a->acoustics_fire_slot_selected = 0;
+    a->acoustics_thr_slot_selected = 0;
+    memset(a->acoustics_fire_slot_defined, 0, sizeof(a->acoustics_fire_slot_defined));
+    memset(a->acoustics_thr_slot_defined, 0, sizeof(a->acoustics_thr_slot_defined));
+    memset(a->acoustics_fire_slots, 0, sizeof(a->acoustics_fire_slots));
+    memset(a->acoustics_thr_slots, 0, sizeof(a->acoustics_thr_slots));
+    for (int i = 0; i < 8; ++i) {
+        a->acoustics_fire_slots[0][i] = a->acoustics_value_01[i];
+    }
+    for (int i = 0; i < 6; ++i) {
+        a->acoustics_thr_slots[0][i] = a->acoustics_value_01[8 + i];
+    }
+    a->acoustics_fire_slot_defined[0] = 1u;
+    a->acoustics_thr_slot_defined[0] = 1u;
+}
+
+static void capture_current_to_selected_slot(app* a, int is_fire) {
+    if (!a) {
+        return;
+    }
+    if (is_fire) {
+        const int s = a->acoustics_fire_slot_selected;
+        if (s < 0 || s >= ACOUSTICS_SLOT_COUNT) {
+            return;
+        }
+        for (int i = 0; i < 8; ++i) {
+            a->acoustics_fire_slots[s][i] = a->acoustics_value_01[i];
+        }
+        a->acoustics_fire_slot_defined[s] = 1u;
+        return;
+    }
+    {
+        const int s = a->acoustics_thr_slot_selected;
+        if (s < 0 || s >= ACOUSTICS_SLOT_COUNT) {
+            return;
+        }
+        for (int i = 0; i < 6; ++i) {
+            a->acoustics_thr_slots[s][i] = a->acoustics_value_01[8 + i];
+        }
+        a->acoustics_thr_slot_defined[s] = 1u;
+    }
+}
+
+static void capture_current_to_selected_slots(app* a) {
+    if (!a) {
+        return;
+    }
+    capture_current_to_selected_slot(a, 1);
+    capture_current_to_selected_slot(a, 0);
+}
+
+static void load_slot_to_current(app* a, int is_fire, int slot_idx, int apply_now) {
+    if (!a || slot_idx < 0 || slot_idx >= ACOUSTICS_SLOT_COUNT) {
+        return;
+    }
+    if (is_fire) {
+        if (!a->acoustics_fire_slot_defined[slot_idx]) {
+            return;
+        }
+        for (int i = 0; i < 8; ++i) {
+            a->acoustics_value_01[i] = a->acoustics_fire_slots[slot_idx][i];
+        }
+    } else {
+        if (!a->acoustics_thr_slot_defined[slot_idx]) {
+            return;
+        }
+        for (int i = 0; i < 6; ++i) {
+            a->acoustics_value_01[8 + i] = a->acoustics_thr_slots[slot_idx][i];
+        }
+    }
+    if (apply_now) {
+        apply_acoustics(a);
+    }
+}
+
+static int save_acoustics_slots(const app* a, const char* path) {
+    if (!a || !path) {
+        return 0;
+    }
+    FILE* f = fopen(path, "w");
+    if (!f) {
+        return 0;
+    }
+    fprintf(f, "version=1\n");
+    fprintf(f, "fsel=%d\n", a->acoustics_fire_slot_selected);
+    fprintf(f, "tsel=%d\n", a->acoustics_thr_slot_selected);
+    for (int s = 0; s < ACOUSTICS_SLOT_COUNT; ++s) {
+        fprintf(f, "fd%d=%d\n", s, a->acoustics_fire_slot_defined[s] ? 1 : 0);
+        fprintf(f, "td%d=%d\n", s, a->acoustics_thr_slot_defined[s] ? 1 : 0);
+        for (int i = 0; i < 8; ++i) {
+            fprintf(f, "fv%d_%d=%.9f\n", s, i, a->acoustics_fire_slots[s][i]);
+        }
+        for (int i = 0; i < 6; ++i) {
+            fprintf(f, "tv%d_%d=%.9f\n", s, i, a->acoustics_thr_slots[s][i]);
+        }
+    }
+    fclose(f);
+    return 1;
+}
+
+static int load_acoustics_slots(app* a, const char* path) {
+    if (!a || !path) {
+        return 0;
+    }
+    FILE* f = fopen(path, "r");
+    if (!f) {
+        return 0;
+    }
+    char key[64];
+    float v = 0.0f;
+    while (fscanf(f, "%63[^=]=%f\n", key, &v) == 2) {
+        if (strcmp(key, "fsel") == 0) {
+            a->acoustics_fire_slot_selected = (int)clampf(v, 0.0f, (float)(ACOUSTICS_SLOT_COUNT - 1));
+            continue;
+        }
+        if (strcmp(key, "tsel") == 0) {
+            a->acoustics_thr_slot_selected = (int)clampf(v, 0.0f, (float)(ACOUSTICS_SLOT_COUNT - 1));
+            continue;
+        }
+        int s = 0;
+        int i = 0;
+        if (sscanf(key, "fd%d", &s) == 1 && s >= 0 && s < ACOUSTICS_SLOT_COUNT) {
+            a->acoustics_fire_slot_defined[s] = (v >= 0.5f) ? 1u : 0u;
+            continue;
+        }
+        if (sscanf(key, "td%d", &s) == 1 && s >= 0 && s < ACOUSTICS_SLOT_COUNT) {
+            a->acoustics_thr_slot_defined[s] = (v >= 0.5f) ? 1u : 0u;
+            continue;
+        }
+        if (sscanf(key, "fv%d_%d", &s, &i) == 2 && s >= 0 && s < ACOUSTICS_SLOT_COUNT && i >= 0 && i < 8) {
+            a->acoustics_fire_slots[s][i] = clampf(v, 0.0f, 1.0f);
+            continue;
+        }
+        if (sscanf(key, "tv%d_%d", &s, &i) == 2 && s >= 0 && s < ACOUSTICS_SLOT_COUNT && i >= 0 && i < 6) {
+            a->acoustics_thr_slots[s][i] = clampf(v, 0.0f, 1.0f);
+            continue;
+        }
+    }
+    fclose(f);
+    load_slot_to_current(a, 1, a->acoustics_fire_slot_selected, 0);
+    load_slot_to_current(a, 0, a->acoustics_thr_slot_selected, 1);
+    return 1;
+}
+
+static void apply_acoustics_locked(app* a) {
+    const int fire_wave_idx = (int)floorf(clampf(a->acoustics_value_01[ACOUST_FIRE_WAVE], 0.0f, 1.0f) * 4.0f + 0.5f);
+    enum wtp_waveform_type fire_wave = (enum wtp_waveform_type)fire_wave_idx;
+    if (fire_wave >= WTP_WT_TYPES) {
+        fire_wave = WTP_WT_SAW;
+    }
+    wtp_set_waveform(&a->weapon_synth, fire_wave);
+    wtp_set_adsr_ms(
+        &a->weapon_synth,
+        acoustics_value_to_display(ACOUST_FIRE_ATTACK, a->acoustics_value_01[ACOUST_FIRE_ATTACK]),
+        acoustics_value_to_display(ACOUST_FIRE_DECAY, a->acoustics_value_01[ACOUST_FIRE_DECAY]),
+        0.0f,
+        80.0f
+    );
+    wtp_set_pitch_env(
+        &a->weapon_synth,
+        acoustics_value_to_display(ACOUST_FIRE_SWEEP_ST, a->acoustics_value_01[ACOUST_FIRE_SWEEP_ST]),
+        0.0f,
+        acoustics_value_to_display(ACOUST_FIRE_SWEEP_DECAY, a->acoustics_value_01[ACOUST_FIRE_SWEEP_DECAY])
+    );
+    wtp_set_filter(
+        &a->weapon_synth,
+        acoustics_value_to_display(ACOUST_FIRE_CUTOFF, a->acoustics_value_01[ACOUST_FIRE_CUTOFF]),
+        acoustics_value_to_display(ACOUST_FIRE_RESONANCE, a->acoustics_value_01[ACOUST_FIRE_RESONANCE])
+    );
+    a->weapon_synth.gain = 0.40f;
+    a->weapon_synth.clip_level = 0.92f;
+
+    wtp_set_waveform(&a->thruster_synth, WTP_WT_NOISE);
+    wtp_set_adsr_ms(
+        &a->thruster_synth,
+        acoustics_value_to_display(ACOUST_THR_ATTACK, a->acoustics_value_01[ACOUST_THR_ATTACK]),
+        30.0f,
+        0.92f,
+        acoustics_value_to_display(ACOUST_THR_RELEASE, a->acoustics_value_01[ACOUST_THR_RELEASE])
+    );
+    wtp_set_filter(
+        &a->thruster_synth,
+        acoustics_value_to_display(ACOUST_THR_CUTOFF, a->acoustics_value_01[ACOUST_THR_CUTOFF]),
+        acoustics_value_to_display(ACOUST_THR_RESONANCE, a->acoustics_value_01[ACOUST_THR_RESONANCE])
+    );
+    a->thruster_synth.gain = acoustics_value_to_display(ACOUST_THR_LEVEL, a->acoustics_value_01[ACOUST_THR_LEVEL]);
+    a->thruster_synth.clip_level = 0.85f;
+}
+
+static void apply_acoustics(app* a) {
+    if (!a->audio_ready || a->audio_dev == 0) {
+        return;
+    }
+    SDL_LockAudioDevice(a->audio_dev);
+    apply_acoustics_locked(a);
+    SDL_UnlockAudioDevice(a->audio_dev);
+}
+
+typedef struct acoustics_ui_layout {
+    vg_rect panel[2];
+    vg_rect button[2];
+    vg_rect save_button[2];
+    vg_rect slot_button[2][ACOUSTICS_SLOT_COUNT];
+    float row_y0[2];
+    float row_h;
+    float slider_x[2];
+    float slider_w[2];
+    int row_count[2];
+} acoustics_ui_layout;
+
+static acoustics_ui_layout make_acoustics_ui_layout(float w, float h) {
+    acoustics_ui_layout l;
+    l.panel[0] = (vg_rect){w * 0.02f, h * 0.10f, w * 0.47f, h * 0.80f};
+    l.panel[1] = (vg_rect){w * 0.51f, h * 0.10f, w * 0.47f, h * 0.80f};
+    l.button[0] = (vg_rect){
+        l.panel[0].x + l.panel[0].w * 0.03f,
+        l.panel[0].y + l.panel[0].h - l.panel[0].h * 0.08f,
+        l.panel[0].w * 0.28f,
+        l.panel[0].h * 0.042f
+    };
+    l.button[1] = (vg_rect){
+        l.panel[1].x + l.panel[1].w * 0.03f,
+        l.panel[1].y + l.panel[1].h - l.panel[1].h * 0.08f,
+        l.panel[1].w * 0.32f,
+        l.panel[1].h * 0.042f
+    };
+    for (int p = 0; p < 2; ++p) {
+        const vg_rect btn = l.button[p];
+        const vg_rect panel = l.panel[p];
+        const float save_w = panel.w * 0.15f;
+        l.save_button[p] = (vg_rect){panel.x + panel.w - panel.w * 0.03f - save_w, btn.y, save_w, btn.h};
+        const float sx = btn.x + btn.w + panel.w * 0.02f;
+        const float sw = panel.w * 0.052f;
+        const float sg = panel.w * 0.006f;
+        for (int s = 0; s < ACOUSTICS_SLOT_COUNT; ++s) {
+            l.slot_button[p][s] = (vg_rect){sx + (sw + sg) * (float)s, btn.y, sw, btn.h};
+        }
+    }
+    /* Must match DefconDraw/src/vg_ui.c slider panel layout exactly. */
+    l.row_h = 34.0f;
+    l.row_count[0] = 8;
+    l.row_count[1] = 6;
+    for (int p = 0; p < 2; ++p) {
+        const vg_rect r = l.panel[p];
+        const float left = r.x + 16.0f;
+        const float label_w = r.w * 0.34f;
+        l.row_y0[p] = r.y + 70.0f;
+        l.slider_x[p] = left + label_w + 16.0f;
+        l.slider_w[p] = r.w - (l.slider_x[p] - r.x) - 104.0f;
+    }
+    return l;
+}
+
+static int handle_acoustics_ui_mouse(app* a, int mouse_x, int mouse_y, int set_value) {
+    const float w = (float)a->swapchain_extent.width;
+    const float h = (float)a->swapchain_extent.height;
+    const acoustics_ui_layout l = make_acoustics_ui_layout(w, h);
+    float mx = 0.0f;
+    float my = 0.0f;
+    map_mouse_to_scene_coords(a, mouse_x, mouse_y, &mx, &my);
+    for (int p = 0; p < 2; ++p) {
+        const vg_rect r = l.panel[p];
+        if (mx < r.x || mx > r.x + r.w || my < r.y || my > r.y + r.h) {
+            continue;
+        }
+        {
+            const vg_rect btn = l.button[p];
+            if (mx >= btn.x && mx <= btn.x + btn.w && my >= btn.y && my <= btn.y + btn.h) {
+                if (set_value) {
+                    if (p == 0) {
+                        trigger_fire_test(a);
+                    } else {
+                        trigger_thruster_test(a);
+                    }
+                }
+                return 1;
+            }
+        }
+        {
+            const vg_rect b = l.save_button[p];
+            if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
+                if (set_value) {
+                    capture_current_to_selected_slot(a, (p == 0) ? 1 : 0);
+                    (void)save_acoustics_slots(a, ACOUSTICS_SLOTS_PATH);
+                }
+                return 1;
+            }
+        }
+        for (int s = 0; s < ACOUSTICS_SLOT_COUNT; ++s) {
+            const vg_rect b = l.slot_button[p][s];
+            if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
+                if (set_value) {
+                    if (p == 0) {
+                        a->acoustics_fire_slot_selected = s;
+                        load_slot_to_current(a, 1, s, 1);
+                    } else {
+                        a->acoustics_thr_slot_selected = s;
+                        load_slot_to_current(a, 0, s, 1);
+                    }
+                }
+                return 1;
+            }
+        }
+        const int row = (int)((my - l.row_y0[p]) / l.row_h);
+        const int row_count = l.row_count[p];
+        if (row < 0 || row >= row_count) {
+            return 1;
+        }
+        const float sx0 = l.slider_x[p];
+        const float sx1 = l.slider_x[p] + l.slider_w[p];
+        if (mx >= sx0 && mx <= sx1) {
+            a->acoustics_selected = (p == 0) ? row : (8 + row);
+            if (set_value) {
+                const float t = clampf((mx - sx0) / l.slider_w[p], 0.0f, 1.0f);
+                a->acoustics_value_01[a->acoustics_selected] = t;
+                apply_acoustics(a);
+            }
+        }
+        return 1;
+    }
+    return 0;
+}
+
+static float sample_lerp(const float* src, uint32_t n, float idx) {
+    if (!src || n == 0u) {
+        return 0.0f;
+    }
+    if (idx <= 0.0f) {
+        return src[0];
+    }
+    const float max_i = (float)(n - 1u);
+    if (idx >= max_i) {
+        return src[n - 1u];
+    }
+    const uint32_t i0 = (uint32_t)idx;
+    const uint32_t i1 = i0 + 1u;
+    const float t = idx - (float)i0;
+    return src[i0] + (src[i1] - src[i0]) * t;
+}
+
+static void scope_history_push(app* a, const float* src, uint32_t count) {
+    if (!a || !src || count == 0u) {
+        return;
+    }
+    if (count >= ACOUSTICS_SCOPE_HISTORY_SAMPLES) {
+        const uint32_t from = count - ACOUSTICS_SCOPE_HISTORY_SAMPLES;
+        memcpy(a->scope_history, src + from, sizeof(float) * ACOUSTICS_SCOPE_HISTORY_SAMPLES);
+        return;
+    }
+    const uint32_t keep = ACOUSTICS_SCOPE_HISTORY_SAMPLES - count;
+    memmove(a->scope_history, a->scope_history + count, sizeof(float) * keep);
+    memcpy(a->scope_history + keep, src, sizeof(float) * count);
+}
+
+static uint32_t find_rising_trigger(const float* buf, uint32_t begin, uint32_t end, float threshold) {
+    uint32_t trigger = begin;
+    for (uint32_t i = begin; i + 1u < end; ++i) {
+        const float a = buf[i];
+        const float b = buf[i + 1u];
+        if (a < threshold && b >= threshold && (b - a) > 0.002f) {
+            trigger = i + 1u;
+        }
+    }
+    return trigger;
+}
+
+static void rebuild_scope_window(app* a) {
+    const uint32_t hist_n = ACOUSTICS_SCOPE_HISTORY_SAMPLES;
+    if (!a || hist_n < 128u) {
+        return;
+    }
+
+    const float* hist = a->scope_history;
+    const uint32_t search_span = (hist_n > 6144u) ? 6144u : (hist_n - 2u);
+    const uint32_t search_begin = hist_n - search_span;
+    const uint32_t trigger = find_rising_trigger(hist, search_begin, hist_n - 1u, 0.02f);
+
+    uint32_t cross[2] = {0u, 0u};
+    uint32_t cross_count = 0u;
+    for (uint32_t i = trigger + 1u; i + 1u < hist_n; ++i) {
+        const float a0 = hist[i];
+        const float a1 = hist[i + 1u];
+        if (a0 < 0.02f && a1 >= 0.02f && (a1 - a0) > 0.002f) {
+            cross[cross_count++] = i + 1u;
+            if (cross_count >= 2u) {
+                break;
+            }
+        }
+    }
+
+    uint32_t period = 96u;
+    if (cross_count >= 2u && cross[1] > cross[0]) {
+        period = cross[1] - cross[0];
+    } else if (cross_count == 1u && cross[0] > trigger) {
+        period = cross[0] - trigger;
+    }
+    if (period < 24u) {
+        period = 24u;
+    }
+    if (period > 1536u) {
+        period = 1536u;
+    }
+
+    uint32_t window_len = period * 2u;
+    if (window_len < 192u) {
+        window_len = 192u;
+    }
+    if (window_len > (hist_n - 2u)) {
+        window_len = hist_n - 2u;
+    }
+
+    uint32_t window_start = trigger;
+    if (window_start + window_len >= hist_n) {
+        window_start = hist_n - window_len - 1u;
+    }
+
+    float peak = 0.0f;
+    for (uint32_t i = 0; i < window_len; ++i) {
+        const float s = hist[window_start + i];
+        const float aabs = fabsf(s);
+        if (aabs > peak) {
+            peak = aabs;
+        }
+    }
+    const float gain = (peak > 0.001f) ? (0.88f / peak) : 1.0f;
+
+    const float max_src = (float)(window_len - 1u);
+    for (uint32_t i = 0; i < ACOUSTICS_SCOPE_SAMPLES; ++i) {
+        const float t = (float)i / (float)(ACOUSTICS_SCOPE_SAMPLES - 1);
+        const float src_i = (float)window_start + t * max_src;
+        float v = sample_lerp(hist, hist_n, src_i) * gain;
+        if (v > 1.0f) v = 1.0f;
+        if (v < -1.0f) v = -1.0f;
+        a->scope_window[i] = v;
+    }
+}
+
+static void audio_callback(void* userdata, Uint8* stream, int len) {
+    app* a = (app*)userdata;
+    if (!a || !stream || len <= 0) {
+        return;
+    }
+    float* out = (float*)stream;
+    const uint32_t frames = (uint32_t)(len / (int)sizeof(float));
+    if (frames == 0) {
+        return;
+    }
+
+    uint32_t fire_events = atomic_exchange_explicit(&a->pending_fire_events, 0u, memory_order_acq_rel);
+    uint32_t thruster_tests = atomic_exchange_explicit(&a->pending_thruster_tests, 0u, memory_order_acq_rel);
+    const int weapon_level = atomic_load_explicit(&a->audio_weapon_level, memory_order_acquire);
+    const int thrust_gate = atomic_load_explicit(&a->thrust_gate, memory_order_acquire);
+    if (thruster_tests > 0) {
+        a->thruster_test_frames_left = a->audio_have.freq / 3u;
+    }
+    const int thruster_effective_gate = thrust_gate || (a->thruster_test_frames_left > 0u);
+
+    if (thruster_effective_gate && !a->thruster_note_on) {
+        const float thr_hz = acoustics_value_to_display(ACOUST_THR_PITCH, a->acoustics_value_01[ACOUST_THR_PITCH]);
+        wtp_note_on_hz(&a->thruster_synth, a->thruster_note_id, thr_hz);
+        a->thruster_note_on = 1;
+    } else if (!thruster_effective_gate && a->thruster_note_on) {
+        wtp_note_off(&a->thruster_synth, a->thruster_note_id);
+        a->thruster_note_on = 0;
+    }
+
+    for (uint32_t i = 0; i < fire_events; ++i) {
+        const float base_hz = acoustics_value_to_display(ACOUST_FIRE_PITCH, a->acoustics_value_01[ACOUST_FIRE_PITCH]);
+        const float cutoff = acoustics_value_to_display(ACOUST_FIRE_CUTOFF, a->acoustics_value_01[ACOUST_FIRE_CUTOFF]) + (float)(weapon_level - 1) * 360.0f;
+        const float resonance = clampf(
+            acoustics_value_to_display(ACOUST_FIRE_RESONANCE, a->acoustics_value_01[ACOUST_FIRE_RESONANCE]) + 0.05f * (float)(weapon_level - 1),
+            0.0f,
+            0.98f
+        );
+        wtp_set_filter(&a->weapon_synth, cutoff, resonance);
+
+        float intervals[3] = {1.0f, 1.5f, 2.0f};
+        int voices = 1;
+        if (weapon_level >= 2) {
+            voices = 2;
+        }
+        if (weapon_level >= 3) {
+            voices = 3;
+        }
+        for (int v = 0; v < voices; ++v) {
+            const float jitter = (rand01_from_state(&a->audio_rng) - 0.5f) * 0.012f;
+            const float hz = base_hz * intervals[v] * (1.0f + jitter);
+            wtp_note_on_hz(&a->weapon_synth, (int32_t)a->fire_note_id++, hz);
+        }
+    }
+
+    uint32_t remaining = frames;
+    uint32_t off = 0;
+    while (remaining > 0) {
+        uint32_t n = remaining;
+        if (n > a->audio_mix_tmp_cap) {
+            n = a->audio_mix_tmp_cap;
+        }
+        wtp_render_instrument(&a->weapon_synth, a->audio_mix_tmp_a, n);
+        wtp_render_instrument(&a->thruster_synth, a->audio_mix_tmp_b, n);
+        for (uint32_t i = 0; i < n; ++i) {
+            a->audio_mix_tmp_a[i] += a->audio_mix_tmp_b[i];
+        }
+        memset(a->audio_mix_tmp_b, 0, sizeof(float) * n);
+        uint32_t got = wtp_ringbuffer_read(&a->beep_rb, a->audio_mix_tmp_b, n);
+        if (got < n) {
+            memset(a->audio_mix_tmp_b + got, 0, sizeof(float) * (n - got));
+        }
+        for (uint32_t i = 0; i < n; ++i) {
+            float s = a->audio_mix_tmp_a[i] + a->audio_mix_tmp_b[i];
+            if (s > 1.0f) s = 1.0f;
+            if (s < -1.0f) s = -1.0f;
+            out[off + i] = s;
+        }
+        (void)wtp_ringbuffer_write(&a->scope_rb, out + off, n);
+        off += n;
+        remaining -= n;
+        if (a->thruster_test_frames_left > 0u) {
+            if (a->thruster_test_frames_left > n) {
+                a->thruster_test_frames_left -= n;
+            } else {
+                a->thruster_test_frames_left = 0u;
+            }
+        }
+    }
+}
+
+static void queue_teletype_beep(app* a, float freq_hz, float dur_s, float amp) {
+    if (!a->audio_ready) {
+        return;
+    }
+    const int sample_rate = 48000;
+    int n = (int)(dur_s * (float)sample_rate);
+    if (n < 64) {
+        n = 64;
+    }
+    if (n > 4096) {
+        n = 4096;
+    }
+    float* samples = (float*)malloc((size_t)n * sizeof(float));
+    if (!samples) {
+        return;
+    }
+    float phase = 0.0f;
+    const float step = 2.0f * 3.14159265358979323846f * freq_hz / (float)sample_rate;
+    for (int i = 0; i < n; ++i) {
+        const float t = (float)i / (float)(n - 1);
+        const float env = (1.0f - t) * (1.0f - t);
+        samples[i] = sinf(phase) * amp * env;
+        phase += step;
+    }
+    (void)wtp_ringbuffer_write(&a->beep_rb, samples, (uint32_t)n);
+    free(samples);
+}
+
+static void teletype_beep_cb(void* user, char ch, float freq_hz, float dur_s, float amp) {
+    (void)ch;
+    app* a = (app*)user;
+    if (!a) {
+        return;
+    }
+    queue_teletype_beep(a, freq_hz, dur_s, amp);
+}
+
+static void init_teletype_audio(app* a) {
+    SDL_AudioSpec want;
+    SDL_zero(want);
+    want.freq = 48000;
+    want.format = AUDIO_F32SYS;
+    want.channels = 1;
+    want.samples = 512;
+    want.callback = audio_callback;
+    want.userdata = a;
+    a->audio_dev = SDL_OpenAudioDevice(NULL, 0, &want, &a->audio_have, 0);
+    if (a->audio_dev != 0) {
+        wtp_config_t cfg;
+        wtp_default_config(&cfg);
+        cfg.sample_rate = (uint32_t)a->audio_have.freq;
+        cfg.frame_size = (uint32_t)a->audio_have.samples;
+        cfg.num_voices = 14u;
+        cfg.wavetable_size = 8192u;
+        cfg.waveform = WTP_WT_SQUARE;
+        cfg.attack_ms = 2.0f;
+        cfg.decay_ms = 55.0f;
+        cfg.sustain_level = 0.0f;
+        cfg.release_ms = 90.0f;
+        cfg.gain = 0.40f;
+        cfg.clip_level = 0.92f;
+        cfg.filter_cutoff_hz = 2200.0f;
+        cfg.filter_resonance = 0.32f;
+        cfg.filter_lowpass_mode = 0;
+        if (!wtp_instrument_init_ex(&a->weapon_synth, &cfg)) {
+            SDL_CloseAudioDevice(a->audio_dev);
+            a->audio_dev = 0;
+            a->audio_ready = 0;
+            return;
+        }
+        cfg.waveform = WTP_WT_NOISE;
+        cfg.attack_ms = 30.0f;
+        cfg.decay_ms = 30.0f;
+        cfg.sustain_level = 0.92f;
+        cfg.release_ms = 190.0f;
+        cfg.gain = 0.22f;
+        cfg.clip_level = 0.85f;
+        cfg.filter_cutoff_hz = 820.0f;
+        cfg.filter_resonance = 0.18f;
+        cfg.filter_lowpass_mode = 1;
+        if (!wtp_instrument_init_ex(&a->thruster_synth, &cfg)) {
+            wtp_instrument_free(&a->weapon_synth);
+            SDL_CloseAudioDevice(a->audio_dev);
+            a->audio_dev = 0;
+            a->audio_ready = 0;
+            return;
+        }
+        a->audio_mix_tmp_cap = cfg.frame_size;
+        a->audio_mix_tmp_a = (float*)calloc(a->audio_mix_tmp_cap, sizeof(float));
+        a->audio_mix_tmp_b = (float*)calloc(a->audio_mix_tmp_cap, sizeof(float));
+        if (!a->audio_mix_tmp_a || !a->audio_mix_tmp_b) {
+            free(a->audio_mix_tmp_a);
+            free(a->audio_mix_tmp_b);
+            a->audio_mix_tmp_a = NULL;
+            a->audio_mix_tmp_b = NULL;
+            wtp_instrument_free(&a->weapon_synth);
+            wtp_instrument_free(&a->thruster_synth);
+            SDL_CloseAudioDevice(a->audio_dev);
+            a->audio_dev = 0;
+            a->audio_ready = 0;
+            return;
+        }
+        if (!wtp_ringbuffer_init(&a->beep_rb, 1u << 16)) {
+            free(a->audio_mix_tmp_a);
+            free(a->audio_mix_tmp_b);
+            a->audio_mix_tmp_a = NULL;
+            a->audio_mix_tmp_b = NULL;
+            wtp_instrument_free(&a->weapon_synth);
+            wtp_instrument_free(&a->thruster_synth);
+            SDL_CloseAudioDevice(a->audio_dev);
+            a->audio_dev = 0;
+            a->audio_ready = 0;
+            return;
+        }
+        if (!wtp_ringbuffer_init(&a->scope_rb, 1u << 15)) {
+            wtp_ringbuffer_free(&a->beep_rb);
+            free(a->audio_mix_tmp_a);
+            free(a->audio_mix_tmp_b);
+            a->audio_mix_tmp_a = NULL;
+            a->audio_mix_tmp_b = NULL;
+            wtp_instrument_free(&a->weapon_synth);
+            wtp_instrument_free(&a->thruster_synth);
+            SDL_CloseAudioDevice(a->audio_dev);
+            a->audio_dev = 0;
+            a->audio_ready = 0;
+            return;
+        }
+        a->fire_note_id = 1u;
+        a->thruster_note_id = 5000001;
+        a->thruster_note_on = 0;
+        a->thruster_test_frames_left = 0u;
+        a->audio_rng = 0xC0DEF00Du;
+        atomic_store_explicit(&a->pending_fire_events, 0u, memory_order_release);
+        atomic_store_explicit(&a->pending_thruster_tests, 0u, memory_order_release);
+        atomic_store_explicit(&a->thrust_gate, 0, memory_order_release);
+        atomic_store_explicit(&a->audio_weapon_level, 1, memory_order_release);
+        SDL_PauseAudioDevice(a->audio_dev, 0);
+        a->audio_ready = 1;
+    } else {
+        a->audio_ready = 0;
+    }
+}
+
+static void adjust_crt_profile(vg_context* vg, int selected, int dir) {
+    vg_crt_profile crt;
+    vg_get_crt_profile(vg, &crt);
+    switch (selected) {
+        case 0: crt.bloom_strength = clampf(crt.bloom_strength + 0.05f * (float)dir, 0.0f, 3.0f); break;
+        case 1: crt.bloom_radius_px = clampf(crt.bloom_radius_px + 0.35f * (float)dir, 0.0f, 14.0f); break;
+        case 2: crt.persistence_decay = clampf(crt.persistence_decay + 0.005f * (float)dir, 0.70f, 0.94f); break;
+        case 3: crt.jitter_amount = clampf(crt.jitter_amount + 0.02f * (float)dir, 0.0f, 1.5f); break;
+        case 4: crt.flicker_amount = clampf(crt.flicker_amount + 0.02f * (float)dir, 0.0f, 1.0f); break;
+        case 5: crt.beam_core_width_px = clampf(crt.beam_core_width_px + 0.05f * (float)dir, 0.5f, 3.5f); break;
+        case 6: crt.beam_halo_width_px = clampf(crt.beam_halo_width_px + 0.12f * (float)dir, 0.0f, 10.0f); break;
+        case 7: crt.beam_intensity = clampf(crt.beam_intensity + 0.05f * (float)dir, 0.2f, 3.0f); break;
+        case 8: crt.vignette_strength = clampf(crt.vignette_strength + 0.02f * (float)dir, 0.0f, 1.0f); break;
+        case 9: crt.barrel_distortion = clampf(crt.barrel_distortion + 0.01f * (float)dir, 0.0f, 0.30f); break;
+        case 10: crt.scanline_strength = clampf(crt.scanline_strength + 0.02f * (float)dir, 0.0f, 1.0f); break;
+        case 11: crt.noise_strength = clampf(crt.noise_strength + 0.01f * (float)dir, 0.0f, 0.30f); break;
+        default: break;
+    }
+    vg_set_crt_profile(vg, &crt);
+}
+
+static void set_crt_profile_value01(vg_context* vg, int selected, float value_01) {
+    vg_crt_profile crt;
+    vg_get_crt_profile(vg, &crt);
+    float t = clampf(value_01, 0.0f, 1.0f);
+    switch (selected) {
+        case 0: crt.bloom_strength = lerpf(0.0f, 3.0f, t); break;
+        case 1: crt.bloom_radius_px = lerpf(0.0f, 14.0f, t); break;
+        case 2: crt.persistence_decay = lerpf(0.70f, 0.94f, t); break;
+        case 3: crt.jitter_amount = lerpf(0.0f, 1.5f, t); break;
+        case 4: crt.flicker_amount = lerpf(0.0f, 1.0f, t); break;
+        case 5: crt.beam_core_width_px = lerpf(0.5f, 3.5f, t); break;
+        case 6: crt.beam_halo_width_px = lerpf(0.0f, 10.0f, t); break;
+        case 7: crt.beam_intensity = lerpf(0.2f, 3.0f, t); break;
+        case 8: crt.vignette_strength = lerpf(0.0f, 1.0f, t); break;
+        case 9: crt.barrel_distortion = lerpf(0.0f, 0.30f, t); break;
+        case 10: crt.scanline_strength = lerpf(0.0f, 1.0f, t); break;
+        case 11: crt.noise_strength = lerpf(0.0f, 0.30f, t); break;
+        default: break;
+    }
+    vg_set_crt_profile(vg, &crt);
+}
+
+static int handle_crt_ui_mouse(app* a, int mouse_x, int mouse_y, int set_value) {
+    const float w = (float)a->swapchain_extent.width;
+    const float h = (float)a->swapchain_extent.height;
+    const float px = 24.0f;
+    const float py = h * 0.12f;
+    const float pw = w * 0.44f;
+    const float ph = h * 0.76f;
+    float mx = 0.0f;
+    float my = 0.0f;
+    map_mouse_to_scene_coords(a, mouse_x, mouse_y, &mx, &my);
+    if (mx < px || mx > px + pw || my < py || my > py + ph) {
+        return 0;
+    }
+
+    const float left = px + 16.0f;
+    const float row_h = 34.0f;
+    const float row_y0 = py + 70.0f;
+    const float label_w = pw * 0.34f;
+    const float slider_x = left + label_w + 16.0f;
+    const float slider_w = pw - (slider_x - px) - 104.0f;
+
+    int row = (int)((my - row_y0) / row_h);
+    if (row < 0 || row >= 12) {
+        return 1;
+    }
+    const float sx0 = slider_x;
+    const float sx1 = slider_x + slider_w;
+    if (mx >= sx0 && mx <= sx1) {
+        a->crt_ui_selected = row;
+        if (set_value) {
+            float t = (mx - slider_x) / slider_w;
+            set_crt_profile_value01(a->vg, row, t);
+        }
+    }
+    return 1;
+}
+
+static int handle_video_menu_mouse(app* a, int mouse_x, int mouse_y, int set_value) {
+    if (!a) {
+        return 0;
+    }
+    const float w = (float)a->swapchain_extent.width;
+    const float h = (float)a->swapchain_extent.height;
+    float mx = 0.0f;
+    float my = 0.0f;
+    map_mouse_to_scene_coords(a, mouse_x, mouse_y, &mx, &my);
+
+    const vg_rect panel = {w * 0.09f, h * 0.08f, w * 0.82f, h * 0.84f};
+    if (mx < panel.x || mx > panel.x + panel.w || my < panel.y || my > panel.y + panel.h) {
+        return 0;
+    }
+
+    {
+        const float btn_h = panel.h * 0.055f;
+        const float btn_w = panel.w * 0.09f;
+        const float btn_gap = panel.w * 0.012f;
+        const float btn_y = panel.y + panel.h - panel.h * 0.13f;
+        const float btn_x0 = panel.x + panel.w - (3.0f * btn_w + 2.0f * btn_gap) - panel.w * 0.04f;
+        for (int i = 0; i < 3; ++i) {
+            const vg_rect b = {btn_x0 + (float)i * (btn_w + btn_gap), btn_y, btn_w, btn_h};
+            if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
+                if (set_value) {
+                    a->palette_mode = i;
+                    a->force_clear_frames = 2;
+                    (void)save_settings(a);
+                }
+                return 1;
+            }
+        }
+    }
+
+    {
+        vg_vec2 centers[VIDEO_MENU_DIAL_COUNT];
+        float r = 0.0f;
+        video_menu_dial_geometry(a, centers, &r);
+        for (int d = 0; d < VIDEO_MENU_DIAL_COUNT; ++d) {
+            const float dx = mx - centers[d].x;
+            const float dy = my - centers[d].y;
+            const float dist = sqrtf(dx * dx + dy * dy);
+            if (dist <= r * 1.15f) {
+                if (set_value) {
+                    a->video_menu_dial_drag = d;
+                    a->video_menu_dial_drag_start_y = my;
+                    a->video_menu_dial_drag_start_value = a->video_dial_01[d];
+                }
+                return 1;
+            }
+        }
+    }
+
+    const int item_count = VIDEO_MENU_RES_COUNT + 1;
+    const float row_h = panel.h * 0.082f;
+    const float row_w = panel.w * 0.36f;
+    const float row_x = panel.x + panel.w * 0.05f;
+    const float row_y0 = panel.y + panel.h * 0.68f;
+    for (int i = 0; i < item_count; ++i) {
+        const vg_rect row = {row_x, row_y0 - row_h * (float)i, row_w, row_h * 0.72f};
+        if (mx >= row.x && mx <= row.x + row.w && my >= row.y && my <= row.y + row.h) {
+            if (set_value) {
+                a->video_menu_dial_drag = -1;
+                a->video_menu_selected = i;
+                if (apply_video_mode(a)) {
+                    set_tty_message(a, "display mode applied");
+                } else {
+                    set_tty_message(a, "display mode apply failed");
+                }
+            }
+            return 1;
+        }
+    }
+    return 1;
+}
+
+static uint32_t find_memory_type(app* a, uint32_t type_bits, VkMemoryPropertyFlags required) {
+    VkPhysicalDeviceMemoryProperties props;
+    vkGetPhysicalDeviceMemoryProperties(a->physical_device, &props);
+    for (uint32_t i = 0; i < props.memoryTypeCount; ++i) {
+        if ((type_bits & (1u << i)) && ((props.memoryTypes[i].propertyFlags & required) == required)) {
+            return i;
+        }
+    }
+    return UINT32_MAX;
+}
+
+static int create_image_2d(
+    app* a,
+    uint32_t w,
+    uint32_t h,
+    VkFormat format,
+    VkImageUsageFlags usage,
+    VkImage* out_image,
+    VkDeviceMemory* out_mem,
+    VkImageView* out_view
+) {
+    VkImageCreateInfo img = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = format,
+        .extent = {w, h, 1},
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = usage,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
+    };
+    if (!check_vk(vkCreateImage(a->device, &img, NULL, out_image), "vkCreateImage")) {
+        return 0;
+    }
+    VkMemoryRequirements req;
+    vkGetImageMemoryRequirements(a->device, *out_image, &req);
+    uint32_t mem_type = find_memory_type(a, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (mem_type == UINT32_MAX) {
+        return 0;
+    }
+    VkMemoryAllocateInfo ai = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = req.size,
+        .memoryTypeIndex = mem_type
+    };
+    if (!check_vk(vkAllocateMemory(a->device, &ai, NULL, out_mem), "vkAllocateMemory(image)")) {
+        return 0;
+    }
+    if (!check_vk(vkBindImageMemory(a->device, *out_image, *out_mem, 0), "vkBindImageMemory")) {
+        return 0;
+    }
+    VkImageViewCreateInfo vi = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = *out_image,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = format,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        }
+    };
+    return check_vk(vkCreateImageView(a->device, &vi, NULL, out_view), "vkCreateImageView(offscreen)");
+}
+
+static void set_viewport_scissor(VkCommandBuffer cmd, uint32_t w, uint32_t h) {
+    VkViewport vp = {.x = 0.0f, .y = 0.0f, .width = (float)w, .height = (float)h, .minDepth = 0.0f, .maxDepth = 1.0f};
+    VkRect2D sc = {.offset = {0, 0}, .extent = {w, h}};
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &sc);
+}
+
+static void cleanup(app* a) {
+    if (a->device != VK_NULL_HANDLE) {
+        vkDeviceWaitIdle(a->device);
+    }
+    if (a->audio_dev != 0) {
+        SDL_PauseAudioDevice(a->audio_dev, 1);
+        wtp_ringbuffer_free(&a->beep_rb);
+        wtp_ringbuffer_free(&a->scope_rb);
+        wtp_instrument_free(&a->weapon_synth);
+        wtp_instrument_free(&a->thruster_synth);
+        free(a->audio_mix_tmp_a);
+        free(a->audio_mix_tmp_b);
+        a->audio_mix_tmp_a = NULL;
+        a->audio_mix_tmp_b = NULL;
+        SDL_CloseAudioDevice(a->audio_dev);
+        a->audio_dev = 0;
+    }
+    if (a->vg) {
+        vg_context_destroy(a->vg);
+        a->vg = NULL;
+    }
+
+    if (a->bloom_pipeline) vkDestroyPipeline(a->device, a->bloom_pipeline, NULL);
+    if (a->composite_pipeline) vkDestroyPipeline(a->device, a->composite_pipeline, NULL);
+    if (a->post_layout) vkDestroyPipelineLayout(a->device, a->post_layout, NULL);
+    if (a->post_desc_pool) vkDestroyDescriptorPool(a->device, a->post_desc_pool, NULL);
+    if (a->post_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->post_desc_layout, NULL);
+    if (a->post_sampler) vkDestroySampler(a->device, a->post_sampler, NULL);
+
+    if (a->scene_fb) vkDestroyFramebuffer(a->device, a->scene_fb, NULL);
+    if (a->bloom_fb) vkDestroyFramebuffer(a->device, a->bloom_fb, NULL);
+    if (a->scene_view) vkDestroyImageView(a->device, a->scene_view, NULL);
+    if (a->bloom_view) vkDestroyImageView(a->device, a->bloom_view, NULL);
+    if (a->scene_image) vkDestroyImage(a->device, a->scene_image, NULL);
+    if (a->bloom_image) vkDestroyImage(a->device, a->bloom_image, NULL);
+    if (a->scene_memory) vkFreeMemory(a->device, a->scene_memory, NULL);
+    if (a->bloom_memory) vkFreeMemory(a->device, a->bloom_memory, NULL);
+
+    for (uint32_t i = 0; i < a->swapchain_image_count; ++i) {
+        if (a->present_framebuffers[i]) vkDestroyFramebuffer(a->device, a->present_framebuffers[i], NULL);
+        if (a->swapchain_image_views[i]) vkDestroyImageView(a->device, a->swapchain_image_views[i], NULL);
+    }
+
+    if (a->scene_render_pass) vkDestroyRenderPass(a->device, a->scene_render_pass, NULL);
+    if (a->bloom_render_pass) vkDestroyRenderPass(a->device, a->bloom_render_pass, NULL);
+    if (a->present_render_pass) vkDestroyRenderPass(a->device, a->present_render_pass, NULL);
+    if (a->swapchain) vkDestroySwapchainKHR(a->device, a->swapchain, NULL);
+
+    if (a->in_flight) vkDestroyFence(a->device, a->in_flight, NULL);
+    if (a->render_finished) vkDestroySemaphore(a->device, a->render_finished, NULL);
+    if (a->image_available) vkDestroySemaphore(a->device, a->image_available, NULL);
+    if (a->command_pool) vkDestroyCommandPool(a->device, a->command_pool, NULL);
+    if (a->device) vkDestroyDevice(a->device, NULL);
+    if (a->surface) vkDestroySurfaceKHR(a->instance, a->surface, NULL);
+    if (a->instance) vkDestroyInstance(a->instance, NULL);
+    if (a->window) SDL_DestroyWindow(a->window);
+    SDL_Quit();
+}
+
+static void destroy_render_runtime(app* a) {
+    if (!a || a->device == VK_NULL_HANDLE) {
+        return;
+    }
+    vkDeviceWaitIdle(a->device);
+
+    if (a->vg) {
+        vg_context_destroy(a->vg);
+        a->vg = NULL;
+    }
+    if (a->bloom_pipeline) {
+        vkDestroyPipeline(a->device, a->bloom_pipeline, NULL);
+        a->bloom_pipeline = VK_NULL_HANDLE;
+    }
+    if (a->composite_pipeline) {
+        vkDestroyPipeline(a->device, a->composite_pipeline, NULL);
+        a->composite_pipeline = VK_NULL_HANDLE;
+    }
+    if (a->post_layout) {
+        vkDestroyPipelineLayout(a->device, a->post_layout, NULL);
+        a->post_layout = VK_NULL_HANDLE;
+    }
+    if (a->post_desc_pool) {
+        vkDestroyDescriptorPool(a->device, a->post_desc_pool, NULL);
+        a->post_desc_pool = VK_NULL_HANDLE;
+    }
+    if (a->post_desc_layout) {
+        vkDestroyDescriptorSetLayout(a->device, a->post_desc_layout, NULL);
+        a->post_desc_layout = VK_NULL_HANDLE;
+    }
+    if (a->post_sampler) {
+        vkDestroySampler(a->device, a->post_sampler, NULL);
+        a->post_sampler = VK_NULL_HANDLE;
+    }
+    if (a->scene_fb) {
+        vkDestroyFramebuffer(a->device, a->scene_fb, NULL);
+        a->scene_fb = VK_NULL_HANDLE;
+    }
+    if (a->bloom_fb) {
+        vkDestroyFramebuffer(a->device, a->bloom_fb, NULL);
+        a->bloom_fb = VK_NULL_HANDLE;
+    }
+    if (a->scene_view) {
+        vkDestroyImageView(a->device, a->scene_view, NULL);
+        a->scene_view = VK_NULL_HANDLE;
+    }
+    if (a->bloom_view) {
+        vkDestroyImageView(a->device, a->bloom_view, NULL);
+        a->bloom_view = VK_NULL_HANDLE;
+    }
+    if (a->scene_image) {
+        vkDestroyImage(a->device, a->scene_image, NULL);
+        a->scene_image = VK_NULL_HANDLE;
+    }
+    if (a->bloom_image) {
+        vkDestroyImage(a->device, a->bloom_image, NULL);
+        a->bloom_image = VK_NULL_HANDLE;
+    }
+    if (a->scene_memory) {
+        vkFreeMemory(a->device, a->scene_memory, NULL);
+        a->scene_memory = VK_NULL_HANDLE;
+    }
+    if (a->bloom_memory) {
+        vkFreeMemory(a->device, a->bloom_memory, NULL);
+        a->bloom_memory = VK_NULL_HANDLE;
+    }
+    for (uint32_t i = 0; i < APP_MAX_SWAPCHAIN_IMAGES; ++i) {
+        if (a->present_framebuffers[i]) {
+            vkDestroyFramebuffer(a->device, a->present_framebuffers[i], NULL);
+            a->present_framebuffers[i] = VK_NULL_HANDLE;
+        }
+        if (a->swapchain_image_views[i]) {
+            vkDestroyImageView(a->device, a->swapchain_image_views[i], NULL);
+            a->swapchain_image_views[i] = VK_NULL_HANDLE;
+        }
+    }
+    if (a->scene_render_pass) {
+        vkDestroyRenderPass(a->device, a->scene_render_pass, NULL);
+        a->scene_render_pass = VK_NULL_HANDLE;
+    }
+    if (a->bloom_render_pass) {
+        vkDestroyRenderPass(a->device, a->bloom_render_pass, NULL);
+        a->bloom_render_pass = VK_NULL_HANDLE;
+    }
+    if (a->present_render_pass) {
+        vkDestroyRenderPass(a->device, a->present_render_pass, NULL);
+        a->present_render_pass = VK_NULL_HANDLE;
+    }
+    if (a->swapchain) {
+        vkDestroySwapchainKHR(a->device, a->swapchain, NULL);
+        a->swapchain = VK_NULL_HANDLE;
+    }
+    if (a->in_flight) {
+        vkDestroyFence(a->device, a->in_flight, NULL);
+        a->in_flight = VK_NULL_HANDLE;
+    }
+    if (a->render_finished) {
+        vkDestroySemaphore(a->device, a->render_finished, NULL);
+        a->render_finished = VK_NULL_HANDLE;
+    }
+    if (a->image_available) {
+        vkDestroySemaphore(a->device, a->image_available, NULL);
+        a->image_available = VK_NULL_HANDLE;
+    }
+    if (a->command_pool) {
+        vkDestroyCommandPool(a->device, a->command_pool, NULL);
+        a->command_pool = VK_NULL_HANDLE;
+    }
+    memset(a->swapchain_images, 0, sizeof(a->swapchain_images));
+    memset(a->command_buffers, 0, sizeof(a->command_buffers));
+    a->swapchain_image_count = 0;
+}
+
+static int recreate_render_runtime(app* a) {
+    if (!a) {
+        return 0;
+    }
+    vg_crt_profile saved_crt;
+    int have_crt = 0;
+    if (a->vg) {
+        vg_get_crt_profile(a->vg, &saved_crt);
+        have_crt = 1;
+    }
+    destroy_render_runtime(a);
+    if (!create_swapchain(a) ||
+        !create_render_passes(a) ||
+        !create_offscreen_targets(a) ||
+        !create_present_framebuffers(a) ||
+        !create_commands(a) ||
+        !create_sync(a) ||
+        !create_post_resources(a) ||
+        !create_vg_context(a)) {
+        return 0;
+    }
+    if (have_crt) {
+        vg_set_crt_profile(a->vg, &saved_crt);
+    }
+    a->game.world_w = (float)a->swapchain_extent.width;
+    a->game.world_h = (float)a->swapchain_extent.height;
+    a->force_clear_frames = 2;
+    return 1;
+}
+
+static int apply_video_mode(app* a) {
+    if (!a || !a->window) {
+        return 0;
+    }
+    const int selected = a->video_menu_selected;
+    if (selected <= 0) {
+        a->video_menu_fullscreen = 1;
+        if (SDL_SetWindowFullscreen(a->window, SDL_WINDOW_FULLSCREEN_DESKTOP) != 0) {
+            return 0;
+        }
+    } else {
+        const int idx = selected - 1;
+        if (idx < 0 || idx >= VIDEO_MENU_RES_COUNT) {
+            return 0;
+        }
+        a->video_menu_fullscreen = 0;
+        if (SDL_SetWindowFullscreen(a->window, 0) != 0) {
+            return 0;
+        }
+        SDL_SetWindowSize(a->window, k_video_resolutions[idx].w, k_video_resolutions[idx].h);
+        SDL_SetWindowPosition(a->window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+    }
+    if (!recreate_render_runtime(a)) {
+        return 0;
+    }
+    (void)save_settings(a);
+    return 1;
+}
+
+static int create_instance(app* a) {
+    uint32_t ext_count = 0;
+    if (!SDL_Vulkan_GetInstanceExtensions(a->window, &ext_count, NULL) || ext_count == 0) return 0;
+    const char** exts = (const char**)calloc(ext_count, sizeof(*exts));
+    if (!exts) return 0;
+    if (!SDL_Vulkan_GetInstanceExtensions(a->window, &ext_count, exts)) {
+        free(exts);
+        return 0;
+    }
+    VkApplicationInfo ai = {
+        .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
+        .pApplicationName = "v_type",
+        .applicationVersion = VK_MAKE_VERSION(0, 1, 0),
+        .pEngineName = "none",
+        .engineVersion = VK_MAKE_VERSION(0, 0, 0),
+        .apiVersion = VK_API_VERSION_1_0
+    };
+    VkInstanceCreateInfo ci = {
+        .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+        .pApplicationInfo = &ai,
+        .enabledExtensionCount = ext_count,
+        .ppEnabledExtensionNames = exts
+    };
+    VkResult r = vkCreateInstance(&ci, NULL, &a->instance);
+    free(exts);
+    return check_vk(r, "vkCreateInstance");
+}
+
+static int create_surface(app* a) {
+    return SDL_Vulkan_CreateSurface(a->window, a->instance, &a->surface) == SDL_TRUE;
+}
+
+static int pick_physical_device(app* a) {
+    uint32_t count = 0;
+    if (!check_vk(vkEnumeratePhysicalDevices(a->instance, &count, NULL), "vkEnumeratePhysicalDevices(count)") || count == 0) return 0;
+    VkPhysicalDevice* devs = (VkPhysicalDevice*)calloc(count, sizeof(*devs));
+    if (!devs) return 0;
+    if (!check_vk(vkEnumeratePhysicalDevices(a->instance, &count, devs), "vkEnumeratePhysicalDevices(list)")) {
+        free(devs);
+        return 0;
+    }
+    for (uint32_t d = 0; d < count; ++d) {
+        VkPhysicalDevice dev = devs[d];
+        uint32_t qcount = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(dev, &qcount, NULL);
+        VkQueueFamilyProperties* qprops = (VkQueueFamilyProperties*)calloc(qcount, sizeof(*qprops));
+        if (!qprops) continue;
+        vkGetPhysicalDeviceQueueFamilyProperties(dev, &qcount, qprops);
+        int g = 0, p = 0;
+        uint32_t gi = 0, pi = 0;
+        for (uint32_t i = 0; i < qcount; ++i) {
+            if (qprops[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+                g = 1;
+                gi = i;
+            }
+            VkBool32 present = VK_FALSE;
+            vkGetPhysicalDeviceSurfaceSupportKHR(dev, i, a->surface, &present);
+            if (present) {
+                p = 1;
+                pi = i;
+            }
+        }
+        free(qprops);
+        if (!g || !p) continue;
+        a->physical_device = dev;
+        a->graphics_queue_family = gi;
+        a->present_queue_family = pi;
+        free(devs);
+        return 1;
+    }
+    free(devs);
+    return 0;
+}
+
+static int create_device(app* a) {
+    float prio = 1.0f;
+    VkDeviceQueueCreateInfo qci[2] = {0};
+    qci[0].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    qci[0].queueFamilyIndex = a->graphics_queue_family;
+    qci[0].queueCount = 1;
+    qci[0].pQueuePriorities = &prio;
+    uint32_t qcount = 1;
+    if (a->present_queue_family != a->graphics_queue_family) {
+        qci[1] = qci[0];
+        qci[1].queueFamilyIndex = a->present_queue_family;
+        qcount = 2;
+    }
+    const char* dev_exts[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+    VkDeviceCreateInfo ci = {
+        .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+        .queueCreateInfoCount = qcount,
+        .pQueueCreateInfos = qci,
+        .enabledExtensionCount = 1,
+        .ppEnabledExtensionNames = dev_exts
+    };
+    if (!check_vk(vkCreateDevice(a->physical_device, &ci, NULL, &a->device), "vkCreateDevice")) return 0;
+    vkGetDeviceQueue(a->device, a->graphics_queue_family, 0, &a->graphics_queue);
+    vkGetDeviceQueue(a->device, a->present_queue_family, 0, &a->present_queue);
+    return 1;
+}
+
+static VkSurfaceFormatKHR choose_surface_format(const VkSurfaceFormatKHR* formats, uint32_t count) {
+    for (uint32_t i = 0; i < count; ++i) {
+        if (formats[i].format == VK_FORMAT_B8G8R8A8_UNORM && formats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+            return formats[i];
+        }
+    }
+    return formats[0];
+}
+
+static VkPresentModeKHR choose_present_mode(const VkPresentModeKHR* modes, uint32_t count) {
+    for (uint32_t i = 0; i < count; ++i) {
+        if (modes[i] == VK_PRESENT_MODE_MAILBOX_KHR) return modes[i];
+    }
+    return VK_PRESENT_MODE_FIFO_KHR;
+}
+
+static int create_swapchain(app* a) {
+    VkSurfaceCapabilitiesKHR caps;
+    if (!check_vk(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(a->physical_device, a->surface, &caps), "vkGetPhysicalDeviceSurfaceCapabilitiesKHR")) return 0;
+
+    uint32_t fmt_count = 0;
+    vkGetPhysicalDeviceSurfaceFormatsKHR(a->physical_device, a->surface, &fmt_count, NULL);
+    VkSurfaceFormatKHR* formats = (VkSurfaceFormatKHR*)calloc(fmt_count, sizeof(*formats));
+    if (!formats) return 0;
+    vkGetPhysicalDeviceSurfaceFormatsKHR(a->physical_device, a->surface, &fmt_count, formats);
+    VkSurfaceFormatKHR fmt = choose_surface_format(formats, fmt_count);
+    free(formats);
+
+    uint32_t mode_count = 0;
+    vkGetPhysicalDeviceSurfacePresentModesKHR(a->physical_device, a->surface, &mode_count, NULL);
+    VkPresentModeKHR* modes = (VkPresentModeKHR*)calloc(mode_count > 0 ? mode_count : 1u, sizeof(*modes));
+    if (!modes) return 0;
+    if (mode_count > 0) vkGetPhysicalDeviceSurfacePresentModesKHR(a->physical_device, a->surface, &mode_count, modes);
+    VkPresentModeKHR mode = choose_present_mode(modes, mode_count);
+    free(modes);
+
+    VkExtent2D extent = caps.currentExtent;
+    if (extent.width == UINT32_MAX) {
+        int w = 0, h = 0;
+        SDL_Vulkan_GetDrawableSize(a->window, &w, &h);
+        extent.width = (uint32_t)w;
+        extent.height = (uint32_t)h;
+    }
+    uint32_t image_count = caps.minImageCount + 1;
+    if (caps.maxImageCount > 0 && image_count > caps.maxImageCount) image_count = caps.maxImageCount;
+    if (image_count > APP_MAX_SWAPCHAIN_IMAGES) image_count = APP_MAX_SWAPCHAIN_IMAGES;
+
+    uint32_t qidx[2] = {a->graphics_queue_family, a->present_queue_family};
+    VkSwapchainCreateInfoKHR ci = {
+        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+        .surface = a->surface,
+        .minImageCount = image_count,
+        .imageFormat = fmt.format,
+        .imageColorSpace = fmt.colorSpace,
+        .imageExtent = extent,
+        .imageArrayLayers = 1,
+        .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+        .preTransform = caps.currentTransform,
+        .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+        .presentMode = mode,
+        .clipped = VK_TRUE
+    };
+    if (a->graphics_queue_family != a->present_queue_family) {
+        ci.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+        ci.queueFamilyIndexCount = 2;
+        ci.pQueueFamilyIndices = qidx;
+    } else {
+        ci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    }
+    if (!check_vk(vkCreateSwapchainKHR(a->device, &ci, NULL, &a->swapchain), "vkCreateSwapchainKHR")) return 0;
+
+    a->swapchain_format = fmt.format;
+    a->swapchain_extent = extent;
+    a->swapchain_image_count = APP_MAX_SWAPCHAIN_IMAGES;
+    if (!check_vk(vkGetSwapchainImagesKHR(a->device, a->swapchain, &a->swapchain_image_count, a->swapchain_images), "vkGetSwapchainImagesKHR")) return 0;
+
+    for (uint32_t i = 0; i < a->swapchain_image_count; ++i) {
+        VkImageViewCreateInfo vi = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image = a->swapchain_images[i],
+            .viewType = VK_IMAGE_VIEW_TYPE_2D,
+            .format = a->swapchain_format,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            }
+        };
+        if (!check_vk(vkCreateImageView(a->device, &vi, NULL, &a->swapchain_image_views[i]), "vkCreateImageView(swapchain)")) return 0;
+    }
+    return 1;
+}
+
+static int create_render_passes(app* a) {
+    VkAttachmentDescription scene_att = {
+        .format = a->swapchain_format,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        .finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    };
+    VkAttachmentReference scene_ref = {.attachment = 0, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkSubpassDescription scene_sub = {.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS, .colorAttachmentCount = 1, .pColorAttachments = &scene_ref};
+    VkRenderPassCreateInfo scene_rp = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO, .attachmentCount = 1, .pAttachments = &scene_att, .subpassCount = 1, .pSubpasses = &scene_sub};
+    if (!check_vk(vkCreateRenderPass(a->device, &scene_rp, NULL, &a->scene_render_pass), "vkCreateRenderPass(scene)")) return 0;
+
+    VkAttachmentDescription bloom_att = {
+        .format = a->swapchain_format,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    };
+    VkAttachmentReference bloom_ref = {.attachment = 0, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkSubpassDescription bloom_sub = {.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS, .colorAttachmentCount = 1, .pColorAttachments = &bloom_ref};
+    VkRenderPassCreateInfo bloom_rp = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO, .attachmentCount = 1, .pAttachments = &bloom_att, .subpassCount = 1, .pSubpasses = &bloom_sub};
+    if (!check_vk(vkCreateRenderPass(a->device, &bloom_rp, NULL, &a->bloom_render_pass), "vkCreateRenderPass(bloom)")) return 0;
+
+    VkAttachmentDescription present_att = {
+        .format = a->swapchain_format,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+    };
+    VkAttachmentReference present_ref = {.attachment = 0, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkSubpassDescription present_sub = {.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS, .colorAttachmentCount = 1, .pColorAttachments = &present_ref};
+    VkRenderPassCreateInfo present_rp = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO, .attachmentCount = 1, .pAttachments = &present_att, .subpassCount = 1, .pSubpasses = &present_sub};
+    return check_vk(vkCreateRenderPass(a->device, &present_rp, NULL, &a->present_render_pass), "vkCreateRenderPass(present)");
+}
+
+static int create_offscreen_targets(app* a) {
+    uint32_t w = a->swapchain_extent.width;
+    uint32_t h = a->swapchain_extent.height;
+    VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+
+    if (!create_image_2d(a, w, h, a->swapchain_format, usage, &a->scene_image, &a->scene_memory, &a->scene_view)) return 0;
+    if (!create_image_2d(a, w, h, a->swapchain_format, usage, &a->bloom_image, &a->bloom_memory, &a->bloom_view)) return 0;
+
+    VkImageView scene_att[] = {a->scene_view};
+    VkFramebufferCreateInfo scene_fb = {.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO, .renderPass = a->scene_render_pass, .attachmentCount = 1, .pAttachments = scene_att, .width = w, .height = h, .layers = 1};
+    if (!check_vk(vkCreateFramebuffer(a->device, &scene_fb, NULL, &a->scene_fb), "vkCreateFramebuffer(scene)")) return 0;
+
+    VkImageView bloom_att[] = {a->bloom_view};
+    VkFramebufferCreateInfo bloom_fb = {.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO, .renderPass = a->bloom_render_pass, .attachmentCount = 1, .pAttachments = bloom_att, .width = w, .height = h, .layers = 1};
+    return check_vk(vkCreateFramebuffer(a->device, &bloom_fb, NULL, &a->bloom_fb), "vkCreateFramebuffer(bloom)");
+}
+
+static int create_present_framebuffers(app* a) {
+    for (uint32_t i = 0; i < a->swapchain_image_count; ++i) {
+        VkImageView att[] = {a->swapchain_image_views[i]};
+        VkFramebufferCreateInfo fb = {
+            .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+            .renderPass = a->present_render_pass,
+            .attachmentCount = 1,
+            .pAttachments = att,
+            .width = a->swapchain_extent.width,
+            .height = a->swapchain_extent.height,
+            .layers = 1
+        };
+        if (!check_vk(vkCreateFramebuffer(a->device, &fb, NULL, &a->present_framebuffers[i]), "vkCreateFramebuffer(present)")) return 0;
+    }
+    return 1;
+}
+
+static int create_commands(app* a) {
+    VkCommandPoolCreateInfo pool = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, .queueFamilyIndex = a->graphics_queue_family};
+    if (!check_vk(vkCreateCommandPool(a->device, &pool, NULL, &a->command_pool), "vkCreateCommandPool")) return 0;
+    VkCommandBufferAllocateInfo alloc = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, .commandPool = a->command_pool, .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, .commandBufferCount = a->swapchain_image_count};
+    return check_vk(vkAllocateCommandBuffers(a->device, &alloc, a->command_buffers), "vkAllocateCommandBuffers");
+}
+
+static int create_sync(app* a) {
+    VkSemaphoreCreateInfo sem = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    VkFenceCreateInfo fence = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, .flags = VK_FENCE_CREATE_SIGNALED_BIT};
+    if (!check_vk(vkCreateSemaphore(a->device, &sem, NULL, &a->image_available), "vkCreateSemaphore(image_available)")) return 0;
+    if (!check_vk(vkCreateSemaphore(a->device, &sem, NULL, &a->render_finished), "vkCreateSemaphore(render_finished)")) return 0;
+    return check_vk(vkCreateFence(a->device, &fence, NULL, &a->in_flight), "vkCreateFence");
+}
+
+static int create_post_resources(app* a) {
+#if !V_TYPE_HAS_POST_SHADERS
+    (void)a;
+    fprintf(stderr, "Post shaders unavailable.\n");
+    return 0;
+#else
+    VkSamplerCreateInfo sampler = {
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .magFilter = VK_FILTER_LINEAR,
+        .minFilter = VK_FILTER_LINEAR,
+        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+        .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .maxLod = 1.0f
+    };
+    if (!check_vk(vkCreateSampler(a->device, &sampler, NULL, &a->post_sampler), "vkCreateSampler")) return 0;
+
+    VkDescriptorSetLayoutBinding bindings[2] = {
+        {.binding = 0, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT},
+        {.binding = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT}
+    };
+    VkDescriptorSetLayoutCreateInfo dsl = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 2, .pBindings = bindings};
+    if (!check_vk(vkCreateDescriptorSetLayout(a->device, &dsl, NULL, &a->post_desc_layout), "vkCreateDescriptorSetLayout")) return 0;
+
+    VkDescriptorPoolSize pool_size = {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 2};
+    VkDescriptorPoolCreateInfo pool = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, .poolSizeCount = 1, .pPoolSizes = &pool_size, .maxSets = 1};
+    if (!check_vk(vkCreateDescriptorPool(a->device, &pool, NULL, &a->post_desc_pool), "vkCreateDescriptorPool")) return 0;
+
+    VkDescriptorSetAllocateInfo alloc = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, .descriptorPool = a->post_desc_pool, .descriptorSetCount = 1, .pSetLayouts = &a->post_desc_layout};
+    if (!check_vk(vkAllocateDescriptorSets(a->device, &alloc, &a->post_desc_set), "vkAllocateDescriptorSets")) return 0;
+
+    VkDescriptorImageInfo scene_info = {.sampler = a->post_sampler, .imageView = a->scene_view, .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo bloom_info = {.sampler = a->post_sampler, .imageView = a->bloom_view, .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet writes[2] = {
+        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = a->post_desc_set, .dstBinding = 0, .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &scene_info},
+        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = a->post_desc_set, .dstBinding = 1, .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &bloom_info}
+    };
+    vkUpdateDescriptorSets(a->device, 2, writes, 0, NULL);
+
+    VkPushConstantRange pc = {.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 0, .size = sizeof(post_pc)};
+    VkPipelineLayoutCreateInfo pli = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = &a->post_desc_layout,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &pc
+    };
+    if (!check_vk(vkCreatePipelineLayout(a->device, &pli, NULL, &a->post_layout), "vkCreatePipelineLayout(post)")) return 0;
+
+    VkShaderModuleCreateInfo vs_ci = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = demo_fullscreen_vert_spv_len, .pCode = (const uint32_t*)demo_fullscreen_vert_spv};
+    VkShaderModuleCreateInfo bloom_ci = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = demo_bloom_frag_spv_len, .pCode = (const uint32_t*)demo_bloom_frag_spv};
+    VkShaderModuleCreateInfo comp_ci = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = demo_composite_frag_spv_len, .pCode = (const uint32_t*)demo_composite_frag_spv};
+
+    VkShaderModule vs = VK_NULL_HANDLE, fs_bloom = VK_NULL_HANDLE, fs_comp = VK_NULL_HANDLE;
+    if (!check_vk(vkCreateShaderModule(a->device, &vs_ci, NULL, &vs), "vkCreateShaderModule(vs)")) return 0;
+    if (!check_vk(vkCreateShaderModule(a->device, &bloom_ci, NULL, &fs_bloom), "vkCreateShaderModule(fs bloom)")) return 0;
+    if (!check_vk(vkCreateShaderModule(a->device, &comp_ci, NULL, &fs_comp), "vkCreateShaderModule(fs comp)")) return 0;
+
+    VkPipelineShaderStageCreateInfo stages[2] = {
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vs, .pName = "main"},
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = fs_bloom, .pName = "main"}
+    };
+    VkPipelineVertexInputStateCreateInfo vi = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    VkPipelineInputAssemblyStateCreateInfo ia = {.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO, .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST};
+    VkPipelineViewportStateCreateInfo vp = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .scissorCount = 1};
+    VkPipelineRasterizationStateCreateInfo rs = {.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO, .polygonMode = VK_POLYGON_MODE_FILL, .lineWidth = 1.0f, .cullMode = VK_CULL_MODE_NONE, .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE};
+    VkPipelineMultisampleStateCreateInfo ms = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT};
+    VkPipelineColorBlendAttachmentState cb_att = {
+        .blendEnable = VK_TRUE,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE,
+        .colorBlendOp = VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .alphaBlendOp = VK_BLEND_OP_ADD,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
+    };
+    VkPipelineColorBlendStateCreateInfo cb = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1, .pAttachments = &cb_att};
+    VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo ds = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .dynamicStateCount = 2, .pDynamicStates = dyn};
+    VkGraphicsPipelineCreateInfo gp = {
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .stageCount = 2,
+        .pStages = stages,
+        .pVertexInputState = &vi,
+        .pInputAssemblyState = &ia,
+        .pViewportState = &vp,
+        .pRasterizationState = &rs,
+        .pMultisampleState = &ms,
+        .pColorBlendState = &cb,
+        .pDynamicState = &ds,
+        .layout = a->post_layout,
+        .renderPass = a->bloom_render_pass,
+        .subpass = 0
+    };
+    if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->bloom_pipeline), "vkCreateGraphicsPipelines(bloom)")) return 0;
+
+    stages[1].module = fs_comp;
+    cb_att.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    cb_att.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    cb_att.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    cb_att.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    gp.renderPass = a->present_render_pass;
+    if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->composite_pipeline), "vkCreateGraphicsPipelines(composite)")) return 0;
+
+    vkDestroyShaderModule(a->device, fs_comp, NULL);
+    vkDestroyShaderModule(a->device, fs_bloom, NULL);
+    vkDestroyShaderModule(a->device, vs, NULL);
+    return 1;
+#endif
+}
+
+static int create_vg_context(app* a) {
+    vg_context_desc desc;
+    memset(&desc, 0, sizeof(desc));
+    desc.backend = VG_BACKEND_VULKAN;
+    desc.api.vulkan.instance = (void*)a->instance;
+    desc.api.vulkan.physical_device = (void*)a->physical_device;
+    desc.api.vulkan.device = (void*)a->device;
+    desc.api.vulkan.graphics_queue = (void*)a->graphics_queue;
+    desc.api.vulkan.graphics_queue_family = a->graphics_queue_family;
+    desc.api.vulkan.render_pass = (void*)a->scene_render_pass;
+    desc.api.vulkan.vertex_binding = 0;
+    desc.api.vulkan.max_frames_in_flight = 1;
+    vg_result vr = vg_context_create(&desc, &a->vg);
+    if (vr != VG_OK) {
+        fprintf(stderr, "vg_context_create failed: %s\n", vg_result_string(vr));
+        return 0;
+    }
+
+    vg_crt_profile profile;
+    vg_make_crt_profile(VG_CRT_PRESET_WOPR, &profile);
+    profile.beam_core_width_px = 0.600001f;
+    profile.beam_halo_width_px = 2.8f;
+    profile.beam_intensity = 0.85f;
+    profile.bloom_strength = 0.75f;
+    profile.bloom_radius_px = 4.0f;
+    profile.persistence_decay = 0.70f;
+    profile.jitter_amount = 0.07f;
+    profile.flicker_amount = 0.03f;
+    profile.vignette_strength = 0.14f;
+    profile.barrel_distortion = 0.02f;
+    profile.scanline_strength = 0.12f;
+    profile.noise_strength = 0.04f;
+    vg_set_crt_profile(a->vg, &profile);
+    return 1;
+}
+
+static int record_submit_present(app* a, uint32_t image_index, float t, float dt, float fps) {
+    VkCommandBuffer cmd = a->command_buffers[image_index];
+    if (!check_vk(vkResetCommandBuffer(cmd, 0), "vkResetCommandBuffer")) return 0;
+    VkCommandBufferBeginInfo begin = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    if (!check_vk(vkBeginCommandBuffer(cmd, &begin), "vkBeginCommandBuffer")) return 0;
+
+    VkClearValue scene_clear = {.color = {{0.0f, 0.0f, 0.0f, 1.0f}}};
+    VkRenderPassBeginInfo scene_rp = {
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+        .renderPass = a->scene_render_pass,
+        .framebuffer = a->scene_fb,
+        .renderArea = {.offset = {0, 0}, .extent = a->swapchain_extent},
+        .clearValueCount = 1,
+        .pClearValues = &scene_clear
+    };
+    vkCmdBeginRenderPass(cmd, &scene_rp, VK_SUBPASS_CONTENTS_INLINE);
+
+    vg_frame_desc frame = {.width = a->swapchain_extent.width, .height = a->swapchain_extent.height, .delta_time_s = dt, .command_buffer = (void*)cmd};
+    vg_result vr = vg_begin_frame(a->vg, &frame);
+    if (vr != VG_OK) return 0;
+    render_metrics metrics = {
+        .fps = fps,
+        .dt = dt,
+        .force_clear = (a->force_clear_frames > 0) ? 1 : 0,
+        .show_crt_ui = a->show_crt_ui,
+        .crt_ui_selected = a->crt_ui_selected,
+        .teletype_text = a->wave_tty_visible,
+        .show_acoustics = a->show_acoustics,
+        .show_video_menu = a->show_video_menu,
+        .video_menu_selected = a->video_menu_selected,
+        .video_menu_fullscreen = a->video_menu_fullscreen,
+        .palette_mode = a->palette_mode,
+        .acoustics_selected = a->acoustics_selected,
+        .acoustics_fire_slot_selected = a->acoustics_fire_slot_selected,
+        .acoustics_thr_slot_selected = a->acoustics_thr_slot_selected
+    };
+    {
+        int mx = 0;
+        int my = 0;
+        (void)SDL_GetMouseState(&mx, &my);
+        const uint32_t wf = SDL_GetWindowFlags(a->window);
+        metrics.mouse_in_window = ((wf & SDL_WINDOW_MOUSE_FOCUS) != 0u) ? 1 : 0;
+        map_mouse_to_scene_coords(a, mx, my, &metrics.mouse_x, &metrics.mouse_y);
+    }
+    for (int i = 0; i < ACOUSTICS_SLOT_COUNT; ++i) {
+        metrics.acoustics_fire_slot_defined[i] = a->acoustics_fire_slot_defined[i] ? 1 : 0;
+        metrics.acoustics_thr_slot_defined[i] = a->acoustics_thr_slot_defined[i] ? 1 : 0;
+    }
+    for (int i = 0; i < VIDEO_MENU_RES_COUNT; ++i) {
+        metrics.video_res_w[i] = k_video_resolutions[i].w;
+        metrics.video_res_h[i] = k_video_resolutions[i].h;
+    }
+    for (int i = 0; i < VIDEO_MENU_DIAL_COUNT; ++i) {
+        metrics.video_dial_01[i] = a->video_dial_01[i];
+    }
+    for (int i = 0; i < ACOUSTICS_SLIDER_COUNT; ++i) {
+        metrics.acoustics_value_01[i] = a->acoustics_value_01[i];
+        metrics.acoustics_display[i] = acoustics_value_to_ui_display(i, a->acoustics_value_01[i]);
+    }
+    for (int i = 0; i < ACOUSTICS_SCOPE_SAMPLES; ++i) {
+        metrics.acoustics_scope[i] = a->scope_window[i];
+    }
+    vr = render_frame(a->vg, &a->game, &metrics);
+    if (vr != VG_OK) return 0;
+    if (a->force_clear_frames > 0) {
+        a->force_clear_frames--;
+    }
+    vr = vg_end_frame(a->vg);
+    if (vr != VG_OK) return 0;
+    vkCmdEndRenderPass(cmd);
+
+    VkClearValue bloom_clear = {.color = {{0.0f, 0.0f, 0.0f, 1.0f}}};
+    VkRenderPassBeginInfo bloom_rp = {
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+        .renderPass = a->bloom_render_pass,
+        .framebuffer = a->bloom_fb,
+        .renderArea = {.offset = {0, 0}, .extent = a->swapchain_extent},
+        .clearValueCount = 1,
+        .pClearValues = &bloom_clear
+    };
+    vkCmdBeginRenderPass(cmd, &bloom_rp, VK_SUBPASS_CONTENTS_INLINE);
+    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->bloom_pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->post_layout, 0, 1, &a->post_desc_set, 0, NULL);
+
+    vg_crt_profile crt;
+    vg_get_crt_profile(a->vg, &crt);
+    post_pc pc = {0};
+    pc.p0[0] = 1.0f / (float)a->swapchain_extent.width;
+    pc.p0[1] = 1.0f / (float)a->swapchain_extent.height;
+    pc.p0[2] = crt.bloom_strength;
+    pc.p0[3] = crt.bloom_radius_px;
+    pc.p1[0] = crt.vignette_strength;
+    pc.p1[1] = crt.barrel_distortion;
+    pc.p1[2] = crt.scanline_strength;
+    pc.p1[3] = crt.noise_strength;
+    pc.p2[0] = t;
+    pc.p2[1] = a->show_crt_ui ? 1.0f : 0.0f;
+    pc.p2[2] = 24.0f / (float)a->swapchain_extent.width;
+    pc.p2[3] = 0.12f;
+    pc.p3[0] = 0.44f;
+    pc.p3[1] = 0.76f;
+    vkCmdPushConstants(cmd, a->post_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRenderPass(cmd);
+
+    VkClearValue present_clear = {.color = {{0.0f, 0.0f, 0.0f, 1.0f}}};
+    VkRenderPassBeginInfo present_rp = {
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+        .renderPass = a->present_render_pass,
+        .framebuffer = a->present_framebuffers[image_index],
+        .renderArea = {.offset = {0, 0}, .extent = a->swapchain_extent},
+        .clearValueCount = 1,
+        .pClearValues = &present_clear
+    };
+    vkCmdBeginRenderPass(cmd, &present_rp, VK_SUBPASS_CONTENTS_INLINE);
+    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->composite_pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->post_layout, 0, 1, &a->post_desc_set, 0, NULL);
+    vkCmdPushConstants(cmd, a->post_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRenderPass(cmd);
+
+    if (!check_vk(vkEndCommandBuffer(cmd), "vkEndCommandBuffer")) return 0;
+    if (!check_vk(vkResetFences(a->device, 1, &a->in_flight), "vkResetFences")) return 0;
+
+    VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    VkSubmitInfo submit = {
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores = &a->image_available,
+        .pWaitDstStageMask = &wait_stage,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &cmd,
+        .signalSemaphoreCount = 1,
+        .pSignalSemaphores = &a->render_finished
+    };
+    if (!check_vk(vkQueueSubmit(a->graphics_queue, 1, &submit, a->in_flight), "vkQueueSubmit")) return 0;
+
+    VkPresentInfoKHR present = {
+        .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores = &a->render_finished,
+        .swapchainCount = 1,
+        .pSwapchains = &a->swapchain,
+        .pImageIndices = &image_index
+    };
+    VkResult pr = vkQueuePresentKHR(a->present_queue, &present);
+    if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR) {
+        a->swapchain_needs_recreate = 1;
+        return 0;
+    }
+    return check_vk(pr, "vkQueuePresentKHR");
+}
+
+int main(void) {
+    app a;
+    memset(&a, 0, sizeof(a));
+    a.force_clear_frames = 2;
+    a.crt_ui_selected = 0;
+    a.crt_ui_mouse_drag = 0;
+    a.show_acoustics = 0;
+    a.show_video_menu = 0;
+    a.video_menu_selected = 1;
+    a.video_menu_fullscreen = 0;
+    a.palette_mode = 0;
+    a.video_dial_01[0] = 0.56f; /* bloom */
+    a.video_dial_01[1] = 0.44f; /* persistence */
+    a.video_dial_01[2] = 0.22f; /* jitter */
+    a.video_dial_01[3] = 0.18f; /* flicker */
+    a.video_dial_01[4] = 0.38f; /* scanline */
+    a.video_dial_01[5] = 0.32f; /* noise */
+    a.video_dial_01[6] = 0.30f; /* vignette */
+    a.video_dial_01[7] = 0.28f; /* barrel */
+    a.video_dial_01[8] = 0.40f; /* beam */
+    a.video_menu_dial_drag = -1;
+    a.video_menu_dial_drag_start_y = 0.0f;
+    a.video_menu_dial_drag_start_value = 0.0f;
+    a.acoustics_selected = 0;
+    a.acoustics_mouse_drag = 0;
+    a.wave_tty_visible[0] = '\0';
+    acoustics_defaults(&a);
+    acoustics_slot_defaults(&a);
+
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
+        fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
+        return 1;
+    }
+    srand((unsigned int)SDL_GetTicks());
+    init_teletype_audio(&a);
+    (void)load_acoustics_slots(&a, ACOUSTICS_SLOTS_PATH);
+    (void)load_settings(&a);
+    apply_acoustics(&a);
+
+    int start_w = APP_WIDTH;
+    int start_h = APP_HEIGHT;
+    if (a.video_menu_selected > 0 && a.video_menu_selected <= VIDEO_MENU_RES_COUNT) {
+        start_w = k_video_resolutions[a.video_menu_selected - 1].w;
+        start_h = k_video_resolutions[a.video_menu_selected - 1].h;
+    }
+    Uint32 win_flags = SDL_WINDOW_VULKAN | SDL_WINDOW_SHOWN;
+    if (a.video_menu_fullscreen) {
+        win_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+    }
+    a.window = SDL_CreateWindow("v-type (vulkan + post)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, start_w, start_h, win_flags);
+    if (!a.window) {
+        cleanup(&a);
+        return 1;
+    }
+    SDL_ShowCursor(SDL_DISABLE);
+
+    if (!create_instance(&a) ||
+        !create_surface(&a) ||
+        !pick_physical_device(&a) ||
+        !create_device(&a) ||
+        !create_swapchain(&a) ||
+        !create_render_passes(&a) ||
+        !create_offscreen_targets(&a) ||
+        !create_present_framebuffers(&a) ||
+        !create_commands(&a) ||
+        !create_sync(&a) ||
+        !create_post_resources(&a) ||
+        !create_vg_context(&a)) {
+        cleanup(&a);
+        return 1;
+    }
+
+    game_init(&a.game, (float)a.swapchain_extent.width, (float)a.swapchain_extent.height);
+    apply_video_lab_controls(&a);
+    vg_text_fx_typewriter_set_rate(&a.wave_tty, 0.038f);
+    vg_text_fx_typewriter_set_beep(&a.wave_tty, teletype_beep_cb, &a);
+    vg_text_fx_typewriter_set_beep_profile(&a.wave_tty, 900.0f, 55.0f, 0.028f, 0.14f);
+    vg_text_fx_typewriter_enable_beep(&a.wave_tty, 1);
+    vg_text_fx_typewriter_set_text(&a.wave_tty, "TACTICAL UPLINK READY");
+
+    uint64_t last = SDL_GetPerformanceCounter();
+    float freq = (float)SDL_GetPerformanceFrequency();
+    float fps_smoothed = 60.0f;
+    int running = 1;
+
+    while (running) {
+        int restart_pressed = 0;
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_QUIT) {
+                running = 0;
+            } else if (ev.type == SDL_KEYDOWN && !ev.key.repeat) {
+                if (ev.key.keysym.sym == SDLK_ESCAPE && a.show_video_menu) {
+                    a.show_video_menu = 0;
+                } else if (ev.key.keysym.sym == SDLK_ESCAPE) {
+                    running = 0;
+                } else if (ev.key.keysym.sym == SDLK_n) {
+                    game_cycle_level(&a.game);
+                    a.force_clear_frames = 2;
+                    if (a.game.level_style == 1) {
+                        set_tty_message(&a, "level mode: cylinder run");
+                    } else {
+                        set_tty_message(&a, "level mode: classic scroll");
+                    }
+                } else if (ev.key.keysym.sym == SDLK_2) {
+                    a.show_video_menu = !a.show_video_menu;
+                    if (a.show_video_menu) {
+                        a.show_acoustics = 0;
+                        a.show_crt_ui = 0;
+                        a.video_menu_dial_drag = -1;
+                    }
+                } else if (a.show_video_menu && ev.key.keysym.sym == SDLK_UP) {
+                    const int count = VIDEO_MENU_RES_COUNT + 1;
+                    a.video_menu_selected = (a.video_menu_selected + count - 1) % count;
+                } else if (a.show_video_menu && ev.key.keysym.sym == SDLK_DOWN) {
+                    const int count = VIDEO_MENU_RES_COUNT + 1;
+                    a.video_menu_selected = (a.video_menu_selected + 1) % count;
+                } else if (a.show_video_menu && (ev.key.keysym.sym == SDLK_RETURN || ev.key.keysym.sym == SDLK_KP_ENTER || ev.key.keysym.sym == SDLK_SPACE)) {
+                    if (apply_video_mode(&a)) {
+                        set_tty_message(&a, "display mode applied");
+                    } else {
+                        set_tty_message(&a, "display mode apply failed");
+                    }
+                } else if (ev.key.keysym.sym == SDLK_1) {
+                    a.show_acoustics = !a.show_acoustics;
+                } else if (a.show_acoustics && ev.key.keysym.sym == SDLK_s) {
+                    capture_current_to_selected_slots(&a);
+                    if (save_acoustics_slots(&a, ACOUSTICS_SLOTS_PATH)) {
+                        set_tty_message(&a, "acoustics slots saved");
+                    } else {
+                        set_tty_message(&a, "acoustics slots save failed");
+                    }
+                } else if (a.show_acoustics && ev.key.keysym.sym == SDLK_f) {
+                    trigger_fire_test(&a);
+                } else if (a.show_acoustics && ev.key.keysym.sym == SDLK_g) {
+                    trigger_thruster_test(&a);
+                } else if (ev.key.keysym.sym == SDLK_TAB) {
+                    a.show_crt_ui = !a.show_crt_ui;
+                } else if (ev.key.keysym.sym == SDLK_r) {
+                    restart_pressed = 1;
+                } else if (a.show_acoustics && ev.key.keysym.sym == SDLK_UP) {
+                    a.acoustics_selected = (a.acoustics_selected + ACOUSTICS_SLIDER_COUNT - 1) % ACOUSTICS_SLIDER_COUNT;
+                } else if (a.show_acoustics && ev.key.keysym.sym == SDLK_DOWN) {
+                    a.acoustics_selected = (a.acoustics_selected + 1) % ACOUSTICS_SLIDER_COUNT;
+                } else if (a.show_acoustics && ev.key.keysym.sym == SDLK_LEFT) {
+                    float* v = &a.acoustics_value_01[a.acoustics_selected];
+                    *v = clampf(*v - 0.02f, 0.0f, 1.0f);
+                    apply_acoustics(&a);
+                } else if (a.show_acoustics && ev.key.keysym.sym == SDLK_RIGHT) {
+                    float* v = &a.acoustics_value_01[a.acoustics_selected];
+                    *v = clampf(*v + 0.02f, 0.0f, 1.0f);
+                    apply_acoustics(&a);
+                } else if (a.show_crt_ui && ev.key.keysym.sym == SDLK_UP) {
+                    a.crt_ui_selected = (a.crt_ui_selected + 11) % 12;
+                } else if (a.show_crt_ui && ev.key.keysym.sym == SDLK_DOWN) {
+                    a.crt_ui_selected = (a.crt_ui_selected + 1) % 12;
+                } else if (a.show_crt_ui && ev.key.keysym.sym == SDLK_LEFT) {
+                    adjust_crt_profile(a.vg, a.crt_ui_selected, -1);
+                } else if (a.show_crt_ui && ev.key.keysym.sym == SDLK_RIGHT) {
+                    adjust_crt_profile(a.vg, a.crt_ui_selected, +1);
+                }
+            } else if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT) {
+                if (a.show_video_menu && handle_video_menu_mouse(&a, ev.button.x, ev.button.y, 1)) {
+                    a.acoustics_mouse_drag = 0;
+                    a.crt_ui_mouse_drag = 0;
+                } else if (a.show_acoustics && handle_acoustics_ui_mouse(&a, ev.button.x, ev.button.y, 1)) {
+                    a.acoustics_mouse_drag = 1;
+                } else if (a.show_crt_ui && handle_crt_ui_mouse(&a, ev.button.x, ev.button.y, 1)) {
+                    a.crt_ui_mouse_drag = 1;
+                }
+            } else if (ev.type == SDL_MOUSEBUTTONUP && ev.button.button == SDL_BUTTON_LEFT) {
+                if (a.show_video_menu) {
+                    if (a.video_menu_dial_drag >= 0) {
+                        (void)save_settings(&a);
+                    }
+                    a.video_menu_dial_drag = -1;
+                }
+                a.crt_ui_mouse_drag = 0;
+                a.acoustics_mouse_drag = 0;
+            } else if (ev.type == SDL_MOUSEMOTION) {
+                if (a.show_video_menu && a.video_menu_dial_drag >= 0) {
+                    (void)update_video_menu_dial_drag(&a, ev.motion.x, ev.motion.y);
+                } else if (a.show_acoustics && a.acoustics_mouse_drag) {
+                    (void)handle_acoustics_ui_mouse(&a, ev.motion.x, ev.motion.y, 1);
+                } else if (a.show_crt_ui && a.crt_ui_mouse_drag) {
+                    (void)handle_crt_ui_mouse(&a, ev.motion.x, ev.motion.y, 1);
+                }
+            }
+        }
+
+        const uint8_t* keys = SDL_GetKeyboardState(NULL);
+        game_input in;
+        memset(&in, 0, sizeof(in));
+        if (!a.show_acoustics && !a.show_video_menu) {
+            in.left = keys[SDL_SCANCODE_A] || keys[SDL_SCANCODE_LEFT];
+            in.right = keys[SDL_SCANCODE_D] || keys[SDL_SCANCODE_RIGHT];
+            in.up = keys[SDL_SCANCODE_W] || keys[SDL_SCANCODE_UP];
+            in.down = keys[SDL_SCANCODE_S] || keys[SDL_SCANCODE_DOWN];
+            in.fire = keys[SDL_SCANCODE_SPACE] || keys[SDL_SCANCODE_LCTRL];
+            in.restart = restart_pressed;
+        }
+
+        uint64_t now = SDL_GetPerformanceCounter();
+        float dt_raw = (float)(now - last) / freq;
+        last = now;
+        if (dt_raw <= 0.0f) dt_raw = 1.0f / 60.0f;
+        float dt_sim = dt_raw;
+        if (dt_sim > (1.0f / 15.0f)) dt_sim = 1.0f / 15.0f;
+        if (!a.show_acoustics && !a.show_video_menu) {
+            game_update(&a.game, dt_sim, &in);
+        }
+        if (a.audio_ready) {
+            const int thrust_on = (!a.show_acoustics && !a.show_video_menu) && (in.left || in.right || in.up || in.down) && (a.game.lives > 0);
+            atomic_store_explicit(&a.thrust_gate, thrust_on ? 1 : 0, memory_order_release);
+        }
+        if (a.audio_ready) {
+            const int fire_events = game_pop_fire_sfx_count(&a.game);
+            if (fire_events > 0) {
+                atomic_fetch_add_explicit(&a.pending_fire_events, (unsigned int)fire_events, memory_order_acq_rel);
+            }
+            atomic_store_explicit(&a.audio_weapon_level, a.game.weapon_level, memory_order_release);
+        } else {
+            (void)game_pop_fire_sfx_count(&a.game);
+        }
+        {
+            char wave_msg[160];
+            if (game_pop_wave_announcement(&a.game, wave_msg, sizeof(wave_msg))) {
+                vg_text_fx_typewriter_set_text(&a.wave_tty, wave_msg);
+                vg_text_fx_typewriter_reset(&a.wave_tty);
+                a.wave_tty.timer_s = 0.02f;
+            }
+            (void)vg_text_fx_typewriter_update(&a.wave_tty, dt_sim);
+            (void)vg_text_fx_typewriter_copy_visible(&a.wave_tty, a.wave_tty_visible, sizeof(a.wave_tty_visible));
+        }
+        if (a.audio_ready) {
+            float rb_tmp[256];
+            uint32_t got = 0u;
+            int scope_updated = 0;
+            do {
+                got = wtp_ringbuffer_read(&a.scope_rb, rb_tmp, (uint32_t)(sizeof(rb_tmp) / sizeof(rb_tmp[0])));
+                if (got > 0u) {
+                    scope_history_push(&a, rb_tmp, got);
+                    scope_updated = 1;
+                }
+            } while (got > 0u);
+            if (scope_updated) {
+                rebuild_scope_window(&a);
+            }
+        }
+
+        float fps_inst = 1.0f / dt_raw;
+        fps_smoothed += (fps_inst - fps_smoothed) * 0.10f;
+
+        if (!check_vk(vkWaitForFences(a.device, 1, &a.in_flight, VK_TRUE, UINT64_MAX), "vkWaitForFences")) break;
+
+        uint32_t image_index = 0;
+        VkResult ar = vkAcquireNextImageKHR(a.device, a.swapchain, UINT64_MAX, a.image_available, VK_NULL_HANDLE, &image_index);
+        if (ar != VK_SUCCESS) {
+            if (ar == VK_ERROR_OUT_OF_DATE_KHR || ar == VK_SUBOPTIMAL_KHR) {
+                if (!recreate_render_runtime(&a)) {
+                    fprintf(stderr, "swapchain recreate failed after out-of-date/suboptimal\n");
+                    break;
+                }
+                continue;
+            } else {
+                check_vk(ar, "vkAcquireNextImageKHR");
+            }
+            break;
+        }
+
+        float t = (float)SDL_GetTicks() * 0.001f;
+        a.swapchain_needs_recreate = 0;
+        if (!record_submit_present(&a, image_index, t, dt_sim, fps_smoothed)) {
+            if (a.swapchain_needs_recreate) {
+                if (!recreate_render_runtime(&a)) {
+                    break;
+                }
+                continue;
+            }
+            break;
+        }
+    }
+
+    cleanup(&a);
+    return 0;
+}
