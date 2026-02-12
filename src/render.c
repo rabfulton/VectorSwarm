@@ -232,6 +232,21 @@ static float repeatf(float v, float period) {
     return x;
 }
 
+static int wrapi(int i, int n) {
+    if (n <= 0) {
+        return 0;
+    }
+    i %= n;
+    if (i < 0) {
+        i += n;
+    }
+    return i;
+}
+
+static float lerpf(float a, float b, float t) {
+    return a + (b - a) * t;
+}
+
 typedef struct palette_theme {
     vg_color primary;
     vg_color primary_dim;
@@ -1084,16 +1099,28 @@ static vg_result draw_cylinder_wire(
                 radar_edge[i].y = cy + (edge[i].y - cy) * radar_scale;
             }
         }
+        const float phase_turns = repeatf(-(g->player.b.x) / fmaxf(period * 0.85f, 1.0f), 1.0f);
+        const float radar_shift = phase_turns * (float)(N - 1);
 
         for (int ring = 0; ring < 8; ++ring) {
             const float rs = 1.0f - 0.11f * (float)ring;
             vg_vec2 loop[N];
-            for (int i = 0; i < N; ++i) {
-                loop[i].x = cx + (radar_edge[i].x - cx) * rs;
-                loop[i].y = cy + (radar_edge[i].y - cy) * rs;
-            }
+            float loop_depth[N];
             for (int i = 0; i < N - 1; ++i) {
-                const float d = 0.5f * (edge_depth[i] + edge_depth[i + 1]);
+                const float u = (float)i + radar_shift;
+                const int i0 = wrapi((int)floorf(u), N - 1);
+                const int i1 = wrapi(i0 + 1, N - 1);
+                const float t = u - floorf(u);
+                const float ex = lerpf(radar_edge[i0].x, radar_edge[i1].x, t);
+                const float ey = lerpf(radar_edge[i0].y, radar_edge[i1].y, t);
+                loop[i].x = cx + (ex - cx) * rs;
+                loop[i].y = cy + (ey - cy) * rs;
+                loop_depth[i] = lerpf(edge_depth[i0], edge_depth[i1], t);
+            }
+            loop[N - 1] = loop[0];
+            loop_depth[N - 1] = loop_depth[0];
+            for (int i = 0; i < N - 1; ++i) {
+                const float d = 0.5f * (loop_depth[i] + loop_depth[i + 1]);
                 const float fade = 0.03f + d * d * 0.97f;
                 vg_stroke_style sh = tr_h;
                 vg_stroke_style sm = tr_m;
@@ -1114,12 +1141,19 @@ static vg_result draw_cylinder_wire(
         }
 
         for (int s = 0; s < 20; ++s) {
-            const int idx = (s * (N - 1)) / 20;
+            const float idxf = (float)(s * (N - 1)) / 20.0f + radar_shift;
+            const int i0 = wrapi((int)floorf(idxf), N - 1);
+            const int i1 = wrapi(i0 + 1, N - 1);
+            const float t = idxf - floorf(idxf);
+            const vg_vec2 spoke_tip = {
+                lerpf(radar_edge[i0].x, radar_edge[i1].x, t),
+                lerpf(radar_edge[i0].y, radar_edge[i1].y, t)
+            };
             vg_vec2 spoke[2] = {
                 {cx, cy},
-                {radar_edge[idx].x, radar_edge[idx].y}
+                {spoke_tip.x, spoke_tip.y}
             };
-            const float d = edge_depth[idx];
+            const float d = lerpf(edge_depth[i0], edge_depth[i1], t);
             const float fade = 0.03f + d * d * 0.97f;
             vg_stroke_style sh = tr_h;
             sh.intensity *= fade;
@@ -1135,7 +1169,7 @@ static vg_result draw_cylinder_wire(
             for (int t = 7; t >= 0; --t) {
                 const float lag = (float)t * 0.14f;
                 const float a = sw - lag;
-                float u = fmodf(a / 6.28318530718f, 1.0f);
+                float u = fmodf(a / 6.28318530718f + phase_turns, 1.0f);
                 if (u < 0.0f) {
                     u += 1.0f;
                 }
@@ -1177,7 +1211,18 @@ static vg_result draw_cylinder_wire(
             const float z01 = cosf(theta) * 0.5f + 0.5f;
             const float zfade = 0.03f + z01 * z01 * 0.97f;
             const float r01 = 0.24f + 0.70f * (e->b.y / fmaxf(g->world_h, 1.0f));
-            const vg_vec2 edge_p = project_cylinder_point(g, g->camera_x + theta / 6.28318530718f * period, ring_y[0], NULL);
+            float u = fmodf(theta / 6.28318530718f + phase_turns, 1.0f);
+            if (u < 0.0f) {
+                u += 1.0f;
+            }
+            const float fi = u * (float)(N - 1);
+            const int i0 = wrapi((int)floorf(fi), N - 1);
+            const int i1 = wrapi(i0 + 1, N - 1);
+            const float ft = fi - floorf(fi);
+            const vg_vec2 edge_p = {
+                lerpf(edge[i0].x, edge[i1].x, ft),
+                lerpf(edge[i0].y, edge[i1].y, ft)
+            };
             const vg_vec2 blip = {
                 cx + (edge_p.x - cx) * 1.45f * r01,
                 cy + (edge_p.y - cy) * 1.45f * r01
@@ -1203,6 +1248,10 @@ static vg_result draw_cylinder_wire(
 		        const vg_vec2 vc = project_cylinder_point(g, g->camera_x, g->world_h * 0.50f, NULL);
 		        const float cx = vc.x;
 		        const float cy = vc.y;
+                const float phase_turns = repeatf(-(g->player.b.x) / fmaxf(period * 0.85f, 1.0f), 1.0f);
+                const float loop_shift_legacy = phase_turns * (float)(WORMHOLE_VN - 1);
+                const float loop_shift_modern = phase_turns * (float)WORMHOLE_VN;
+                const float rail_shift = phase_turns * (float)WORMHOLE_COLS;
 
 			        if (level_style == LEVEL_STYLE_EVENT_HORIZON_LEGACY) {
 		            /* Legacy cull-based wireframe (from older render.c). */
@@ -1210,10 +1259,21 @@ static vg_result draw_cylinder_wire(
 		                const float fade = wh.row_fade[j];
 
 		                vg_vec2 loop[WORMHOLE_VN];
-		                for (int i = 0; i < WORMHOLE_VN; ++i) {
-		                    loop[i].x = cx + wh.loop_rel_legacy[j][i].x;
-		                    loop[i].y = cy + wh.loop_rel_legacy[j][i].y;
-		                }
+                        float loop_face[WORMHOLE_VN];
+                        const int nsrc = WORMHOLE_VN - 1;
+                        for (int i = 0; i < nsrc; ++i) {
+                            const float u = (float)i + loop_shift_legacy;
+                            const int i0 = wrapi((int)floorf(u), nsrc);
+                            const int i1 = wrapi(i0 + 1, nsrc);
+                            const float t = u - floorf(u);
+                            const vg_vec2 p0 = wh.loop_rel_legacy[j][i0];
+                            const vg_vec2 p1 = wh.loop_rel_legacy[j][i1];
+                            loop[i].x = cx + lerpf(p0.x, p1.x, t);
+                            loop[i].y = cy + lerpf(p0.y, p1.y, t);
+                            loop_face[i] = lerpf(wh.loop_face_legacy[j][i0], wh.loop_face_legacy[j][i1], t);
+                        }
+                        loop[WORMHOLE_VN - 1] = loop[0];
+                        loop_face[WORMHOLE_VN - 1] = loop_face[0];
 
 		                vg_stroke_style vh = *halo;
 		                vg_stroke_style vm = *main;
@@ -1221,11 +1281,11 @@ static vg_result draw_cylinder_wire(
 		                vm.color = (vg_color){0.44f, 0.97f, 1.0f, 0.58f * fade};
 		                vh.intensity *= 0.42f + fade * 0.48f;
 		                vm.intensity *= 0.48f + fade * 0.56f;
-		                vg_result vr = draw_polyline_culled(ctx, loop, wh.loop_face_legacy[j], WORMHOLE_VN, &vh, 1, 0.02f);
+		                vg_result vr = draw_polyline_culled(ctx, loop, loop_face, WORMHOLE_VN, &vh, 1, 0.02f);
 		                if (vr != VG_OK) {
 		                    return vr;
 		                }
-		                vr = draw_polyline_culled(ctx, loop, wh.loop_face_legacy[j], WORMHOLE_VN, &vm, 1, 0.02f);
+		                vr = draw_polyline_culled(ctx, loop, loop_face, WORMHOLE_VN, &vm, 1, 0.02f);
 		                if (vr != VG_OK) {
 		                    return vr;
 		                }
@@ -1233,15 +1293,21 @@ static vg_result draw_cylinder_wire(
 
 		            for (int c = 0; c < WORMHOLE_COLS; ++c) {
 		                vg_vec2 rail[WORMHOLE_ROWS];
+                        float rail_face[WORMHOLE_ROWS];
+                        const float cu = (float)c + rail_shift;
+                        const int c0 = wrapi((int)floorf(cu), WORMHOLE_COLS);
+                        const int c1 = wrapi(c0 + 1, WORMHOLE_COLS);
+                        const float ct = cu - floorf(cu);
 		                for (int j = 0; j < WORMHOLE_ROWS; ++j) {
-		                    rail[j].x = cx + wh.rail_rel[c][j].x;
-		                    rail[j].y = cy + wh.rail_rel[c][j].y;
+		                    rail[j].x = cx + lerpf(wh.rail_rel[c0][j].x, wh.rail_rel[c1][j].x, ct);
+		                    rail[j].y = cy + lerpf(wh.rail_rel[c0][j].y, wh.rail_rel[c1][j].y, ct);
+                            rail_face[j] = lerpf(wh.rail_face_legacy[c0][j], wh.rail_face_legacy[c1][j], ct);
 		                }
 		                vg_stroke_style rs = *main;
 		                rs.color = (vg_color){0.38f, 0.92f, 1.0f, 0.30f};
 		                rs.width_px *= 1.55f;
 		                rs.intensity *= 0.52f;
-		                vg_result vr = draw_polyline_culled(ctx, rail, wh.rail_face_legacy[c], WORMHOLE_ROWS, &rs, 0, 0.02f);
+		                vg_result vr = draw_polyline_culled(ctx, rail, rail_face, WORMHOLE_ROWS, &rs, 0, 0.02f);
 		                if (vr != VG_OK) {
 		                    return vr;
 		                }
@@ -1253,8 +1319,12 @@ static vg_result draw_cylinder_wire(
 
 		                vg_vec2 loop[WORMHOLE_VN];
 		                for (int i = 0; i < WORMHOLE_VN; ++i) {
-		                    loop[i].x = cx + wh.loop_rel_modern[j][i].x;
-		                    loop[i].y = cy + wh.loop_rel_modern[j][i].y;
+                            const float u = (float)i + loop_shift_modern;
+                            const int i0 = wrapi((int)floorf(u), WORMHOLE_VN);
+                            const int i1 = wrapi(i0 + 1, WORMHOLE_VN);
+                            const float t = u - floorf(u);
+		                    loop[i].x = cx + lerpf(wh.loop_rel_modern[j][i0].x, wh.loop_rel_modern[j][i1].x, t);
+		                    loop[i].y = cy + lerpf(wh.loop_rel_modern[j][i0].y, wh.loop_rel_modern[j][i1].y, t);
 		                }
 
 		                vg_stroke_style vh = *halo;
@@ -1277,9 +1347,13 @@ static vg_result draw_cylinder_wire(
 
 		            for (int c = 0; c < WORMHOLE_COLS; ++c) {
 		                vg_vec2 rail[WORMHOLE_ROWS];
+                        const float cu = (float)c + rail_shift;
+                        const int c0 = wrapi((int)floorf(cu), WORMHOLE_COLS);
+                        const int c1 = wrapi(c0 + 1, WORMHOLE_COLS);
+                        const float ct = cu - floorf(cu);
 		                for (int j = 0; j < WORMHOLE_ROWS; ++j) {
-		                    rail[j].x = cx + wh.rail_rel[c][j].x;
-		                    rail[j].y = cy + wh.rail_rel[c][j].y;
+		                    rail[j].x = cx + lerpf(wh.rail_rel[c0][j].x, wh.rail_rel[c1][j].x, ct);
+		                    rail[j].y = cy + lerpf(wh.rail_rel[c0][j].y, wh.rail_rel[c1][j].y, ct);
 		                }
 		                const float fade = 0.90f;
 		                vg_stroke_style rh = *halo;

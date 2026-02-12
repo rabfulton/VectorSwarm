@@ -45,6 +45,7 @@ typedef struct player_state {
 typedef struct bullet {
     int active;
     body b;
+    float spawn_x;
     float ttl_s;
 } bullet;
 

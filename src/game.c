@@ -189,6 +189,7 @@ static void spawn_bullet_single(game_state* g, float y_offset, float muzzle_spee
         b->active = 1;
         b->b.x = g->player.b.x + dir * 36.0f;
         b->b.y = g->player.b.y + y_offset;
+        b->spawn_x = b->b.x;
         b->b.vx = dir * muzzle_speed + g->player.b.vx;
         b->b.vy = g->player.b.vy * vertical_inherit;
         b->b.ax = 0.0f;
@@ -620,7 +621,9 @@ void game_update(game_state* g, float dt, const game_input* in) {
         integrate_body(&b->b, dt);
         b->ttl_s -= dt;
         if (g->level_style != LEVEL_STYLE_DEFENDER) {
-            if (b->ttl_s <= 0.0f) {
+            const float period = cylinder_period(g);
+            const float travel = fabsf(wrap_delta(b->b.x, b->spawn_x, period));
+            if (b->ttl_s <= 0.0f || travel >= period * (1.0f / 3.0f)) {
                 b->active = 0;
             }
             continue;
