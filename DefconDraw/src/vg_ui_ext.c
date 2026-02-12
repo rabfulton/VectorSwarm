@@ -21,6 +21,13 @@ static float vg_ui_ext_norm(float v, float lo, float hi) {
     return vg_ui_ext_clampf((v - lo) / (hi - lo), 0.0f, 1.0f);
 }
 
+static float vg_ui_ext_resolved_scale(float s) {
+    if (!isfinite(s) || s <= 0.0f) {
+        return 1.0f;
+    }
+    return s;
+}
+
 static vg_fill_style vg_ui_ext_fill_from_stroke(const vg_stroke_style* s, float alpha_scale) {
     vg_fill_style f;
     f.intensity = s->intensity;
@@ -28,6 +35,66 @@ static vg_fill_style vg_ui_ext_fill_from_stroke(const vg_stroke_style* s, float 
     f.color.a *= alpha_scale;
     f.blend = s->blend;
     return f;
+}
+
+vg_result vg_ui_meter_linear_layout_compute(
+    const vg_ui_meter_desc* desc,
+    const vg_ui_meter_style* style,
+    vg_ui_meter_linear_layout* out_layout
+) {
+    if (!desc || !style || !out_layout) {
+        return VG_ERROR_INVALID_ARGUMENT;
+    }
+    if (desc->rect.w <= 0.0f || desc->rect.h <= 0.0f) {
+        return VG_ERROR_INVALID_ARGUMENT;
+    }
+    float ui = vg_ui_ext_resolved_scale(desc->ui_scale);
+    float value01 = vg_ui_ext_norm(desc->value, desc->min_value, desc->max_value);
+    out_layout->outer_rect = desc->rect;
+    float pad = style->frame.width_px + 2.0f * ui;
+    if (pad > desc->rect.w * 0.35f) {
+        pad = desc->rect.w * 0.35f;
+    }
+    if (pad > desc->rect.h * 0.35f) {
+        pad = desc->rect.h * 0.35f;
+    }
+    out_layout->inner_rect = (vg_rect){
+        desc->rect.x + pad,
+        desc->rect.y + pad,
+        desc->rect.w - 2.0f * pad,
+        desc->rect.h - 2.0f * pad
+    };
+    out_layout->fill_rect = out_layout->inner_rect;
+    out_layout->fill_rect.w = out_layout->inner_rect.w * value01;
+    out_layout->label_pos = (vg_vec2){
+        desc->rect.x,
+        desc->rect.y + desc->rect.h + 8.0f * ui
+    };
+    out_layout->value_pos = out_layout->label_pos;
+    return VG_OK;
+}
+
+vg_result vg_ui_meter_radial_layout_compute(
+    vg_vec2 center,
+    float radius_px,
+    const vg_ui_meter_desc* desc,
+    const vg_ui_meter_style* style,
+    vg_ui_meter_radial_layout* out_layout
+) {
+    if (!desc || !style || !out_layout || !isfinite(radius_px) || radius_px <= 1.0f) {
+        return VG_ERROR_INVALID_ARGUMENT;
+    }
+    float ui = vg_ui_ext_resolved_scale(desc->ui_scale);
+    out_layout->center = center;
+    out_layout->radius_px = radius_px;
+    out_layout->a0 = 3.926990716f;
+    out_layout->sweep = 4.712388980f;
+    out_layout->tick_inner_radius = radius_px - 6.0f * ui;
+    out_layout->tick_outer_radius = radius_px + 4.0f * ui;
+    out_layout->needle_radius = radius_px - 8.0f * ui;
+    out_layout->value_pos = (vg_vec2){center.x, center.y - 6.0f * ui};
+    out_layout->label_pos = (vg_vec2){center.x, center.y - radius_px - 18.0f * ui};
+    return VG_OK;
 }
 
 static vg_result vg_ui_ext_draw_arc(
@@ -84,25 +151,19 @@ vg_result vg_ui_meter_linear(vg_context* ctx, const vg_ui_meter_desc* desc, cons
         return VG_ERROR_INVALID_ARGUMENT;
     }
 
+    float ui = vg_ui_ext_resolved_scale(desc->ui_scale);
+    float text = vg_ui_ext_resolved_scale(desc->text_scale);
     float value01 = vg_ui_ext_norm(desc->value, desc->min_value, desc->max_value);
-    vg_result r = vg_draw_rect(ctx, desc->rect, &style->frame);
+    vg_ui_meter_linear_layout layout;
+    vg_result lr = vg_ui_meter_linear_layout_compute(desc, style, &layout);
+    if (lr != VG_OK) {
+        return lr;
+    }
+    vg_result r = vg_draw_rect(ctx, layout.outer_rect, &style->frame);
     if (r != VG_OK) {
         return r;
     }
-
-    float pad = style->frame.width_px + 2.0f;
-    if (pad > desc->rect.w * 0.35f) {
-        pad = desc->rect.w * 0.35f;
-    }
-    if (pad > desc->rect.h * 0.35f) {
-        pad = desc->rect.h * 0.35f;
-    }
-    vg_rect inner = {
-        desc->rect.x + pad,
-        desc->rect.y + pad,
-        desc->rect.w - 2.0f * pad,
-        desc->rect.h - 2.0f * pad
-    };
+    vg_rect inner = layout.inner_rect;
     if (inner.w <= 1.0f || inner.h <= 1.0f) {
         return VG_OK;
     }
@@ -116,7 +177,7 @@ vg_result vg_ui_meter_linear(vg_context* ctx, const vg_ui_meter_desc* desc, cons
     vg_fill_style fg_fill = vg_ui_ext_fill_from_stroke(&style->fill, 0.75f);
     if (desc->mode == VG_UI_METER_SEGMENTED) {
         int segs = desc->segments > 0 ? desc->segments : 10;
-        float gap = desc->segment_gap_px >= 0.0f ? desc->segment_gap_px : 2.0f;
+        float gap = desc->segment_gap_px >= 0.0f ? desc->segment_gap_px : 2.0f * ui;
         float seg_w = (inner.w - (float)(segs - 1) * gap) / (float)segs;
         if (seg_w < 1.0f) {
             seg_w = 1.0f;
@@ -136,8 +197,7 @@ vg_result vg_ui_meter_linear(vg_context* ctx, const vg_ui_meter_desc* desc, cons
             }
         }
     } else {
-        vg_rect fill = inner;
-        fill.w = inner.w * value01;
+        vg_rect fill = layout.fill_rect;
         if (fill.w > 0.5f) {
             r = vg_fill_rect(ctx, fill, &fg_fill);
             if (r != VG_OK) {
@@ -153,7 +213,7 @@ vg_result vg_ui_meter_linear(vg_context* ctx, const vg_ui_meter_desc* desc, cons
             float x = inner.x + inner.w * u;
             vg_vec2 tick[2] = {
                 {x, inner.y},
-                {x, inner.y + inner.h * 0.24f}
+                {x, inner.y + inner.h * (0.24f * ui)}
             };
             r = vg_draw_polyline(ctx, tick, 2u, &style->tick, 0);
             if (r != VG_OK) {
@@ -166,8 +226,8 @@ vg_result vg_ui_meter_linear(vg_context* ctx, const vg_ui_meter_desc* desc, cons
         r = vg_draw_text(
             ctx,
             desc->label,
-            (vg_vec2){desc->rect.x, desc->rect.y + desc->rect.h + 8.0f},
-            12.0f,
+            layout.label_pos,
+            12.0f * text,
             0.9f,
             &style->text,
             NULL
@@ -181,13 +241,15 @@ vg_result vg_ui_meter_linear(vg_context* ctx, const vg_ui_meter_desc* desc, cons
         char vtxt[64];
         const char* fmt = (desc->value_fmt && desc->value_fmt[0] != '\0') ? desc->value_fmt : "%.1f";
         snprintf(vtxt, sizeof(vtxt), fmt, desc->value);
-        float tw = vg_measure_text(vtxt, 12.0f, 0.8f);
+        float tw = vg_measure_text(vtxt, 12.0f * text, 0.8f * text);
+        vg_vec2 value_pos = layout.value_pos;
+        value_pos.x = desc->rect.x + desc->rect.w - tw;
         r = vg_draw_text(
             ctx,
             vtxt,
-            (vg_vec2){desc->rect.x + desc->rect.w - tw, desc->rect.y + desc->rect.h + 8.0f},
-            12.0f,
-            0.8f,
+            value_pos,
+            12.0f * text,
+            0.8f * text,
             &style->text,
             NULL
         );
@@ -204,9 +266,16 @@ vg_result vg_ui_meter_radial(vg_context* ctx, vg_vec2 center, float radius_px, c
         return VG_ERROR_INVALID_ARGUMENT;
     }
 
+    float ui = vg_ui_ext_resolved_scale(desc->ui_scale);
+    float text = vg_ui_ext_resolved_scale(desc->text_scale);
     float value01 = vg_ui_ext_norm(desc->value, desc->min_value, desc->max_value);
-    const float a0 = 3.926990716f;  /* 225 deg */
-    const float sweep = 4.712388980f; /* 270 deg */
+    vg_ui_meter_radial_layout layout;
+    vg_result lr = vg_ui_meter_radial_layout_compute(center, radius_px, desc, style, &layout);
+    if (lr != VG_OK) {
+        return lr;
+    }
+    const float a0 = layout.a0;
+    const float sweep = layout.sweep;
     const float a1 = a0 + sweep;
     vg_result r = vg_ui_ext_draw_arc(ctx, center, radius_px, a0, a1, 72, &style->bg);
     if (r != VG_OK) {
@@ -215,7 +284,7 @@ vg_result vg_ui_meter_radial(vg_context* ctx, vg_vec2 center, float radius_px, c
 
     if (desc->mode == VG_UI_METER_SEGMENTED) {
         int segs = desc->segments > 0 ? desc->segments : 18;
-        float gap_px = desc->segment_gap_px >= 0.0f ? desc->segment_gap_px : 3.0f;
+        float gap_px = desc->segment_gap_px >= 0.0f ? desc->segment_gap_px : 3.0f * ui;
         float gap_a = gap_px / radius_px;
         float seg_a = (sweep - gap_a * (float)(segs - 1)) / (float)segs;
         if (seg_a < 0.02f) {
@@ -252,8 +321,8 @@ vg_result vg_ui_meter_radial(vg_context* ctx, vg_vec2 center, float radius_px, c
             float c = cosf(a);
             float s = sinf(a);
             vg_vec2 tick[2] = {
-                {center.x + c * (radius_px - 6.0f), center.y + s * (radius_px - 6.0f)},
-                {center.x + c * (radius_px + 4.0f), center.y + s * (radius_px + 4.0f)}
+                {center.x + c * layout.tick_inner_radius, center.y + s * layout.tick_inner_radius},
+                {center.x + c * layout.tick_outer_radius, center.y + s * layout.tick_outer_radius}
             };
             r = vg_draw_polyline(ctx, tick, 2u, &style->tick, 0);
             if (r != VG_OK) {
@@ -267,7 +336,7 @@ vg_result vg_ui_meter_radial(vg_context* ctx, vg_vec2 center, float radius_px, c
         float an = a0 + sweep * value01;
         vg_vec2 needle[2] = {
             center,
-            {center.x + cosf(an) * (radius_px - 8.0f), center.y + sinf(an) * (radius_px - 8.0f)}
+            {center.x + cosf(an) * layout.needle_radius, center.y + sinf(an) * layout.needle_radius}
         };
         r = vg_draw_polyline(ctx, needle, 2u, &style->tick, 0);
         if (r != VG_OK) {
@@ -279,16 +348,16 @@ vg_result vg_ui_meter_radial(vg_context* ctx, vg_vec2 center, float radius_px, c
         char vtxt[64];
         const char* fmt = (desc->value_fmt && desc->value_fmt[0] != '\0') ? desc->value_fmt : "%.1f";
         snprintf(vtxt, sizeof(vtxt), fmt, desc->value);
-        float tw = vg_measure_text(vtxt, 12.0f, 0.8f);
-        r = vg_draw_text(ctx, vtxt, (vg_vec2){center.x - tw * 0.5f, center.y - 6.0f}, 12.0f, 0.8f, &style->text, NULL);
+        float tw = vg_measure_text(vtxt, 12.0f * text, 0.8f * text);
+        r = vg_draw_text(ctx, vtxt, (vg_vec2){layout.value_pos.x - tw * 0.5f, layout.value_pos.y}, 12.0f * text, 0.8f * text, &style->text, NULL);
         if (r != VG_OK) {
             return r;
         }
     }
 
     if (desc->label && desc->label[0] != '\0') {
-        float tw = vg_measure_text(desc->label, 11.0f, 0.8f);
-        r = vg_draw_text(ctx, desc->label, (vg_vec2){center.x - tw * 0.5f, center.y - radius_px - 18.0f}, 11.0f, 0.8f, &style->text, NULL);
+        float tw = vg_measure_text(desc->label, 11.0f * text, 0.8f * text);
+        r = vg_draw_text(ctx, desc->label, (vg_vec2){layout.label_pos.x - tw * 0.5f, layout.label_pos.y}, 11.0f * text, 0.8f * text, &style->text, NULL);
         if (r != VG_OK) {
             return r;
         }
@@ -354,6 +423,8 @@ static vg_result vg_ui_graph_common_frame(vg_context* ctx, const vg_ui_graph_des
 }
 
 vg_result vg_ui_graph_line(vg_context* ctx, const vg_ui_graph_desc* desc, const vg_ui_graph_style* style) {
+    float ui = vg_ui_ext_resolved_scale(desc->ui_scale);
+    float text = vg_ui_ext_resolved_scale(desc->text_scale);
     vg_rect inner;
     vg_result r = vg_ui_graph_common_frame(ctx, desc, style, &inner);
     if (r != VG_OK) {
@@ -398,7 +469,15 @@ vg_result vg_ui_graph_line(vg_context* ctx, const vg_ui_graph_desc* desc, const 
     }
 
     if (desc->label && desc->label[0] != '\0') {
-        r = vg_draw_text(ctx, desc->label, (vg_vec2){desc->rect.x, desc->rect.y + desc->rect.h + 8.0f}, 11.0f, 0.8f, &style->text, NULL);
+        r = vg_draw_text(
+            ctx,
+            desc->label,
+            (vg_vec2){desc->rect.x, desc->rect.y + desc->rect.h + 8.0f * ui},
+            11.0f * text,
+            0.8f * text,
+            &style->text,
+            NULL
+        );
         if (r != VG_OK) return r;
     }
     if (desc->show_minmax_labels) {
@@ -406,16 +485,18 @@ vg_result vg_ui_graph_line(vg_context* ctx, const vg_ui_graph_desc* desc, const 
         char max_txt[32];
         snprintf(min_txt, sizeof(min_txt), "%.1f", min_v);
         snprintf(max_txt, sizeof(max_txt), "%.1f", max_v);
-        r = vg_draw_text(ctx, min_txt, (vg_vec2){desc->rect.x, desc->rect.y - 14.0f}, 10.0f, 0.7f, &style->text, NULL);
+        r = vg_draw_text(ctx, min_txt, (vg_vec2){desc->rect.x, desc->rect.y - 14.0f * ui}, 10.0f * text, 0.7f * text, &style->text, NULL);
         if (r != VG_OK) return r;
-        float tw = vg_measure_text(max_txt, 10.0f, 0.7f);
-        r = vg_draw_text(ctx, max_txt, (vg_vec2){desc->rect.x + desc->rect.w - tw, desc->rect.y - 14.0f}, 10.0f, 0.7f, &style->text, NULL);
+        float tw = vg_measure_text(max_txt, 10.0f * text, 0.7f * text);
+        r = vg_draw_text(ctx, max_txt, (vg_vec2){desc->rect.x + desc->rect.w - tw, desc->rect.y - 14.0f * ui}, 10.0f * text, 0.7f * text, &style->text, NULL);
         if (r != VG_OK) return r;
     }
     return VG_OK;
 }
 
 vg_result vg_ui_graph_bars(vg_context* ctx, const vg_ui_graph_desc* desc, const vg_ui_graph_style* style) {
+    float ui = vg_ui_ext_resolved_scale(desc->ui_scale);
+    float text = vg_ui_ext_resolved_scale(desc->text_scale);
     vg_rect inner;
     vg_result r = vg_ui_graph_common_frame(ctx, desc, style, &inner);
     if (r != VG_OK) {
@@ -429,7 +510,7 @@ vg_result vg_ui_graph_bars(vg_context* ctx, const vg_ui_graph_desc* desc, const 
     }
 
     size_t n = desc->sample_count;
-    float gap = 1.5f;
+    float gap = 1.5f * ui;
     float bw = (inner.w - (float)(n - 1u) * gap) / (float)n;
     if (bw < 1.0f) {
         bw = 1.0f;
@@ -453,7 +534,15 @@ vg_result vg_ui_graph_bars(vg_context* ctx, const vg_ui_graph_desc* desc, const 
     }
 
     if (desc->label && desc->label[0] != '\0') {
-        r = vg_draw_text(ctx, desc->label, (vg_vec2){desc->rect.x, desc->rect.y + desc->rect.h + 8.0f}, 11.0f, 0.8f, &style->text, NULL);
+        r = vg_draw_text(
+            ctx,
+            desc->label,
+            (vg_vec2){desc->rect.x, desc->rect.y + desc->rect.h + 8.0f * ui},
+            11.0f * text,
+            0.8f * text,
+            &style->text,
+            NULL
+        );
         if (r != VG_OK) return r;
     }
     return VG_OK;
@@ -473,12 +562,16 @@ vg_result vg_ui_histogram(vg_context* ctx, const vg_ui_histogram_desc* desc, con
     gd.label = NULL;
     gd.show_grid = desc->show_grid;
     gd.show_minmax_labels = 0;
+    gd.ui_scale = desc->ui_scale;
+    gd.text_scale = desc->text_scale;
     vg_result r = vg_ui_graph_bars(ctx, &gd, style);
     if (r != VG_OK) {
         return r;
     }
 
     if (desc->show_axes) {
+        float ui = vg_ui_ext_resolved_scale(desc->ui_scale);
+        float text = vg_ui_ext_resolved_scale(desc->text_scale);
         float pad = style->frame.width_px + 2.0f;
         if (pad < 2.0f) {
             pad = 2.0f;
@@ -497,26 +590,26 @@ vg_result vg_ui_histogram(vg_context* ctx, const vg_ui_histogram_desc* desc, con
         if (r != VG_OK) return r;
 
         if (desc->label && desc->label[0] != '\0') {
-            float tw = vg_measure_text(desc->label, 11.0f, 0.8f);
+            float tw = vg_measure_text(desc->label, 11.0f * text, 0.8f * text);
             r = vg_draw_text(
                 ctx,
                 desc->label,
-                (vg_vec2){desc->rect.x + (desc->rect.w - tw) * 0.5f, desc->rect.y + desc->rect.h + 8.0f},
-                11.0f,
-                0.8f,
+                (vg_vec2){desc->rect.x + (desc->rect.w - tw) * 0.5f, desc->rect.y + desc->rect.h + 8.0f * ui},
+                11.0f * text,
+                0.8f * text,
                 &style->text,
                 NULL
             );
             if (r != VG_OK) return r;
         }
         if (desc->x_label && desc->x_label[0] != '\0') {
-            float tw = vg_measure_text(desc->x_label, 10.0f, 0.7f);
+            float tw = vg_measure_text(desc->x_label, 10.0f * text, 0.7f * text);
             r = vg_draw_text(
                 ctx,
                 desc->x_label,
-                (vg_vec2){desc->rect.x + (desc->rect.w - tw) * 0.5f, desc->rect.y - 14.0f},
-                10.0f,
-                0.7f,
+                (vg_vec2){desc->rect.x + (desc->rect.w - tw) * 0.5f, desc->rect.y - 14.0f * ui},
+                10.0f * text,
+                0.7f * text,
                 &style->text,
                 NULL
             );
@@ -526,9 +619,9 @@ vg_result vg_ui_histogram(vg_context* ctx, const vg_ui_histogram_desc* desc, con
             r = vg_draw_text(
                 ctx,
                 desc->y_label,
-                (vg_vec2){desc->rect.x + 4.0f, desc->rect.y + desc->rect.h + 20.0f},
-                10.0f,
-                0.7f,
+                (vg_vec2){desc->rect.x + 4.0f * ui, desc->rect.y + desc->rect.h + 20.0f * ui},
+                10.0f * text,
+                0.7f * text,
                 &style->text,
                 NULL
             );
@@ -543,6 +636,8 @@ vg_result vg_ui_pie_chart(vg_context* ctx, const vg_ui_pie_desc* desc, const vg_
         return VG_ERROR_INVALID_ARGUMENT;
     }
     float total = 0.0f;
+    float ui = vg_ui_ext_resolved_scale(desc->ui_scale);
+    float text = vg_ui_ext_resolved_scale(desc->text_scale);
     for (size_t i = 0; i < desc->value_count; ++i) {
         if (desc->values[i] > 0.0f && isfinite(desc->values[i])) {
             total += desc->values[i];
@@ -615,16 +710,16 @@ vg_result vg_ui_pie_chart(vg_context* ctx, const vg_ui_pie_desc* desc, const vg_
             };
             float sign = (c >= 0.0f) ? 1.0f : -1.0f;
             vg_vec2 p2 = {
-                p1.x + sign * 18.0f,
+                p1.x + sign * (18.0f * ui),
                 p1.y
             };
             vg_result lr = vg_draw_polyline(ctx, (vg_vec2[]){p0, p1, p2}, 3u, text_style, 0);
             if (lr != VG_OK) {
                 return lr;
             }
-            float tw = vg_measure_text(pct, 10.0f, 0.7f);
-            float tx = (sign > 0.0f) ? (p2.x + 4.0f) : (p2.x - tw - 4.0f);
-            r = vg_draw_text(ctx, pct, (vg_vec2){tx, p2.y - 5.0f}, 10.0f, 0.7f, text_style, NULL);
+            float tw = vg_measure_text(pct, 10.0f * text, 0.7f * text);
+            float tx = (sign > 0.0f) ? (p2.x + 4.0f * ui) : (p2.x - tw - 4.0f * ui);
+            r = vg_draw_text(ctx, pct, (vg_vec2){tx, p2.y - 5.0f * ui}, 10.0f * text, 0.7f * text, text_style, NULL);
             if (r != VG_OK) {
                 return r;
             }
@@ -647,8 +742,16 @@ vg_result vg_ui_pie_chart(vg_context* ctx, const vg_ui_pie_desc* desc, const vg_
         return r;
     }
     if (desc->label && desc->label[0] != '\0') {
-        float tw = vg_measure_text(desc->label, 11.0f, 0.8f);
-        r = vg_draw_text(ctx, desc->label, (vg_vec2){desc->center.x - tw * 0.5f, desc->center.y - 6.0f}, 11.0f, 0.8f, text_style, NULL);
+        float tw = vg_measure_text(desc->label, 11.0f * text, 0.8f * text);
+        r = vg_draw_text(
+            ctx,
+            desc->label,
+            (vg_vec2){desc->center.x - tw * 0.5f, desc->center.y - 6.0f * ui},
+            11.0f * text,
+            0.8f * text,
+            text_style,
+            NULL
+        );
         if (r != VG_OK) {
             return r;
         }

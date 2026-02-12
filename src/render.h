@@ -3,22 +3,28 @@
 
 #include "game.h"
 #include "vg.h"
+#include <stdint.h>
 
 #define ACOUSTICS_SLIDER_COUNT 14
 #define ACOUSTICS_SCOPE_SAMPLES 192
 #define ACOUSTICS_SLOT_COUNT 5
 #define VIDEO_MENU_RES_COUNT 6
 #define VIDEO_MENU_DIAL_COUNT 9
+#define PLANETARIUM_MAX_SYSTEMS 8
 
 typedef struct render_metrics {
     float fps;
     float dt;
+    float ui_time_s;
     int force_clear;
     int show_crt_ui;
     int crt_ui_selected;
     const char* teletype_text;
+    const char* planetarium_marquee_text;
+    float planetarium_marquee_offset_px;
     int show_acoustics;
     int show_video_menu;
+    int show_planetarium;
     int video_menu_selected;
     int video_menu_fullscreen;
     int palette_mode;
@@ -26,6 +32,10 @@ typedef struct render_metrics {
     int acoustics_selected;
     int acoustics_fire_slot_selected;
     int acoustics_thr_slot_selected;
+    int planetarium_selected;
+    int planetarium_system_count;
+    int planetarium_systems_quelled;
+    int planetarium_nodes_quelled[PLANETARIUM_MAX_SYSTEMS];
     int mouse_in_window;
     float mouse_x;
     float mouse_y;
@@ -36,6 +46,11 @@ typedef struct render_metrics {
     float acoustics_scope[ACOUSTICS_SCOPE_SAMPLES];
     int video_res_w[VIDEO_MENU_RES_COUNT];
     int video_res_h[VIDEO_MENU_RES_COUNT];
+    const uint8_t* nick_rgba8;
+    uint32_t nick_w;
+    uint32_t nick_h;
+    uint32_t nick_stride;
+    const void* surveillance_svg_asset;
 } render_metrics;
 
 vg_result render_frame(vg_context* ctx, const game_state* g, const render_metrics* metrics);

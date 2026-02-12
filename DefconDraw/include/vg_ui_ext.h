@@ -32,8 +32,42 @@ typedef struct vg_ui_meter_desc {
     const char* value_fmt;
     int show_value;
     int show_ticks;
+    float ui_scale;
+    float text_scale;
 } vg_ui_meter_desc;
 
+typedef struct vg_ui_meter_linear_layout {
+    vg_rect outer_rect;
+    vg_rect inner_rect;
+    vg_rect fill_rect;
+    vg_vec2 label_pos;
+    vg_vec2 value_pos;
+} vg_ui_meter_linear_layout;
+
+typedef struct vg_ui_meter_radial_layout {
+    vg_vec2 center;
+    float radius_px;
+    float a0;
+    float sweep;
+    float tick_inner_radius;
+    float tick_outer_radius;
+    float needle_radius;
+    vg_vec2 value_pos;
+    vg_vec2 label_pos;
+} vg_ui_meter_radial_layout;
+
+vg_result vg_ui_meter_linear_layout_compute(
+    const vg_ui_meter_desc* desc,
+    const vg_ui_meter_style* style,
+    vg_ui_meter_linear_layout* out_layout
+);
+vg_result vg_ui_meter_radial_layout_compute(
+    vg_vec2 center,
+    float radius_px,
+    const vg_ui_meter_desc* desc,
+    const vg_ui_meter_style* style,
+    vg_ui_meter_radial_layout* out_layout
+);
 vg_result vg_ui_meter_linear(vg_context* ctx, const vg_ui_meter_desc* desc, const vg_ui_meter_style* style);
 vg_result vg_ui_meter_radial(vg_context* ctx, vg_vec2 center, float radius_px, const vg_ui_meter_desc* desc, const vg_ui_meter_style* style);
 
@@ -54,6 +88,8 @@ typedef struct vg_ui_graph_desc {
     const char* label;
     int show_grid;
     int show_minmax_labels;
+    float ui_scale;
+    float text_scale;
 } vg_ui_graph_desc;
 
 typedef struct vg_ui_histogram_desc {
@@ -67,6 +103,8 @@ typedef struct vg_ui_histogram_desc {
     const char* y_label;
     int show_grid;
     int show_axes;
+    float ui_scale;
+    float text_scale;
 } vg_ui_histogram_desc;
 
 typedef struct vg_ui_pie_desc {
@@ -78,6 +116,8 @@ typedef struct vg_ui_pie_desc {
     const char* const* labels;
     const char* label;
     int show_percent_labels;
+    float ui_scale;
+    float text_scale;
 } vg_ui_pie_desc;
 
 typedef struct vg_ui_history {

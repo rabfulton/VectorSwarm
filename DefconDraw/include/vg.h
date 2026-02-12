@@ -135,7 +135,7 @@ typedef struct vg_backend_vulkan_desc {
     void* render_pass;
     uint32_t vertex_binding;
     uint32_t max_frames_in_flight;
-    uint32_t sample_count; /* VkSampleCountFlagBits, or 0 to default to 1. */
+    uint32_t raster_samples;
 } vg_backend_vulkan_desc;
 
 typedef enum vg_backend_type {
@@ -168,6 +168,9 @@ vg_mat2x3 vg_transform_get(vg_context* ctx);
 void vg_transform_translate(vg_context* ctx, float tx, float ty);
 void vg_transform_scale(vg_context* ctx, float sx, float sy);
 void vg_transform_rotate(vg_context* ctx, float radians);
+vg_result vg_clip_push_rect(vg_context* ctx, vg_rect rect);
+vg_result vg_clip_pop(vg_context* ctx);
+void vg_clip_reset(vg_context* ctx);
 
 vg_result vg_path_create(vg_context* ctx, vg_path** out_path);
 void vg_path_destroy(vg_path* path);

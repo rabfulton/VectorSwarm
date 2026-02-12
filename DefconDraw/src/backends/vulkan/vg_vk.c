@@ -25,6 +25,8 @@ typedef struct vg_vk_draw_cmd {
     uint32_t first_vertex;
     uint32_t vertex_count;
     vg_stroke_style style;
+    vg_rect clip_rect;
+    int has_clip;
 } vg_vk_draw_cmd;
 
 #if VG_HAS_VULKAN
@@ -46,6 +48,7 @@ typedef struct vg_vk_backend {
     vg_retro_params retro;
     vg_crt_profile crt;
     uint64_t frame_index;
+    uint32_t raster_samples;
 
     vg_vec2* stroke_vertices;
     uint32_t stroke_vertex_count;
@@ -71,6 +74,21 @@ typedef struct vg_vk_backend {
 #endif
 #endif
 } vg_vk_backend;
+
+static uint32_t vg_vk_sanitize_raster_samples(uint32_t samples) {
+    switch (samples) {
+        case 1u:
+        case 2u:
+        case 4u:
+        case 8u:
+        case 16u:
+        case 32u:
+        case 64u:
+            return samples;
+        default:
+            return 1u;
+    }
+}
 
 /*
  * Vulkan backend entry points will live here.
@@ -131,6 +149,16 @@ static int vg_vk_style_equal(const vg_stroke_style* a, const vg_stroke_style* b)
            a->join == b->join &&
            a->miter_limit == b->miter_limit &&
            a->blend == b->blend;
+}
+
+static int vg_vk_clip_equal(int has_a, vg_rect a, int has_b, vg_rect b) {
+    if (has_a != has_b) {
+        return 0;
+    }
+    if (!has_a) {
+        return 1;
+    }
+    return a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h;
 }
 
 #if VG_HAS_VULKAN
@@ -352,11 +380,8 @@ static vg_result vg_vk_create_pipelines(vg_vk_backend* backend) {
     };
     VkPipelineMultisampleStateCreateInfo msaa = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT
+        .rasterizationSamples = (VkSampleCountFlagBits)backend->raster_samples
     };
-    if (backend->desc.sample_count != 0u) {
-        msaa.rasterizationSamples = (VkSampleCountFlagBits)backend->desc.sample_count;
-    }
 
     VkPipelineColorBlendAttachmentState blend_attachment = {
         .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
@@ -520,13 +545,17 @@ static int vg_vk_emit_round_cap(vg_vk_backend* backend, vg_vec2 center, vg_vec2 
     return 1;
 }
 
-static vg_result vg_vk_push_draw(vg_vk_backend* backend, uint32_t first_vertex, uint32_t vertex_count, const vg_stroke_style* style) {
+static vg_result vg_vk_push_draw(vg_context* ctx, vg_vk_backend* backend, uint32_t first_vertex, uint32_t vertex_count, const vg_stroke_style* style) {
     if (!vg_vk_reserve_draws(backend, 1u)) {
         return VG_ERROR_OUT_OF_MEMORY;
     }
+    vg_rect clip_rect = {0};
+    int has_clip = vg_context_get_clip(ctx, &clip_rect);
     if (backend->draw_count > 0u) {
         vg_vk_draw_cmd* prev = &backend->draws[backend->draw_count - 1u];
-        if (prev->first_vertex + prev->vertex_count == first_vertex && vg_vk_style_equal(&prev->style, style)) {
+        if (prev->first_vertex + prev->vertex_count == first_vertex &&
+            vg_vk_style_equal(&prev->style, style) &&
+            vg_vk_clip_equal(prev->has_clip, prev->clip_rect, has_clip, clip_rect)) {
             prev->vertex_count += vertex_count;
             return VG_OK;
         }
@@ -534,11 +563,14 @@ static vg_result vg_vk_push_draw(vg_vk_backend* backend, uint32_t first_vertex, 
     backend->draws[backend->draw_count].first_vertex = first_vertex;
     backend->draws[backend->draw_count].vertex_count = vertex_count;
     backend->draws[backend->draw_count].style = *style;
+    backend->draws[backend->draw_count].clip_rect = clip_rect;
+    backend->draws[backend->draw_count].has_clip = has_clip;
     backend->draw_count++;
     return VG_OK;
 }
 
 static vg_result vg_vk_draw_polyline_impl(
+    vg_context* ctx,
     vg_vk_backend* backend,
     const vg_vec2* points,
     size_t count,
@@ -585,7 +617,7 @@ static vg_result vg_vk_draw_polyline_impl(
         }
     }
 
-    return vg_vk_push_draw(backend, first_vertex, backend->stroke_vertex_count - first_vertex, style);
+    return vg_vk_push_draw(ctx, backend, first_vertex, backend->stroke_vertex_count - first_vertex, style);
 }
 
 static int vg_vk_append_point(vg_vec2** points, size_t* count, size_t* cap, vg_vec2 p) {
@@ -629,6 +661,7 @@ static int vg_vk_append_cubic(
 }
 
 static vg_result vg_vk_flush_subpath(
+    vg_context* ctx,
     vg_vk_backend* backend,
     vg_vec2** points,
     size_t* count,
@@ -637,7 +670,7 @@ static vg_result vg_vk_flush_subpath(
 ) {
     vg_result out = VG_OK;
     if (*count >= 2u) {
-        out = vg_vk_draw_polyline_impl(backend, *points, *count, style, closed);
+        out = vg_vk_draw_polyline_impl(ctx, backend, *points, *count, style, closed);
     }
     *count = 0;
     return out;
@@ -695,12 +728,47 @@ static vg_result vg_vk_submit_recorded_draws(vg_vk_backend* backend) {
 #if VG_HAS_VK_INTERNAL_PIPELINE
             VkPipeline current_pipeline = VK_NULL_HANDLE;
 #endif
+            VkRect2D current_scissor = scissor;
             for (int pass = 0; pass < 2; ++pass) {
                 vg_blend_mode want_blend = pass == 0 ? VG_BLEND_ALPHA : VG_BLEND_ADDITIVE;
                 for (uint32_t i = 0; i < backend->draw_count; ++i) {
                     const vg_vk_draw_cmd* cmd = &backend->draws[i];
                     if (cmd->vertex_count == 0u || cmd->style.blend != want_blend) {
                         continue;
+                    }
+
+                    VkRect2D draw_scissor = scissor;
+                    if (cmd->has_clip) {
+                        int32_t x0 = (int32_t)floorf(cmd->clip_rect.x);
+                        int32_t y0 = (int32_t)floorf((float)backend->frame.height - (cmd->clip_rect.y + cmd->clip_rect.h));
+                        int32_t x1 = (int32_t)ceilf(cmd->clip_rect.x + cmd->clip_rect.w);
+                        int32_t y1 = (int32_t)ceilf((float)backend->frame.height - cmd->clip_rect.y);
+                        if (x0 < 0) {
+                            x0 = 0;
+                        }
+                        if (y0 < 0) {
+                            y0 = 0;
+                        }
+                        if (x1 > (int32_t)backend->frame.width) {
+                            x1 = (int32_t)backend->frame.width;
+                        }
+                        if (y1 > (int32_t)backend->frame.height) {
+                            y1 = (int32_t)backend->frame.height;
+                        }
+                        if (x1 <= x0 || y1 <= y0) {
+                            continue;
+                        }
+                        draw_scissor.offset.x = x0;
+                        draw_scissor.offset.y = y0;
+                        draw_scissor.extent.width = (uint32_t)(x1 - x0);
+                        draw_scissor.extent.height = (uint32_t)(y1 - y0);
+                    }
+                    if (draw_scissor.offset.x != current_scissor.offset.x ||
+                        draw_scissor.offset.y != current_scissor.offset.y ||
+                        draw_scissor.extent.width != current_scissor.extent.width ||
+                        draw_scissor.extent.height != current_scissor.extent.height) {
+                        vkCmdSetScissor(backend->command_buffer, 0, 1, &draw_scissor);
+                        current_scissor = draw_scissor;
                     }
 
 #if VG_HAS_VK_INTERNAL_PIPELINE
@@ -733,6 +801,13 @@ static vg_result vg_vk_submit_recorded_draws(vg_vk_backend* backend) {
 #endif
                     vkCmdDraw(backend->command_buffer, cmd->vertex_count, 1, cmd->first_vertex, 0);
                 }
+            }
+            /* Restore full scissor so client rendering after vg_end_frame is not clipped. */
+            if (current_scissor.offset.x != scissor.offset.x ||
+                current_scissor.offset.y != scissor.offset.y ||
+                current_scissor.extent.width != scissor.extent.width ||
+                current_scissor.extent.height != scissor.extent.height) {
+                vkCmdSetScissor(backend->command_buffer, 0, 1, &scissor);
             }
         }
     }
@@ -819,7 +894,9 @@ static void vg_vk_raster_triangle(
     vg_vec2 c,
     vg_color color,
     float intensity,
-    vg_blend_mode blend
+    vg_blend_mode blend,
+    int has_clip,
+    vg_rect clip_rect
 ) {
     float area = vg_vk_edge(a, b, c);
     if (fabsf(area) <= 1e-8f) {
@@ -851,6 +928,42 @@ static void vg_vk_raster_triangle(
     }
     if (max_y > (int)height - 1) {
         max_y = (int)height - 1;
+    }
+    if (has_clip) {
+        int clip_x0 = (int)floorf(clip_rect.x);
+        int clip_y0 = (int)floorf((float)height - (clip_rect.y + clip_rect.h));
+        int clip_x1 = (int)ceilf(clip_rect.x + clip_rect.w);
+        int clip_y1 = (int)ceilf((float)height - clip_rect.y);
+        if (clip_x0 < 0) {
+            clip_x0 = 0;
+        }
+        if (clip_y0 < 0) {
+            clip_y0 = 0;
+        }
+        if (clip_x1 > (int)width) {
+            clip_x1 = (int)width;
+        }
+        if (clip_y1 > (int)height) {
+            clip_y1 = (int)height;
+        }
+        if (clip_x1 <= clip_x0 || clip_y1 <= clip_y0) {
+            return;
+        }
+        if (min_x < clip_x0) {
+            min_x = clip_x0;
+        }
+        if (min_y < clip_y0) {
+            min_y = clip_y0;
+        }
+        if (max_x > clip_x1 - 1) {
+            max_x = clip_x1 - 1;
+        }
+        if (max_y > clip_y1 - 1) {
+            max_y = clip_y1 - 1;
+        }
+        if (max_x < min_x || max_y < min_y) {
+            return;
+        }
     }
 
     float sign = area > 0.0f ? 1.0f : -1.0f;
@@ -1023,7 +1136,9 @@ static vg_result vg_vk_debug_rasterize_rgba8(
                 c,
                 cmd->style.color,
                 cmd_intensity,
-                cmd->style.blend
+                cmd->style.blend,
+                cmd->has_clip,
+                cmd->clip_rect
             );
         }
     }
@@ -1106,7 +1221,7 @@ static vg_result vg_vk_draw_path_stroke(vg_context* ctx, const vg_path* path, co
         vg_path_cmd cmd = path->cmds[i];
         switch (cmd.type) {
             case VG_CMD_MOVE_TO: {
-                vg_result flush = vg_vk_flush_subpath(backend, &points, &count, style, 0);
+                vg_result flush = vg_vk_flush_subpath(ctx, backend, &points, &count, style, 0);
                 if (flush != VG_OK) {
                     free(points);
                     return flush;
@@ -1138,7 +1253,7 @@ static vg_result vg_vk_draw_path_stroke(vg_context* ctx, const vg_path* path, co
                 }
                 break;
             case VG_CMD_CLOSE: {
-                vg_result flush = vg_vk_flush_subpath(backend, &points, &count, style, 1);
+                vg_result flush = vg_vk_flush_subpath(ctx, backend, &points, &count, style, 1);
                 if (flush != VG_OK) {
                     free(points);
                     return flush;
@@ -1152,14 +1267,14 @@ static vg_result vg_vk_draw_path_stroke(vg_context* ctx, const vg_path* path, co
         }
     }
 
-    vg_result out = vg_vk_flush_subpath(backend, &points, &count, style, 0);
+    vg_result out = vg_vk_flush_subpath(ctx, backend, &points, &count, style, 0);
     free(points);
     return out;
 }
 
 static vg_result vg_vk_draw_polyline(vg_context* ctx, const vg_vec2* points, size_t count, const vg_stroke_style* style, int closed) {
     vg_vk_backend* backend = vg_vk_backend_from(ctx);
-    return vg_vk_draw_polyline_impl(backend, points, count, style, closed);
+    return vg_vk_draw_polyline_impl(ctx, backend, points, count, style, closed);
 }
 
 static vg_result vg_vk_fill_convex(vg_context* ctx, const vg_vec2* points, size_t count, const vg_fill_style* style) {
@@ -1182,7 +1297,7 @@ static vg_result vg_vk_fill_convex(vg_context* ctx, const vg_vec2* points, size_
         .miter_limit = 1.0f,
         .blend = style->blend
     };
-    return vg_vk_push_draw(backend, first_vertex, backend->stroke_vertex_count - first_vertex, &draw_style);
+    return vg_vk_push_draw(ctx, backend, first_vertex, backend->stroke_vertex_count - first_vertex, &draw_style);
 }
 
 vg_result vg_vk_backend_create(vg_context* ctx) {
@@ -1214,8 +1329,10 @@ vg_result vg_vk_backend_create(vg_context* ctx) {
     if (backend->desc.vertex_binding > 15u) {
         backend->desc.vertex_binding = 0u;
     }
+    backend->desc.raster_samples = vg_vk_sanitize_raster_samples(backend->desc.raster_samples);
     backend->retro = ctx->retro;
     backend->crt = ctx->crt;
+    backend->raster_samples = backend->desc.raster_samples;
 
 #if VG_HAS_VULKAN
     backend->physical_device = (VkPhysicalDevice)backend->desc.physical_device;

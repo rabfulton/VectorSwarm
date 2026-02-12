@@ -3,6 +3,10 @@
 #include "vg_ui.h"
 #include "vg_ui_ext.h"
 #include "vg_pointer.h"
+#include "vg_image.h"
+#include "vg_svg.h"
+#include "vg_text_fx.h"
+#include "ui_layout.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -48,6 +52,12 @@ static vg_fill_style make_fill(float intensity, vg_color color, vg_blend_mode bl
     f.color = color;
     f.blend = blend;
     return f;
+}
+
+static float clampf(float v, float lo, float hi) {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
 }
 
 static v3 v3_norm(v3 a) {
@@ -315,17 +325,18 @@ static vg_result draw_teletype_overlay(
     const vg_stroke_style* halo_style,
     const vg_stroke_style* main_style
 ) {
-    (void)w;
     if (!text || text[0] == '\0') {
         return VG_OK;
     }
+    const float ui = ui_reference_scale(w, h);
+    const vg_rect safe = make_ui_safe_frame(w, h);
 
     char line[256];
     size_t li = 0;
     int row = 0;
-    const float x0 = 30.0f;
-    const float y0 = h - 34.0f;
-    const float lh = 17.0f;
+    const float x0 = safe.x + safe.w * 0.025f;
+    const float y0 = safe.y + safe.h - 34.0f * ui;
+    const float lh = 17.0f * ui;
 
     for (size_t i = 0;; ++i) {
         const char c = text[i];
@@ -335,8 +346,8 @@ static vg_result draw_teletype_overlay(
                 ctx,
                 line,
                 (vg_vec2){x0, y0 - lh * (float)row},
-                12.5f,
-                0.8f,
+                12.5f * ui,
+                0.8f * ui,
                 halo_style,
                 main_style
             );
@@ -363,11 +374,14 @@ static vg_result draw_top_meters(
     const vg_stroke_style* halo_s,
     const vg_stroke_style* main_s
 ) {
+    const float ui = ui_reference_scale(g->world_w, g->world_h);
+    const vg_rect safe = make_ui_safe_frame(g->world_w, g->world_h);
+
     vg_ui_meter_style ms;
     ms.frame = *main_s;
     ms.frame.blend = VG_BLEND_ALPHA;
     ms.frame.intensity = main_s->intensity * 1.10f;
-    ms.frame.width_px = fmaxf(main_s->width_px + 0.6f, 1.5f);
+    ms.frame.width_px = fmaxf(main_s->width_px + 0.6f * ui, 1.5f * ui);
     ms.bg = *halo_s;
     ms.bg.blend = VG_BLEND_ALPHA;
     ms.bg.intensity = halo_s->intensity * 0.45f;
@@ -376,31 +390,33 @@ static vg_result draw_top_meters(
     ms.fill.intensity = main_s->intensity * 1.15f;
     ms.tick = *main_s;
     ms.tick.blend = VG_BLEND_ALPHA;
-    ms.tick.width_px = 1.0f;
+    ms.tick.width_px = 1.0f * ui;
     ms.tick.intensity = 0.9f;
     ms.text = ms.tick;
-    ms.text.width_px = 1.25f;
+    ms.text.width_px = 1.25f * ui;
 
     vg_ui_meter_desc d;
     d.min_value = 0.0f;
     d.max_value = 100.0f;
     d.mode = VG_UI_METER_SEGMENTED;
     d.segments = 18;
-    d.segment_gap_px = 2.0f;
+    d.segment_gap_px = 2.0f * ui;
     d.value_fmt = "%5.1f";
     d.show_value = 1;
     d.show_ticks = 1;
+    d.ui_scale = ui;
+    d.text_scale = ui;
 
-    const float w = g->world_w;
-    const float h = g->world_h;
+    const float w = safe.w;
+    const float h = safe.h;
     const float margin_x = w * 0.04f;
-    const float top_margin = 46.0f;
+    const float top_margin = 46.0f * ui;
     const float total_w = w * 0.40f;
     const float meter_gap = w * 0.02f;
     const float meter_w = (total_w - meter_gap) * 0.5f;
-    const float meter_h = 16.0f;
-    const float y_top = h - top_margin - meter_h;
-    const float x_block = w - margin_x - total_w;
+    const float meter_h = 16.0f * ui;
+    const float y_top = safe.y + h - top_margin - meter_h;
+    const float x_block = safe.x + w - margin_x - total_w;
 
     vg_result r;
     d.rect = (vg_rect){x_block, y_top, meter_w, meter_h};
@@ -417,7 +433,7 @@ static vg_result draw_top_meters(
     d.max_value = 40.0f;
     d.mode = VG_UI_METER_SEGMENTED;
     d.segments = 20;
-    d.segment_gap_px = 2.0f;
+    d.segment_gap_px = 2.0f * ui;
     d.value_fmt = "%4.0f";
     d.value = (float)g->kills;
     return vg_ui_meter_linear(ctx, &d, &ms);
@@ -435,6 +451,28 @@ static float norm_range(float v, float lo, float hi) {
         return 1.0f;
     }
     return t;
+}
+
+static vg_ui_slider_panel_metrics scaled_slider_metrics(float ui, float value_col_width_px) {
+    vg_ui_slider_panel_metrics m;
+    vg_ui_slider_panel_default_metrics(&m);
+    m.pad_left_px *= ui;
+    m.pad_top_px *= ui;
+    m.pad_right_px *= ui;
+    m.pad_bottom_px *= ui;
+    m.title_line_gap_px *= ui;
+    m.rows_top_offset_px *= ui;
+    m.col_gap_px *= ui;
+    m.value_col_width_px = value_col_width_px;
+    m.row_label_height_sub_px *= ui;
+    m.row_slider_y_offset_px *= ui;
+    m.row_slider_height_sub_px *= ui;
+    m.value_y_offset_px *= ui;
+    m.footer_y_from_bottom_px *= ui;
+    m.title_sub_size_delta_px *= ui;
+    m.label_size_bias_px *= ui;
+    m.footer_size_bias_px *= ui;
+    return m;
 }
 
 static vg_result draw_crt_debug_ui(vg_context* ctx, float w, float h, const vg_crt_profile* crt, int selected) {
@@ -472,8 +510,11 @@ static vg_result draw_crt_debug_ui(vg_context* ctx, float w, float h, const vg_c
         norm_range(crt->noise_strength, 0.0f, 0.30f)
     };
 
+    const float ui_scale = ui_reference_scale(w, h);
+    const vg_rect safe = make_ui_safe_frame(w, h);
+
     vg_stroke_style panel = {
-        .width_px = 1.4f,
+        .width_px = 1.4f * ui_scale,
         .intensity = 0.9f,
         .color = {0.15f, 1.0f, 0.38f, 0.9f},
         .cap = VG_LINE_CAP_ROUND,
@@ -482,7 +523,7 @@ static vg_result draw_crt_debug_ui(vg_context* ctx, float w, float h, const vg_c
         .blend = VG_BLEND_ALPHA
     };
     vg_stroke_style text = panel;
-    text.width_px = 1.15f;
+    text.width_px = 1.15f * ui_scale;
     text.intensity = 1.0f;
     text.color = (vg_color){0.45f, 1.0f, 0.62f, 1.0f};
 
@@ -494,20 +535,23 @@ static vg_result draw_crt_debug_ui(vg_context* ctx, float w, float h, const vg_c
         items[i].selected = (i == selected);
     }
 
+    vg_ui_slider_panel_metrics m = scaled_slider_metrics(ui_scale, 70.0f * ui_scale);
     vg_ui_slider_panel_desc ui = {
-        .rect = {24.0f, h * 0.12f, w * 0.44f, h * 0.76f},
+        .rect = {safe.x + safe.w * 0.00f, safe.y + safe.h * 0.08f, safe.w * 0.44f, safe.h * 0.82f},
         .title_line_0 = "CRT DEBUG",
         .title_line_1 = "TAB TOGGLE  ARROWS ADJUST",
         .footer_line = NULL,
         .items = items,
         .item_count = 12u,
-        .row_height_px = 34.0f,
-        .label_size_px = 11.0f,
-        .value_size_px = 11.5f,
+        .row_height_px = 34.0f * ui_scale,
+        .label_size_px = 11.0f * ui_scale,
+        .value_size_px = 11.5f * ui_scale,
+        .value_text_x_offset_px = 0.0f,
         .border_style = panel,
         .text_style = text,
         .track_style = text,
-        .knob_style = text
+        .knob_style = text,
+        .metrics = &m
     };
     return vg_ui_draw_slider_panel(ctx, &ui);
 }
@@ -520,8 +564,11 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         "LEVEL", "PITCH HZ", "ATTACK MS", "RELEASE MS", "CUTOFF KHZ", "RESONANCE"
     };
 
+    const float ui = ui_reference_scale(w, h);
+    const vg_rect screen_safe = make_ui_safe_frame(w, h);
+
     vg_stroke_style panel = {
-        .width_px = 1.45f,
+        .width_px = 1.45f * ui,
         .intensity = 0.95f,
         .color = {0.22f, 1.0f, 0.55f, 0.95f},
         .cap = VG_LINE_CAP_ROUND,
@@ -530,7 +577,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         .blend = VG_BLEND_ALPHA
     };
     vg_stroke_style text = panel;
-    text.width_px = 1.2f;
+    text.width_px = 1.2f * ui;
     text.intensity = 1.0f;
     text.color = (vg_color){0.52f, 1.0f, 0.72f, 1.0f};
 
@@ -549,11 +596,11 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         thr_items[i].selected = 0;
     }
 
-    const vg_rect fire_rect = {w * 0.02f, h * 0.10f, w * 0.47f, h * 0.80f};
-    const vg_rect thr_rect = {w * 0.51f, h * 0.10f, w * 0.47f, h * 0.80f};
+    const vg_rect fire_rect = {screen_safe.x + screen_safe.w * 0.01f, screen_safe.y + screen_safe.h * 0.10f, screen_safe.w * 0.47f, screen_safe.h * 0.80f};
+    const vg_rect thr_rect = {screen_safe.x + screen_safe.w * 0.52f, screen_safe.y + screen_safe.h * 0.10f, screen_safe.w * 0.47f, screen_safe.h * 0.80f};
     const float btn_x_pad = fire_rect.w * 0.03f;
-    const float btn_w_fire = fire_rect.w * 0.28f;
-    const float btn_w_thr = thr_rect.w * 0.32f;
+    const float btn_w_fire = fire_rect.w * (0.28f * 0.85f);
+    const float btn_w_thr = thr_rect.w * (0.32f * 0.85f);
     const float btn_h = fire_rect.h * 0.042f;
     const float btn_y_off = fire_rect.h * 0.08f;
     const vg_rect fire_btn = {fire_rect.x + btn_x_pad, fire_rect.y + fire_rect.h - btn_y_off, btn_w_fire, btn_h};
@@ -575,10 +622,39 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
             thr_slot_btn[i] = (vg_rect){thr_sx + (thr_sw + gap) * (float)i, thr_btn.y, thr_sw, btn_h};
         }
     }
-    const float row_y0 = fire_rect.h * 0.13f;
-    const float row_h = fire_rect.h * 0.062f;
-    const float fire_rows_top = fire_rect.y + row_y0 + row_h * 8.0f;
-    const float thr_rows_top = thr_rect.y + row_y0 + row_h * 6.0f;
+    const vg_ui_slider_panel_metrics sm = scaled_slider_metrics(ui, 70.0f * ui);
+
+    vg_ui_slider_panel_desc fire = {
+        .rect = fire_rect,
+        .title_line_0 = "SHIPYARD ACOUSTICS - FIRE",
+        .title_line_1 = "ARROWS OR MOUSE TO TUNE",
+        .footer_line = NULL,
+        .items = fire_items,
+        .item_count = 8u,
+        .row_height_px = 34.0f * ui,
+        .label_size_px = 11.0f * ui,
+        .value_size_px = 11.5f * ui,
+        .value_text_x_offset_px = 0.0f,
+        .border_style = panel,
+        .text_style = text,
+        .track_style = text,
+        .knob_style = text,
+        .metrics = &sm
+    };
+    vg_ui_slider_panel_desc thr = fire;
+    thr.rect = thr_rect;
+    thr.title_line_0 = "SHIPYARD ACOUSTICS - THRUST";
+    thr.items = thr_items;
+    thr.item_count = 6u;
+
+    vg_ui_slider_panel_layout fire_layout;
+    vg_ui_slider_panel_layout thr_layout;
+    if (vg_ui_slider_panel_compute_layout(&fire, &fire_layout) != VG_OK ||
+        vg_ui_slider_panel_compute_layout(&thr, &thr_layout) != VG_OK) {
+        return VG_ERROR_INVALID_ARGUMENT;
+    }
+    const float fire_rows_top = fire_layout.row_start_y + fire.row_height_px * (float)fire.item_count;
+    const float thr_rows_top = thr_layout.row_start_y + thr.row_height_px * (float)thr.item_count;
     const float display_margin = fire_rect.h * 0.02f;
     const float min_display_h = fire_rect.h * 0.11f;
     const float fire_display_y = fire_rows_top + display_margin;
@@ -598,50 +674,30 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         thr_display_h
     };
 
-    vg_ui_slider_panel_desc fire = {
-        .rect = fire_rect,
-        .title_line_0 = "SHIPYARD ACOUSTICS - FIRE",
-        .title_line_1 = "ARROWS OR MOUSE TO TUNE",
-        .footer_line = NULL,
-        .items = fire_items,
-        .item_count = 8u,
-        .row_height_px = 34.0f,
-        .label_size_px = 11.0f,
-        .value_size_px = 11.5f,
-        .border_style = panel,
-        .text_style = text,
-        .track_style = text,
-        .knob_style = text
-    };
     vg_result r = vg_ui_draw_slider_panel(ctx, &fire);
     if (r != VG_OK) {
         return r;
     }
 
-    vg_ui_slider_panel_desc thr = fire;
-    thr.rect = thr_rect;
-    thr.title_line_0 = "SHIPYARD ACOUSTICS - THRUST";
-    thr.items = thr_items;
-    thr.item_count = 6u;
     r = vg_ui_draw_slider_panel(ctx, &thr);
     if (r != VG_OK) {
         return r;
     }
 
     {
-        r = vg_draw_button(ctx, fire_btn, "TEST FIRE", 11.5f, &panel, &text, 0);
+        r = vg_draw_button(ctx, fire_btn, "TEST FIRE", 11.5f * ui, &panel, &text, 0);
         if (r != VG_OK) {
             return r;
         }
-        r = vg_draw_button(ctx, thr_btn, "TEST THRUST", 11.5f, &panel, &text, 0);
+        r = vg_draw_button(ctx, thr_btn, "TEST THRUST", 11.5f * ui, &panel, &text, 0);
         if (r != VG_OK) {
             return r;
         }
-        r = vg_draw_button(ctx, fire_save_btn, "SAVE", 11.0f, &panel, &text, 0);
+        r = vg_draw_button(ctx, fire_save_btn, "SAVE", 11.0f * ui, &panel, &text, 0);
         if (r != VG_OK) {
             return r;
         }
-        r = vg_draw_button(ctx, thr_save_btn, "SAVE", 11.0f, &panel, &text, 0);
+        r = vg_draw_button(ctx, thr_save_btn, "SAVE", 11.0f * ui, &panel, &text, 0);
         if (r != VG_OK) {
             return r;
         }
@@ -657,7 +713,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
                 ctx,
                 fire_slot_btn[i],
                 label,
-                11.0f,
+                11.0f * ui,
                 &panel,
                 &slot_text,
                 (metrics->acoustics_fire_slot_selected == i) ? 1 : 0
@@ -673,7 +729,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
                 ctx,
                 thr_slot_btn[i],
                 label,
-                11.0f,
+                11.0f * ui,
                 &panel,
                 &slot_text,
                 (metrics->acoustics_thr_slot_selected == i) ? 1 : 0
@@ -690,9 +746,9 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         r = draw_text_vector_glow(
             ctx,
             "ENV + PITCH SWEEP",
-            (vg_vec2){fire_display.x + 8.0f, fire_display.y + fire_display.h - 16.0f},
-            10.5f,
-            0.7f,
+            (vg_vec2){fire_display.x + 8.0f * ui, fire_display.y + fire_display.h - 16.0f * ui},
+            10.5f * ui,
+            0.7f * ui,
             &panel,
             &text
         );
@@ -708,7 +764,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         const float sweep_d_ms = metrics->acoustics_display[7];
         for (int i = 0; i < 32; ++i) {
             const float t = (float)i / 31.0f;
-            const float x = fire_display.x + 8.0f + (fire_display.w - 16.0f) * t;
+            const float x = fire_display.x + 8.0f * ui + (fire_display.w - 16.0f * ui) * t;
             float amp;
             if (t < a_ms / 280.0f) {
                 amp = t / (a_ms / 280.0f + 1e-4f);
@@ -718,8 +774,8 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
                 if (amp < 0.0f) amp = 0.0f;
             }
             float p = 0.5f + (sweep_st / 24.0f) * expf(-t * (280.0f / (sweep_d_ms + 1.0f))) * 0.35f;
-            amp_line[i] = (vg_vec2){x, fire_display.y + 8.0f + amp * (fire_display.h - 20.0f)};
-            pitch_line[i] = (vg_vec2){x, fire_display.y + 8.0f + p * (fire_display.h - 20.0f)};
+            amp_line[i] = (vg_vec2){x, fire_display.y + 8.0f * ui + amp * (fire_display.h - 20.0f * ui)};
+            pitch_line[i] = (vg_vec2){x, fire_display.y + 8.0f * ui + p * (fire_display.h - 20.0f * ui)};
         }
         vg_stroke_style amp_s = text;
         amp_s.color = (vg_color){0.35f, 1.0f, 0.65f, 1.0f};
@@ -741,9 +797,9 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         r = draw_text_vector_glow(
             ctx,
             "OSCILLOSCOPE",
-            (vg_vec2){thr_display.x + 8.0f, thr_display.y + thr_display.h - 16.0f},
-            10.5f,
-            0.7f,
+            (vg_vec2){thr_display.x + 8.0f * ui, thr_display.y + thr_display.h - 16.0f * ui},
+            10.5f * ui,
+            0.7f * ui,
             &panel,
             &text
         );
@@ -752,12 +808,12 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         }
 
         vg_stroke_style axis_s = panel;
-        axis_s.width_px = 1.0f;
+        axis_s.width_px = 1.0f * ui;
         axis_s.intensity = 0.65f;
         axis_s.color = (vg_color){0.28f, 0.96f, 0.58f, 0.72f};
         const vg_vec2 h_axis[2] = {
-            {thr_display.x + 8.0f, thr_display.y + thr_display.h * 0.5f},
-            {thr_display.x + thr_display.w - 8.0f, thr_display.y + thr_display.h * 0.5f}
+            {thr_display.x + 8.0f * ui, thr_display.y + thr_display.h * 0.5f},
+            {thr_display.x + thr_display.w - 8.0f * ui, thr_display.y + thr_display.h * 0.5f}
         };
         r = vg_draw_polyline(ctx, h_axis, 2, &axis_s, 0);
         if (r != VG_OK) {
@@ -767,7 +823,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         vg_vec2 scope_line[ACOUSTICS_SCOPE_SAMPLES];
         for (int i = 0; i < ACOUSTICS_SCOPE_SAMPLES; ++i) {
             const float t = (float)i / (float)(ACOUSTICS_SCOPE_SAMPLES - 1);
-            const float x = thr_display.x + 8.0f + (thr_display.w - 16.0f) * t;
+            const float x = thr_display.x + 8.0f * ui + (thr_display.w - 16.0f * ui) * t;
             const float s = metrics->acoustics_scope[i];
             const float y = thr_display.y + thr_display.h * 0.5f + s * (thr_display.h * 0.35f);
             scope_line[i] = (vg_vec2){x, y};
@@ -812,9 +868,11 @@ static vg_result draw_mouse_pointer(vg_context* ctx, float w, float h, const ren
 
 static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render_metrics* metrics, float t_s) {
     (void)t_s;
+    const float ui = ui_reference_scale(w, h);
+    const vg_rect safe = make_ui_safe_frame(w, h);
     const palette_theme pal = get_palette_theme(metrics->palette_mode);
     vg_stroke_style frame = {
-        .width_px = 2.2f,
+        .width_px = 2.2f * ui,
         .intensity = 1.0f,
         .color = pal.primary,
         .cap = VG_LINE_CAP_ROUND,
@@ -823,7 +881,7 @@ static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render
         .blend = VG_BLEND_ALPHA
     };
     vg_stroke_style txt = frame;
-    txt.width_px = 1.2f;
+    txt.width_px = 1.2f * ui;
     txt.color = pal.secondary;
     vg_fill_style haze = {
         .intensity = 0.28f,
@@ -831,7 +889,7 @@ static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render
         .blend = VG_BLEND_ALPHA
     };
 
-    const vg_rect panel = {w * 0.09f, h * 0.08f, w * 0.82f, h * 0.84f};
+    const vg_rect panel = safe;
     const vg_rect inner = {panel.x + panel.w * 0.015f, panel.y + panel.h * 0.02f, panel.w * 0.97f, panel.h * 0.95f};
     vg_result r = vg_fill_rect(ctx, panel, &haze);
     if (r != VG_OK) {
@@ -850,8 +908,8 @@ static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render
         ctx,
         "DISPLAY CONFIG",
         (vg_vec2){panel.x + panel.w * 0.04f, panel.y + panel.h - panel.h * 0.10f},
-        18.0f,
-        1.4f,
+        18.0f * ui,
+        1.4f * ui,
         &frame,
         &txt
     );
@@ -862,8 +920,8 @@ static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render
         ctx,
         "UP/DOWN SELECT  ENTER APPLY  2 EXIT",
         (vg_vec2){panel.x + panel.w * 0.04f, panel.y + panel.h - panel.h * 0.15f},
-        10.0f,
-        0.8f,
+        10.0f * ui,
+        0.8f * ui,
         &frame,
         &txt
     );
@@ -880,7 +938,7 @@ static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render
         const float btn_x0 = panel.x + panel.w - (3.0f * btn_w + 2.0f * btn_gap) - panel.w * 0.04f;
         for (int i = 0; i < 3; ++i) {
             const vg_rect b = {btn_x0 + (float)i * (btn_w + btn_gap), btn_y, btn_w, btn_h};
-            r = vg_draw_button(ctx, b, labels[i], 11.0f, &frame, &txt, (metrics->palette_mode == i) ? 1 : 0);
+            r = vg_draw_button(ctx, b, labels[i], 11.0f * ui, &frame, &txt, (metrics->palette_mode == i) ? 1 : 0);
             if (r != VG_OK) {
                 return r;
             }
@@ -901,7 +959,7 @@ static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render
             const int idx = i - 1;
             snprintf(label, sizeof(label), "%d x %d", metrics->video_res_w[idx], metrics->video_res_h[idx]);
         }
-        r = vg_draw_button(ctx, row, label, 12.0f, &frame, &txt, (metrics->video_menu_selected == i) ? 1 : 0);
+        r = vg_draw_button(ctx, row, label, 12.0f * ui, &frame, &txt, (metrics->video_menu_selected == i) ? 1 : 0);
         if (r != VG_OK) {
             return r;
         }
@@ -913,8 +971,8 @@ static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render
             ctx,
             mode,
             (vg_vec2){panel.x + panel.w * 0.05f, panel.y + panel.h * 0.10f},
-            11.0f,
-            0.8f,
+            11.0f * ui,
+            0.8f * ui,
             &frame,
             &txt
         );
@@ -943,10 +1001,12 @@ static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render
             d.max_value = 100.0f;
             d.mode = VG_UI_METER_SEGMENTED;
             d.segments = 12;
-            d.segment_gap_px = 2.0f;
+            d.segment_gap_px = 2.0f * ui;
             d.value_fmt = "%3.0f";
             d.show_value = 0;
             d.show_ticks = 1;
+            d.ui_scale = ui;
+            d.text_scale = ui;
             const float radius = lab.w * 0.070f;
             for (int i = 0; i < VIDEO_MENU_DIAL_COUNT; ++i) {
                 const int row = i / 3;
@@ -967,6 +1027,419 @@ static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render
             }
         }
     }
+    return VG_OK;
+}
+
+static void planetarium_node_center(float w, float h, int system_count, int idx, float t_s, float* out_x, float* out_y) {
+    static const int k_primes[PLANETARIUM_MAX_SYSTEMS] = {2, 3, 5, 7, 11, 13, 17, 19};
+    const vg_rect panel = make_ui_safe_frame(w, h);
+    const vg_rect map = {panel.x + panel.w * 0.03f, panel.y + panel.h * 0.10f, panel.w * 0.56f, panel.h * 0.82f};
+    const float cx = map.x + map.w * 0.50f;
+    const float cy = map.y + map.h * 0.52f;
+    if (idx < system_count) {
+        const float orbit_t = ((float)idx + 1.0f) / ((float)system_count + 1.0f);
+        const float rx = map.w * (0.12f + orbit_t * 0.30f);
+        const float ry = map.h * (0.04f + orbit_t * 0.11f);
+        const float rot = 0.22f;
+        const int p = k_primes[idx % PLANETARIUM_MAX_SYSTEMS];
+        const int q = k_primes[(idx + 3) % PLANETARIUM_MAX_SYSTEMS];
+        const float phase = t_s * (0.10f + 0.008f * (float)p) + 6.28318530718f * ((float)(q % 29) / 29.0f);
+        const float c = cosf(phase);
+        const float s = sinf(phase);
+        *out_x = cx + c * rx * cosf(rot) - s * ry * sinf(rot);
+        *out_y = cy + c * rx * sinf(rot) + s * ry * cosf(rot);
+    } else {
+        *out_x = cx + map.w * 0.38f;
+        *out_y = cy;
+    }
+}
+
+static vg_result draw_planetarium_ui(vg_context* ctx, float w, float h, const render_metrics* metrics, float t_s) {
+    static const char* k_system_names[PLANETARIUM_MAX_SYSTEMS] = {
+        "THETA PRI",
+        "KELVIN ARC",
+        "NOVA REACH",
+        "VANTA BELT",
+        "EMBER VEIL",
+        "ORBITAL IX",
+        "CERULEAN RIFT",
+        "BLACK SITE"
+    };
+    static const char* k_system_lore[PLANETARIUM_MAX_SYSTEMS][3] = {
+        {"RELAY SHELL OVERRUN BY SCAV DRONES.",
+         "NICK: CLEAR LANES, RECOVER NAV SHARDS.",
+         "PROFILE: INTERCEPTOR HEAVY, LOW ARMOR."},
+        {"FRACTURED MINING ARC, UNSTABLE GRIDS.",
+         "NICK: STRIKE BEFORE DEFENSES RE ARM.",
+         "PROFILE: MEDIUM THREAT, BURST FIGHTS."},
+        {"TRADE SPINE DARK AFTER CONVOY LOSSES.",
+         "NICK: REOPEN ESCORT CORRIDOR FAST.",
+         "PROFILE: MIXED FORMATIONS, STEADY HEAT."},
+        {"DERELICT BELT MASKING HOT SIGNATURES.",
+         "NICK: TRUST SCANS OVER VISUAL NOISE.",
+         "PROFILE: AMBUSH VECTORS, COLLISION RISK."},
+        {"THERMAL FRONTS AROUND OLD HABITATS.",
+         "NICK: TARGET BLOOMS, AVOID DEAD ZONES.",
+         "PROFILE: AGGRESSIVE PACKS, FAST WAVES."},
+        {"OUTER PATROL RING FEEDING COMMAND.",
+         "NICK: SEVER UPLINKS BEFORE REINFORCE.",
+         "PROFILE: COMMAND ESCORTS, SHARP RETURN."},
+        {"IONIC FRACTURE BENDS LONG RANGE SCAN.",
+         "NICK: MAINTAIN FORMATION UNDER DRIFT.",
+         "PROFILE: EVASIVE TARGETS, TRACKING TEST."},
+        {"BLACK CHANNEL LOCKS FINAL BOSS GATE.",
+         "NICK: THIS IS THE BREACH CORRIDOR.",
+         "PROFILE: ELITE DEFENSES, BOSS PREP."}
+    };
+    const float ui = ui_reference_scale(w, h);
+    const palette_theme pal = get_palette_theme(metrics->palette_mode);
+    vg_stroke_style frame = {
+        .width_px = 2.0f * ui,
+        .intensity = 1.0f,
+        .color = pal.primary,
+        .cap = VG_LINE_CAP_ROUND,
+        .join = VG_LINE_JOIN_ROUND,
+        .miter_limit = 4.0f,
+        .blend = VG_BLEND_ALPHA
+    };
+    vg_stroke_style txt = frame;
+    txt.width_px = 1.2f * ui;
+    txt.color = pal.secondary;
+    vg_fill_style haze = {.intensity = 0.30f, .color = pal.haze, .blend = VG_BLEND_ALPHA};
+
+    const vg_rect panel = make_ui_safe_frame(w, h);
+    const vg_rect map = {panel.x + panel.w * 0.03f, panel.y + panel.h * 0.10f, panel.w * 0.56f, panel.h * 0.82f};
+    const vg_rect side = {panel.x + panel.w * 0.62f, panel.y + panel.h * 0.10f, panel.w * 0.35f, panel.h * 0.82f};
+    const vg_rect nick_rect = {side.x + side.w * 0.05f, side.y + side.h * 0.56f, side.w * 0.32f, side.h * 0.40f};
+
+    vg_result r = vg_fill_rect(ctx, panel, &haze);
+    if (r != VG_OK) return r;
+    r = vg_draw_rect(ctx, panel, &frame);
+    if (r != VG_OK) return r;
+    r = vg_draw_rect(ctx, map, &frame);
+    if (r != VG_OK) return r;
+    r = vg_draw_rect(ctx, side, &frame);
+    if (r != VG_OK) return r;
+
+    {
+        const float marq_x = panel.x + panel.w * 0.025f;
+        const float marq_r = side.x + side.w;
+        const vg_rect marq_box = {marq_x, panel.y + panel.h * 0.945f, marq_r - marq_x, panel.h * 0.040f};
+        vg_text_fx_marquee marquee = {0};
+        marquee.text = (metrics->planetarium_marquee_text && metrics->planetarium_marquee_text[0] != '\0')
+                           ? metrics->planetarium_marquee_text
+                           : "PLANETARIUM CONTRACT GRID  ";
+        /* Pixel-snap scroll to reduce sub-pixel crawl shimmer on thin vector glyphs. */
+        marquee.offset_px = floorf(metrics->planetarium_marquee_offset_px + 0.5f);
+        marquee.speed_px_s = 70.0f;
+        marquee.gap_px = 48.0f;
+        vg_fill_style marq_bg = {.intensity = 1.0f, .color = {0.02f, 0.10f, 0.06f, 0.92f}, .blend = VG_BLEND_ALPHA};
+        vg_stroke_style marq_bd = txt;
+        marq_bd.width_px = 1.4f * ui;
+        marq_bd.intensity = 0.85f;
+        r = vg_text_fx_marquee_draw(
+            ctx,
+            &marquee,
+            marq_box,
+            14.0f * ui,
+            0.8f * ui,
+            VG_TEXT_DRAW_MODE_STROKE,
+            &txt,
+            1.0f,
+            &marq_bg,
+            &marq_bd
+        );
+        if (r != VG_OK) return r;
+    }
+    r = draw_text_vector_glow(ctx, "3 TO EXIT   LEFT/RIGHT SELECT   ENTER ACCEPT", (vg_vec2){panel.x + panel.w * 0.03f, panel.y + panel.h * 0.03f}, 9.5f * ui, 0.75f * ui, &frame, &txt);
+    if (r != VG_OK) return r;
+    {
+        char tty_fallback[96];
+        const char* tty_line = metrics->teletype_text;
+        if (!tty_line || tty_line[0] == '\0') {
+            int tty_selected = metrics->planetarium_selected;
+            if (tty_selected < 0) tty_selected = 0;
+            if (tty_selected >= metrics->planetarium_system_count) {
+                snprintf(tty_fallback, sizeof(tty_fallback), "BOSS GATE CONTRACT");
+            } else {
+                snprintf(tty_fallback, sizeof(tty_fallback), "SYSTEM %02d CONTRACT", tty_selected + 1);
+            }
+            tty_line = tty_fallback;
+        }
+        r = draw_text_vector_glow(
+            ctx,
+            tty_line,
+            (vg_vec2){map.x + map.w * 0.02f, map.y + map.h * 0.95f},
+            10.8f * ui,
+            0.72f * ui,
+            &frame,
+            &txt
+        );
+        if (r != VG_OK) return r;
+    }
+
+    const float cx = map.x + map.w * 0.50f;
+    const float cy = map.y + map.h * 0.52f;
+    const int systems = (metrics->planetarium_system_count > 0)
+                            ? ((metrics->planetarium_system_count > PLANETARIUM_MAX_SYSTEMS) ? PLANETARIUM_MAX_SYSTEMS : metrics->planetarium_system_count)
+                            : 1;
+    const int boss_idx = systems;
+    int selected_idx = metrics->planetarium_selected;
+    if (selected_idx < 0) selected_idx = 0;
+    if (selected_idx > boss_idx) selected_idx = boss_idx;
+    const float node_r = fminf(w, h) * 0.012f;
+    const float orbit_rot = 0.22f;
+    float node_x[PLANETARIUM_MAX_SYSTEMS];
+    float node_y[PLANETARIUM_MAX_SYSTEMS];
+
+    {
+        char left_title[96];
+        char left_status[80];
+        const int boss_unlocked = (metrics->planetarium_systems_quelled >= systems);
+        if (selected_idx >= systems) {
+            snprintf(left_title, sizeof(left_title), "BOSS GATE CONTRACT");
+            snprintf(left_status, sizeof(left_status), "STATUS  %s", boss_unlocked ? "READY" : "LOCKED");
+        } else {
+            snprintf(left_title, sizeof(left_title), "%s CONTRACT", k_system_names[selected_idx % PLANETARIUM_MAX_SYSTEMS]);
+            snprintf(left_status, sizeof(left_status), "STATUS  %s", metrics->planetarium_nodes_quelled[selected_idx] ? "QUELLED" : "PENDING");
+        }
+        r = draw_text_vector_glow(ctx, left_title, (vg_vec2){map.x + map.w * 0.02f, map.y + map.h * 0.90f}, 12.8f * ui, 0.88f * ui, &frame, &txt);
+        if (r != VG_OK) return r;
+        r = draw_text_vector_glow(ctx, left_status, (vg_vec2){map.x + map.w * 0.02f, map.y + map.h * 0.86f}, 9.6f * ui, 0.70f * ui, &frame, &txt);
+        if (r != VG_OK) return r;
+    }
+
+    for (int i = 0; i < systems; ++i) {
+        planetarium_node_center(w, h, systems, i, t_s, &node_x[i], &node_y[i]);
+        const float orbit_t = ((float)i + 1.0f) / ((float)systems + 1.0f);
+        const float rx = map.w * (0.12f + orbit_t * 0.30f);
+        const float ry = map.h * (0.04f + orbit_t * 0.11f);
+        const int seg_n = 128;
+        vg_vec2 orbit[128];
+        for (int j = 0; j < seg_n; ++j) {
+            const float a = (float)j / (float)(seg_n - 1) * 6.28318530718f;
+            const float c = cosf(a);
+            const float s = sinf(a);
+            orbit[j].x = cx + c * rx * cosf(orbit_rot) - s * ry * sinf(orbit_rot);
+            orbit[j].y = cy + c * rx * sinf(orbit_rot) + s * ry * cosf(orbit_rot);
+        }
+        vg_stroke_style os = frame;
+        os.width_px = 1.0f * ui;
+        os.intensity = 0.45f + 0.07f * (float)i;
+        os.color.a = 0.34f;
+        r = vg_draw_polyline(ctx, orbit, seg_n, &os, 1);
+        if (r != VG_OK) return r;
+    }
+
+    {
+        vg_fill_style sun_c = {.intensity = 1.0f, .color = {1.0f, 0.86f, 0.45f, 0.92f}, .blend = VG_BLEND_ALPHA};
+        r = vg_fill_circle(ctx, (vg_vec2){cx, cy}, node_r * 1.9f, &sun_c, 20);
+        if (r != VG_OK) return r;
+    }
+
+    for (int i = 0; i < systems; ++i) {
+        const float nx = node_x[i];
+        const float ny = node_y[i];
+        const int selected = (metrics->planetarium_selected == i);
+        const int quelled = metrics->planetarium_nodes_quelled[i] ? 1 : 0;
+        vg_fill_style f = {
+            .intensity = selected ? 1.2f : 0.95f,
+            .color = quelled ? (vg_color){0.35f, 1.0f, 0.62f, 0.95f} : (vg_color){0.35f, 0.72f, 1.0f, 0.85f},
+            .blend = VG_BLEND_ALPHA
+        };
+        r = vg_fill_circle(ctx, (vg_vec2){nx, ny}, node_r, &f, 18);
+        if (r != VG_OK) return r;
+        vg_stroke_style ns = frame;
+        ns.width_px = selected ? 2.4f : 1.4f;
+        ns.color = selected ? pal.secondary : pal.primary;
+        ns.intensity = selected ? 1.25f : 0.8f;
+        {
+            const int cn = 24;
+            vg_vec2 ring[24];
+            const float rr = node_r * 1.35f;
+            for (int ci = 0; ci < cn; ++ci) {
+                const float a = (float)ci / (float)(cn - 1) * 6.28318530718f;
+                ring[ci].x = nx + cosf(a) * rr;
+                ring[ci].y = ny + sinf(a) * rr;
+            }
+            r = vg_draw_polyline(ctx, ring, cn, &ns, 1);
+        }
+        if (r != VG_OK) return r;
+
+        {
+            const char* label = k_system_names[i % PLANETARIUM_MAX_SYSTEMS];
+            const float lx = nx + node_r * 1.6f;
+            const float ly = ny + node_r * (i & 1 ? -1.2f : 1.4f);
+        r = draw_text_vector_glow(ctx, label, (vg_vec2){lx, ly}, 7.4f * ui, 0.60f * ui, &frame, &txt);
+        if (r != VG_OK) return r;
+    }
+    }
+
+    {
+        float bx = 0.0f;
+        float by = 0.0f;
+        planetarium_node_center(w, h, systems, boss_idx, t_s, &bx, &by);
+        const int selected = (metrics->planetarium_selected == boss_idx);
+        const int boss_unlocked = (metrics->planetarium_systems_quelled >= systems);
+        vg_stroke_style gate = frame;
+        gate.width_px = 1.2f * ui;
+        gate.intensity = 0.78f;
+        gate.color.a = 0.50f;
+        vg_vec2 bridge[2] = {{cx + map.w * 0.30f, cy}, {bx, by}};
+        r = vg_draw_polyline(ctx, bridge, 2, &gate, 0);
+        if (r != VG_OK) return r;
+        vg_fill_style bf = {
+            .intensity = 1.0f,
+            .color = boss_unlocked ? (vg_color){1.0f, 0.34f, 0.32f, 0.95f} : (vg_color){0.52f, 0.20f, 0.22f, 0.58f},
+            .blend = VG_BLEND_ALPHA
+        };
+        r = vg_fill_circle(ctx, (vg_vec2){bx, by}, node_r * 1.35f, &bf, 20);
+        if (r != VG_OK) return r;
+        gate.width_px = (selected ? 2.4f : 1.5f) * ui;
+        gate.color = selected ? pal.secondary : pal.primary;
+        gate.intensity = selected ? 1.28f : 0.9f;
+        {
+            const int cn = 26;
+            vg_vec2 ring[26];
+            for (int ci = 0; ci < cn; ++ci) {
+                const float a = (float)ci / (float)(cn - 1) * 6.28318530718f;
+                ring[ci].x = bx + cosf(a) * node_r * 1.75f;
+                ring[ci].y = by + sinf(a) * node_r * 1.75f;
+            }
+            r = vg_draw_polyline(ctx, ring, cn, &gate, 1);
+            if (r != VG_OK) return r;
+        }
+        r = draw_text_vector_glow(ctx, "BOSS GATE", (vg_vec2){bx + node_r * 2.0f, by + node_r * 1.6f}, 8.0f * ui, 0.62f * ui, &frame, &txt);
+        if (r != VG_OK) return r;
+    }
+
+    {
+        vg_vec2 target = {cx, cy};
+        if (metrics->planetarium_selected < systems) {
+            target.x = node_x[metrics->planetarium_selected];
+            target.y = node_y[metrics->planetarium_selected];
+        } else {
+            planetarium_node_center(w, h, systems, boss_idx, t_s, &target.x, &target.y);
+        }
+        const vg_vec2 sweep[2] = {{cx, cy}, {target.x, target.y}};
+        vg_stroke_style sw = txt;
+        sw.width_px = 1.4f * ui;
+        sw.intensity = 1.12f;
+        sw.color.a = 0.68f;
+        r = vg_draw_polyline(ctx, sweep, 2, &sw, 0);
+        if (r != VG_OK) return r;
+    }
+
+    {
+        const int selected = selected_idx;
+        const int boss_unlocked = (metrics->planetarium_systems_quelled >= systems);
+        const int remaining = systems - metrics->planetarium_systems_quelled;
+        const float stats_x = side.x + side.w * 0.42f;
+        char stat_line[128];
+        r = draw_text_vector_glow(ctx, "COMMANDER NICK", (vg_vec2){side.x + side.w * 0.06f, side.y + side.h * 0.95f}, 10.4f * ui, 0.76f * ui, &frame, &txt);
+        if (r != VG_OK) return r;
+        snprintf(stat_line, sizeof(stat_line), "SYSTEMS QUELLED  %d / %d", metrics->planetarium_systems_quelled, systems);
+        r = draw_text_vector_glow(ctx, stat_line, (vg_vec2){stats_x, side.y + side.h * 0.92f}, 7.4f * ui, 0.62f * ui, &frame, &txt);
+        if (r != VG_OK) return r;
+        snprintf(stat_line, sizeof(stat_line), "SYSTEMS REMAINING  %d", remaining > 0 ? remaining : 0);
+        r = draw_text_vector_glow(ctx, stat_line, (vg_vec2){stats_x, side.y + side.h * 0.88f}, 7.4f * ui, 0.62f * ui, &frame, &txt);
+        if (r != VG_OK) return r;
+        snprintf(stat_line, sizeof(stat_line), "BOSS GATE  %s", boss_unlocked ? "UNLOCKED" : "LOCKED");
+        r = draw_text_vector_glow(ctx, stat_line, (vg_vec2){stats_x, side.y + side.h * 0.84f}, 7.4f * ui, 0.62f * ui, &frame, &txt);
+        if (r != VG_OK) return r;
+        snprintf(stat_line, sizeof(stat_line), "SELECTED  %s",
+                 (selected < systems) ? k_system_names[selected % PLANETARIUM_MAX_SYSTEMS] : "BOSS GATE");
+        r = draw_text_vector_glow(ctx, stat_line, (vg_vec2){stats_x, side.y + side.h * 0.80f}, 7.4f * ui, 0.62f * ui, &frame, &txt);
+        if (r != VG_OK) return r;
+        r = draw_text_vector_glow(ctx, "MISSION BRIEFING", (vg_vec2){side.x + side.w * 0.06f, side.y + side.h * 0.50f}, 9.8f * ui, 0.74f * ui, &frame, &txt);
+        if (r != VG_OK) return r;
+        if (selected < systems) {
+            for (int li = 0; li < 3; ++li) {
+                r = draw_text_vector_glow(
+                    ctx,
+                    k_system_lore[selected % PLANETARIUM_MAX_SYSTEMS][li],
+                    (vg_vec2){side.x + side.w * 0.06f, side.y + side.h * (0.44f - 0.045f * (float)li)},
+                    7.8f * ui,
+                    0.58f * ui,
+                    &frame,
+                    &txt
+                );
+                if (r != VG_OK) return r;
+            }
+        } else {
+            r = draw_text_vector_glow(ctx, "BOSS GATE TELEMETRY SYNCHRONIZED.", (vg_vec2){side.x + side.w * 0.06f, side.y + side.h * 0.43f}, 7.8f * ui, 0.58f * ui, &frame, &txt);
+            if (r != VG_OK) return r;
+            r = draw_text_vector_glow(ctx, "ALL SYSTEMS MUST BE QUELLED BEFORE LAUNCH.", (vg_vec2){side.x + side.w * 0.06f, side.y + side.h * 0.385f}, 7.8f * ui, 0.58f * ui, &frame, &txt);
+            if (r != VG_OK) return r;
+            r = draw_text_vector_glow(ctx, "EXPECT COORDINATED ELITE RESISTANCE.", (vg_vec2){side.x + side.w * 0.06f, side.y + side.h * 0.34f}, 7.8f * ui, 0.58f * ui, &frame, &txt);
+            if (r != VG_OK) return r;
+        }
+    }
+
+    {
+        vg_rect prog = {side.x + side.w * 0.42f, side.y + side.h * 0.60f, side.w * 0.53f, side.h * 0.07f};
+        r = vg_draw_rect(ctx, prog, &frame);
+        if (r != VG_OK) return r;
+        const float p01 = clampf((float)metrics->planetarium_systems_quelled / fmaxf((float)systems, 1.0f), 0.0f, 1.0f);
+        vg_fill_style pf = {.intensity = 1.0f, .color = pal.primary, .blend = VG_BLEND_ALPHA};
+        vg_rect fill = {prog.x + 2.0f, prog.y + 2.0f, (prog.w - 4.0f) * p01, prog.h - 4.0f};
+        if (fill.w > 0.5f && fill.h > 0.5f) {
+            r = vg_fill_rect(ctx, fill, &pf);
+            if (r != VG_OK) return r;
+        }
+        r = draw_text_vector_glow(ctx, "THREAT INDEX CONTROL", (vg_vec2){prog.x, prog.y + prog.h + 10.0f * ui}, 8.2f * ui, 0.66f * ui, &frame, &txt);
+        if (r != VG_OK) return r;
+    }
+
+    if (metrics->nick_rgba8 && metrics->nick_w > 0 && metrics->nick_h > 0 && metrics->nick_stride > 0) {
+        vg_image_desc img = {
+            .pixels_rgba8 = metrics->nick_rgba8,
+            .width = metrics->nick_w,
+            .height = metrics->nick_h,
+            .stride_bytes = metrics->nick_stride
+        };
+        vg_image_style is = {
+            .kind = VG_IMAGE_STYLE_BLOCK_GRAPHICS,
+            .threshold = 0.47f,
+            .contrast = 1.45f,
+            .scanline_pitch_px = 2.6f,
+            .min_line_width_px = 0.55f,
+            .max_line_width_px = 2.35f,
+            .line_jitter_px = 0.0f,
+            .cell_width_px = 8.0f,
+            .cell_height_px = 6.0f,
+            .block_levels = 16,
+            .intensity = 0.96f,
+            .tint_color = pal.secondary,
+            .blend = VG_BLEND_ALPHA,
+            .use_crt_palette = 0,
+            .use_context_palette = 0,
+            .palette_index = 0,
+            .invert = 0,
+            .use_boxed_glyphs = 0
+        };
+        vg_rect dst = {nick_rect.x + 4.0f, nick_rect.y + 4.0f, nick_rect.w - 8.0f, nick_rect.h - 8.0f};
+        const float img_ar = (float)metrics->nick_w / (float)metrics->nick_h;
+        const float dst_ar = dst.w / fmaxf(dst.h, 1.0f);
+        if (img_ar > dst_ar) {
+            const float old_h = dst.h;
+            dst.h = dst.w / fmaxf(img_ar, 1e-5f);
+            dst.y += (old_h - dst.h) * 0.5f;
+        } else {
+            const float old_w = dst.w;
+            dst.w = dst.h * img_ar;
+            dst.x += (old_w - dst.w) * 0.5f;
+        }
+        r = vg_draw_image_stylized(ctx, &img, dst, &is);
+        if (r != VG_OK) {
+            r = draw_text_vector_glow(ctx, "NICK FEED DEGRADED", (vg_vec2){nick_rect.x + 10.0f * ui, nick_rect.y + nick_rect.h * 0.5f}, 10.0f * ui, 0.8f * ui, &frame, &txt);
+            if (r != VG_OK) return r;
+        }
+    } else {
+        r = draw_text_vector_glow(ctx, "NICK PORTRAIT OFFLINE", (vg_vec2){nick_rect.x + 10.0f * ui, nick_rect.y + nick_rect.h * 0.5f}, 10.0f * ui, 0.8f * ui, &frame, &txt);
+        if (r != VG_OK) return r;
+    }
+
     return VG_OK;
 }
 
@@ -1248,7 +1721,8 @@ static vg_result draw_cylinder_wire(
 		        const vg_vec2 vc = project_cylinder_point(g, g->camera_x, g->world_h * 0.50f, NULL);
 		        const float cx = vc.x;
 		        const float cy = vc.y;
-                const float phase_turns = repeatf(-(g->player.b.x) / fmaxf(period * 0.85f, 1.0f), 1.0f);
+                const float spin_sign = (level_style == LEVEL_STYLE_EVENT_HORIZON_LEGACY) ? 1.0f : -1.0f;
+                const float phase_turns = repeatf(spin_sign * g->player.b.x / fmaxf(period * 0.85f, 1.0f), 1.0f);
                 const float loop_shift_legacy = phase_turns * (float)(WORMHOLE_VN - 1);
                 const float loop_shift_modern = phase_turns * (float)WORMHOLE_VN;
                 const float rail_shift = phase_turns * (float)WORMHOLE_COLS;
@@ -1314,6 +1788,7 @@ static vg_result draw_cylinder_wire(
 		            }
 		        } else {
 		            /* Modern uniform wireframe. */
+                    const float modern_brightness = 0.68f;
 		            for (int j = 0; j < WORMHOLE_ROWS; ++j) {
 		                const float fade = wh.row_fade[j];
 
@@ -1329,12 +1804,12 @@ static vg_result draw_cylinder_wire(
 
 		                vg_stroke_style vh = *halo;
 		                vg_stroke_style vm = *main;
-		                vh.color = (vg_color){0.38f, 0.92f, 1.0f, 0.20f * fade};
-		                vm.color = (vg_color){0.44f, 0.97f, 1.0f, 0.58f * fade};
+		                vh.color = (vg_color){0.38f, 0.92f, 1.0f, 0.20f * fade * modern_brightness};
+		                vm.color = (vg_color){0.44f, 0.97f, 1.0f, 0.58f * fade * modern_brightness};
 		                vh.width_px *= 1.40f;
 		                vm.width_px *= 1.25f;
-		                vh.intensity *= 0.42f + fade * 0.48f;
-		                vm.intensity *= 0.48f + fade * 0.56f;
+		                vh.intensity *= (0.42f + fade * 0.48f) * modern_brightness;
+		                vm.intensity *= (0.48f + fade * 0.56f) * modern_brightness;
 		                vg_result vr = vg_draw_polyline(ctx, loop, WORMHOLE_VN, &vh, 1);
 		                if (vr != VG_OK) {
 		                    return vr;
@@ -1358,12 +1833,12 @@ static vg_result draw_cylinder_wire(
 		                const float fade = 0.90f;
 		                vg_stroke_style rh = *halo;
 		                vg_stroke_style rm = *main;
-		                rh.color = (vg_color){0.38f, 0.92f, 1.0f, 0.20f * fade};
-		                rm.color = (vg_color){0.44f, 0.97f, 1.0f, 0.58f * fade};
+		                rh.color = (vg_color){0.38f, 0.92f, 1.0f, 0.20f * fade * modern_brightness};
+		                rm.color = (vg_color){0.44f, 0.97f, 1.0f, 0.58f * fade * modern_brightness};
 		                rh.width_px *= 1.40f;
 		                rm.width_px *= 1.25f;
-		                rh.intensity *= 0.42f;
-		                rm.intensity *= 0.48f;
+		                rh.intensity *= 0.42f * modern_brightness;
+		                rm.intensity *= 0.48f * modern_brightness;
 
 		                vg_result vr = vg_draw_polyline(ctx, rail, WORMHOLE_ROWS, &rh, 0);
 		                if (vr != VG_OK) {
@@ -1503,11 +1978,12 @@ static vg_result draw_player_ship(
     const vg_stroke_style* ship_style,
     const vg_fill_style* thruster_fill
 ) {
+    const float su = ui_reference_scale(g->world_w, g->world_h);
     ship_pose p = {
         .x = g->player.b.x,
         .y = g->player.b.y,
         .fx = (g->player.facing_x < 0.0f) ? -1.0f : 1.0f,
-        .s = 0.65f
+        .s = 0.65f * su
     };
 
     vg_result r = draw_ship_hull(ctx, p, ship_style);
@@ -1634,6 +2110,17 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         }
         return draw_mouse_pointer(ctx, g->world_w, g->world_h, metrics, &txt_main);
     }
+    if (metrics->show_planetarium) {
+        vg_result r = vg_fill_rect(ctx, (vg_rect){0.0f, 0.0f, g->world_w, g->world_h}, &bg);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = draw_planetarium_ui(ctx, g->world_w, g->world_h, metrics, metrics->ui_time_s);
+        if (r != VG_OK) {
+            return r;
+        }
+        return draw_mouse_pointer(ctx, g->world_w, g->world_h, metrics, &txt_main);
+    }
 
     const float jx = sinf(g->t * 17.0f + 0.2f) * crt.jitter_amount * 0.75f;
     const float jy = cosf(g->t * 21.0f) * crt.jitter_amount * 0.75f;
@@ -1755,8 +2242,9 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             return r;
         }
         if (g->lives <= 0) {
-            const float go_size = 36.0f;
-            const float go_spacing = 2.2f;
+            const float ui = ui_reference_scale(g->world_w, g->world_h);
+            const float go_size = 36.0f * ui;
+            const float go_spacing = 2.2f * ui;
             const float go_w = vg_measure_text("GAME OVER", go_size, go_spacing);
             r = draw_text_vector_glow(
                 ctx,
@@ -1774,11 +2262,11 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
                 ctx,
                 "PRESS R TO RESTART",
                 (vg_vec2){
-                    (g->world_w - vg_measure_text("PRESS R TO RESTART", 14.0f, 1.2f)) * 0.5f,
+                    (g->world_w - vg_measure_text("PRESS R TO RESTART", 14.0f * ui, 1.2f * ui)) * 0.5f,
                     g->world_h * 0.52f
                 },
-                14.0f,
-                1.2f,
+                14.0f * ui,
+                1.2f * ui,
                 &txt_halo,
                 &txt_main
             );
@@ -1969,8 +2457,9 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
     }
 
     if (g->lives <= 0) {
-        const float go_size = 36.0f;
-        const float go_spacing = 2.2f;
+        const float ui = ui_reference_scale(g->world_w, g->world_h);
+        const float go_size = 36.0f * ui;
+        const float go_spacing = 2.2f * ui;
         const float go_w = vg_measure_text("GAME OVER", go_size, go_spacing);
         r = draw_text_vector_glow(
             ctx,
@@ -1988,11 +2477,11 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             ctx,
             "PRESS R TO RESTART",
             (vg_vec2){
-                (g->world_w - vg_measure_text("PRESS R TO RESTART", 14.0f, 1.2f)) * 0.5f,
+                (g->world_w - vg_measure_text("PRESS R TO RESTART", 14.0f * ui, 1.2f * ui)) * 0.5f,
                 g->world_h * 0.52f
             },
-            14.0f,
-            1.2f,
+            14.0f * ui,
+            1.2f * ui,
             &txt_halo,
             &txt_main
         );

@@ -57,8 +57,7 @@ vg_result vg_text_fx_marquee_draw(
     const vg_stroke_style* text_style,
     float boxed_weight,
     const vg_fill_style* panel_fill,
-    const vg_stroke_style* panel_border,
-    const vg_fill_style* clip_fill
+    const vg_stroke_style* panel_border
 );
 
 #ifdef __cplusplus

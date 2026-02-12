@@ -176,8 +176,7 @@ vg_result vg_text_fx_marquee_draw(
     const vg_stroke_style* text_style,
     float boxed_weight,
     const vg_fill_style* panel_fill,
-    const vg_stroke_style* panel_border,
-    const vg_fill_style* clip_fill
+    const vg_stroke_style* panel_border
 ) {
     if (!ctx || !fx || !fx->text || !text_style || box.w <= 1.0f || box.h <= 1.0f || size_px <= 0.0f) {
         return VG_ERROR_INVALID_ARGUMENT;
@@ -207,6 +206,10 @@ vg_result vg_text_fx_marquee_draw(
     }
 
     float y = box.y + (box.h - size_px) * 0.5f;
+    vg_result clip_r = vg_clip_push_rect(ctx, box);
+    if (clip_r != VG_OK) {
+        return clip_r;
+    }
     for (float x = box.x - ofs; x < box.x + box.w + text_w; x += cycle) {
         vg_result r = vg_text_fx_draw_mode(
             ctx,
@@ -221,21 +224,9 @@ vg_result vg_text_fx_marquee_draw(
             panel_border
         );
         if (r != VG_OK) {
+            (void)vg_clip_pop(ctx);
             return r;
         }
     }
-
-    if (clip_fill) {
-        vg_rect left = {box.x - 4096.0f, box.y, 4096.0f, box.h};
-        vg_rect right = {box.x + box.w, box.y, 4096.0f, box.h};
-        vg_result r = vg_fill_rect(ctx, left, clip_fill);
-        if (r != VG_OK) {
-            return r;
-        }
-        r = vg_fill_rect(ctx, right, clip_fill);
-        if (r != VG_OK) {
-            return r;
-        }
-    }
-    return VG_OK;
+    return vg_clip_pop(ctx);
 }

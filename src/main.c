@@ -1,11 +1,18 @@
 #include "game.h"
+#include "planetarium_propaganda.h"
 #include "render.h"
+#include "ui_layout.h"
 #include "vg.h"
+#include "vg_ui.h"
+#include "vg_svg.h"
 #include "vg_text_fx.h"
 #include "wavetable_poly_synth_lib.h"
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_vulkan.h>
+#if V_TYPE_HAS_SDL_IMAGE
+#include <SDL2/SDL_image.h>
+#endif
 #include <vulkan/vulkan.h>
 
 #include <stdint.h>
@@ -35,6 +42,8 @@
 #define ACOUSTICS_SLOTS_PATH "acoustics_slots.cfg"
 #define SETTINGS_PATH "settings.cfg"
 #define ACOUSTICS_SCOPE_HISTORY_SAMPLES 8192
+
+#define PLANETARIUM_NODE_COUNT 6
 
 typedef struct video_resolution {
     int w;
@@ -116,9 +125,11 @@ typedef struct app {
     vg_context* vg;
     game_state game;
     vg_text_fx_typewriter wave_tty;
+    vg_text_fx_marquee planetarium_marquee;
     SDL_AudioDeviceID audio_dev;
     SDL_AudioSpec audio_have;
     int audio_ready;
+    char wave_tty_text[640];
     char wave_tty_visible[640];
     wtp_instrument_t weapon_synth;
     wtp_instrument_t thruster_synth;
@@ -143,6 +154,7 @@ typedef struct app {
     int crt_ui_mouse_drag;
     int show_acoustics;
     int show_video_menu;
+    int show_planetarium;
     int video_menu_selected;
     int video_menu_fullscreen;
     int palette_mode;
@@ -163,17 +175,20 @@ typedef struct app {
     int acoustics_mouse_drag;
     float acoustics_value_01[ACOUSTICS_SLIDER_COUNT];
     int thruster_note_on;
+    int planetarium_selected;
+    int planetarium_system_count;
+    int planetarium_nodes_quelled[PLANETARIUM_MAX_SYSTEMS];
+    uint8_t* nick_rgba8;
+    uint32_t nick_w;
+    uint32_t nick_h;
+    uint32_t nick_stride;
+    vg_svg_asset* surveillance_svg_asset;
 } app;
 
 static VkSampleCountFlagBits pick_msaa_samples(app* a) {
-    if (!a || a->physical_device == VK_NULL_HANDLE) {
-        return VK_SAMPLE_COUNT_1_BIT;
-    }
-    VkPhysicalDeviceProperties props;
-    vkGetPhysicalDeviceProperties(a->physical_device, &props);
-    VkSampleCountFlags counts = props.limits.framebufferColorSampleCounts;
-    if (counts & VK_SAMPLE_COUNT_4_BIT) return VK_SAMPLE_COUNT_4_BIT;
-    if (counts & VK_SAMPLE_COUNT_2_BIT) return VK_SAMPLE_COUNT_2_BIT;
+    (void)a;
+    /* DefconDraw Vulkan backend currently builds its internal line pipeline at 1x samples.
+       Keep the scene pass at 1x to avoid render-pass/pipeline sample mismatches. */
     return VK_SAMPLE_COUNT_1_BIT;
 }
 
@@ -210,6 +225,19 @@ static float rand01_from_state(uint32_t* s) {
     return (float)((*s >> 8) & 0x00ffffffu) / 16777215.0f;
 }
 
+static int planetarium_quelled_count(const app* a) {
+    if (!a) {
+        return 0;
+    }
+    int count = 0;
+    for (int i = 0; i < a->planetarium_system_count && i < PLANETARIUM_MAX_SYSTEMS; ++i) {
+        if (a->planetarium_nodes_quelled[i]) {
+            count++;
+        }
+    }
+    return count;
+}
+
 static int resolution_index_from_wh(int w, int h) {
     for (int i = 0; i < VIDEO_MENU_RES_COUNT; ++i) {
         if (k_video_resolutions[i].w == w && k_video_resolutions[i].h == h) {
@@ -224,7 +252,7 @@ static void map_mouse_to_scene_coords(const app* a, int mouse_x, int mouse_y, fl
 static void video_menu_dial_geometry(const app* a, vg_vec2 centers[VIDEO_MENU_DIAL_COUNT], float* radius_px) {
     const float w = (float)a->swapchain_extent.width;
     const float h = (float)a->swapchain_extent.height;
-    const vg_rect panel = {w * 0.09f, h * 0.08f, w * 0.82f, h * 0.84f};
+    const vg_rect panel = make_ui_safe_frame(w, h);
     const vg_rect lab = {panel.x + panel.w * 0.42f, panel.y + panel.h * 0.07f, panel.w * 0.54f, panel.h * 0.86f};
     *radius_px = lab.w * 0.070f;
     for (int i = 0; i < VIDEO_MENU_DIAL_COUNT; ++i) {
@@ -481,9 +509,23 @@ static void set_tty_message(app* a, const char* msg) {
     if (!a || !msg) {
         return;
     }
-    vg_text_fx_typewriter_set_text(&a->wave_tty, msg);
+    snprintf(a->wave_tty_text, sizeof(a->wave_tty_text), "%s", msg);
+    vg_text_fx_typewriter_set_text(&a->wave_tty, a->wave_tty_text);
     vg_text_fx_typewriter_reset(&a->wave_tty);
     a->wave_tty.timer_s = 0.02f;
+}
+
+static void announce_planetarium_selection(app* a) {
+    if (!a) {
+        return;
+    }
+    if (a->planetarium_selected >= 0 && a->planetarium_selected < a->planetarium_system_count) {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "SYSTEM %02d CONTRACT", a->planetarium_selected + 1);
+        set_tty_message(a, msg);
+    } else {
+        set_tty_message(a, "BOSS GATE CONTRACT");
+    }
 }
 
 static void trigger_fire_test(app* a) {
@@ -819,20 +861,45 @@ typedef struct acoustics_ui_layout {
     int row_count[2];
 } acoustics_ui_layout;
 
+static vg_ui_slider_panel_metrics make_scaled_slider_metrics(float ui, float value_col_width_px) {
+    vg_ui_slider_panel_metrics m;
+    vg_ui_slider_panel_default_metrics(&m);
+    m.pad_left_px *= ui;
+    m.pad_top_px *= ui;
+    m.pad_right_px *= ui;
+    m.pad_bottom_px *= ui;
+    m.title_line_gap_px *= ui;
+    m.rows_top_offset_px *= ui;
+    m.col_gap_px *= ui;
+    m.value_col_width_px = value_col_width_px;
+    m.row_label_height_sub_px *= ui;
+    m.row_slider_y_offset_px *= ui;
+    m.row_slider_height_sub_px *= ui;
+    m.value_y_offset_px *= ui;
+    m.footer_y_from_bottom_px *= ui;
+    m.title_sub_size_delta_px *= ui;
+    m.label_size_bias_px *= ui;
+    m.footer_size_bias_px *= ui;
+    return m;
+}
+
 static acoustics_ui_layout make_acoustics_ui_layout(float w, float h) {
     acoustics_ui_layout l;
-    l.panel[0] = (vg_rect){w * 0.02f, h * 0.10f, w * 0.47f, h * 0.80f};
-    l.panel[1] = (vg_rect){w * 0.51f, h * 0.10f, w * 0.47f, h * 0.80f};
+    memset(&l, 0, sizeof(l));
+    const float ui = ui_reference_scale(w, h);
+    const vg_rect safe = make_ui_safe_frame(w, h);
+    l.panel[0] = (vg_rect){safe.x + safe.w * 0.01f, safe.y + safe.h * 0.10f, safe.w * 0.47f, safe.h * 0.80f};
+    l.panel[1] = (vg_rect){safe.x + safe.w * 0.52f, safe.y + safe.h * 0.10f, safe.w * 0.47f, safe.h * 0.80f};
     l.button[0] = (vg_rect){
         l.panel[0].x + l.panel[0].w * 0.03f,
         l.panel[0].y + l.panel[0].h - l.panel[0].h * 0.08f,
-        l.panel[0].w * 0.28f,
+        l.panel[0].w * (0.28f * 0.85f),
         l.panel[0].h * 0.042f
     };
     l.button[1] = (vg_rect){
         l.panel[1].x + l.panel[1].w * 0.03f,
         l.panel[1].y + l.panel[1].h - l.panel[1].h * 0.08f,
-        l.panel[1].w * 0.32f,
+        l.panel[1].w * (0.32f * 0.85f),
         l.panel[1].h * 0.042f
     };
     for (int p = 0; p < 2; ++p) {
@@ -847,17 +914,36 @@ static acoustics_ui_layout make_acoustics_ui_layout(float w, float h) {
             l.slot_button[p][s] = (vg_rect){sx + (sw + sg) * (float)s, btn.y, sw, btn.h};
         }
     }
-    /* Must match DefconDraw/src/vg_ui.c slider panel layout exactly. */
-    l.row_h = 34.0f;
+    l.row_h = 34.0f * ui;
     l.row_count[0] = 8;
     l.row_count[1] = 6;
+    vg_ui_slider_panel_metrics sm = make_scaled_slider_metrics(ui, 70.0f * ui);
+    vg_ui_slider_item dummy_fire[8] = {0};
+    vg_ui_slider_item dummy_thr[6] = {0};
     for (int p = 0; p < 2; ++p) {
         const vg_rect r = l.panel[p];
-        const float left = r.x + 16.0f;
-        const float label_w = r.w * 0.34f;
-        l.row_y0[p] = r.y + 70.0f;
-        l.slider_x[p] = left + label_w + 16.0f;
-        l.slider_w[p] = r.w - (l.slider_x[p] - r.x) - 104.0f;
+        vg_ui_slider_panel_desc desc = {
+            .rect = r,
+            .items = (p == 0) ? dummy_fire : dummy_thr,
+            .item_count = (size_t)l.row_count[p],
+            .row_height_px = l.row_h,
+            .label_size_px = 11.0f * ui,
+            .value_size_px = 11.5f * ui,
+            .value_text_x_offset_px = 0.0f,
+            .metrics = &sm
+        };
+        vg_ui_slider_panel_layout panel_layout;
+        vg_ui_slider_panel_row_layout row_layout;
+        if (vg_ui_slider_panel_compute_layout(&desc, &panel_layout) == VG_OK &&
+            vg_ui_slider_panel_compute_row_layout(&desc, &panel_layout, 0u, &row_layout) == VG_OK) {
+            l.row_y0[p] = panel_layout.row_start_y;
+            l.slider_x[p] = row_layout.slider_rect.x;
+            l.slider_w[p] = row_layout.slider_rect.w;
+        } else {
+            l.row_y0[p] = r.y + sm.rows_top_offset_px;
+            l.slider_x[p] = r.x + sm.pad_left_px + r.w * sm.label_col_frac + sm.col_gap_px;
+            l.slider_w[p] = r.w - (l.slider_x[p] - r.x) - sm.value_col_width_px - sm.pad_right_px;
+        }
     }
     return l;
 }
@@ -1325,10 +1411,12 @@ static void set_crt_profile_value01(vg_context* vg, int selected, float value_01
 static int handle_crt_ui_mouse(app* a, int mouse_x, int mouse_y, int set_value) {
     const float w = (float)a->swapchain_extent.width;
     const float h = (float)a->swapchain_extent.height;
-    const float px = 24.0f;
-    const float py = h * 0.12f;
-    const float pw = w * 0.44f;
-    const float ph = h * 0.76f;
+    const float ui = ui_reference_scale(w, h);
+    const vg_rect safe = make_ui_safe_frame(w, h);
+    const float px = safe.x + safe.w * 0.00f;
+    const float py = safe.y + safe.h * 0.08f;
+    const float pw = safe.w * 0.44f;
+    const float ph = safe.h * 0.82f;
     float mx = 0.0f;
     float my = 0.0f;
     map_mouse_to_scene_coords(a, mouse_x, mouse_y, &mx, &my);
@@ -1336,12 +1424,28 @@ static int handle_crt_ui_mouse(app* a, int mouse_x, int mouse_y, int set_value) 
         return 0;
     }
 
-    const float left = px + 16.0f;
-    const float row_h = 34.0f;
-    const float row_y0 = py + 70.0f;
-    const float label_w = pw * 0.34f;
-    const float slider_x = left + label_w + 16.0f;
-    const float slider_w = pw - (slider_x - px) - 104.0f;
+    const float row_h = 34.0f * ui;
+    vg_ui_slider_panel_metrics sm = make_scaled_slider_metrics(ui, 70.0f * ui);
+    vg_ui_slider_item dummy[12] = {0};
+    vg_ui_slider_panel_desc desc = {
+        .rect = {px, py, pw, ph},
+        .items = dummy,
+        .item_count = 12u,
+        .row_height_px = row_h,
+        .label_size_px = 11.0f * ui,
+        .value_size_px = 11.5f * ui,
+        .value_text_x_offset_px = 0.0f,
+        .metrics = &sm
+    };
+    vg_ui_slider_panel_layout panel_layout;
+    vg_ui_slider_panel_row_layout row_layout;
+    if (vg_ui_slider_panel_compute_layout(&desc, &panel_layout) != VG_OK ||
+        vg_ui_slider_panel_compute_row_layout(&desc, &panel_layout, 0u, &row_layout) != VG_OK) {
+        return 0;
+    }
+    const float row_y0 = panel_layout.row_start_y;
+    const float slider_x = row_layout.slider_rect.x;
+    const float slider_w = row_layout.slider_rect.w;
 
     int row = (int)((my - row_y0) / row_h);
     if (row < 0 || row >= 12) {
@@ -1369,7 +1473,7 @@ static int handle_video_menu_mouse(app* a, int mouse_x, int mouse_y, int set_val
     float my = 0.0f;
     map_mouse_to_scene_coords(a, mouse_x, mouse_y, &mx, &my);
 
-    const vg_rect panel = {w * 0.09f, h * 0.08f, w * 0.82f, h * 0.84f};
+    const vg_rect panel = make_ui_safe_frame(w, h);
     if (mx < panel.x || mx > panel.x + panel.w || my < panel.y || my > panel.y + panel.h) {
         return 0;
     }
@@ -1433,6 +1537,128 @@ static int handle_video_menu_mouse(app* a, int mouse_x, int mouse_y, int set_val
         }
     }
     return 1;
+}
+
+static void planetarium_node_center(const app* a, int idx, float* out_x, float* out_y) {
+    static const int k_primes[PLANETARIUM_MAX_SYSTEMS] = {2, 3, 5, 7, 11, 13, 17, 19};
+    const float w = (float)a->swapchain_extent.width;
+    const float h = (float)a->swapchain_extent.height;
+    const vg_rect panel = make_ui_safe_frame(w, h);
+    const vg_rect map = {panel.x + panel.w * 0.03f, panel.y + panel.h * 0.10f, panel.w * 0.56f, panel.h * 0.82f};
+    const float cx = map.x + map.w * 0.50f;
+    const float cy = map.y + map.h * 0.52f;
+    const float t_s = (float)SDL_GetTicks() * 0.001f;
+    if (idx < 0) {
+        idx = 0;
+    }
+    if (idx >= a->planetarium_system_count) {
+        *out_x = cx + map.w * 0.38f;
+        *out_y = cy;
+        return;
+    }
+    const float orbit_t = ((float)idx + 1.0f) / ((float)a->planetarium_system_count + 1.0f);
+    const float rx = map.w * (0.12f + orbit_t * 0.30f);
+    const float ry = map.h * (0.04f + orbit_t * 0.11f);
+    const float rot = 0.22f;
+    const int p = k_primes[idx % PLANETARIUM_MAX_SYSTEMS];
+    const int q = k_primes[(idx + 3) % PLANETARIUM_MAX_SYSTEMS];
+    const float phase = t_s * (0.10f + 0.008f * (float)p) + 6.28318530718f * ((float)(q % 29) / 29.0f);
+    const float c = cosf(phase);
+    const float s = sinf(phase);
+    *out_x = cx + c * rx * cosf(rot) - s * ry * sinf(rot);
+    *out_y = cy + c * rx * sinf(rot) + s * ry * cosf(rot);
+}
+
+static int handle_planetarium_mouse(app* a, int mouse_x, int mouse_y, int set_value) {
+    if (!a) {
+        return 0;
+    }
+    const float w = (float)a->swapchain_extent.width;
+    const float h = (float)a->swapchain_extent.height;
+    float mx = 0.0f;
+    float my = 0.0f;
+    map_mouse_to_scene_coords(a, mouse_x, mouse_y, &mx, &my);
+    const vg_rect panel = make_ui_safe_frame(w, h);
+    if (mx < panel.x || mx > panel.x + panel.w || my < panel.y || my > panel.y + panel.h) {
+        return 0;
+    }
+    const int boss_idx = a->planetarium_system_count;
+    const float r = fminf(w, h) * 0.024f;
+    for (int i = 0; i <= boss_idx; ++i) {
+        float cx = 0.0f;
+        float cy = 0.0f;
+        planetarium_node_center(a, i, &cx, &cy);
+        const float dx = mx - cx;
+        const float dy = my - cy;
+        if (dx * dx + dy * dy <= r * r * 1.8f) {
+            if (set_value) {
+                if (a->planetarium_selected != i) {
+                    a->planetarium_selected = i;
+                    announce_planetarium_selection(a);
+                }
+            }
+            return 1;
+        }
+    }
+    return 1;
+}
+
+static void init_planetarium_assets(app* a) {
+    if (!a) {
+        return;
+    }
+
+    vg_svg_load_params sp = {
+        .curve_tolerance_px = 0.75f,
+        .dpi = 96.0f,
+        .units = "px"
+    };
+    const char* svg_candidates[] = {
+        "assets/images/surveillance.svg",
+        "../assets/images/surveillance.svg",
+        "../../assets/images/surveillance.svg"
+    };
+    for (size_t i = 0; i < sizeof(svg_candidates) / sizeof(svg_candidates[0]); ++i) {
+        vg_svg_asset* asset = NULL;
+        if (vg_svg_load_from_file(svg_candidates[i], &sp, &asset) == VG_OK && asset) {
+            a->surveillance_svg_asset = asset;
+            break;
+        }
+    }
+
+#if V_TYPE_HAS_SDL_IMAGE
+    const int img_ok = IMG_Init(IMG_INIT_JPG);
+    if (img_ok & IMG_INIT_JPG) {
+        const char* img_candidates[] = {
+            "assets/images/nick.jpg",
+            "../assets/images/nick.jpg",
+            "../../assets/images/nick.jpg"
+        };
+        SDL_Surface* src = NULL;
+        for (size_t i = 0; i < sizeof(img_candidates) / sizeof(img_candidates[0]); ++i) {
+            src = IMG_Load(img_candidates[i]);
+            if (src) {
+                break;
+            }
+        }
+        if (src) {
+            SDL_Surface* rgba = SDL_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_RGBA32, 0);
+            SDL_FreeSurface(src);
+            src = NULL;
+            if (rgba) {
+                const size_t bytes = (size_t)rgba->pitch * (size_t)rgba->h;
+                a->nick_rgba8 = (uint8_t*)malloc(bytes);
+                if (a->nick_rgba8) {
+                    memcpy(a->nick_rgba8, rgba->pixels, bytes);
+                    a->nick_w = (uint32_t)rgba->w;
+                    a->nick_h = (uint32_t)rgba->h;
+                    a->nick_stride = (uint32_t)rgba->pitch;
+                }
+                SDL_FreeSurface(rgba);
+            }
+        }
+    }
+#endif
 }
 
 static uint32_t find_memory_type(app* a, uint32_t type_bits, VkMemoryPropertyFlags required) {
@@ -1572,6 +1798,17 @@ static void cleanup(app* a) {
     if (a->surface) vkDestroySurfaceKHR(a->instance, a->surface, NULL);
     if (a->instance) vkDestroyInstance(a->instance, NULL);
     if (a->window) SDL_DestroyWindow(a->window);
+#if V_TYPE_HAS_SDL_IMAGE
+    if (a->nick_rgba8) {
+        free(a->nick_rgba8);
+        a->nick_rgba8 = NULL;
+    }
+    IMG_Quit();
+#endif
+    if (a->surveillance_svg_asset) {
+        vg_svg_destroy(a->surveillance_svg_asset);
+        a->surveillance_svg_asset = NULL;
+    }
     SDL_Quit();
 }
 
@@ -1877,6 +2114,17 @@ static VkPresentModeKHR choose_present_mode(const VkPresentModeKHR* modes, uint3
     return VK_PRESENT_MODE_FIFO_KHR;
 }
 
+static VkExtent2D clamp_extent_to_caps(VkExtent2D extent, const VkSurfaceCapabilitiesKHR* caps) {
+    if (!caps) {
+        return extent;
+    }
+    if (extent.width < caps->minImageExtent.width) extent.width = caps->minImageExtent.width;
+    if (extent.height < caps->minImageExtent.height) extent.height = caps->minImageExtent.height;
+    if (caps->maxImageExtent.width > 0 && extent.width > caps->maxImageExtent.width) extent.width = caps->maxImageExtent.width;
+    if (caps->maxImageExtent.height > 0 && extent.height > caps->maxImageExtent.height) extent.height = caps->maxImageExtent.height;
+    return extent;
+}
+
 static int create_swapchain(app* a) {
     VkSurfaceCapabilitiesKHR caps;
     if (!check_vk(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(a->physical_device, a->surface, &caps), "vkGetPhysicalDeviceSurfaceCapabilitiesKHR")) return 0;
@@ -1897,12 +2145,21 @@ static int create_swapchain(app* a) {
     VkPresentModeKHR mode = choose_present_mode(modes, mode_count);
     free(modes);
 
+    int drawable_w = 0;
+    int drawable_h = 0;
+    SDL_Vulkan_GetDrawableSize(a->window, &drawable_w, &drawable_h);
+    VkExtent2D drawable_extent = {
+        .width = (drawable_w > 0) ? (uint32_t)drawable_w : APP_WIDTH,
+        .height = (drawable_h > 0) ? (uint32_t)drawable_h : APP_HEIGHT
+    };
+    drawable_extent = clamp_extent_to_caps(drawable_extent, &caps);
+
     VkExtent2D extent = caps.currentExtent;
-    if (extent.width == UINT32_MAX) {
-        int w = 0, h = 0;
-        SDL_Vulkan_GetDrawableSize(a->window, &w, &h);
-        extent.width = (uint32_t)w;
-        extent.height = (uint32_t)h;
+    if (caps.currentExtent.width == UINT32_MAX || caps.currentExtent.height == UINT32_MAX) {
+        extent = drawable_extent;
+    } else if (caps.currentExtent.width != drawable_extent.width || caps.currentExtent.height != drawable_extent.height) {
+        /* Some WSI paths report currentExtent in logical units; prefer drawable pixels when valid. */
+        extent = drawable_extent;
     }
     uint32_t image_count = caps.minImageCount + 1;
     if (caps.maxImageCount > 0 && image_count > caps.maxImageCount) image_count = caps.maxImageCount;
@@ -1930,7 +2187,28 @@ static int create_swapchain(app* a) {
     } else {
         ci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     }
-    if (!check_vk(vkCreateSwapchainKHR(a->device, &ci, NULL, &a->swapchain), "vkCreateSwapchainKHR")) return 0;
+    VkResult sc_res = vkCreateSwapchainKHR(a->device, &ci, NULL, &a->swapchain);
+    if (sc_res != VK_SUCCESS) {
+        /* Fallback to strict surface extent if the platform rejects drawable-sized swapchains. */
+        if (caps.currentExtent.width != UINT32_MAX && caps.currentExtent.height != UINT32_MAX &&
+            (extent.width != caps.currentExtent.width || extent.height != caps.currentExtent.height)) {
+            ci.imageExtent = caps.currentExtent;
+            sc_res = vkCreateSwapchainKHR(a->device, &ci, NULL, &a->swapchain);
+            extent = caps.currentExtent;
+        }
+    }
+    if (!check_vk(sc_res, "vkCreateSwapchainKHR")) return 0;
+
+    fprintf(
+        stderr,
+        "swapchain extent=%ux%u drawable=%dx%d currentExtent=%ux%u\n",
+        extent.width,
+        extent.height,
+        drawable_w,
+        drawable_h,
+        caps.currentExtent.width,
+        caps.currentExtent.height
+    );
 
     a->swapchain_format = fmt.format;
     a->swapchain_extent = extent;
@@ -2238,7 +2516,7 @@ static int create_vg_context(app* a) {
     desc.api.vulkan.render_pass = (void*)a->scene_render_pass;
     desc.api.vulkan.vertex_binding = 0;
     desc.api.vulkan.max_frames_in_flight = 1;
-    desc.api.vulkan.sample_count = (uint32_t)scene_samples(a);
+    desc.api.vulkan.raster_samples = (uint32_t)scene_samples(a);
     vg_result vr = vg_context_create(&desc, &a->vg);
     if (vr != VG_OK) {
         fprintf(stderr, "vg_context_create failed: %s\n", vg_result_string(vr));
@@ -2282,22 +2560,37 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
 
     vg_frame_desc frame = {.width = a->swapchain_extent.width, .height = a->swapchain_extent.height, .delta_time_s = dt, .command_buffer = (void*)cmd};
     vg_result vr = vg_begin_frame(a->vg, &frame);
-    if (vr != VG_OK) return 0;
+    if (vr != VG_OK) {
+        fprintf(stderr, "VG failure: vg_begin_frame -> %s (%d)\n", vg_result_string(vr), (int)vr);
+        return 0;
+    }
     render_metrics metrics = {
         .fps = fps,
         .dt = dt,
+        .ui_time_s = (float)SDL_GetTicks() * 0.001f,
         .force_clear = (a->force_clear_frames > 0) ? 1 : 0,
         .show_crt_ui = a->show_crt_ui,
         .crt_ui_selected = a->crt_ui_selected,
         .teletype_text = a->wave_tty_visible,
+        .planetarium_marquee_text = a->planetarium_marquee.text,
+        .planetarium_marquee_offset_px = a->planetarium_marquee.offset_px,
         .show_acoustics = a->show_acoustics,
         .show_video_menu = a->show_video_menu,
+        .show_planetarium = a->show_planetarium,
         .video_menu_selected = a->video_menu_selected,
         .video_menu_fullscreen = a->video_menu_fullscreen,
         .palette_mode = a->palette_mode,
         .acoustics_selected = a->acoustics_selected,
         .acoustics_fire_slot_selected = a->acoustics_fire_slot_selected,
-        .acoustics_thr_slot_selected = a->acoustics_thr_slot_selected
+        .acoustics_thr_slot_selected = a->acoustics_thr_slot_selected,
+        .planetarium_selected = a->planetarium_selected,
+        .planetarium_system_count = a->planetarium_system_count,
+        .planetarium_systems_quelled = planetarium_quelled_count(a),
+        .nick_rgba8 = a->nick_rgba8,
+        .nick_w = a->nick_w,
+        .nick_h = a->nick_h,
+        .nick_stride = a->nick_stride,
+        .surveillance_svg_asset = a->surveillance_svg_asset
     };
     {
         int mx = 0;
@@ -2315,6 +2608,9 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         metrics.video_res_w[i] = k_video_resolutions[i].w;
         metrics.video_res_h[i] = k_video_resolutions[i].h;
     }
+    for (int i = 0; i < PLANETARIUM_MAX_SYSTEMS; ++i) {
+        metrics.planetarium_nodes_quelled[i] = a->planetarium_nodes_quelled[i] ? 1 : 0;
+    }
     for (int i = 0; i < VIDEO_MENU_DIAL_COUNT; ++i) {
         metrics.video_dial_01[i] = a->video_dial_01[i];
     }
@@ -2326,12 +2622,18 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         metrics.acoustics_scope[i] = a->scope_window[i];
     }
     vr = render_frame(a->vg, &a->game, &metrics);
-    if (vr != VG_OK) return 0;
+    if (vr != VG_OK) {
+        fprintf(stderr, "VG failure: render_frame -> %s (%d)\n", vg_result_string(vr), (int)vr);
+        return 0;
+    }
     if (a->force_clear_frames > 0) {
         a->force_clear_frames--;
     }
     vr = vg_end_frame(a->vg);
-    if (vr != VG_OK) return 0;
+    if (vr != VG_OK) {
+        fprintf(stderr, "VG failure: vg_end_frame -> %s (%d)\n", vg_result_string(vr), (int)vr);
+        return 0;
+    }
     vkCmdEndRenderPass(cmd);
 
     VkClearValue bloom_clear = {.color = {{0.0f, 0.0f, 0.0f, 1.0f}}};
@@ -2426,6 +2728,7 @@ int main(void) {
     a.crt_ui_mouse_drag = 0;
     a.show_acoustics = 0;
 	    a.show_video_menu = 0;
+    a.show_planetarium = 0;
     a.video_menu_selected = 1;
     a.video_menu_fullscreen = 0;
     a.palette_mode = 0;
@@ -2444,7 +2747,11 @@ int main(void) {
     a.video_menu_dial_drag_start_value = 0.0f;
     a.acoustics_selected = 0;
     a.acoustics_mouse_drag = 0;
+    a.wave_tty_text[0] = '\0';
     a.wave_tty_visible[0] = '\0';
+    a.planetarium_selected = 0;
+    a.planetarium_system_count = PLANETARIUM_NODE_COUNT;
+    memset(a.planetarium_nodes_quelled, 0, sizeof(a.planetarium_nodes_quelled));
     acoustics_defaults(&a);
     acoustics_slot_defaults(&a);
 
@@ -2464,7 +2771,7 @@ int main(void) {
         start_w = k_video_resolutions[a.video_menu_selected - 1].w;
         start_h = k_video_resolutions[a.video_menu_selected - 1].h;
     }
-    Uint32 win_flags = SDL_WINDOW_VULKAN | SDL_WINDOW_SHOWN;
+    Uint32 win_flags = SDL_WINDOW_VULKAN | SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI;
     if (a.video_menu_fullscreen) {
         win_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
     }
@@ -2491,13 +2798,21 @@ int main(void) {
         return 1;
     }
 
+    init_planetarium_assets(&a);
+
     game_init(&a.game, (float)a.swapchain_extent.width, (float)a.swapchain_extent.height);
     apply_video_lab_controls(&a);
     vg_text_fx_typewriter_set_rate(&a.wave_tty, 0.038f);
     vg_text_fx_typewriter_set_beep(&a.wave_tty, teletype_beep_cb, &a);
     vg_text_fx_typewriter_set_beep_profile(&a.wave_tty, 900.0f, 55.0f, 0.028f, 0.14f);
     vg_text_fx_typewriter_enable_beep(&a.wave_tty, 1);
-    vg_text_fx_typewriter_set_text(&a.wave_tty, "TACTICAL UPLINK READY");
+    set_tty_message(&a, "TACTICAL UPLINK READY");
+    vg_text_fx_marquee_set_text(
+        &a.planetarium_marquee,
+        k_planetarium_propaganda_marquee
+    );
+    vg_text_fx_marquee_set_speed(&a.planetarium_marquee, 70.0f);
+    vg_text_fx_marquee_set_gap(&a.planetarium_marquee, 48.0f);
 
     uint64_t last = SDL_GetPerformanceCounter();
     float freq = (float)SDL_GetPerformanceFrequency();
@@ -2513,6 +2828,8 @@ int main(void) {
             } else if (ev.type == SDL_KEYDOWN && !ev.key.repeat) {
                 if (ev.key.keysym.sym == SDLK_ESCAPE && a.show_video_menu) {
                     a.show_video_menu = 0;
+                } else if (ev.key.keysym.sym == SDLK_ESCAPE && a.show_planetarium) {
+                    a.show_planetarium = 0;
                 } else if (ev.key.keysym.sym == SDLK_ESCAPE) {
                     running = 0;
                 } else if (ev.key.keysym.sym == SDLK_n) {
@@ -2531,8 +2848,18 @@ int main(void) {
                     a.show_video_menu = !a.show_video_menu;
                     if (a.show_video_menu) {
                         a.show_acoustics = 0;
+                        a.show_planetarium = 0;
                         a.show_crt_ui = 0;
                         a.video_menu_dial_drag = -1;
+                    }
+                } else if (ev.key.keysym.sym == SDLK_3) {
+                    a.show_planetarium = !a.show_planetarium;
+                    if (a.show_planetarium) {
+                        a.show_video_menu = 0;
+                        a.show_acoustics = 0;
+                        a.show_crt_ui = 0;
+                        a.video_menu_dial_drag = -1;
+                        announce_planetarium_selection(&a);
                     }
                 } else if (a.show_video_menu && ev.key.keysym.sym == SDLK_a) {
                     a.msaa_enabled = !a.msaa_enabled;
@@ -2560,6 +2887,35 @@ int main(void) {
                     }
                 } else if (ev.key.keysym.sym == SDLK_1) {
                     a.show_acoustics = !a.show_acoustics;
+                    if (a.show_acoustics) {
+                        a.show_planetarium = 0;
+                        a.show_video_menu = 0;
+                    }
+                } else if (a.show_planetarium && ev.key.keysym.sym == SDLK_LEFT) {
+                    const int max_idx = a.planetarium_system_count;
+                    a.planetarium_selected = (a.planetarium_selected + max_idx) % (max_idx + 1);
+                    announce_planetarium_selection(&a);
+                } else if (a.show_planetarium && ev.key.keysym.sym == SDLK_RIGHT) {
+                    const int max_idx = a.planetarium_system_count;
+                    a.planetarium_selected = (a.planetarium_selected + 1) % (max_idx + 1);
+                    announce_planetarium_selection(&a);
+                } else if (a.show_planetarium &&
+                           (ev.key.keysym.sym == SDLK_RETURN || ev.key.keysym.sym == SDLK_KP_ENTER || ev.key.keysym.sym == SDLK_SPACE)) {
+                    const int boss_idx = a.planetarium_system_count;
+                    const int quelled = planetarium_quelled_count(&a);
+                    if (a.planetarium_selected < boss_idx) {
+                        if (!a.planetarium_nodes_quelled[a.planetarium_selected]) {
+                            a.planetarium_nodes_quelled[a.planetarium_selected] = 1;
+                            set_tty_message(&a, "contract accepted: system marked quelled");
+                        } else {
+                            set_tty_message(&a, "system already quelled");
+                        }
+                    } else if (quelled >= boss_idx) {
+                        a.show_planetarium = 0;
+                        set_tty_message(&a, "boss contract armed: launching sortie");
+                    } else {
+                        set_tty_message(&a, "boss locked: quell all systems first");
+                    }
                 } else if (a.show_acoustics && ev.key.keysym.sym == SDLK_s) {
                     capture_current_to_selected_slots(&a);
                     if (save_acoustics_slots(&a, ACOUSTICS_SLOTS_PATH)) {
@@ -2600,6 +2956,9 @@ int main(void) {
                 if (a.show_video_menu && handle_video_menu_mouse(&a, ev.button.x, ev.button.y, 1)) {
                     a.acoustics_mouse_drag = 0;
                     a.crt_ui_mouse_drag = 0;
+                } else if (a.show_planetarium && handle_planetarium_mouse(&a, ev.button.x, ev.button.y, 1)) {
+                    a.acoustics_mouse_drag = 0;
+                    a.crt_ui_mouse_drag = 0;
                 } else if (a.show_acoustics && handle_acoustics_ui_mouse(&a, ev.button.x, ev.button.y, 1)) {
                     a.acoustics_mouse_drag = 1;
                 } else if (a.show_crt_ui && handle_crt_ui_mouse(&a, ev.button.x, ev.button.y, 1)) {
@@ -2628,7 +2987,7 @@ int main(void) {
         const uint8_t* keys = SDL_GetKeyboardState(NULL);
         game_input in;
         memset(&in, 0, sizeof(in));
-        if (!a.show_acoustics && !a.show_video_menu) {
+        if (!a.show_acoustics && !a.show_video_menu && !a.show_planetarium) {
             in.left = keys[SDL_SCANCODE_A] || keys[SDL_SCANCODE_LEFT];
             in.right = keys[SDL_SCANCODE_D] || keys[SDL_SCANCODE_RIGHT];
             in.up = keys[SDL_SCANCODE_W] || keys[SDL_SCANCODE_UP];
@@ -2643,11 +3002,12 @@ int main(void) {
         if (dt_raw <= 0.0f) dt_raw = 1.0f / 60.0f;
         float dt_sim = dt_raw;
         if (dt_sim > (1.0f / 15.0f)) dt_sim = 1.0f / 15.0f;
-        if (!a.show_acoustics && !a.show_video_menu) {
+        if (!a.show_acoustics && !a.show_video_menu && !a.show_planetarium) {
             game_update(&a.game, dt_sim, &in);
         }
         if (a.audio_ready) {
-            const int thrust_on = (!a.show_acoustics && !a.show_video_menu) && (in.left || in.right || in.up || in.down) && (a.game.lives > 0);
+            const int thrust_on = (!a.show_acoustics && !a.show_video_menu && !a.show_planetarium) &&
+                                  (in.left || in.right || in.up || in.down) && (a.game.lives > 0);
             atomic_store_explicit(&a.thrust_gate, thrust_on ? 1 : 0, memory_order_release);
         }
         if (a.audio_ready) {
@@ -2662,13 +3022,12 @@ int main(void) {
         {
             char wave_msg[160];
             if (game_pop_wave_announcement(&a.game, wave_msg, sizeof(wave_msg))) {
-                vg_text_fx_typewriter_set_text(&a.wave_tty, wave_msg);
-                vg_text_fx_typewriter_reset(&a.wave_tty);
-                a.wave_tty.timer_s = 0.02f;
+                set_tty_message(&a, wave_msg);
             }
             (void)vg_text_fx_typewriter_update(&a.wave_tty, dt_sim);
             (void)vg_text_fx_typewriter_copy_visible(&a.wave_tty, a.wave_tty_visible, sizeof(a.wave_tty_visible));
         }
+        vg_text_fx_marquee_update(&a.planetarium_marquee, dt_raw);
         if (a.audio_ready) {
             float rb_tmp[256];
             uint32_t got = 0u;
@@ -2710,10 +3069,12 @@ int main(void) {
         if (!record_submit_present(&a, image_index, t, dt_sim, fps_smoothed)) {
             if (a.swapchain_needs_recreate) {
                 if (!recreate_render_runtime(&a)) {
+                    fprintf(stderr, "render failure: swapchain flagged for recreate, but recreate failed\n");
                     break;
                 }
                 continue;
             }
+            fprintf(stderr, "render failure: record_submit_present returned 0\n");
             break;
         }
     }

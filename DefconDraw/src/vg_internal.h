@@ -49,10 +49,13 @@ struct vg_context {
     vg_mat2x3 transform;
     vg_mat2x3 transform_stack[32];
     uint32_t transform_stack_count;
+    vg_rect clip_stack[32];
+    uint32_t clip_stack_count;
     int in_frame;
     vg_backend_state backend;
 };
 
 vg_result vg_vk_backend_create(struct vg_context* ctx);
+int vg_context_get_clip(const struct vg_context* ctx, vg_rect* out_clip);
 
 #endif

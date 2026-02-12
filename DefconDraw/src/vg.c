@@ -95,6 +95,47 @@ static vg_vec2 vg_transform_point(vg_mat2x3 m, vg_vec2 p) {
     return out;
 }
 
+static int vg_rect_is_valid(vg_rect rect) {
+    return isfinite(rect.x) && isfinite(rect.y) && isfinite(rect.w) && isfinite(rect.h) && rect.w > 0.0f && rect.h > 0.0f;
+}
+
+static vg_rect vg_rect_intersection(vg_rect a, vg_rect b) {
+    float x0 = fmaxf(a.x, b.x);
+    float y0 = fmaxf(a.y, b.y);
+    float x1 = fminf(a.x + a.w, b.x + b.w);
+    float y1 = fminf(a.y + a.h, b.y + b.h);
+    vg_rect out = {x0, y0, x1 - x0, y1 - y0};
+    if (out.w < 0.0f) {
+        out.w = 0.0f;
+    }
+    if (out.h < 0.0f) {
+        out.h = 0.0f;
+    }
+    return out;
+}
+
+static vg_rect vg_transform_rect_aabb(vg_mat2x3 m, vg_rect rect) {
+    vg_vec2 p0 = vg_transform_point(m, (vg_vec2){rect.x, rect.y});
+    vg_vec2 p1 = vg_transform_point(m, (vg_vec2){rect.x + rect.w, rect.y});
+    vg_vec2 p2 = vg_transform_point(m, (vg_vec2){rect.x + rect.w, rect.y + rect.h});
+    vg_vec2 p3 = vg_transform_point(m, (vg_vec2){rect.x, rect.y + rect.h});
+    float min_x = fminf(fminf(p0.x, p1.x), fminf(p2.x, p3.x));
+    float min_y = fminf(fminf(p0.y, p1.y), fminf(p2.y, p3.y));
+    float max_x = fmaxf(fmaxf(p0.x, p1.x), fmaxf(p2.x, p3.x));
+    float max_y = fmaxf(fmaxf(p0.y, p1.y), fmaxf(p2.y, p3.y));
+    vg_rect out = {min_x, min_y, max_x - min_x, max_y - min_y};
+    if (!isfinite(out.x) || !isfinite(out.y) || !isfinite(out.w) || !isfinite(out.h)) {
+        out = (vg_rect){0.0f, 0.0f, 0.0f, 0.0f};
+    }
+    if (out.w < 0.0f) {
+        out.w = 0.0f;
+    }
+    if (out.h < 0.0f) {
+        out.h = 0.0f;
+    }
+    return out;
+}
+
 static vg_crt_profile vg_crt_profile_for_preset(vg_crt_preset preset) {
     vg_crt_profile p = {0};
     switch (preset) {
@@ -457,6 +498,7 @@ vg_result vg_begin_frame(vg_context* ctx, const vg_frame_desc* frame) {
     ctx->frame = *frame;
     ctx->in_frame = 1;
     vg_transform_reset(ctx);
+    vg_clip_reset(ctx);
     return VG_OK;
 }
 
@@ -590,6 +632,46 @@ void vg_transform_rotate(vg_context* ctx, float radians) {
     float s = sinf(radians);
     vg_mat2x3 r = {c, -s, 0.0f, s, c, 0.0f};
     ctx->transform = vg_mat_mul(ctx->transform, r);
+}
+
+vg_result vg_clip_push_rect(vg_context* ctx, vg_rect rect) {
+    if (!ctx || !ctx->in_frame || !vg_rect_is_valid(rect)) {
+        return VG_ERROR_INVALID_ARGUMENT;
+    }
+    if (ctx->clip_stack_count >= (uint32_t)(sizeof(ctx->clip_stack) / sizeof(ctx->clip_stack[0]))) {
+        return VG_ERROR_OUT_OF_MEMORY;
+    }
+    vg_rect clip = vg_transform_rect_aabb(ctx->transform, rect);
+    if (ctx->clip_stack_count > 0u) {
+        clip = vg_rect_intersection(ctx->clip_stack[ctx->clip_stack_count - 1u], clip);
+    }
+    ctx->clip_stack[ctx->clip_stack_count++] = clip;
+    return VG_OK;
+}
+
+vg_result vg_clip_pop(vg_context* ctx) {
+    if (!ctx || !ctx->in_frame || ctx->clip_stack_count == 0u) {
+        return VG_ERROR_INVALID_ARGUMENT;
+    }
+    ctx->clip_stack_count--;
+    return VG_OK;
+}
+
+void vg_clip_reset(vg_context* ctx) {
+    if (!ctx) {
+        return;
+    }
+    ctx->clip_stack_count = 0u;
+}
+
+int vg_context_get_clip(const vg_context* ctx, vg_rect* out_clip) {
+    if (!ctx || ctx->clip_stack_count == 0u) {
+        return 0;
+    }
+    if (out_clip) {
+        *out_clip = ctx->clip_stack[ctx->clip_stack_count - 1u];
+    }
+    return 1;
 }
 
 vg_result vg_path_create(vg_context* ctx, vg_path** out_path) {

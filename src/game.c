@@ -47,6 +47,12 @@ static float cylinder_period(const game_state* g) {
     return fmaxf(g->world_w * 2.4f, 1.0f);
 }
 
+static float gameplay_ui_scale(const game_state* g) {
+    const float sx = g->world_w / 1920.0f;
+    const float sy = g->world_h / 1080.0f;
+    return fmaxf(0.5f, fminf(sx, sy));
+}
+
 static float wrap_delta(float a, float b, float period) {
     float d = fmodf(a - b, period);
     if (d > period * 0.5f) {
@@ -114,23 +120,24 @@ static void kill_particle(game_state* g, particle* p) {
 }
 
 static void emit_explosion(game_state* g, float x, float y, float bias_vx, float bias_vy, int count) {
+    const float su = gameplay_ui_scale(g);
     for (int i = 0; i < count; ++i) {
         particle* p = alloc_particle(g);
         if (!p) {
             return;
         }
         const float a = frand01() * 6.2831853f;
-        const float spd = 70.0f + frand01() * 300.0f;
+        const float spd = (70.0f + frand01() * 300.0f) * su;
         p->type = (frand01() < 0.65f) ? PARTICLE_POINT : PARTICLE_GEOM;
-        p->b.x = x + frands1() * 6.0f;
-        p->b.y = y + frands1() * 6.0f;
+        p->b.x = x + frands1() * 6.0f * su;
+        p->b.y = y + frands1() * 6.0f * su;
         p->b.vx = cosf(a) * spd + bias_vx * 0.4f;
         p->b.vy = sinf(a) * spd + bias_vy * 0.4f;
         p->b.ax = -p->b.vx * 1.6f;
         p->b.ay = -p->b.vy * 1.6f;
         p->age_s = 0.0f;
         p->life_s = 0.35f + frand01() * 0.55f;
-        p->size = 1.2f + frand01() * 3.0f;
+        p->size = (1.2f + frand01() * 3.0f) * su;
         p->spin = frand01() * 6.2831853f;
         p->spin_rate = frands1() * 9.0f;
         p->r = 0.9f + frand01() * 0.1f;
@@ -146,8 +153,9 @@ static void emit_thruster(game_state* g, float dt) {
         return;
     }
     const float dir = (g->player.facing_x < 0.0f) ? -1.0f : 1.0f;
+    const float su = gameplay_ui_scale(g);
     const float speed = length2(g->player.b.vx, g->player.b.vy);
-    const float emit_rate = 55.0f + clampf(speed / 760.0f, 0.0f, 1.0f) * 45.0f;
+    const float emit_rate = 55.0f + clampf(speed / fmaxf(g->player.max_speed, 1.0f), 0.0f, 1.0f) * 45.0f;
     g->thruster_emit_accum += emit_rate * dt;
     int emit_count = (int)g->thruster_emit_accum;
     if (emit_count > 8) {
@@ -160,15 +168,15 @@ static void emit_thruster(game_state* g, float dt) {
             return;
         }
         p->type = (frand01() < 0.75f) ? PARTICLE_POINT : PARTICLE_GEOM;
-        p->b.x = g->player.b.x - dir * (40.0f + frand01() * 4.0f);
-        p->b.y = g->player.b.y + frands1() * 4.5f;
-        p->b.vx = -dir * (220.0f + frand01() * 220.0f) + g->player.b.vx * 0.25f;
-        p->b.vy = frands1() * 30.0f + g->player.b.vy * 0.15f;
+        p->b.x = g->player.b.x - dir * (40.0f + frand01() * 4.0f) * su;
+        p->b.y = g->player.b.y + frands1() * 4.5f * su;
+        p->b.vx = -dir * (220.0f + frand01() * 220.0f) * su + g->player.b.vx * 0.25f;
+        p->b.vy = frands1() * 30.0f * su + g->player.b.vy * 0.15f;
         p->b.ax = -p->b.vx * 1.9f;
         p->b.ay = -p->b.vy * 1.6f;
         p->age_s = 0.0f;
         p->life_s = 0.10f + frand01() * 0.15f;
-        p->size = 1.0f + frand01() * 2.2f;
+        p->size = (1.0f + frand01() * 2.2f) * su;
         p->spin = frand01() * 6.2831853f;
         p->spin_rate = frands1() * 15.0f;
         p->r = 0.35f;
@@ -180,6 +188,7 @@ static void emit_thruster(game_state* g, float dt) {
 
 static void spawn_bullet_single(game_state* g, float y_offset, float muzzle_speed) {
     const float dir = (g->player.facing_x < 0.0f) ? -1.0f : 1.0f;
+    const float su = gameplay_ui_scale(g);
     const float vertical_inherit = 0.18f;
     for (size_t i = 0; i < MAX_BULLETS; ++i) {
         if (g->bullets[i].active) {
@@ -187,7 +196,7 @@ static void spawn_bullet_single(game_state* g, float y_offset, float muzzle_spee
         }
         bullet* b = &g->bullets[i];
         b->active = 1;
-        b->b.x = g->player.b.x + dir * 36.0f;
+        b->b.x = g->player.b.x + dir * 36.0f * su;
         b->b.y = g->player.b.y + y_offset;
         b->spawn_x = b->b.x;
         b->b.vx = dir * muzzle_speed + g->player.b.vx;
@@ -200,22 +209,24 @@ static void spawn_bullet_single(game_state* g, float y_offset, float muzzle_spee
 }
 
 static void spawn_bullet(game_state* g) {
+    const float su = gameplay_ui_scale(g);
     g->fire_sfx_pending += 1;
     if (g->weapon_level <= 1) {
-        spawn_bullet_single(g, 0.0f, 760.0f);
+        spawn_bullet_single(g, 0.0f, 760.0f * su);
         return;
     }
     if (g->weapon_level == 2) {
-        spawn_bullet_single(g, -12.0f, 800.0f);
-        spawn_bullet_single(g, 12.0f, 800.0f);
+        spawn_bullet_single(g, -12.0f * su, 800.0f * su);
+        spawn_bullet_single(g, 12.0f * su, 800.0f * su);
         return;
     }
-    spawn_bullet_single(g, 0.0f, 860.0f);
-    spawn_bullet_single(g, -15.0f, 860.0f);
-    spawn_bullet_single(g, 15.0f, 860.0f);
+    spawn_bullet_single(g, 0.0f, 860.0f * su);
+    spawn_bullet_single(g, -15.0f * su, 860.0f * su);
+    spawn_bullet_single(g, 15.0f * su, 860.0f * su);
 }
 
 static enemy* spawn_enemy_common(game_state* g) {
+    const float su = gameplay_ui_scale(g);
     for (size_t i = 0; i < MAX_ENEMIES; ++i) {
         if (g->enemies[i].active) {
             continue;
@@ -223,8 +234,8 @@ static enemy* spawn_enemy_common(game_state* g) {
         enemy* e = &g->enemies[i];
         memset(e, 0, sizeof(*e));
         e->active = 1;
-        e->radius = 12.0f + frand01() * 8.0f;
-        e->max_speed = 270.0f;
+        e->radius = (12.0f + frand01() * 8.0f) * su;
+        e->max_speed = 270.0f * su;
         e->accel = 6.0f;
         return e;
     }
@@ -237,6 +248,7 @@ static void announce_wave(game_state* g, const char* wave_name) {
 }
 
 static void spawn_wave_sine_snake(game_state* g, int wave_id) {
+    const float su = gameplay_ui_scale(g);
     const int count = 10;
     for (int i = 0; i < count; ++i) {
         enemy* e = spawn_enemy_common(g);
@@ -247,19 +259,20 @@ static void spawn_wave_sine_snake(game_state* g, int wave_id) {
         e->state = ENEMY_STATE_FORMATION;
         e->wave_id = wave_id;
         e->slot_index = i;
-        e->b.x = g->camera_x + g->world_w * 0.70f + (float)i * 44.0f;
+        e->b.x = g->camera_x + g->world_w * 0.70f + (float)i * 44.0f * su;
         e->home_y = g->world_h * 0.52f;
         e->b.y = e->home_y;
         e->form_phase = (float)i * 0.55f;
-        e->form_amp = 92.0f;
+        e->form_amp = 92.0f * su;
         e->form_freq = 1.8f;
         e->break_delay_s = 1.1f + 0.16f * (float)i;
-        e->max_speed = 285.0f;
+        e->max_speed = 285.0f * su;
         e->accel = 6.8f;
     }
 }
 
 static void spawn_wave_v_formation(game_state* g, int wave_id) {
+    const float su = gameplay_ui_scale(g);
     const int count = 11;
     const int mid = count / 2;
     for (int i = 0; i < count; ++i) {
@@ -272,19 +285,20 @@ static void spawn_wave_v_formation(game_state* g, int wave_id) {
         e->state = ENEMY_STATE_FORMATION;
         e->wave_id = wave_id;
         e->slot_index = i;
-        e->b.x = g->camera_x + g->world_w * 0.74f + (float)(abs(off)) * 32.0f;
-        e->home_y = g->world_h * 0.55f + (float)off * 18.0f;
+        e->b.x = g->camera_x + g->world_w * 0.74f + (float)(abs(off)) * 32.0f * su;
+        e->home_y = g->world_h * 0.55f + (float)off * 18.0f * su;
         e->b.y = e->home_y;
         e->form_phase = (float)i * 0.35f;
-        e->form_amp = 10.0f;
+        e->form_amp = 10.0f * su;
         e->form_freq = 1.2f;
         e->break_delay_s = 0.9f + frand01() * 1.8f;
-        e->max_speed = 295.0f;
+        e->max_speed = 295.0f * su;
         e->accel = 7.5f;
     }
 }
 
 static void spawn_wave_swarm(game_state* g, int wave_id) {
+    const float su = gameplay_ui_scale(g);
     const int count = 15;
     for (int i = 0; i < count; ++i) {
         enemy* e = spawn_enemy_common(g);
@@ -295,16 +309,17 @@ static void spawn_wave_swarm(game_state* g, int wave_id) {
         e->state = ENEMY_STATE_SWARM;
         e->wave_id = wave_id;
         e->slot_index = i;
-        e->b.x = g->camera_x + g->world_w * 0.62f + frand01() * 260.0f;
-        e->b.y = g->world_h * 0.50f + frands1() * 140.0f;
+        e->b.x = g->camera_x + g->world_w * 0.62f + frand01() * 260.0f * su;
+        e->b.y = g->world_h * 0.50f + frands1() * 140.0f * su;
         e->home_y = g->world_h * 0.50f;
-        e->max_speed = 255.0f;
+        e->max_speed = 255.0f * su;
         e->accel = 7.8f;
-        e->radius = 10.0f + frand01() * 6.0f;
+        e->radius = (10.0f + frand01() * 6.0f) * su;
     }
 }
 
 static void spawn_wave_kamikaze(game_state* g, int wave_id) {
+    const float su = gameplay_ui_scale(g);
     const int count = 9;
     for (int i = 0; i < count; ++i) {
         enemy* e = spawn_enemy_common(g);
@@ -315,11 +330,11 @@ static void spawn_wave_kamikaze(game_state* g, int wave_id) {
         e->state = ENEMY_STATE_KAMIKAZE;
         e->wave_id = wave_id;
         e->slot_index = i;
-        e->b.x = g->camera_x + g->world_w * 0.65f + (float)i * 34.0f;
-        e->b.y = 64.0f + frand01() * (g->world_h - 128.0f);
-        e->max_speed = 360.0f;
+        e->b.x = g->camera_x + g->world_w * 0.65f + (float)i * 34.0f * su;
+        e->b.y = 64.0f * su + frand01() * (g->world_h - 128.0f * su);
+        e->max_speed = 360.0f * su;
         e->accel = 9.0f;
-        e->radius = 11.0f + frand01() * 6.0f;
+        e->radius = (11.0f + frand01() * 6.0f) * su;
     }
 }
 
@@ -347,8 +362,9 @@ static void update_enemy_formation(game_state* g, enemy* e, float dt) {
     (void)dt;
     e->ai_timer_s += dt;
     if (e->state == ENEMY_STATE_FORMATION) {
+        const float su = gameplay_ui_scale(g);
         const float desired_y = e->home_y + sinf(g->t * e->form_freq + e->form_phase) * e->form_amp;
-        const float target_vx = -165.0f;
+        const float target_vx = -165.0f * su;
         const float target_vy = (desired_y - e->b.y) * 2.4f;
         steer_to_velocity(&e->b, target_vx, target_vy, e->accel, 1.2f);
 
@@ -386,6 +402,7 @@ static void update_enemy_kamikaze(game_state* g, enemy* e, float dt) {
 
 static void update_enemy_swarm(game_state* g, enemy* e, float dt) {
     (void)dt;
+    const float su = gameplay_ui_scale(g);
     float sep_x = 0.0f;
     float sep_y = 0.0f;
     float ali_x = 0.0f;
@@ -406,16 +423,16 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt) {
         if (d2 < 1e-4f) {
             continue;
         }
-        if (d2 < 70.0f * 70.0f) {
+        if (d2 < (70.0f * su) * (70.0f * su)) {
             sep_x -= dx / d2;
             sep_y -= dy / d2;
         }
-        if (d2 < 180.0f * 180.0f) {
+        if (d2 < (180.0f * su) * (180.0f * su)) {
             ali_x += o->b.vx;
             ali_y += o->b.vy;
             ali_n += 1;
         }
-        if (d2 < 220.0f * 220.0f) {
+        if (d2 < (220.0f * su) * (220.0f * su)) {
             coh_x += o->b.x;
             coh_y += o->b.y;
             coh_n += 1;
@@ -437,7 +454,7 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt) {
         float dx = (g->level_style != LEVEL_STYLE_DEFENDER) ? wrap_delta(e->b.x, g->player.b.x, cylinder_period(g)) : (e->b.x - g->player.b.x);
         float dy = e->b.y - g->player.b.y;
         float d2 = dx * dx + dy * dy;
-        if (d2 < 185.0f * 185.0f) {
+        if (d2 < (185.0f * su) * (185.0f * su)) {
             if (d2 < 1e-4f) {
                 d2 = 1e-4f;
             }
@@ -446,11 +463,11 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt) {
         }
     }
 
-    float goal_x = (g->player.b.x + 280.0f) - e->b.x;
+    float goal_x = (g->player.b.x + 280.0f * su) - e->b.x;
     if (g->level_style != LEVEL_STYLE_DEFENDER) {
-        goal_x = wrap_delta(g->player.b.x + 280.0f, e->b.x, cylinder_period(g));
+        goal_x = wrap_delta(g->player.b.x + 280.0f * su, e->b.x, cylinder_period(g));
     }
-    float goal_y = (g->player.b.y + sinf(g->t * 0.7f + (float)e->slot_index * 0.35f) * 80.0f) - e->b.y;
+    float goal_y = (g->player.b.y + sinf(g->t * 0.7f + (float)e->slot_index * 0.35f) * 80.0f * su) - e->b.y;
 
     normalize2(&sep_x, &sep_y);
     normalize2(&ali_x, &ali_y);
@@ -481,11 +498,12 @@ void game_init(game_state* g, float world_w, float world_h) {
     g->world_h = world_h;
     g->lives = 3;
     g->weapon_level = 1;
-    g->player.b.x = 170.0f;
+    const float su = gameplay_ui_scale(g);
+    g->player.b.x = 170.0f * su;
     g->player.b.y = world_h * 0.5f;
-    g->player.thrust = 3300.0f;
+    g->player.thrust = 3300.0f * su;
     g->player.drag = 4.1f;
-    g->player.max_speed = 760.0f;
+    g->player.max_speed = 760.0f * su;
     g->player.facing_x = 1.0f;
     g->camera_x = g->player.b.x;
     g->camera_y = world_h * 0.5f;
@@ -520,6 +538,7 @@ void game_cycle_level(game_state* g) {
 
 void game_update(game_state* g, float dt, const game_input* in) {
     g->t += dt;
+    const float su = gameplay_ui_scale(g);
 
     if (in->restart && g->lives <= 0) {
         const int level_style = g->level_style;
@@ -579,14 +598,14 @@ void game_update(game_state* g, float dt, const game_input* in) {
             g->player.b.vy *= s;
         }
 
-        if (g->player.b.y < 38.0f) {
-            g->player.b.y = 38.0f;
+        if (g->player.b.y < 38.0f * su) {
+            g->player.b.y = 38.0f * su;
             if (g->player.b.vy < 0.0f) {
                 g->player.b.vy = 0.0f;
             }
         }
-        if (g->player.b.y > g->world_h - 38.0f) {
-            g->player.b.y = g->world_h - 38.0f;
+        if (g->player.b.y > g->world_h - 38.0f * su) {
+            g->player.b.y = g->world_h - 38.0f * su;
             if (g->player.b.vy > 0.0f) {
                 g->player.b.vy = 0.0f;
             }
@@ -666,21 +685,21 @@ void game_update(game_state* g, float dt, const game_input* in) {
             e->active = 0;
             continue;
         }
-        if (e->b.y < 26.0f) {
-            e->b.y = 26.0f;
+        if (e->b.y < 26.0f * su) {
+            e->b.y = 26.0f * su;
             if (e->b.vy < 0.0f) {
                 e->b.vy = 0.0f;
             }
         }
-        if (e->b.y > g->world_h - 26.0f) {
-            e->b.y = g->world_h - 26.0f;
+        if (e->b.y > g->world_h - 26.0f * su) {
+            e->b.y = g->world_h - 26.0f * su;
             if (e->b.vy > 0.0f) {
                 e->b.vy = 0.0f;
             }
         }
 
         if (g->lives > 0) {
-            const float hit_r = e->radius + 14.0f;
+            const float hit_r = e->radius + 14.0f * su;
             if (dist_sq_level(g, e->b.x, e->b.y, g->player.b.x, g->player.b.y) <= hit_r * hit_r) {
                 e->active = 0;
                 emit_explosion(g, g->player.b.x, g->player.b.y, g->player.b.vx, g->player.b.vy, 48);
