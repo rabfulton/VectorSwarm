@@ -135,6 +135,7 @@ typedef struct vg_backend_vulkan_desc {
     void* render_pass;
     uint32_t vertex_binding;
     uint32_t max_frames_in_flight;
+    uint32_t sample_count; /* VkSampleCountFlagBits, or 0 to default to 1. */
 } vg_backend_vulkan_desc;
 
 typedef enum vg_backend_type {

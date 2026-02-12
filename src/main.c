@@ -86,6 +86,9 @@ typedef struct app {
     VkImage scene_image;
     VkDeviceMemory scene_memory;
     VkImageView scene_view;
+    VkImage scene_msaa_image;
+    VkDeviceMemory scene_msaa_memory;
+    VkImageView scene_msaa_view;
     VkFramebuffer scene_fb;
     VkRenderPass scene_render_pass;
 
@@ -143,6 +146,8 @@ typedef struct app {
     int video_menu_selected;
     int video_menu_fullscreen;
     int palette_mode;
+    int msaa_enabled;
+    VkSampleCountFlagBits msaa_samples;
     float video_dial_01[VIDEO_MENU_DIAL_COUNT];
     int video_menu_dial_drag;
     float video_menu_dial_drag_start_y;
@@ -159,6 +164,28 @@ typedef struct app {
     float acoustics_value_01[ACOUSTICS_SLIDER_COUNT];
     int thruster_note_on;
 } app;
+
+static VkSampleCountFlagBits pick_msaa_samples(app* a) {
+    if (!a || a->physical_device == VK_NULL_HANDLE) {
+        return VK_SAMPLE_COUNT_1_BIT;
+    }
+    VkPhysicalDeviceProperties props;
+    vkGetPhysicalDeviceProperties(a->physical_device, &props);
+    VkSampleCountFlags counts = props.limits.framebufferColorSampleCounts;
+    if (counts & VK_SAMPLE_COUNT_4_BIT) return VK_SAMPLE_COUNT_4_BIT;
+    if (counts & VK_SAMPLE_COUNT_2_BIT) return VK_SAMPLE_COUNT_2_BIT;
+    return VK_SAMPLE_COUNT_1_BIT;
+}
+
+static VkSampleCountFlagBits scene_samples(const app* a) {
+    if (!a || !a->msaa_enabled) {
+        return VK_SAMPLE_COUNT_1_BIT;
+    }
+    if (a->msaa_samples == 0) {
+        return VK_SAMPLE_COUNT_1_BIT;
+    }
+    return a->msaa_samples;
+}
 
 static int check_vk(VkResult r, const char* what) {
     if (r != VK_SUCCESS) {
@@ -1425,6 +1452,7 @@ static int create_image_2d(
     uint32_t h,
     VkFormat format,
     VkImageUsageFlags usage,
+    VkSampleCountFlagBits samples,
     VkImage* out_image,
     VkDeviceMemory* out_mem,
     VkImageView* out_view
@@ -1436,7 +1464,7 @@ static int create_image_2d(
         .extent = {w, h, 1},
         .mipLevels = 1,
         .arrayLayers = 1,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .samples = samples,
         .tiling = VK_IMAGE_TILING_OPTIMAL,
         .usage = usage,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
@@ -1517,10 +1545,13 @@ static void cleanup(app* a) {
     if (a->scene_fb) vkDestroyFramebuffer(a->device, a->scene_fb, NULL);
     if (a->bloom_fb) vkDestroyFramebuffer(a->device, a->bloom_fb, NULL);
     if (a->scene_view) vkDestroyImageView(a->device, a->scene_view, NULL);
+    if (a->scene_msaa_view) vkDestroyImageView(a->device, a->scene_msaa_view, NULL);
     if (a->bloom_view) vkDestroyImageView(a->device, a->bloom_view, NULL);
     if (a->scene_image) vkDestroyImage(a->device, a->scene_image, NULL);
+    if (a->scene_msaa_image) vkDestroyImage(a->device, a->scene_msaa_image, NULL);
     if (a->bloom_image) vkDestroyImage(a->device, a->bloom_image, NULL);
     if (a->scene_memory) vkFreeMemory(a->device, a->scene_memory, NULL);
+    if (a->scene_msaa_memory) vkFreeMemory(a->device, a->scene_msaa_memory, NULL);
     if (a->bloom_memory) vkFreeMemory(a->device, a->bloom_memory, NULL);
 
     for (uint32_t i = 0; i < a->swapchain_image_count; ++i) {
@@ -1590,6 +1621,10 @@ static void destroy_render_runtime(app* a) {
         vkDestroyImageView(a->device, a->scene_view, NULL);
         a->scene_view = VK_NULL_HANDLE;
     }
+    if (a->scene_msaa_view) {
+        vkDestroyImageView(a->device, a->scene_msaa_view, NULL);
+        a->scene_msaa_view = VK_NULL_HANDLE;
+    }
     if (a->bloom_view) {
         vkDestroyImageView(a->device, a->bloom_view, NULL);
         a->bloom_view = VK_NULL_HANDLE;
@@ -1598,6 +1633,10 @@ static void destroy_render_runtime(app* a) {
         vkDestroyImage(a->device, a->scene_image, NULL);
         a->scene_image = VK_NULL_HANDLE;
     }
+    if (a->scene_msaa_image) {
+        vkDestroyImage(a->device, a->scene_msaa_image, NULL);
+        a->scene_msaa_image = VK_NULL_HANDLE;
+    }
     if (a->bloom_image) {
         vkDestroyImage(a->device, a->bloom_image, NULL);
         a->bloom_image = VK_NULL_HANDLE;
@@ -1605,6 +1644,10 @@ static void destroy_render_runtime(app* a) {
     if (a->scene_memory) {
         vkFreeMemory(a->device, a->scene_memory, NULL);
         a->scene_memory = VK_NULL_HANDLE;
+    }
+    if (a->scene_msaa_memory) {
+        vkFreeMemory(a->device, a->scene_msaa_memory, NULL);
+        a->scene_msaa_memory = VK_NULL_HANDLE;
     }
     if (a->bloom_memory) {
         vkFreeMemory(a->device, a->bloom_memory, NULL);
@@ -1783,6 +1826,7 @@ static int pick_physical_device(app* a) {
         a->physical_device = dev;
         a->graphics_queue_family = gi;
         a->present_queue_family = pi;
+        a->msaa_samples = pick_msaa_samples(a);
         free(devs);
         return 1;
     }
@@ -1913,20 +1957,67 @@ static int create_swapchain(app* a) {
 }
 
 static int create_render_passes(app* a) {
-    VkAttachmentDescription scene_att = {
-        .format = a->swapchain_format,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
-        .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
-        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        .finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-    };
-    VkAttachmentReference scene_ref = {.attachment = 0, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-    VkSubpassDescription scene_sub = {.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS, .colorAttachmentCount = 1, .pColorAttachments = &scene_ref};
-    VkRenderPassCreateInfo scene_rp = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO, .attachmentCount = 1, .pAttachments = &scene_att, .subpassCount = 1, .pSubpasses = &scene_sub};
-    if (!check_vk(vkCreateRenderPass(a->device, &scene_rp, NULL, &a->scene_render_pass), "vkCreateRenderPass(scene)")) return 0;
+    VkSampleCountFlagBits samples = scene_samples(a);
+    if (samples == VK_SAMPLE_COUNT_1_BIT) {
+        VkAttachmentDescription scene_att = {
+            .format = a->swapchain_format,
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        };
+        VkAttachmentReference scene_ref = {.attachment = 0, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        VkSubpassDescription scene_sub = {.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS, .colorAttachmentCount = 1, .pColorAttachments = &scene_ref};
+        VkRenderPassCreateInfo scene_rp = {
+            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+            .attachmentCount = 1,
+            .pAttachments = &scene_att,
+            .subpassCount = 1,
+            .pSubpasses = &scene_sub
+        };
+        if (!check_vk(vkCreateRenderPass(a->device, &scene_rp, NULL, &a->scene_render_pass), "vkCreateRenderPass(scene)")) return 0;
+    } else {
+        VkAttachmentDescription atts[2];
+        atts[0] = (VkAttachmentDescription){
+            .format = a->swapchain_format,
+            .samples = samples,
+            .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+        };
+        atts[1] = (VkAttachmentDescription){
+            .format = a->swapchain_format,
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        };
+        VkAttachmentReference color_ref = {.attachment = 0, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        VkAttachmentReference resolve_ref = {.attachment = 1, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        VkSubpassDescription scene_sub = {
+            .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+            .colorAttachmentCount = 1,
+            .pColorAttachments = &color_ref,
+            .pResolveAttachments = &resolve_ref
+        };
+        VkRenderPassCreateInfo scene_rp = {
+            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+            .attachmentCount = 2,
+            .pAttachments = atts,
+            .subpassCount = 1,
+            .pSubpasses = &scene_sub
+        };
+        if (!check_vk(vkCreateRenderPass(a->device, &scene_rp, NULL, &a->scene_render_pass), "vkCreateRenderPass(scene msaa)")) return 0;
+    }
 
     VkAttachmentDescription bloom_att = {
         .format = a->swapchain_format,
@@ -1963,12 +2054,26 @@ static int create_offscreen_targets(app* a) {
     uint32_t w = a->swapchain_extent.width;
     uint32_t h = a->swapchain_extent.height;
     VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    VkSampleCountFlagBits samples = scene_samples(a);
 
-    if (!create_image_2d(a, w, h, a->swapchain_format, usage, &a->scene_image, &a->scene_memory, &a->scene_view)) return 0;
-    if (!create_image_2d(a, w, h, a->swapchain_format, usage, &a->bloom_image, &a->bloom_memory, &a->bloom_view)) return 0;
+    if (!create_image_2d(a, w, h, a->swapchain_format, usage, VK_SAMPLE_COUNT_1_BIT, &a->scene_image, &a->scene_memory, &a->scene_view)) return 0;
+    if (!create_image_2d(a, w, h, a->swapchain_format, usage, VK_SAMPLE_COUNT_1_BIT, &a->bloom_image, &a->bloom_memory, &a->bloom_view)) return 0;
+    if (samples != VK_SAMPLE_COUNT_1_BIT) {
+        VkImageUsageFlags msaa_usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        if (!create_image_2d(a, w, h, a->swapchain_format, msaa_usage, samples, &a->scene_msaa_image, &a->scene_msaa_memory, &a->scene_msaa_view)) return 0;
+    }
 
-    VkImageView scene_att[] = {a->scene_view};
-    VkFramebufferCreateInfo scene_fb = {.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO, .renderPass = a->scene_render_pass, .attachmentCount = 1, .pAttachments = scene_att, .width = w, .height = h, .layers = 1};
+    VkImageView scene_att_1[] = {a->scene_view};
+    VkImageView scene_att_2[] = {a->scene_msaa_view, a->scene_view};
+    VkFramebufferCreateInfo scene_fb = {
+        .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+        .renderPass = a->scene_render_pass,
+        .attachmentCount = (samples == VK_SAMPLE_COUNT_1_BIT) ? 1u : 2u,
+        .pAttachments = (samples == VK_SAMPLE_COUNT_1_BIT) ? scene_att_1 : scene_att_2,
+        .width = w,
+        .height = h,
+        .layers = 1
+    };
     if (!check_vk(vkCreateFramebuffer(a->device, &scene_fb, NULL, &a->scene_fb), "vkCreateFramebuffer(scene)")) return 0;
 
     VkImageView bloom_att[] = {a->bloom_view};
@@ -2133,6 +2238,7 @@ static int create_vg_context(app* a) {
     desc.api.vulkan.render_pass = (void*)a->scene_render_pass;
     desc.api.vulkan.vertex_binding = 0;
     desc.api.vulkan.max_frames_in_flight = 1;
+    desc.api.vulkan.sample_count = (uint32_t)scene_samples(a);
     vg_result vr = vg_context_create(&desc, &a->vg);
     if (vr != VG_OK) {
         fprintf(stderr, "vg_context_create failed: %s\n", vg_result_string(vr));
@@ -2319,14 +2425,15 @@ int main(void) {
     a.crt_ui_selected = 0;
     a.crt_ui_mouse_drag = 0;
     a.show_acoustics = 0;
-    a.show_video_menu = 0;
+	    a.show_video_menu = 0;
     a.video_menu_selected = 1;
     a.video_menu_fullscreen = 0;
     a.palette_mode = 0;
+    a.msaa_enabled = 1;
     a.video_dial_01[0] = 0.56f; /* bloom */
-    a.video_dial_01[1] = 0.44f; /* persistence */
-    a.video_dial_01[2] = 0.22f; /* jitter */
-    a.video_dial_01[3] = 0.18f; /* flicker */
+	    a.video_dial_01[1] = 0.44f; /* persistence */
+	    a.video_dial_01[2] = 0.22f; /* jitter */
+	    a.video_dial_01[3] = 0.18f; /* flicker */
     a.video_dial_01[4] = 0.38f; /* scanline */
     a.video_dial_01[5] = 0.32f; /* noise */
     a.video_dial_01[6] = 0.30f; /* vignette */
@@ -2415,6 +2522,8 @@ int main(void) {
                         set_tty_message(&a, "level mode: cylinder run");
                     } else if (a.game.level_style == LEVEL_STYLE_EVENT_HORIZON) {
                         set_tty_message(&a, "level mode: event horizon");
+                    } else if (a.game.level_style == LEVEL_STYLE_EVENT_HORIZON_LEGACY) {
+                        set_tty_message(&a, "level mode: event horizon legacy");
                     } else {
                         set_tty_message(&a, "level mode: defender");
                     }
@@ -2424,6 +2533,18 @@ int main(void) {
                         a.show_acoustics = 0;
                         a.show_crt_ui = 0;
                         a.video_menu_dial_drag = -1;
+                    }
+                } else if (a.show_video_menu && ev.key.keysym.sym == SDLK_a) {
+                    a.msaa_enabled = !a.msaa_enabled;
+                    if (a.msaa_enabled && a.msaa_samples == VK_SAMPLE_COUNT_1_BIT) {
+                        a.msaa_enabled = 0;
+                        set_tty_message(&a, "msaa unavailable");
+                    } else {
+                        set_tty_message(&a, a.msaa_enabled ? "msaa enabled" : "msaa disabled");
+                        if (!recreate_render_runtime(&a)) {
+                            fprintf(stderr, "msaa toggle recreate failed\n");
+                            running = 0;
+                        }
                     }
                 } else if (a.show_video_menu && ev.key.keysym.sym == SDLK_UP) {
                     const int count = VIDEO_MENU_RES_COUNT + 1;

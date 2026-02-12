@@ -354,6 +354,9 @@ static vg_result vg_vk_create_pipelines(vg_vk_backend* backend) {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
         .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT
     };
+    if (backend->desc.sample_count != 0u) {
+        msaa.rasterizationSamples = (VkSampleCountFlagBits)backend->desc.sample_count;
+    }
 
     VkPipelineColorBlendAttachmentState blend_attachment = {
         .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,

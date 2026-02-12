@@ -22,10 +22,11 @@ typedef struct wormhole_cache {
     int valid;
     float world_w;
     float world_h;
-    vg_vec2 loop_rel[WORMHOLE_ROWS][WORMHOLE_VN];
-    float loop_face[WORMHOLE_ROWS][WORMHOLE_VN];
+    vg_vec2 loop_rel_modern[WORMHOLE_ROWS][WORMHOLE_VN];
+    vg_vec2 loop_rel_legacy[WORMHOLE_ROWS][WORMHOLE_VN];
+    float loop_face_legacy[WORMHOLE_ROWS][WORMHOLE_VN];
     vg_vec2 rail_rel[WORMHOLE_COLS][WORMHOLE_ROWS];
-    float rail_face[WORMHOLE_COLS][WORMHOLE_ROWS];
+    float rail_face_legacy[WORMHOLE_COLS][WORMHOLE_ROWS];
     float row_fade[WORMHOLE_ROWS];
 } wormhole_cache;
 
@@ -177,13 +178,22 @@ static void wormhole_cache_build(wormhole_cache* c, float world_w, float world_h
         const float drdy = row_drdy[j];
 
         for (int i = 0; i < WORMHOLE_VN; ++i) {
-            const float ang = (float)i / (float)(WORMHOLE_VN - 1) * 6.28318530718f;
-            const float ca = cosf(ang);
-            const float sa = sinf(ang);
-            c->loop_rel[j][i].x = ca * rx;
-            c->loop_rel[j][i].y = sy * h_span + sa * ry;
-            /* Surface of revolution normal: N ~ (cos(phi), -dr/dy, sin(phi)). */
-            c->loop_face[j][i] = facing01_from_normal((v3){ca, -drdy, sa}, view_dir);
+            {
+                const float ang = (float)i / (float)WORMHOLE_VN * 6.28318530718f;
+                const float ca = cosf(ang);
+                const float sa = sinf(ang);
+                c->loop_rel_modern[j][i].x = ca * rx;
+                c->loop_rel_modern[j][i].y = sy * h_span + sa * ry;
+            }
+            {
+                const float ang = (float)i / (float)(WORMHOLE_VN - 1) * 6.28318530718f;
+                const float ca = cosf(ang);
+                const float sa = sinf(ang);
+                c->loop_rel_legacy[j][i].x = ca * rx;
+                c->loop_rel_legacy[j][i].y = sy * h_span + sa * ry;
+                /* Surface of revolution normal: N ~ (cos(phi), -dr/dy, sin(phi)). */
+                c->loop_face_legacy[j][i] = facing01_from_normal((v3){ca, -drdy, sa}, view_dir);
+            }
         }
     }
 
@@ -195,11 +205,9 @@ static void wormhole_cache_build(wormhole_cache* c, float world_w, float world_h
             const float sy = row_sy[j];
             const float rx = row_rx[j];
             const float ry = row_ry[j];
-            const float drdy = row_drdy[j];
             c->rail_rel[col][j].x = cp * rx;
             c->rail_rel[col][j].y = sy * h_span + sp * ry;
-            c->rail_face[col][j] =
-                facing01_from_normal((v3){cp, -drdy, sp}, view_dir) * c->row_fade[j];
+            c->rail_face_legacy[col][j] = facing01_from_normal((v3){cp, -row_drdy[j], sp}, view_dir) * c->row_fade[j];
         }
     }
 }
@@ -1002,18 +1010,23 @@ static vg_vec2 project_cylinder_point(const game_state* g, float x, float y, flo
     };
 }
 
-static vg_result draw_cylinder_wire(vg_context* ctx, const game_state* g, const vg_stroke_style* halo, const vg_stroke_style* main, int level_style) {
+static vg_result draw_cylinder_wire(
+    vg_context* ctx,
+    const game_state* g,
+    const vg_stroke_style* halo,
+    const vg_stroke_style* main,
+    int level_style
+) {
     const float period = cylinder_period(g);
     enum { N = 96 };
     const float ring_y[] = {g->world_h * 0.06f, g->world_h * 0.46f, g->world_h * 0.86f};
     vg_stroke_style cyl_h = *halo;
     vg_stroke_style cyl_m = *main;
-    cyl_h.color = (vg_color){0.40f, 0.95f, 1.0f, 0.22f};
-    cyl_m.color = (vg_color){0.40f, 0.95f, 1.0f, 0.50f};
     cyl_h.intensity *= 0.62f;
     cyl_m.intensity *= 0.58f;
-    if (level_style != LEVEL_STYLE_EVENT_HORIZON) {
-        for (int r = 1; r < 3; ++r) {
+    if (level_style != LEVEL_STYLE_EVENT_HORIZON && level_style != LEVEL_STYLE_EVENT_HORIZON_LEGACY) {
+        const int ring_start = (level_style == LEVEL_STYLE_ENEMY_RADAR) ? 2 : 1;
+        for (int r = ring_start; r < 3; ++r) {
             vg_vec2 line[N];
             float z01[N];
             for (int i = 0; i < N; ++i) {
@@ -1182,54 +1195,113 @@ static vg_result draw_cylinder_wire(vg_context* ctx, const game_state* g, const 
     }
     }
 
-    if (level_style == LEVEL_STYLE_EVENT_HORIZON) {
-        /* Classic spacetime-fabric hourglass (wormhole throat) through cylinder center. */
-        static wormhole_cache wh;
-        wormhole_cache_ensure(&wh, g->world_w, g->world_h);
+			    if (level_style == LEVEL_STYLE_EVENT_HORIZON || level_style == LEVEL_STYLE_EVENT_HORIZON_LEGACY) {
+		        /* Classic spacetime-fabric hourglass (wormhole throat) through cylinder center. */
+		        static wormhole_cache wh;
+		        wormhole_cache_ensure(&wh, g->world_w, g->world_h);
 
-        const vg_vec2 vc = project_cylinder_point(g, g->camera_x, g->world_h * 0.50f, NULL);
-        const float cx = vc.x;
-        const float cy = vc.y;
-        for (int j = 0; j < WORMHOLE_ROWS; ++j) {
-            const float fade = wh.row_fade[j];
+		        const vg_vec2 vc = project_cylinder_point(g, g->camera_x, g->world_h * 0.50f, NULL);
+		        const float cx = vc.x;
+		        const float cy = vc.y;
 
-            vg_vec2 loop[WORMHOLE_VN];
-            for (int i = 0; i < WORMHOLE_VN; ++i) {
-                loop[i].x = cx + wh.loop_rel[j][i].x;
-                loop[i].y = cy + wh.loop_rel[j][i].y;
-            }
+			        if (level_style == LEVEL_STYLE_EVENT_HORIZON_LEGACY) {
+		            /* Legacy cull-based wireframe (from older render.c). */
+		            for (int j = 0; j < WORMHOLE_ROWS; ++j) {
+		                const float fade = wh.row_fade[j];
 
-            vg_stroke_style vh = *halo;
-            vg_stroke_style vm = *main;
-            vh.color = (vg_color){0.38f, 0.92f, 1.0f, 0.20f * fade};
-            vm.color = (vg_color){0.44f, 0.97f, 1.0f, 0.58f * fade};
-            vh.intensity *= 0.42f + fade * 0.48f;
-            vm.intensity *= 0.48f + fade * 0.56f;
-            vg_result vr = draw_polyline_culled(ctx, loop, wh.loop_face[j], WORMHOLE_VN, &vh, 1, 0.02f);
-            if (vr != VG_OK) {
-                return vr;
-            }
-            vr = draw_polyline_culled(ctx, loop, wh.loop_face[j], WORMHOLE_VN, &vm, 1, 0.02f);
-            if (vr != VG_OK) {
-                return vr;
-            }
-        }
+		                vg_vec2 loop[WORMHOLE_VN];
+		                for (int i = 0; i < WORMHOLE_VN; ++i) {
+		                    loop[i].x = cx + wh.loop_rel_legacy[j][i].x;
+		                    loop[i].y = cy + wh.loop_rel_legacy[j][i].y;
+		                }
 
-        for (int c = 0; c < WORMHOLE_COLS; ++c) {
-            vg_vec2 rail[WORMHOLE_ROWS];
-            for (int j = 0; j < WORMHOLE_ROWS; ++j) {
-                rail[j].x = cx + wh.rail_rel[c][j].x;
-                rail[j].y = cy + wh.rail_rel[c][j].y;
-            }
-            vg_stroke_style rs = *main;
-            rs.color = (vg_color){0.38f, 0.92f, 1.0f, 0.30f};
-            rs.intensity *= 0.52f;
-            vg_result vr = draw_polyline_culled(ctx, rail, wh.rail_face[c], WORMHOLE_ROWS, &rs, 0, 0.02f);
-            if (vr != VG_OK) {
-                return vr;
-            }
-        }
-    }
+		                vg_stroke_style vh = *halo;
+		                vg_stroke_style vm = *main;
+		                vh.color = (vg_color){0.38f, 0.92f, 1.0f, 0.20f * fade};
+		                vm.color = (vg_color){0.44f, 0.97f, 1.0f, 0.58f * fade};
+		                vh.intensity *= 0.42f + fade * 0.48f;
+		                vm.intensity *= 0.48f + fade * 0.56f;
+		                vg_result vr = draw_polyline_culled(ctx, loop, wh.loop_face_legacy[j], WORMHOLE_VN, &vh, 1, 0.02f);
+		                if (vr != VG_OK) {
+		                    return vr;
+		                }
+		                vr = draw_polyline_culled(ctx, loop, wh.loop_face_legacy[j], WORMHOLE_VN, &vm, 1, 0.02f);
+		                if (vr != VG_OK) {
+		                    return vr;
+		                }
+		            }
+
+		            for (int c = 0; c < WORMHOLE_COLS; ++c) {
+		                vg_vec2 rail[WORMHOLE_ROWS];
+		                for (int j = 0; j < WORMHOLE_ROWS; ++j) {
+		                    rail[j].x = cx + wh.rail_rel[c][j].x;
+		                    rail[j].y = cy + wh.rail_rel[c][j].y;
+		                }
+		                vg_stroke_style rs = *main;
+		                rs.color = (vg_color){0.38f, 0.92f, 1.0f, 0.30f};
+		                rs.width_px *= 1.55f;
+		                rs.intensity *= 0.52f;
+		                vg_result vr = draw_polyline_culled(ctx, rail, wh.rail_face_legacy[c], WORMHOLE_ROWS, &rs, 0, 0.02f);
+		                if (vr != VG_OK) {
+		                    return vr;
+		                }
+		            }
+		        } else {
+		            /* Modern uniform wireframe. */
+		            for (int j = 0; j < WORMHOLE_ROWS; ++j) {
+		                const float fade = wh.row_fade[j];
+
+		                vg_vec2 loop[WORMHOLE_VN];
+		                for (int i = 0; i < WORMHOLE_VN; ++i) {
+		                    loop[i].x = cx + wh.loop_rel_modern[j][i].x;
+		                    loop[i].y = cy + wh.loop_rel_modern[j][i].y;
+		                }
+
+		                vg_stroke_style vh = *halo;
+		                vg_stroke_style vm = *main;
+		                vh.color = (vg_color){0.38f, 0.92f, 1.0f, 0.20f * fade};
+		                vm.color = (vg_color){0.44f, 0.97f, 1.0f, 0.58f * fade};
+		                vh.width_px *= 1.40f;
+		                vm.width_px *= 1.25f;
+		                vh.intensity *= 0.42f + fade * 0.48f;
+		                vm.intensity *= 0.48f + fade * 0.56f;
+		                vg_result vr = vg_draw_polyline(ctx, loop, WORMHOLE_VN, &vh, 1);
+		                if (vr != VG_OK) {
+		                    return vr;
+		                }
+		                vr = vg_draw_polyline(ctx, loop, WORMHOLE_VN, &vm, 1);
+		                if (vr != VG_OK) {
+		                    return vr;
+		                }
+		            }
+
+		            for (int c = 0; c < WORMHOLE_COLS; ++c) {
+		                vg_vec2 rail[WORMHOLE_ROWS];
+		                for (int j = 0; j < WORMHOLE_ROWS; ++j) {
+		                    rail[j].x = cx + wh.rail_rel[c][j].x;
+		                    rail[j].y = cy + wh.rail_rel[c][j].y;
+		                }
+		                const float fade = 0.90f;
+		                vg_stroke_style rh = *halo;
+		                vg_stroke_style rm = *main;
+		                rh.color = (vg_color){0.38f, 0.92f, 1.0f, 0.20f * fade};
+		                rm.color = (vg_color){0.44f, 0.97f, 1.0f, 0.58f * fade};
+		                rh.width_px *= 1.40f;
+		                rm.width_px *= 1.25f;
+		                rh.intensity *= 0.42f;
+		                rm.intensity *= 0.48f;
+
+		                vg_result vr = vg_draw_polyline(ctx, rail, WORMHOLE_ROWS, &rh, 0);
+		                if (vr != VG_OK) {
+		                    return vr;
+		                }
+		                vr = vg_draw_polyline(ctx, rail, WORMHOLE_ROWS, &rm, 0);
+		                if (vr != VG_OK) {
+		                    return vr;
+		                }
+		            }
+		        }
+		    }
     return VG_OK;
 }
 
