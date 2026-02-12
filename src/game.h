@@ -8,6 +8,13 @@
 #define MAX_ENEMIES 64
 #define MAX_PARTICLES 1024
 
+enum level_style_id {
+    LEVEL_STYLE_DEFENDER = 0,
+    LEVEL_STYLE_ENEMY_RADAR = 1,
+    LEVEL_STYLE_EVENT_HORIZON = 2,
+    LEVEL_STYLE_COUNT = 3
+};
+
 typedef struct star {
     float x;
     float y;
@@ -110,7 +117,7 @@ typedef struct game_state {
     float camera_y;
     float camera_vx;
     float camera_vy;
-    int level_style; /* 0 = classic side-scroll, 1 = cylindrical ring */
+    int level_style; /* enum level_style_id */
     player_state player;
     star stars[MAX_STARS];
     bullet bullets[MAX_BULLETS];

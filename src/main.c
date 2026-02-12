@@ -2411,10 +2411,12 @@ int main(void) {
                 } else if (ev.key.keysym.sym == SDLK_n) {
                     game_cycle_level(&a.game);
                     a.force_clear_frames = 2;
-                    if (a.game.level_style == 1) {
+                    if (a.game.level_style == LEVEL_STYLE_ENEMY_RADAR) {
                         set_tty_message(&a, "level mode: cylinder run");
+                    } else if (a.game.level_style == LEVEL_STYLE_EVENT_HORIZON) {
+                        set_tty_message(&a, "level mode: event horizon");
                     } else {
-                        set_tty_message(&a, "level mode: classic scroll");
+                        set_tty_message(&a, "level mode: defender");
                     }
                 } else if (ev.key.keysym.sym == SDLK_2) {
                     a.show_video_menu = !a.show_video_menu;

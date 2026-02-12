@@ -7,6 +7,28 @@
 #include <math.h>
 #include <stdio.h>
 
+typedef struct v3 {
+    float x;
+    float y;
+    float z;
+} v3;
+
+/* Event Horizon wormhole mesh is static; cache it to avoid per-frame recompute. */
+#define WORMHOLE_VN 84
+#define WORMHOLE_ROWS 24
+#define WORMHOLE_COLS 24
+
+typedef struct wormhole_cache {
+    int valid;
+    float world_w;
+    float world_h;
+    vg_vec2 loop_rel[WORMHOLE_ROWS][WORMHOLE_VN];
+    float loop_face[WORMHOLE_ROWS][WORMHOLE_VN];
+    vg_vec2 rail_rel[WORMHOLE_COLS][WORMHOLE_ROWS];
+    float rail_face[WORMHOLE_COLS][WORMHOLE_ROWS];
+    float row_fade[WORMHOLE_ROWS];
+} wormhole_cache;
+
 static vg_stroke_style make_stroke(float width, float intensity, vg_color color, vg_blend_mode blend) {
     vg_stroke_style s;
     s.width_px = width;
@@ -25,6 +47,170 @@ static vg_fill_style make_fill(float intensity, vg_color color, vg_blend_mode bl
     f.color = color;
     f.blend = blend;
     return f;
+}
+
+static v3 v3_norm(v3 a) {
+    const float l2 = a.x * a.x + a.y * a.y + a.z * a.z;
+    if (l2 > 1e-12f) {
+        const float inv = 1.0f / sqrtf(l2);
+        a.x *= inv;
+        a.y *= inv;
+        a.z *= inv;
+    }
+    return a;
+}
+
+static float v3_dot(v3 a, v3 b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+static float facing01_from_normal(v3 normal, v3 view_dir) {
+    normal = v3_norm(normal);
+    view_dir = v3_norm(view_dir);
+    const float d = v3_dot(normal, view_dir);
+    return (d > 0.0f) ? d : 0.0f;
+}
+
+static float facing_soft(float facing01, float cutoff01) {
+    float f = facing01;
+    if (f < 0.0f) f = 0.0f;
+    if (f > 1.0f) f = 1.0f;
+    float c = cutoff01;
+    if (c < 0.0f) c = 0.0f;
+    if (c > 0.95f) c = 0.95f;
+    if (f <= c) {
+        return 0.0f;
+    }
+    float t = (f - c) / (1.0f - c);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+static vg_result draw_polyline_culled(
+    vg_context* ctx,
+    const vg_vec2* pts,
+    const float* facing01,
+    int count,
+    const vg_stroke_style* base,
+    int closed,
+    float cutoff01
+) {
+    if (!ctx || !pts || !facing01 || !base || count < 2) {
+        return VG_OK;
+    }
+    for (int i = 0; i < count - 1; ++i) {
+        const float f = facing_soft(0.5f * (facing01[i] + facing01[i + 1]), cutoff01);
+        if (f <= 0.0f) {
+            continue;
+        }
+        vg_stroke_style s = *base;
+        s.intensity *= f;
+        s.color.a *= f;
+        const vg_vec2 seg[2] = {pts[i], pts[i + 1]};
+        vg_result r = vg_draw_polyline(ctx, seg, 2, &s, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+    }
+    if (closed) {
+        const float f = facing_soft(0.5f * (facing01[count - 1] + facing01[0]), cutoff01);
+        if (f > 0.0f) {
+            vg_stroke_style s = *base;
+            s.intensity *= f;
+            s.color.a *= f;
+            const vg_vec2 seg[2] = {pts[count - 1], pts[0]};
+            vg_result r = vg_draw_polyline(ctx, seg, 2, &s, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+    }
+    return VG_OK;
+}
+
+static void wormhole_cache_build(wormhole_cache* c, float world_w, float world_h) {
+    if (!c) {
+        return;
+    }
+
+    c->world_w = world_w;
+    c->world_h = world_h;
+    c->valid = 1;
+
+    const float h_span = world_h * 0.46f;
+    const float rx_outer = world_w * 0.64f;
+    const float rx_throat = world_w * 0.030f;
+    const float ry_ratio = 0.18f;
+    const float flare_s = 3.4f; /* larger = longer/narrower, still curved */
+    const float flare_norm = 1.0f / sinhf(flare_s);
+    const v3 view_dir = (v3){0.0f, 0.0f, 1.0f};
+
+    float row_sy[WORMHOLE_ROWS];
+    float row_rx[WORMHOLE_ROWS];
+    float row_ry[WORMHOLE_ROWS];
+    float row_drdy[WORMHOLE_ROWS];
+
+    for (int j = 0; j < WORMHOLE_ROWS; ++j) {
+        const float tj = (float)j / (float)(WORMHOLE_ROWS - 1);
+        const float sy = tj * 2.0f - 1.0f;
+        const float a = fabsf(sy);
+        float k = sinhf(flare_s * a) * flare_norm;
+        k = powf(k, 1.35f);
+        row_sy[j] = sy;
+        row_rx[j] = rx_throat + (rx_outer - rx_throat) * k;
+        row_ry[j] = row_rx[j] * (ry_ratio * (0.92f + 0.10f * (1.0f - k)));
+        c->row_fade[j] = 0.22f + powf(1.0f - a, 1.35f) * 0.78f;
+    }
+
+    for (int j = 0; j < WORMHOLE_ROWS; ++j) {
+        const int j0 = (j > 0) ? (j - 1) : j;
+        const int j1 = (j + 1 < WORMHOLE_ROWS) ? (j + 1) : j;
+        const float y0 = row_sy[j0] * h_span;
+        const float y1 = row_sy[j1] * h_span;
+        const float dy = y1 - y0;
+        row_drdy[j] = (fabsf(dy) > 1e-6f) ? ((row_rx[j1] - row_rx[j0]) / dy) : 0.0f;
+    }
+
+    for (int j = 0; j < WORMHOLE_ROWS; ++j) {
+        const float sy = row_sy[j];
+        const float rx = row_rx[j];
+        const float ry = row_ry[j];
+        const float drdy = row_drdy[j];
+
+        for (int i = 0; i < WORMHOLE_VN; ++i) {
+            const float ang = (float)i / (float)(WORMHOLE_VN - 1) * 6.28318530718f;
+            const float ca = cosf(ang);
+            const float sa = sinf(ang);
+            c->loop_rel[j][i].x = ca * rx;
+            c->loop_rel[j][i].y = sy * h_span + sa * ry;
+            /* Surface of revolution normal: N ~ (cos(phi), -dr/dy, sin(phi)). */
+            c->loop_face[j][i] = facing01_from_normal((v3){ca, -drdy, sa}, view_dir);
+        }
+    }
+
+    for (int col = 0; col < WORMHOLE_COLS; ++col) {
+        const float phi = (float)col / (float)WORMHOLE_COLS * 6.28318530718f;
+        const float cp = cosf(phi);
+        const float sp = sinf(phi);
+        for (int j = 0; j < WORMHOLE_ROWS; ++j) {
+            const float sy = row_sy[j];
+            const float rx = row_rx[j];
+            const float ry = row_ry[j];
+            const float drdy = row_drdy[j];
+            c->rail_rel[col][j].x = cp * rx;
+            c->rail_rel[col][j].y = sy * h_span + sp * ry;
+            c->rail_face[col][j] =
+                facing01_from_normal((v3){cp, -drdy, sp}, view_dir) * c->row_fade[j];
+        }
+    }
+}
+
+static void wormhole_cache_ensure(wormhole_cache* c, float world_w, float world_h) {
+    if (!c) {
+        return;
+    }
+    if (!c->valid || fabsf(c->world_w - world_w) > 1e-3f || fabsf(c->world_h - world_h) > 1e-3f) {
+        wormhole_cache_build(c, world_w, world_h);
+    }
 }
 
 static float repeatf(float v, float period) {
@@ -816,7 +1002,7 @@ static vg_vec2 project_cylinder_point(const game_state* g, float x, float y, flo
     };
 }
 
-static vg_result draw_cylinder_wire(vg_context* ctx, const game_state* g, const vg_stroke_style* halo, const vg_stroke_style* main) {
+static vg_result draw_cylinder_wire(vg_context* ctx, const game_state* g, const vg_stroke_style* halo, const vg_stroke_style* main, int level_style) {
     const float period = cylinder_period(g);
     enum { N = 96 };
     const float ring_y[] = {g->world_h * 0.06f, g->world_h * 0.46f, g->world_h * 0.86f};
@@ -826,36 +1012,39 @@ static vg_result draw_cylinder_wire(vg_context* ctx, const game_state* g, const 
     cyl_m.color = (vg_color){0.40f, 0.95f, 1.0f, 0.50f};
     cyl_h.intensity *= 0.62f;
     cyl_m.intensity *= 0.58f;
-    for (int r = 1; r < 3; ++r) {
-        vg_vec2 line[N];
-        float z01[N];
-        for (int i = 0; i < N; ++i) {
-            const float u = (float)i / (float)(N - 1);
-            const float xw = g->camera_x + (u - 0.5f) * period;
-            line[i] = project_cylinder_point(g, xw, ring_y[r], &z01[i]);
-        }
-        for (int i = 0; i < N - 1; ++i) {
-            const float d = 0.5f * (z01[i] + z01[i + 1]);
-            const float fade = 0.03f + d * d * 0.97f;
-            vg_stroke_style sh = cyl_h;
-            vg_stroke_style sm = cyl_m;
-            sh.intensity *= fade;
-            sm.intensity *= fade;
-            sh.color.a *= fade;
-            sm.color.a *= fade;
-            const vg_vec2 seg[2] = {line[i], line[i + 1]};
-            vg_result vr = vg_draw_polyline(ctx, seg, 2, &sh, 0);
-            if (vr != VG_OK) {
-                return vr;
+    if (level_style != LEVEL_STYLE_EVENT_HORIZON) {
+        for (int r = 1; r < 3; ++r) {
+            vg_vec2 line[N];
+            float z01[N];
+            for (int i = 0; i < N; ++i) {
+                const float u = (float)i / (float)(N - 1);
+                const float xw = g->camera_x + (u - 0.5f) * period;
+                line[i] = project_cylinder_point(g, xw, ring_y[r], &z01[i]);
             }
-            vr = vg_draw_polyline(ctx, seg, 2, &sm, 0);
-            if (vr != VG_OK) {
-                return vr;
+            for (int i = 0; i < N - 1; ++i) {
+                const float d = 0.5f * (z01[i] + z01[i + 1]);
+                const float fade = 0.03f + d * d * 0.97f;
+                vg_stroke_style sh = cyl_h;
+                vg_stroke_style sm = cyl_m;
+                sh.intensity *= fade;
+                sm.intensity *= fade;
+                sh.color.a *= fade;
+                sm.color.a *= fade;
+                const vg_vec2 seg[2] = {line[i], line[i + 1]};
+                vg_result vr = vg_draw_polyline(ctx, seg, 2, &sh, 0);
+                if (vr != VG_OK) {
+                    return vr;
+                }
+                vr = vg_draw_polyline(ctx, seg, 2, &sm, 0);
+                if (vr != VG_OK) {
+                    return vr;
+                }
             }
         }
     }
 
-    /* Flat radar-plate ground plane near bottom. */
+    /* Flat radar-plate ground plane near bottom (Enemy Radar level). */
+    if (level_style == LEVEL_STYLE_ENEMY_RADAR) {
     {
         vg_stroke_style tr_h = *halo;
         vg_stroke_style tr_m = *main;
@@ -986,6 +1175,56 @@ static vg_result draw_cylinder_wire(vg_context* ctx, const game_state* g, const 
                 .blend = VG_BLEND_ADDITIVE
             };
             vg_result vr = vg_fill_circle(ctx, blip, 1.8f, &bf, 10);
+            if (vr != VG_OK) {
+                return vr;
+            }
+        }
+    }
+    }
+
+    if (level_style == LEVEL_STYLE_EVENT_HORIZON) {
+        /* Classic spacetime-fabric hourglass (wormhole throat) through cylinder center. */
+        static wormhole_cache wh;
+        wormhole_cache_ensure(&wh, g->world_w, g->world_h);
+
+        const vg_vec2 vc = project_cylinder_point(g, g->camera_x, g->world_h * 0.50f, NULL);
+        const float cx = vc.x;
+        const float cy = vc.y;
+        for (int j = 0; j < WORMHOLE_ROWS; ++j) {
+            const float fade = wh.row_fade[j];
+
+            vg_vec2 loop[WORMHOLE_VN];
+            for (int i = 0; i < WORMHOLE_VN; ++i) {
+                loop[i].x = cx + wh.loop_rel[j][i].x;
+                loop[i].y = cy + wh.loop_rel[j][i].y;
+            }
+
+            vg_stroke_style vh = *halo;
+            vg_stroke_style vm = *main;
+            vh.color = (vg_color){0.38f, 0.92f, 1.0f, 0.20f * fade};
+            vm.color = (vg_color){0.44f, 0.97f, 1.0f, 0.58f * fade};
+            vh.intensity *= 0.42f + fade * 0.48f;
+            vm.intensity *= 0.48f + fade * 0.56f;
+            vg_result vr = draw_polyline_culled(ctx, loop, wh.loop_face[j], WORMHOLE_VN, &vh, 1, 0.02f);
+            if (vr != VG_OK) {
+                return vr;
+            }
+            vr = draw_polyline_culled(ctx, loop, wh.loop_face[j], WORMHOLE_VN, &vm, 1, 0.02f);
+            if (vr != VG_OK) {
+                return vr;
+            }
+        }
+
+        for (int c = 0; c < WORMHOLE_COLS; ++c) {
+            vg_vec2 rail[WORMHOLE_ROWS];
+            for (int j = 0; j < WORMHOLE_ROWS; ++j) {
+                rail[j].x = cx + wh.rail_rel[c][j].x;
+                rail[j].y = cy + wh.rail_rel[c][j].y;
+            }
+            vg_stroke_style rs = *main;
+            rs.color = (vg_color){0.38f, 0.92f, 1.0f, 0.30f};
+            rs.intensity *= 0.52f;
+            vg_result vr = draw_polyline_culled(ctx, rail, wh.rail_face[c], WORMHOLE_ROWS, &rs, 0, 0.02f);
             if (vr != VG_OK) {
                 return vr;
             }
@@ -1260,13 +1499,13 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         return r;
     }
 
-    if (g->level_style == 1) {
+    if (g->level_style != LEVEL_STYLE_DEFENDER) {
         const float period = cylinder_period(g);
         vg_stroke_style cyl_halo = land_halo;
         vg_stroke_style cyl_main = land_main;
         cyl_halo.intensity *= 1.15f;
         cyl_main.intensity *= 1.20f;
-        r = draw_cylinder_wire(ctx, g, &cyl_halo, &cyl_main);
+        r = draw_cylinder_wire(ctx, g, &cyl_halo, &cyl_main, g->level_style);
         if (r != VG_OK) {
             return r;
         }
