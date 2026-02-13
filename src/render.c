@@ -175,7 +175,12 @@ static void wormhole_cache_build(wormhole_cache* c, float world_w, float world_h
         row_sy[j] = sy;
         row_rx[j] = rx_throat + (rx_outer - rx_throat) * k;
         row_ry[j] = row_rx[j] * (ry_ratio * (0.92f + 0.10f * (1.0f - k)));
-        c->row_fade[j] = 0.22f + powf(1.0f - a, 1.35f) * 0.78f;
+        /* Keep bottom bright; only fade toward the top of the throat. */
+        if (sy < 0.0f) {
+            c->row_fade[j] = 1.0f;
+        } else {
+            c->row_fade[j] = 0.22f + powf(1.0f - sy, 1.35f) * 0.78f;
+        }
     }
 
     for (int j = 0; j < WORMHOLE_ROWS; ++j) {
@@ -2392,6 +2397,10 @@ static vg_result draw_cylinder_wire(
 		            /* Legacy cull-based wireframe (from older render.c). */
 		            for (int j = 0; j < WORMHOLE_ROWS; ++j) {
 		                const float fade = wh.row_fade[j];
+                        const int is_top = (j >= (WORMHOLE_ROWS / 2));
+                        const float face_boost = is_top ? 1.65f : 1.0f;
+                        const float face_lift = is_top ? 0.07f : 0.0f;
+                        const float face_cutoff = is_top ? 0.0f : 0.02f;
 
 		                vg_vec2 loop[WORMHOLE_VN];
                         float loop_face[WORMHOLE_VN];
@@ -2402,13 +2411,15 @@ static vg_result draw_cylinder_wire(
                             const int i1 = wrapi(i0 + 1, nsrc);
                             const float t = u - floorf(u);
                             const vg_vec2 p0 = wh.loop_rel_legacy[j][i0];
-                            const vg_vec2 p1 = wh.loop_rel_legacy[j][i1];
-                            loop[i].x = cx + lerpf(p0.x, p1.x, t);
-                            loop[i].y = cy + lerpf(p0.y, p1.y, t);
-                            loop_face[i] = lerpf(wh.loop_face_legacy[j][i0], wh.loop_face_legacy[j][i1], t);
-                        }
-                        loop[WORMHOLE_VN - 1] = loop[0];
-                        loop_face[WORMHOLE_VN - 1] = loop_face[0];
+		                            const vg_vec2 p1 = wh.loop_rel_legacy[j][i1];
+		                            loop[i].x = cx + lerpf(p0.x, p1.x, t);
+		                            loop[i].y = cy + lerpf(p0.y, p1.y, t);
+		                            float lf = lerpf(wh.loop_face_legacy[j][i0], wh.loop_face_legacy[j][i1], t);
+                                    lf = lf * face_boost + face_lift;
+                                    loop_face[i] = clampf(lf, 0.0f, 1.0f);
+		                        }
+		                        loop[WORMHOLE_VN - 1] = loop[0];
+		                        loop_face[WORMHOLE_VN - 1] = loop_face[0];
 
 		                vg_stroke_style vh = *halo;
 		                vg_stroke_style vm = *main;
@@ -2416,11 +2427,11 @@ static vg_result draw_cylinder_wire(
 		                vm.color = (vg_color){0.44f, 0.97f, 1.0f, 0.58f * fade};
 		                vh.intensity *= 0.42f + fade * 0.48f;
 		                vm.intensity *= 0.48f + fade * 0.56f;
-		                vg_result vr = draw_polyline_culled(ctx, loop, loop_face, WORMHOLE_VN, &vh, 1, 0.02f);
+		                vg_result vr = draw_polyline_culled(ctx, loop, loop_face, WORMHOLE_VN, &vh, 1, face_cutoff);
 		                if (vr != VG_OK) {
 		                    return vr;
 		                }
-		                vr = draw_polyline_culled(ctx, loop, loop_face, WORMHOLE_VN, &vm, 1, 0.02f);
+		                vr = draw_polyline_culled(ctx, loop, loop_face, WORMHOLE_VN, &vm, 1, face_cutoff);
 		                if (vr != VG_OK) {
 		                    return vr;
 		                }
@@ -2436,13 +2447,29 @@ static vg_result draw_cylinder_wire(
 		                for (int j = 0; j < WORMHOLE_ROWS; ++j) {
 		                    rail[j].x = cx + lerpf(wh.rail_rel_legacy[c0][j].x, wh.rail_rel_legacy[c1][j].x, ct);
 		                    rail[j].y = cy + lerpf(wh.rail_rel_legacy[c0][j].y, wh.rail_rel_legacy[c1][j].y, ct);
-                            rail_face[j] = lerpf(wh.rail_face_legacy[c0][j], wh.rail_face_legacy[c1][j], ct);
+                            {
+                                const int is_top = (j >= (WORMHOLE_ROWS / 2));
+                                const float face_boost = is_top ? 1.65f : 1.0f;
+                                const float face_lift = is_top ? 0.07f : 0.0f;
+                                float rf = lerpf(wh.rail_face_legacy[c0][j], wh.rail_face_legacy[c1][j], ct);
+                                rf = rf * face_boost + face_lift;
+                                rail_face[j] = clampf(rf, 0.0f, 1.0f);
+                            }
 		                }
-		                vg_stroke_style rs = *main;
-		                rs.color = (vg_color){0.38f, 0.92f, 1.0f, 0.30f};
-		                rs.width_px *= 1.55f;
-		                rs.intensity *= 0.52f;
-		                vg_result vr = draw_polyline_culled(ctx, rail, rail_face, WORMHOLE_ROWS, &rs, 0, 0.02f);
+                        const float fade = 0.90f;
+		                vg_stroke_style rh = *halo;
+		                vg_stroke_style rm = *main;
+		                rh.color = (vg_color){0.38f, 0.92f, 1.0f, 0.20f * fade};
+		                rm.color = (vg_color){0.44f, 0.97f, 1.0f, 0.58f * fade};
+		                rh.width_px *= 1.55f;
+		                rm.width_px *= 1.35f;
+		                rh.intensity *= 0.42f + fade * 0.48f;
+		                rm.intensity *= 0.48f + fade * 0.56f;
+		                vg_result vr = draw_polyline_culled(ctx, rail, rail_face, WORMHOLE_ROWS, &rh, 0, 0.02f);
+		                if (vr != VG_OK) {
+		                    return vr;
+		                }
+		                vr = draw_polyline_culled(ctx, rail, rail_face, WORMHOLE_ROWS, &rm, 0, 0.02f);
 		                if (vr != VG_OK) {
 		                    return vr;
 		                }
