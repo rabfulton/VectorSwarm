@@ -2038,6 +2038,53 @@ static vg_result draw_parallax_landscape(
     return vg_draw_polyline(ctx, line, N, main, 0);
 }
 
+static int horizon_bin_index(float x, float w, int bins) {
+    if (bins <= 1 || w <= 1e-6f) {
+        return 0;
+    }
+    float t = x / w;
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    int i = (int)floorf(t * (float)(bins - 1) + 0.5f);
+    if (i < 0) i = 0;
+    if (i >= bins) i = bins - 1;
+    return i;
+}
+
+static void horizon_segment_update(float* horizon, int bins, float w, vg_vec2 a, vg_vec2 b) {
+    if (!horizon || bins <= 0) {
+        return;
+    }
+    int i0 = horizon_bin_index(a.x, w, bins);
+    int i1 = horizon_bin_index(b.x, w, bins);
+    if (i0 > i1) {
+        const int ti = i0;
+        i0 = i1;
+        i1 = ti;
+        const vg_vec2 tp = a;
+        a = b;
+        b = tp;
+    }
+    const float dx = b.x - a.x;
+    if (fabsf(dx) < 1e-4f) {
+        const float y = fmaxf(a.y, b.y);
+        if (y > horizon[i0]) {
+            horizon[i0] = y;
+        }
+        return;
+    }
+    for (int i = i0; i <= i1; ++i) {
+        const float x = ((float)i / (float)(bins - 1)) * w;
+        float t = (x - a.x) / dx;
+        if (t < 0.0f) t = 0.0f;
+        if (t > 1.0f) t = 1.0f;
+        const float y = lerpf(a.y, b.y, t);
+        if (y > horizon[i]) {
+            horizon[i] = y;
+        }
+    }
+}
+
 static vg_result draw_high_plains_drifter_terrain(
     vg_context* ctx,
     const game_state* g,
@@ -2047,11 +2094,14 @@ static vg_result draw_high_plains_drifter_terrain(
     enum { ROWS = 24, COLS = 70 };
     vg_vec2 pts[ROWS][COLS];
     float row_depth[ROWS];
+    enum { HORIZON_BINS = 384 };
+    float horizon[HORIZON_BINS];
     const float w = g->world_w;
     const float h = g->world_h;
     const float y_near = h * 0.04f;
     const float y_far = h * 0.34f;
     const float cam = g->camera_x;
+    const int enable_horizon_cull = (g->level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2);
 
     for (int r = 0; r < ROWS; ++r) {
         const float z = (float)r / (float)(ROWS - 1);
@@ -2071,10 +2121,110 @@ static vg_result draw_high_plains_drifter_terrain(
         }
     }
 
+    if (enable_horizon_cull) {
+        const float eps = h * 0.0025f;
+        for (int i = 0; i < HORIZON_BINS; ++i) {
+            horizon[i] = -1e9f;
+        }
+
+        for (int r = 0; r < ROWS - 1; ++r) {
+            const float z_h = row_depth[r];
+            const float fade_h = 0.10f + (1.0f - z_h) * (1.0f - z_h) * 0.90f;
+            const float z_v = 0.5f * (row_depth[r] + row_depth[r + 1]);
+            const float fade_v = 0.09f + (1.0f - z_v) * (1.0f - z_v) * 0.91f;
+            for (int c = 0; c < COLS - 1; ++c) {
+                const vg_vec2 p00 = pts[r][c];
+                const vg_vec2 p10 = pts[r][c + 1];
+                const vg_vec2 p01 = pts[r + 1][c];
+                const vg_vec2 p11 = pts[r + 1][c + 1];
+
+                const int i00 = horizon_bin_index(p00.x, w, HORIZON_BINS);
+                const int i10 = horizon_bin_index(p10.x, w, HORIZON_BINS);
+                const int i01 = horizon_bin_index(p01.x, w, HORIZON_BINS);
+                const int i11 = horizon_bin_index(p11.x, w, HORIZON_BINS);
+                const int quad_vis =
+                    (p00.y > horizon[i00] + eps) ||
+                    (p10.y > horizon[i10] + eps) ||
+                    (p01.y > horizon[i01] + eps) ||
+                    (p11.y > horizon[i11] + eps);
+                if (!quad_vis) {
+                    continue;
+                }
+
+                {
+                    vg_stroke_style sh = *halo;
+                    vg_stroke_style sm = *main;
+                    vg_stroke_style glow = sm;
+                    sh.intensity *= fade_h * 0.72f;
+                    sm.intensity *= fade_h * 0.82f;
+                    glow.intensity *= fade_h * 0.38f;
+                    sh.color.a *= fade_h;
+                    sm.color.a *= fade_h;
+                    glow.color.a *= fade_h * 0.45f;
+                    sh.width_px *= 0.94f + (1.0f - z_h) * 0.62f;
+                    sm.width_px *= 0.90f + (1.0f - z_h) * 0.56f;
+                    glow.width_px = fmaxf(glow.width_px * (1.35f + (1.0f - z_h) * 0.45f), sm.width_px * 1.35f);
+                    glow.blend = VG_BLEND_ADDITIVE;
+                    const vg_vec2 seg[2] = {p00, p10};
+                    vg_result vr = vg_draw_polyline(ctx, seg, 2, &glow, 0);
+                    if (vr != VG_OK) {
+                        return vr;
+                    }
+                    vr = vg_draw_polyline(ctx, seg, 2, &sh, 0);
+                    if (vr != VG_OK) {
+                        return vr;
+                    }
+                    vr = vg_draw_polyline(ctx, seg, 2, &sm, 0);
+                    if (vr != VG_OK) {
+                        return vr;
+                    }
+                }
+
+                if ((c % 2) == 0) {
+                    const int major = (c % 8) == 0;
+                    const float major_boost = major ? 1.0f : 0.62f;
+                    vg_stroke_style sh = *halo;
+                    vg_stroke_style sm = *main;
+                    vg_stroke_style glow = sm;
+                    sh.intensity *= fade_v * 0.56f * major_boost;
+                    sm.intensity *= fade_v * 0.66f * major_boost;
+                    glow.intensity *= fade_v * 0.34f * major_boost;
+                    sh.color.a *= fade_v;
+                    sm.color.a *= fade_v;
+                    glow.color.a *= fade_v * 0.42f;
+                    sh.width_px *= 0.82f + (1.0f - z_v) * 0.44f;
+                    sm.width_px *= 0.80f + (1.0f - z_v) * 0.40f;
+                    glow.width_px = fmaxf(glow.width_px * (1.28f + (1.0f - z_v) * 0.40f), sm.width_px * 1.30f);
+                    glow.blend = VG_BLEND_ADDITIVE;
+                    const vg_vec2 seg[2] = {p00, p01};
+                    vg_result vr = vg_draw_polyline(ctx, seg, 2, &glow, 0);
+                    if (vr != VG_OK) {
+                        return vr;
+                    }
+                    vr = vg_draw_polyline(ctx, seg, 2, &sh, 0);
+                    if (vr != VG_OK) {
+                        return vr;
+                    }
+                    vr = vg_draw_polyline(ctx, seg, 2, &sm, 0);
+                    if (vr != VG_OK) {
+                        return vr;
+                    }
+                }
+
+                horizon_segment_update(horizon, HORIZON_BINS, w, p00, p10);
+                horizon_segment_update(horizon, HORIZON_BINS, w, p00, p01);
+                horizon_segment_update(horizon, HORIZON_BINS, w, p01, p11);
+                horizon_segment_update(horizon, HORIZON_BINS, w, p10, p11);
+            }
+        }
+        return VG_OK;
+    }
+
     for (int r = 0; r < ROWS; ++r) {
         const float z = row_depth[r];
         const float fade = 0.10f + (1.0f - z) * (1.0f - z) * 0.90f;
         for (int c = 0; c < COLS - 1; ++c) {
+            const vg_vec2 seg[2] = {pts[r][c], pts[r][c + 1]};
             vg_stroke_style sh = *halo;
             vg_stroke_style sm = *main;
             vg_stroke_style glow = sm;
@@ -2087,6 +2237,151 @@ static vg_result draw_high_plains_drifter_terrain(
             sh.width_px *= 0.94f + (1.0f - z) * 0.62f;
             sm.width_px *= 0.90f + (1.0f - z) * 0.56f;
             glow.width_px = fmaxf(glow.width_px * (1.35f + (1.0f - z) * 0.45f), sm.width_px * 1.35f);
+            glow.blend = VG_BLEND_ADDITIVE;
+            vg_result vr = vg_draw_polyline(ctx, seg, 2, &glow, 0);
+            if (vr != VG_OK) {
+                return vr;
+            }
+            vr = vg_draw_polyline(ctx, seg, 2, &sh, 0);
+            if (vr != VG_OK) {
+                return vr;
+            }
+            vr = vg_draw_polyline(ctx, seg, 2, &sm, 0);
+            if (vr != VG_OK) {
+                return vr;
+            }
+        }
+    }
+
+    for (int c = 0; c < COLS; c += 2) {
+        const int major = (c % 8) == 0;
+        const float major_boost = major ? 1.0f : 0.62f;
+        for (int r = 0; r < ROWS - 1; ++r) {
+            const vg_vec2 seg[2] = {pts[r][c], pts[r + 1][c]};
+            const float z = 0.5f * (row_depth[r] + row_depth[r + 1]);
+            const float fade = 0.09f + (1.0f - z) * (1.0f - z) * 0.91f;
+            vg_stroke_style sh = *halo;
+            vg_stroke_style sm = *main;
+            vg_stroke_style glow = sm;
+            sh.intensity *= fade * 0.56f * major_boost;
+            sm.intensity *= fade * 0.66f * major_boost;
+            glow.intensity *= fade * 0.34f * major_boost;
+            sh.color.a *= fade;
+            sm.color.a *= fade;
+            glow.color.a *= fade * 0.42f;
+            sh.width_px *= 0.82f + (1.0f - z) * 0.44f;
+            sm.width_px *= 0.80f + (1.0f - z) * 0.40f;
+            glow.width_px = fmaxf(glow.width_px * (1.28f + (1.0f - z) * 0.40f), sm.width_px * 1.30f);
+            glow.blend = VG_BLEND_ADDITIVE;
+            vg_result vr = vg_draw_polyline(ctx, seg, 2, &glow, 0);
+            if (vr != VG_OK) {
+                return vr;
+            }
+            vr = vg_draw_polyline(ctx, seg, 2, &sh, 0);
+            if (vr != VG_OK) {
+                return vr;
+            }
+            vr = vg_draw_polyline(ctx, seg, 2, &sm, 0);
+            if (vr != VG_OK) {
+                return vr;
+            }
+        }
+    }
+    return VG_OK;
+}
+
+static vg_result draw_high_plains_drifter_terrain_traditional(
+    vg_context* ctx,
+    const game_state* g,
+    const vg_stroke_style* halo,
+    const vg_stroke_style* main
+) {
+    enum { ROWS = 28, COLS = 76 };
+    vg_vec2 pts[ROWS][COLS];
+    float depth01[ROWS][COLS];
+    int valid[ROWS][COLS];
+
+    const float w = g->world_w;
+    const float h = g->world_h;
+    const float cx = w * 0.5f;
+    const float cy = h * 0.30f;    /* Lower-third anchor in this Y-up coordinate system. */
+    const float focal = h * 1.22f; /* Perspective scale. */
+
+    /* World basis: x=right, y=up, z=forward. */
+    const float world_z_near = 420.0f;
+    const float world_z_far = 4200.0f;
+    const float cam_x = g->camera_x;
+    const float cam_y = h * 0.16f;
+    const float cam_z = 0.0f;
+    const float pitch_down = 0.13f;
+    const float cp = cosf(pitch_down);
+    const float sp = sinf(pitch_down);
+    const float col_spacing = w * 0.055f;
+    const float span = col_spacing * (float)(COLS - 1);
+    const int x0 = (int)floorf((cam_x - span * 0.5f) / col_spacing) - 2;
+
+    for (int r = 0; r < ROWS; ++r) {
+        const float v = (float)r / (float)(ROWS - 1); /* near -> far */
+        const float p = powf(v, 1.12f);
+        const float zw = lerpf(world_z_near, world_z_far, p);
+        const float amp = lerpf(h * 0.18f, h * 0.050f, p);
+        for (int c = 0; c < COLS; ++c) {
+            const float xw = (float)(x0 + c) * col_spacing;
+            const float n = high_plains_looped_noise(xw * 1.20f, zw * 1.75f) * 1.65f;
+            const float yw = n * amp;
+
+            /* View transform (camera translation + pitch around x-axis). */
+            const float xt = xw - cam_x;
+            const float yt = yw - cam_y;
+            const float zt = zw - cam_z;
+            /* View rotation around x-axis (positive pitch looks downward). */
+            const float yv = yt * cp - zt * sp;
+            const float zv = yt * sp + zt * cp;
+
+            if (zv <= 4.0f) {
+                valid[r][c] = 0;
+                depth01[r][c] = 0.0f;
+                pts[r][c] = (vg_vec2){0.0f, 0.0f};
+                continue;
+            }
+
+            const float invz = 1.0f / zv;
+            const float sx = cx + xt * focal * invz;
+            const float sy = cy + yv * focal * invz;
+            const float d = clampf((zv - world_z_near) / fmaxf(world_z_far - world_z_near, 1.0f), 0.0f, 1.0f);
+
+            if (sy > h * 1.35f || sy < -h * 0.10f) {
+                valid[r][c] = 0;
+                depth01[r][c] = d;
+                pts[r][c] = (vg_vec2){sx, sy};
+                continue;
+            }
+
+            valid[r][c] = 1;
+            depth01[r][c] = d;
+            pts[r][c] = (vg_vec2){sx, sy};
+        }
+    }
+
+    for (int r = 0; r < ROWS; ++r) {
+        for (int c = 0; c < COLS - 1; ++c) {
+            if (!valid[r][c] || !valid[r][c + 1]) {
+                continue;
+            }
+            const float d = 0.5f * (depth01[r][c] + depth01[r][c + 1]);
+            const float fade = 0.12f + (1.0f - d) * (1.0f - d) * 0.88f;
+            vg_stroke_style sh = *halo;
+            vg_stroke_style sm = *main;
+            vg_stroke_style glow = sm;
+            sh.intensity *= fade * 0.62f;
+            sm.intensity *= fade * 0.78f;
+            glow.intensity *= fade * 0.34f;
+            sh.color.a *= fade;
+            sm.color.a *= fade;
+            glow.color.a *= fade * 0.40f;
+            sh.width_px *= 0.80f + (1.0f - d) * 0.58f;
+            sm.width_px *= 0.78f + (1.0f - d) * 0.50f;
+            glow.width_px = fmaxf(glow.width_px * (1.22f + (1.0f - d) * 0.44f), sm.width_px * 1.30f);
             glow.blend = VG_BLEND_ADDITIVE;
             const vg_vec2 seg[2] = {pts[r][c], pts[r][c + 1]};
             vg_result vr = vg_draw_polyline(ctx, seg, 2, &glow, 0);
@@ -2104,24 +2399,27 @@ static vg_result draw_high_plains_drifter_terrain(
         }
     }
 
-    for (int c = 0; c < COLS; c += 2) {
-            const int major = (c % 8) == 0;
-        const float major_boost = major ? 1.0f : 0.62f;
+    for (int c = 0; c < COLS; ++c) {
+        const int major = (c % 6) == 0;
+        const float major_boost = major ? 1.0f : 0.72f;
         for (int r = 0; r < ROWS - 1; ++r) {
-            const float z = 0.5f * (row_depth[r] + row_depth[r + 1]);
-            const float fade = 0.09f + (1.0f - z) * (1.0f - z) * 0.91f;
+            if (!valid[r][c] || !valid[r + 1][c]) {
+                continue;
+            }
+            const float d = 0.5f * (depth01[r][c] + depth01[r + 1][c]);
+            const float fade = 0.10f + (1.0f - d) * (1.0f - d) * 0.90f;
             vg_stroke_style sh = *halo;
             vg_stroke_style sm = *main;
             vg_stroke_style glow = sm;
-            sh.intensity *= fade * 0.56f * major_boost;
-            sm.intensity *= fade * 0.66f * major_boost;
-            glow.intensity *= fade * 0.34f * major_boost;
+            sh.intensity *= fade * 0.50f * major_boost;
+            sm.intensity *= fade * 0.60f * major_boost;
+            glow.intensity *= fade * 0.30f * major_boost;
             sh.color.a *= fade;
             sm.color.a *= fade;
-            glow.color.a *= fade * 0.42f;
-            sh.width_px *= 0.82f + (1.0f - z) * 0.44f;
-            sm.width_px *= 0.80f + (1.0f - z) * 0.40f;
-            glow.width_px = fmaxf(glow.width_px * (1.28f + (1.0f - z) * 0.40f), sm.width_px * 1.30f);
+            glow.color.a *= fade * 0.38f;
+            sh.width_px *= 0.72f + (1.0f - d) * 0.44f;
+            sm.width_px *= 0.70f + (1.0f - d) * 0.40f;
+            glow.width_px = fmaxf(glow.width_px * (1.18f + (1.0f - d) * 0.40f), sm.width_px * 1.24f);
             glow.blend = VG_BLEND_ADDITIVE;
             const vg_vec2 seg[2] = {pts[r][c], pts[r + 1][c]};
             vg_result vr = vg_draw_polyline(ctx, seg, 2, &glow, 0);
@@ -2999,8 +3297,12 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         }
         const float parallax = 0.08f + u * 0.28f;
         const float persistence_trail = 1.0f + (1.0f - crt.persistence_decay) * 2.8f;
-        float tx = g->stars[i].x + (g->stars[i].prev_x - g->stars[i].x) * (1.4f + 2.6f * u) * persistence_trail;
-        const float ty = g->stars[i].y + (g->stars[i].prev_y - g->stars[i].y) * (1.4f + 2.6f * u);
+        const float dt_safe = fmaxf(metrics->dt, 1e-4f);
+        const float vx = (g->stars[i].prev_x - g->stars[i].x) / dt_safe;
+        const float vy = (g->stars[i].prev_y - g->stars[i].y) / dt_safe;
+        const float exposure_s = (1.0f / 60.0f) * (1.4f + 2.6f * u) * persistence_trail;
+        float tx = g->stars[i].x + vx * exposure_s;
+        const float ty = g->stars[i].y + vy * exposure_s;
         float sx = repeatf(g->stars[i].x - g->camera_x * parallax, g->world_w);
         float stx = repeatf(tx - g->camera_x * parallax, g->world_w);
         if (stx - sx > g->world_w * 0.5f) {
@@ -3012,18 +3314,39 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             {stx, ty},
             {sx, g->stars[i].y}
         };
+        const vg_vec2 mid = {
+            seg[0].x + (seg[1].x - seg[0].x) * 0.55f,
+            seg[0].y + (seg[1].y - seg[0].y) * 0.55f
+        };
+        const vg_vec2 seg_tail[] = {seg[0], mid};
+        const vg_vec2 seg_head[] = {mid, seg[1]};
         vg_stroke_style sh = star_halo;
         vg_stroke_style sm = star_main;
         sh.width_px *= 0.70f + u * 0.55f;
         sm.width_px *= 0.62f + u * 0.50f;
         sh.intensity *= 0.40f + u * 0.36f;
         sm.intensity *= 0.52f + u * 0.34f;
+        vg_stroke_style sh_tail = sh;
+        vg_stroke_style sm_tail = sm;
+        /* Fade the back half faster so tails don't stay bright too long. */
+        sh_tail.intensity *= 0.34f;
+        sm_tail.intensity *= 0.40f;
+        sh_tail.color.a *= 0.38f;
+        sm_tail.color.a *= 0.44f;
 
-        r = vg_draw_polyline(ctx, seg, 2, &sh, 0);
+        r = vg_draw_polyline(ctx, seg_tail, 2, &sh_tail, 0);
         if (r != VG_OK) {
             return r;
         }
-        r = vg_draw_polyline(ctx, seg, 2, &sm, 0);
+        r = vg_draw_polyline(ctx, seg_tail, 2, &sm_tail, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_draw_polyline(ctx, seg_head, 2, &sh, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_draw_polyline(ctx, seg_head, 2, &sm, 0);
         if (r != VG_OK) {
             return r;
         }
@@ -3163,6 +3486,18 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         plains_main.width_px *= 1.04f;
         plains_main.color = (vg_color){pal.secondary.r, pal.secondary.g, pal.secondary.b, 0.92f};
         r = draw_high_plains_drifter_terrain(ctx, g, &plains_halo, &plains_main);
+        if (r != VG_OK) {
+            return r;
+        }
+    } else if (g->level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2) {
+        vg_stroke_style plains_halo = land_halo;
+        vg_stroke_style plains_main = land_main;
+        plains_halo.intensity *= 1.10f;
+        plains_main.intensity *= 1.18f;
+        plains_halo.width_px *= 1.06f;
+        plains_main.width_px *= 1.02f;
+        plains_main.color = (vg_color){pal.secondary.r, pal.secondary.g, pal.secondary.b, 0.92f};
+        r = draw_high_plains_drifter_terrain_traditional(ctx, g, &plains_halo, &plains_main);
         if (r != VG_OK) {
             return r;
         }

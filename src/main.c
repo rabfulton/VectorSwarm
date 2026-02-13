@@ -33,10 +33,19 @@
 #define V_TYPE_HAS_POST_SHADERS 0
 #endif
 
+#ifndef V_TYPE_HAS_TERRAIN_SHADERS
+#define V_TYPE_HAS_TERRAIN_SHADERS 0
+#endif
+
 #if V_TYPE_HAS_POST_SHADERS
 #include "demo_bloom_frag_spv.h"
 #include "demo_composite_frag_spv.h"
 #include "demo_fullscreen_vert_spv.h"
+#endif
+
+#if V_TYPE_HAS_TERRAIN_SHADERS
+#include "terrain_frag_spv.h"
+#include "terrain_vert_spv.h"
 #endif
 
 #define APP_WIDTH 1280
@@ -48,6 +57,8 @@
 #define AUDIO_SPATIAL_EVENT_CAP 256
 #define AUDIO_COMBAT_VOICE_COUNT 24
 #define AUDIO_MAX_BEEP_SAMPLES 4096
+#define TERRAIN_ROWS 24
+#define TERRAIN_COLS 70
 
 typedef struct video_resolution {
     int w;
@@ -73,6 +84,17 @@ typedef struct post_pc {
     float p2[4]; /* time_s, ui_enable, ui_x, ui_y */
     float p3[4]; /* ui_w, ui_h, pad0, pad1 */
 } post_pc;
+
+typedef struct terrain_vertex {
+    float x;
+    float y;
+    float z;
+} terrain_vertex;
+
+typedef struct terrain_pc {
+    float color[4];
+    float params[4]; /* x=viewport_width, y=viewport_height, z=intensity */
+} terrain_pc;
 
 enum acoustics_page_id {
     ACOUSTICS_PAGE_SYNTH = 0,
@@ -156,6 +178,10 @@ typedef struct app {
     VkImage scene_image;
     VkDeviceMemory scene_memory;
     VkImageView scene_view;
+    VkImage scene_depth_image;
+    VkDeviceMemory scene_depth_memory;
+    VkImageView scene_depth_view;
+    VkFormat scene_depth_format;
     VkImage scene_msaa_image;
     VkDeviceMemory scene_msaa_memory;
     VkImageView scene_msaa_view;
@@ -175,6 +201,18 @@ typedef struct app {
     VkPipelineLayout post_layout;
     VkPipeline bloom_pipeline;
     VkPipeline composite_pipeline;
+    VkPipelineLayout terrain_layout;
+    VkPipeline terrain_fill_pipeline;
+    VkPipeline terrain_line_pipeline;
+    VkBuffer terrain_vertex_buffer;
+    VkDeviceMemory terrain_vertex_memory;
+    void* terrain_vertex_map;
+    VkBuffer terrain_tri_index_buffer;
+    VkDeviceMemory terrain_tri_index_memory;
+    VkBuffer terrain_line_index_buffer;
+    VkDeviceMemory terrain_line_index_memory;
+    uint32_t terrain_tri_index_count;
+    uint32_t terrain_line_index_count;
 
     VkCommandPool command_pool;
     VkCommandBuffer command_buffers[APP_MAX_SWAPCHAIN_IMAGES];
@@ -298,6 +336,71 @@ static float clampf(float v, float lo, float hi) {
 
 static float lerpf(float a, float b, float t) {
     return a + (b - a) * t;
+}
+
+static float repeatf(float v, float period) {
+    if (period <= 0.0f) {
+        return v;
+    }
+    float x = fmodf(v, period);
+    if (x < 0.0f) {
+        x += period;
+    }
+    return x;
+}
+
+static float perlin_fade(float t) {
+    return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+}
+
+static uint32_t hash_u32(uint32_t x) {
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+static float hash01_2i(int ix, int iy) {
+    const uint32_t hx = hash_u32((uint32_t)ix * 0x9e3779b9u);
+    const uint32_t hy = hash_u32((uint32_t)iy * 0x85ebca6bu);
+    const uint32_t h = hash_u32(hx ^ hy ^ 0x27d4eb2du);
+    return (float)(h & 0x00ffffffu) / 16777215.0f;
+}
+
+static float perlin_grad_dot(int ix, int iy, float x, float y) {
+    const float a = hash01_2i(ix, iy) * 6.28318530718f;
+    const float gx = cosf(a);
+    const float gy = sinf(a);
+    return gx * (x - (float)ix) + gy * (y - (float)iy);
+}
+
+static float perlin2(float x, float y) {
+    const int x0 = (int)floorf(x);
+    const int y0 = (int)floorf(y);
+    const int x1 = x0 + 1;
+    const int y1 = y0 + 1;
+    const float sx = perlin_fade(x - (float)x0);
+    const float sy = perlin_fade(y - (float)y0);
+    const float n00 = perlin_grad_dot(x0, y0, x, y);
+    const float n10 = perlin_grad_dot(x1, y0, x, y);
+    const float n01 = perlin_grad_dot(x0, y1, x, y);
+    const float n11 = perlin_grad_dot(x1, y1, x, y);
+    const float ix0 = lerpf(n00, n10, sx);
+    const float ix1 = lerpf(n01, n11, sx);
+    return lerpf(ix0, ix1, sy);
+}
+
+static float high_plains_looped_noise(float world_x, float z) {
+    const float period_world = 8192.0f;
+    const float u = repeatf(world_x, period_world) / period_world;
+    const float a = u * 6.28318530718f;
+    const float nx = cosf(a) * 2.3f + z * 0.85f + 19.7f;
+    const float ny = sinf(a) * 2.3f - z * 0.55f + 7.3f;
+    const float n0 = perlin2(nx, ny);
+    const float n1 = perlin2(nx * 1.9f + 13.2f, ny * 1.9f - 4.6f);
+    return n0 * 0.78f + n1 * 0.22f;
 }
 
 static float rand01_from_state(uint32_t* s) {
@@ -784,7 +887,10 @@ static int create_present_framebuffers(app* a);
 static int create_commands(app* a);
 static int create_sync(app* a);
 static int create_post_resources(app* a);
+static int create_terrain_resources(app* a);
 static int create_vg_context(app* a);
+static void update_gpu_high_plains_vertices(app* a);
+static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd);
 static int apply_video_mode(app* a);
 static void map_mouse_to_scene_coords(const app* a, int mouse_x, int mouse_y, float* out_x, float* out_y);
 
@@ -2339,6 +2445,118 @@ static int create_image_2d(
     return check_vk(vkCreateImageView(a->device, &vi, NULL, out_view), "vkCreateImageView(offscreen)");
 }
 
+static int create_depth_image_2d(
+    app* a,
+    uint32_t w,
+    uint32_t h,
+    VkFormat format,
+    VkSampleCountFlagBits samples,
+    VkImage* out_image,
+    VkDeviceMemory* out_mem,
+    VkImageView* out_view
+) {
+    VkImageCreateInfo img = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = format,
+        .extent = {w, h, 1},
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = samples,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
+    };
+    if (!check_vk(vkCreateImage(a->device, &img, NULL, out_image), "vkCreateImage(depth)")) {
+        return 0;
+    }
+    VkMemoryRequirements req;
+    vkGetImageMemoryRequirements(a->device, *out_image, &req);
+    uint32_t mem_type = find_memory_type(a, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (mem_type == UINT32_MAX) {
+        return 0;
+    }
+    VkMemoryAllocateInfo ai = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = req.size,
+        .memoryTypeIndex = mem_type
+    };
+    if (!check_vk(vkAllocateMemory(a->device, &ai, NULL, out_mem), "vkAllocateMemory(depth)")) {
+        return 0;
+    }
+    if (!check_vk(vkBindImageMemory(a->device, *out_image, *out_mem, 0), "vkBindImageMemory(depth)")) {
+        return 0;
+    }
+    VkImageViewCreateInfo vi = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = *out_image,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = format,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        }
+    };
+    return check_vk(vkCreateImageView(a->device, &vi, NULL, out_view), "vkCreateImageView(depth)");
+}
+
+static int create_buffer(
+    app* a,
+    VkDeviceSize size,
+    VkBufferUsageFlags usage,
+    VkMemoryPropertyFlags memory_flags,
+    VkBuffer* out_buffer,
+    VkDeviceMemory* out_memory
+) {
+    VkBufferCreateInfo bi = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = size,
+        .usage = usage,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE
+    };
+    if (!check_vk(vkCreateBuffer(a->device, &bi, NULL, out_buffer), "vkCreateBuffer")) {
+        return 0;
+    }
+    VkMemoryRequirements req;
+    vkGetBufferMemoryRequirements(a->device, *out_buffer, &req);
+    const uint32_t mem_type = find_memory_type(a, req.memoryTypeBits, memory_flags);
+    if (mem_type == UINT32_MAX) {
+        return 0;
+    }
+    VkMemoryAllocateInfo ai = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = req.size,
+        .memoryTypeIndex = mem_type
+    };
+    if (!check_vk(vkAllocateMemory(a->device, &ai, NULL, out_memory), "vkAllocateMemory(buffer)")) {
+        return 0;
+    }
+    if (!check_vk(vkBindBufferMemory(a->device, *out_buffer, *out_memory, 0), "vkBindBufferMemory")) {
+        return 0;
+    }
+    return 1;
+}
+
+static VkFormat find_depth_format(app* a) {
+    const VkFormat candidates[] = {
+        VK_FORMAT_D32_SFLOAT,
+        VK_FORMAT_D24_UNORM_S8_UINT,
+        VK_FORMAT_D16_UNORM
+    };
+    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); ++i) {
+        VkFormatProperties props;
+        vkGetPhysicalDeviceFormatProperties(a->physical_device, candidates[i], &props);
+        if (props.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) {
+            return candidates[i];
+        }
+    }
+    return VK_FORMAT_UNDEFINED;
+}
+
 static void set_viewport_scissor(VkCommandBuffer cmd, uint32_t w, uint32_t h) {
     VkViewport vp = {.x = 0.0f, .y = 0.0f, .width = (float)w, .height = (float)h, .minDepth = 0.0f, .maxDepth = 1.0f};
     VkRect2D sc = {.offset = {0, 0}, .extent = {w, h}};
@@ -2374,7 +2592,10 @@ static void cleanup(app* a) {
 
     if (a->bloom_pipeline) vkDestroyPipeline(a->device, a->bloom_pipeline, NULL);
     if (a->composite_pipeline) vkDestroyPipeline(a->device, a->composite_pipeline, NULL);
+    if (a->terrain_fill_pipeline) vkDestroyPipeline(a->device, a->terrain_fill_pipeline, NULL);
+    if (a->terrain_line_pipeline) vkDestroyPipeline(a->device, a->terrain_line_pipeline, NULL);
     if (a->post_layout) vkDestroyPipelineLayout(a->device, a->post_layout, NULL);
+    if (a->terrain_layout) vkDestroyPipelineLayout(a->device, a->terrain_layout, NULL);
     if (a->post_desc_pool) vkDestroyDescriptorPool(a->device, a->post_desc_pool, NULL);
     if (a->post_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->post_desc_layout, NULL);
     if (a->post_sampler) vkDestroySampler(a->device, a->post_sampler, NULL);
@@ -2382,14 +2603,27 @@ static void cleanup(app* a) {
     if (a->scene_fb) vkDestroyFramebuffer(a->device, a->scene_fb, NULL);
     if (a->bloom_fb) vkDestroyFramebuffer(a->device, a->bloom_fb, NULL);
     if (a->scene_view) vkDestroyImageView(a->device, a->scene_view, NULL);
+    if (a->scene_depth_view) vkDestroyImageView(a->device, a->scene_depth_view, NULL);
     if (a->scene_msaa_view) vkDestroyImageView(a->device, a->scene_msaa_view, NULL);
     if (a->bloom_view) vkDestroyImageView(a->device, a->bloom_view, NULL);
     if (a->scene_image) vkDestroyImage(a->device, a->scene_image, NULL);
+    if (a->scene_depth_image) vkDestroyImage(a->device, a->scene_depth_image, NULL);
     if (a->scene_msaa_image) vkDestroyImage(a->device, a->scene_msaa_image, NULL);
     if (a->bloom_image) vkDestroyImage(a->device, a->bloom_image, NULL);
     if (a->scene_memory) vkFreeMemory(a->device, a->scene_memory, NULL);
+    if (a->scene_depth_memory) vkFreeMemory(a->device, a->scene_depth_memory, NULL);
     if (a->scene_msaa_memory) vkFreeMemory(a->device, a->scene_msaa_memory, NULL);
     if (a->bloom_memory) vkFreeMemory(a->device, a->bloom_memory, NULL);
+    if (a->terrain_vertex_map && a->terrain_vertex_memory) {
+        vkUnmapMemory(a->device, a->terrain_vertex_memory);
+        a->terrain_vertex_map = NULL;
+    }
+    if (a->terrain_vertex_buffer) vkDestroyBuffer(a->device, a->terrain_vertex_buffer, NULL);
+    if (a->terrain_tri_index_buffer) vkDestroyBuffer(a->device, a->terrain_tri_index_buffer, NULL);
+    if (a->terrain_line_index_buffer) vkDestroyBuffer(a->device, a->terrain_line_index_buffer, NULL);
+    if (a->terrain_vertex_memory) vkFreeMemory(a->device, a->terrain_vertex_memory, NULL);
+    if (a->terrain_tri_index_memory) vkFreeMemory(a->device, a->terrain_tri_index_memory, NULL);
+    if (a->terrain_line_index_memory) vkFreeMemory(a->device, a->terrain_line_index_memory, NULL);
 
     for (uint32_t i = 0; i < a->swapchain_image_count; ++i) {
         if (a->present_framebuffers[i]) vkDestroyFramebuffer(a->device, a->present_framebuffers[i], NULL);
@@ -2441,9 +2675,21 @@ static void destroy_render_runtime(app* a) {
         vkDestroyPipeline(a->device, a->composite_pipeline, NULL);
         a->composite_pipeline = VK_NULL_HANDLE;
     }
+    if (a->terrain_fill_pipeline) {
+        vkDestroyPipeline(a->device, a->terrain_fill_pipeline, NULL);
+        a->terrain_fill_pipeline = VK_NULL_HANDLE;
+    }
+    if (a->terrain_line_pipeline) {
+        vkDestroyPipeline(a->device, a->terrain_line_pipeline, NULL);
+        a->terrain_line_pipeline = VK_NULL_HANDLE;
+    }
     if (a->post_layout) {
         vkDestroyPipelineLayout(a->device, a->post_layout, NULL);
         a->post_layout = VK_NULL_HANDLE;
+    }
+    if (a->terrain_layout) {
+        vkDestroyPipelineLayout(a->device, a->terrain_layout, NULL);
+        a->terrain_layout = VK_NULL_HANDLE;
     }
     if (a->post_desc_pool) {
         vkDestroyDescriptorPool(a->device, a->post_desc_pool, NULL);
@@ -2469,6 +2715,10 @@ static void destroy_render_runtime(app* a) {
         vkDestroyImageView(a->device, a->scene_view, NULL);
         a->scene_view = VK_NULL_HANDLE;
     }
+    if (a->scene_depth_view) {
+        vkDestroyImageView(a->device, a->scene_depth_view, NULL);
+        a->scene_depth_view = VK_NULL_HANDLE;
+    }
     if (a->scene_msaa_view) {
         vkDestroyImageView(a->device, a->scene_msaa_view, NULL);
         a->scene_msaa_view = VK_NULL_HANDLE;
@@ -2480,6 +2730,10 @@ static void destroy_render_runtime(app* a) {
     if (a->scene_image) {
         vkDestroyImage(a->device, a->scene_image, NULL);
         a->scene_image = VK_NULL_HANDLE;
+    }
+    if (a->scene_depth_image) {
+        vkDestroyImage(a->device, a->scene_depth_image, NULL);
+        a->scene_depth_image = VK_NULL_HANDLE;
     }
     if (a->scene_msaa_image) {
         vkDestroyImage(a->device, a->scene_msaa_image, NULL);
@@ -2493,6 +2747,10 @@ static void destroy_render_runtime(app* a) {
         vkFreeMemory(a->device, a->scene_memory, NULL);
         a->scene_memory = VK_NULL_HANDLE;
     }
+    if (a->scene_depth_memory) {
+        vkFreeMemory(a->device, a->scene_depth_memory, NULL);
+        a->scene_depth_memory = VK_NULL_HANDLE;
+    }
     if (a->scene_msaa_memory) {
         vkFreeMemory(a->device, a->scene_msaa_memory, NULL);
         a->scene_msaa_memory = VK_NULL_HANDLE;
@@ -2500,6 +2758,34 @@ static void destroy_render_runtime(app* a) {
     if (a->bloom_memory) {
         vkFreeMemory(a->device, a->bloom_memory, NULL);
         a->bloom_memory = VK_NULL_HANDLE;
+    }
+    if (a->terrain_vertex_map && a->terrain_vertex_memory) {
+        vkUnmapMemory(a->device, a->terrain_vertex_memory);
+        a->terrain_vertex_map = NULL;
+    }
+    if (a->terrain_vertex_buffer) {
+        vkDestroyBuffer(a->device, a->terrain_vertex_buffer, NULL);
+        a->terrain_vertex_buffer = VK_NULL_HANDLE;
+    }
+    if (a->terrain_tri_index_buffer) {
+        vkDestroyBuffer(a->device, a->terrain_tri_index_buffer, NULL);
+        a->terrain_tri_index_buffer = VK_NULL_HANDLE;
+    }
+    if (a->terrain_line_index_buffer) {
+        vkDestroyBuffer(a->device, a->terrain_line_index_buffer, NULL);
+        a->terrain_line_index_buffer = VK_NULL_HANDLE;
+    }
+    if (a->terrain_vertex_memory) {
+        vkFreeMemory(a->device, a->terrain_vertex_memory, NULL);
+        a->terrain_vertex_memory = VK_NULL_HANDLE;
+    }
+    if (a->terrain_tri_index_memory) {
+        vkFreeMemory(a->device, a->terrain_tri_index_memory, NULL);
+        a->terrain_tri_index_memory = VK_NULL_HANDLE;
+    }
+    if (a->terrain_line_index_memory) {
+        vkFreeMemory(a->device, a->terrain_line_index_memory, NULL);
+        a->terrain_line_index_memory = VK_NULL_HANDLE;
     }
     for (uint32_t i = 0; i < APP_MAX_SWAPCHAIN_IMAGES; ++i) {
         if (a->present_framebuffers[i]) {
@@ -2566,6 +2852,7 @@ static int recreate_render_runtime(app* a) {
         !create_commands(a) ||
         !create_sync(a) ||
         !create_post_resources(a) ||
+        !create_terrain_resources(a) ||
         !create_vg_context(a)) {
         return 0;
     }
@@ -2846,9 +3133,15 @@ static int create_swapchain(app* a) {
 }
 
 static int create_render_passes(app* a) {
+    a->scene_depth_format = find_depth_format(a);
+    if (a->scene_depth_format == VK_FORMAT_UNDEFINED) {
+        fprintf(stderr, "No suitable depth format found\n");
+        return 0;
+    }
     VkSampleCountFlagBits samples = scene_samples(a);
     if (samples == VK_SAMPLE_COUNT_1_BIT) {
-        VkAttachmentDescription scene_att = {
+        VkAttachmentDescription atts[2];
+        atts[0] = (VkAttachmentDescription){
             .format = a->swapchain_format,
             .samples = VK_SAMPLE_COUNT_1_BIT,
             .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
@@ -2858,18 +3151,34 @@ static int create_render_passes(app* a) {
             .initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             .finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
         };
+        atts[1] = (VkAttachmentDescription){
+            .format = a->scene_depth_format,
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+        };
         VkAttachmentReference scene_ref = {.attachment = 0, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-        VkSubpassDescription scene_sub = {.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS, .colorAttachmentCount = 1, .pColorAttachments = &scene_ref};
+        VkAttachmentReference depth_ref = {.attachment = 1, .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+        VkSubpassDescription scene_sub = {
+            .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+            .colorAttachmentCount = 1,
+            .pColorAttachments = &scene_ref,
+            .pDepthStencilAttachment = &depth_ref
+        };
         VkRenderPassCreateInfo scene_rp = {
             .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-            .attachmentCount = 1,
-            .pAttachments = &scene_att,
+            .attachmentCount = 2,
+            .pAttachments = atts,
             .subpassCount = 1,
             .pSubpasses = &scene_sub
         };
         if (!check_vk(vkCreateRenderPass(a->device, &scene_rp, NULL, &a->scene_render_pass), "vkCreateRenderPass(scene)")) return 0;
     } else {
-        VkAttachmentDescription atts[2];
+        VkAttachmentDescription atts[3];
         atts[0] = (VkAttachmentDescription){
             .format = a->swapchain_format,
             .samples = samples,
@@ -2890,17 +3199,29 @@ static int create_render_passes(app* a) {
             .initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             .finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
         };
+        atts[2] = (VkAttachmentDescription){
+            .format = a->scene_depth_format,
+            .samples = samples,
+            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+        };
         VkAttachmentReference color_ref = {.attachment = 0, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
         VkAttachmentReference resolve_ref = {.attachment = 1, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        VkAttachmentReference depth_ref = {.attachment = 2, .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
         VkSubpassDescription scene_sub = {
             .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
             .colorAttachmentCount = 1,
             .pColorAttachments = &color_ref,
-            .pResolveAttachments = &resolve_ref
+            .pResolveAttachments = &resolve_ref,
+            .pDepthStencilAttachment = &depth_ref
         };
         VkRenderPassCreateInfo scene_rp = {
             .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-            .attachmentCount = 2,
+            .attachmentCount = 3,
             .pAttachments = atts,
             .subpassCount = 1,
             .pSubpasses = &scene_sub
@@ -2947,17 +3268,18 @@ static int create_offscreen_targets(app* a) {
 
     if (!create_image_2d(a, w, h, a->swapchain_format, usage, VK_SAMPLE_COUNT_1_BIT, &a->scene_image, &a->scene_memory, &a->scene_view)) return 0;
     if (!create_image_2d(a, w, h, a->swapchain_format, usage, VK_SAMPLE_COUNT_1_BIT, &a->bloom_image, &a->bloom_memory, &a->bloom_view)) return 0;
+    if (!create_depth_image_2d(a, w, h, a->scene_depth_format, samples, &a->scene_depth_image, &a->scene_depth_memory, &a->scene_depth_view)) return 0;
     if (samples != VK_SAMPLE_COUNT_1_BIT) {
         VkImageUsageFlags msaa_usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         if (!create_image_2d(a, w, h, a->swapchain_format, msaa_usage, samples, &a->scene_msaa_image, &a->scene_msaa_memory, &a->scene_msaa_view)) return 0;
     }
 
-    VkImageView scene_att_1[] = {a->scene_view};
-    VkImageView scene_att_2[] = {a->scene_msaa_view, a->scene_view};
+    VkImageView scene_att_1[] = {a->scene_view, a->scene_depth_view};
+    VkImageView scene_att_2[] = {a->scene_msaa_view, a->scene_view, a->scene_depth_view};
     VkFramebufferCreateInfo scene_fb = {
         .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
         .renderPass = a->scene_render_pass,
-        .attachmentCount = (samples == VK_SAMPLE_COUNT_1_BIT) ? 1u : 2u,
+        .attachmentCount = (samples == VK_SAMPLE_COUNT_1_BIT) ? 2u : 3u,
         .pAttachments = (samples == VK_SAMPLE_COUNT_1_BIT) ? scene_att_1 : scene_att_2,
         .width = w,
         .height = h,
@@ -3115,6 +3437,200 @@ static int create_post_resources(app* a) {
 #endif
 }
 
+static int create_terrain_resources(app* a) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    return 1;
+#else
+    const uint32_t vcount = (uint32_t)(TERRAIN_ROWS * TERRAIN_COLS);
+    const VkDeviceSize vbuf_size = (VkDeviceSize)vcount * sizeof(terrain_vertex);
+    uint16_t tri_idx[(TERRAIN_ROWS - 1) * (TERRAIN_COLS - 1) * 6];
+    uint16_t line_idx[(TERRAIN_ROWS * (TERRAIN_COLS - 1) + (TERRAIN_ROWS - 1) * ((TERRAIN_COLS + 1) / 2)) * 2];
+    uint32_t tri_count = 0;
+    uint32_t line_count = 0;
+
+    for (int r = 0; r < TERRAIN_ROWS - 1; ++r) {
+        for (int c = 0; c < TERRAIN_COLS - 1; ++c) {
+            const uint16_t i00 = (uint16_t)(r * TERRAIN_COLS + c);
+            const uint16_t i10 = (uint16_t)(r * TERRAIN_COLS + c + 1);
+            const uint16_t i01 = (uint16_t)((r + 1) * TERRAIN_COLS + c);
+            const uint16_t i11 = (uint16_t)((r + 1) * TERRAIN_COLS + c + 1);
+            tri_idx[tri_count++] = i00; tri_idx[tri_count++] = i10; tri_idx[tri_count++] = i01;
+            tri_idx[tri_count++] = i10; tri_idx[tri_count++] = i11; tri_idx[tri_count++] = i01;
+        }
+    }
+    for (int r = 0; r < TERRAIN_ROWS; ++r) {
+        for (int c = 0; c < TERRAIN_COLS - 1; ++c) {
+            const uint16_t i0 = (uint16_t)(r * TERRAIN_COLS + c);
+            const uint16_t i1 = (uint16_t)(r * TERRAIN_COLS + c + 1);
+            line_idx[line_count++] = i0;
+            line_idx[line_count++] = i1;
+        }
+    }
+    for (int c = 0; c < TERRAIN_COLS; c += 2) {
+        for (int r = 0; r < TERRAIN_ROWS - 1; ++r) {
+            const uint16_t i0 = (uint16_t)(r * TERRAIN_COLS + c);
+            const uint16_t i1 = (uint16_t)((r + 1) * TERRAIN_COLS + c);
+            line_idx[line_count++] = i0;
+            line_idx[line_count++] = i1;
+        }
+    }
+
+    if (!create_buffer(
+            a, vbuf_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &a->terrain_vertex_buffer, &a->terrain_vertex_memory)) {
+        return 0;
+    }
+    if (!check_vk(vkMapMemory(a->device, a->terrain_vertex_memory, 0, vbuf_size, 0, &a->terrain_vertex_map), "vkMapMemory(terrain verts)")) {
+        return 0;
+    }
+    update_gpu_high_plains_vertices(a);
+
+    if (!create_buffer(
+            a, (VkDeviceSize)tri_count * sizeof(uint16_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &a->terrain_tri_index_buffer, &a->terrain_tri_index_memory)) {
+        return 0;
+    }
+    if (!create_buffer(
+            a, (VkDeviceSize)line_count * sizeof(uint16_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &a->terrain_line_index_buffer, &a->terrain_line_index_memory)) {
+        return 0;
+    }
+    {
+        void* p = NULL;
+        if (!check_vk(vkMapMemory(a->device, a->terrain_tri_index_memory, 0, VK_WHOLE_SIZE, 0, &p), "vkMapMemory(terrain tri idx)")) {
+            return 0;
+        }
+        memcpy(p, tri_idx, (size_t)tri_count * sizeof(uint16_t));
+        vkUnmapMemory(a->device, a->terrain_tri_index_memory);
+    }
+    {
+        void* p = NULL;
+        if (!check_vk(vkMapMemory(a->device, a->terrain_line_index_memory, 0, VK_WHOLE_SIZE, 0, &p), "vkMapMemory(terrain line idx)")) {
+            return 0;
+        }
+        memcpy(p, line_idx, (size_t)line_count * sizeof(uint16_t));
+        vkUnmapMemory(a->device, a->terrain_line_index_memory);
+    }
+    a->terrain_tri_index_count = tri_count;
+    a->terrain_line_index_count = line_count;
+
+    VkPushConstantRange pc = {.stageFlags = VK_SHADER_STAGE_VERTEX_BIT, .offset = 0, .size = sizeof(terrain_pc)};
+    VkPipelineLayoutCreateInfo pli = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 0,
+        .pSetLayouts = NULL,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &pc
+    };
+    if (!check_vk(vkCreatePipelineLayout(a->device, &pli, NULL, &a->terrain_layout), "vkCreatePipelineLayout(terrain)")) {
+        return 0;
+    }
+
+    VkShaderModuleCreateInfo vs_ci = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = v_type_terrain_vert_spv_len,
+        .pCode = (const uint32_t*)v_type_terrain_vert_spv
+    };
+    VkShaderModuleCreateInfo fs_ci = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = v_type_terrain_frag_spv_len,
+        .pCode = (const uint32_t*)v_type_terrain_frag_spv
+    };
+    VkShaderModule vs = VK_NULL_HANDLE;
+    VkShaderModule fs = VK_NULL_HANDLE;
+    if (!check_vk(vkCreateShaderModule(a->device, &vs_ci, NULL, &vs), "vkCreateShaderModule(terrain vs)")) {
+        return 0;
+    }
+    if (!check_vk(vkCreateShaderModule(a->device, &fs_ci, NULL, &fs), "vkCreateShaderModule(terrain fs)")) {
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+
+    VkPipelineShaderStageCreateInfo stages[2] = {
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vs, .pName = "main"},
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = fs, .pName = "main"}
+    };
+    VkVertexInputBindingDescription binding = {.binding = 0, .stride = sizeof(terrain_vertex), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
+    VkVertexInputAttributeDescription attr = {.location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 0};
+    VkPipelineVertexInputStateCreateInfo vi = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .vertexBindingDescriptionCount = 1,
+        .pVertexBindingDescriptions = &binding,
+        .vertexAttributeDescriptionCount = 1,
+        .pVertexAttributeDescriptions = &attr
+    };
+    VkPipelineInputAssemblyStateCreateInfo ia = {.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO, .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST};
+    VkPipelineViewportStateCreateInfo vp = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .scissorCount = 1};
+    VkPipelineRasterizationStateCreateInfo rs = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .lineWidth = 1.0f,
+        .cullMode = VK_CULL_MODE_NONE,
+        .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE
+    };
+    VkPipelineMultisampleStateCreateInfo ms = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .rasterizationSamples = scene_samples(a)};
+    VkPipelineColorBlendAttachmentState cb_att = {
+        .blendEnable = VK_FALSE,
+        .colorWriteMask = 0
+    };
+    VkPipelineColorBlendStateCreateInfo cb = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1, .pAttachments = &cb_att};
+    VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo ds = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .dynamicStateCount = 2, .pDynamicStates = dyn};
+    VkPipelineDepthStencilStateCreateInfo depth = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .depthTestEnable = VK_TRUE,
+        .depthWriteEnable = VK_TRUE,
+        .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL
+    };
+    VkGraphicsPipelineCreateInfo gp = {
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .stageCount = 2,
+        .pStages = stages,
+        .pVertexInputState = &vi,
+        .pInputAssemblyState = &ia,
+        .pViewportState = &vp,
+        .pRasterizationState = &rs,
+        .pMultisampleState = &ms,
+        .pDepthStencilState = &depth,
+        .pColorBlendState = &cb,
+        .pDynamicState = &ds,
+        .layout = a->terrain_layout,
+        .renderPass = a->scene_render_pass,
+        .subpass = 0
+    };
+    if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->terrain_fill_pipeline), "vkCreateGraphicsPipelines(terrain fill)")) {
+        vkDestroyShaderModule(a->device, fs, NULL);
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    cb_att.blendEnable = VK_TRUE;
+    cb_att.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    cb_att.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    cb_att.colorBlendOp = VK_BLEND_OP_ADD;
+    cb_att.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    cb_att.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    cb_att.alphaBlendOp = VK_BLEND_OP_ADD;
+    cb_att.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    depth.depthWriteEnable = VK_FALSE;
+    if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->terrain_line_pipeline), "vkCreateGraphicsPipelines(terrain line)")) {
+        vkDestroyShaderModule(a->device, fs, NULL);
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+
+    vkDestroyShaderModule(a->device, fs, NULL);
+    vkDestroyShaderModule(a->device, vs, NULL);
+    return 1;
+#endif
+}
+
 static int create_vg_context(app* a) {
     vg_context_desc desc;
     memset(&desc, 0, sizeof(desc));
@@ -3152,20 +3668,107 @@ static int create_vg_context(app* a) {
     return 1;
 }
 
+static void update_gpu_high_plains_vertices(app* a) {
+    if (!a || !a->terrain_vertex_map) {
+        return;
+    }
+    terrain_vertex* vtx = (terrain_vertex*)a->terrain_vertex_map;
+    const float w = (float)a->swapchain_extent.width;
+    const float h = (float)a->swapchain_extent.height;
+    const float y_near = h * 0.04f;
+    const float y_far = h * 0.34f;
+    const float cam = a->game.camera_x;
+    const float scroll = cam * 1.10f;
+    for (int r = 0; r < TERRAIN_ROWS; ++r) {
+        const float z = (float)r / (float)(TERRAIN_ROWS - 1);
+        const float p = powf(z, 0.78f);
+        const float y_base = lerpf(y_near, y_far, p);
+        const float half_w = lerpf(w * 0.78f, w * 0.54f, p);
+        const float center_x = w * 0.50f + lerpf(w * 0.03f, -w * 0.02f, p);
+        const float amp = lerpf(h * 0.21f, h * 0.08f, p);
+        for (int c = 0; c < TERRAIN_COLS; ++c) {
+            const float u = (float)c / (float)(TERRAIN_COLS - 1);
+            const float x = center_x + (u - 0.5f) * 2.0f * half_w;
+            const float world_x = scroll + (u - 0.5f) * (2200.0f + p * 1800.0f);
+            const float n = high_plains_looped_noise(world_x * 0.70f, p * 4.5f + 0.35f) * 1.95f;
+            const float y = y_base + n * amp;
+            const uint32_t idx = (uint32_t)r * TERRAIN_COLS + (uint32_t)c;
+            vtx[idx].x = x;
+            vtx[idx].y = y;
+            vtx[idx].z = z;
+        }
+    }
+}
+
+static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd) {
+    const int enable_gpu_terrain = 0; /* disabled while rebuilding terrain path in renderer */
+    if (!enable_gpu_terrain) {
+        return;
+    }
+    if (!a || !cmd || a->game.level_style != LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2) {
+        return;
+    }
+    if (!a->terrain_fill_pipeline || !a->terrain_line_pipeline || !a->terrain_vertex_buffer) {
+        return;
+    }
+    update_gpu_high_plains_vertices(a);
+    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    VkDeviceSize vb_off = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &a->terrain_vertex_buffer, &vb_off);
+
+    terrain_pc pc;
+    memset(&pc, 0, sizeof(pc));
+    pc.color[3] = 1.0f;
+    pc.params[0] = (float)a->swapchain_extent.width;
+    pc.params[1] = (float)a->swapchain_extent.height;
+    pc.params[2] = 1.0f;
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->terrain_fill_pipeline);
+    vkCmdPushConstants(cmd, a->terrain_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
+    vkCmdBindIndexBuffer(cmd, a->terrain_tri_index_buffer, 0, VK_INDEX_TYPE_UINT16);
+    vkCmdDrawIndexed(cmd, a->terrain_tri_index_count, 1, 0, 0, 0);
+
+    if (a->palette_mode == 1) {
+        pc.color[0] = 1.0f; pc.color[1] = 0.82f; pc.color[2] = 0.45f; pc.color[3] = 0.88f;
+    } else if (a->palette_mode == 2) {
+        pc.color[0] = 0.62f; pc.color[1] = 0.90f; pc.color[2] = 1.0f; pc.color[3] = 0.88f;
+    } else {
+        pc.color[0] = 0.22f; pc.color[1] = 0.92f; pc.color[2] = 0.38f; pc.color[3] = 0.88f;
+    }
+    pc.params[2] = 0.95f;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->terrain_line_pipeline);
+    vkCmdPushConstants(cmd, a->terrain_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
+    vkCmdBindIndexBuffer(cmd, a->terrain_line_index_buffer, 0, VK_INDEX_TYPE_UINT16);
+    vkCmdDrawIndexed(cmd, a->terrain_line_index_count, 1, 0, 0, 0);
+}
+
 static int record_submit_present(app* a, uint32_t image_index, float t, float dt, float fps) {
     VkCommandBuffer cmd = a->command_buffers[image_index];
     if (!check_vk(vkResetCommandBuffer(cmd, 0), "vkResetCommandBuffer")) return 0;
     VkCommandBufferBeginInfo begin = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     if (!check_vk(vkBeginCommandBuffer(cmd, &begin), "vkBeginCommandBuffer")) return 0;
 
-    VkClearValue scene_clear = {.color = {{0.0f, 0.0f, 0.0f, 1.0f}}};
+    VkClearValue scene_clear[3];
+    memset(scene_clear, 0, sizeof(scene_clear));
+    const uint32_t scene_clear_count = (scene_samples(a) == VK_SAMPLE_COUNT_1_BIT) ? 2u : 3u;
+    /* Attachment order:
+       - no MSAA:  [0]=color, [1]=depth
+       - with MSAA:[0]=color_msaa, [1]=resolve_color, [2]=depth
+    */
+    scene_clear[0].color.float32[3] = 1.0f;
+    if (scene_samples(a) == VK_SAMPLE_COUNT_1_BIT) {
+        scene_clear[1].depthStencil.depth = 1.0f;
+    } else {
+        scene_clear[1].color.float32[3] = 1.0f;
+        scene_clear[2].depthStencil.depth = 1.0f;
+    }
     VkRenderPassBeginInfo scene_rp = {
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
         .renderPass = a->scene_render_pass,
         .framebuffer = a->scene_fb,
         .renderArea = {.offset = {0, 0}, .extent = a->swapchain_extent},
-        .clearValueCount = 1,
-        .pClearValues = &scene_clear
+        .clearValueCount = scene_clear_count,
+        .pClearValues = scene_clear
     };
     vkCmdBeginRenderPass(cmd, &scene_rp, VK_SUBPASS_CONTENTS_INLINE);
 
@@ -3264,6 +3867,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         fprintf(stderr, "VG failure: vg_end_frame -> %s (%d)\n", vg_result_string(vr), (int)vr);
         return 0;
     }
+    record_gpu_high_plains_terrain(a, cmd);
     vkCmdEndRenderPass(cmd);
 
     VkClearValue bloom_clear = {.color = {{0.0f, 0.0f, 0.0f, 1.0f}}};
@@ -3429,6 +4033,7 @@ int main(void) {
         !create_commands(&a) ||
         !create_sync(&a) ||
         !create_post_resources(&a) ||
+        !create_terrain_resources(&a) ||
         !create_vg_context(&a)) {
         cleanup(&a);
         return 1;
@@ -3479,6 +4084,8 @@ int main(void) {
                         set_tty_message(&a, "level mode: event horizon legacy");
                     } else if (a.game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER) {
                         set_tty_message(&a, "level mode: high plains drifter");
+                    } else if (a.game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2) {
+                        set_tty_message(&a, "level mode: high plains drifter 2");
                     } else {
                         set_tty_message(&a, "level mode: defender");
                     }

@@ -679,7 +679,6 @@ static void spawn_next_wave(game_state* g) {
 }
 
 static void update_enemy_formation(game_state* g, enemy* e, float dt) {
-    (void)dt;
     e->ai_timer_s += dt;
     if (e->state == ENEMY_STATE_FORMATION) {
         const float su = gameplay_ui_scale(g);
@@ -688,10 +687,16 @@ static void update_enemy_formation(game_state* g, enemy* e, float dt) {
         const float target_vy = (desired_y - e->b.y) * 2.4f;
         steer_to_velocity(&e->b, target_vx, target_vy, e->accel, 1.2f);
 
-        if (e->ai_timer_s > e->break_delay_s && frand01() < 0.014f) {
-            e->state = ENEMY_STATE_BREAK_ATTACK;
-            e->ai_timer_s = 0.0f;
-            e->break_delay_s = 1.0f + frand01() * 2.0f;
+        if (e->ai_timer_s > e->break_delay_s) {
+            /* Keep break-attack transition rate stable across frame rates. */
+            const float legacy_p_per_frame = 0.014f; /* tuned at ~60 fps */
+            const float lambda = -logf(1.0f - legacy_p_per_frame) * 60.0f;
+            const float p_dt = 1.0f - expf(-lambda * fmaxf(dt, 0.0f));
+            if (frand01() < p_dt) {
+                e->state = ENEMY_STATE_BREAK_ATTACK;
+                e->ai_timer_s = 0.0f;
+                e->break_delay_s = 1.0f + frand01() * 2.0f;
+            }
         }
     } else {
         const float lead = 0.45f;

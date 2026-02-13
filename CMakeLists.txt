@@ -42,3 +42,34 @@ if(TARGET vg_demo_vk_shaders)
 else()
     target_compile_definitions(v_type PRIVATE V_TYPE_HAS_POST_SHADERS=0)
 endif()
+
+find_program(GLSLANG_VALIDATOR glslangValidator)
+find_program(XXD_EXECUTABLE xxd)
+if(GLSLANG_VALIDATOR AND XXD_EXECUTABLE)
+    set(V_TYPE_SHADER_GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated/shaders)
+    file(MAKE_DIRECTORY ${V_TYPE_SHADER_GEN_DIR})
+
+    set(V_TYPE_TERRAIN_VERT_SPV ${V_TYPE_SHADER_GEN_DIR}/terrain.vert.spv)
+    set(V_TYPE_TERRAIN_FRAG_SPV ${V_TYPE_SHADER_GEN_DIR}/terrain.frag.spv)
+    set(V_TYPE_TERRAIN_VERT_HDR ${V_TYPE_SHADER_GEN_DIR}/terrain_vert_spv.h)
+    set(V_TYPE_TERRAIN_FRAG_HDR ${V_TYPE_SHADER_GEN_DIR}/terrain_frag_spv.h)
+
+    add_custom_command(
+        OUTPUT ${V_TYPE_TERRAIN_VERT_HDR}
+        COMMAND ${GLSLANG_VALIDATOR} -V ${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/terrain.vert -o ${V_TYPE_TERRAIN_VERT_SPV}
+        COMMAND ${XXD_EXECUTABLE} -i -n v_type_terrain_vert_spv ${V_TYPE_TERRAIN_VERT_SPV} > ${V_TYPE_TERRAIN_VERT_HDR}
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/terrain.vert
+    )
+    add_custom_command(
+        OUTPUT ${V_TYPE_TERRAIN_FRAG_HDR}
+        COMMAND ${GLSLANG_VALIDATOR} -V ${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/terrain.frag -o ${V_TYPE_TERRAIN_FRAG_SPV}
+        COMMAND ${XXD_EXECUTABLE} -i -n v_type_terrain_frag_spv ${V_TYPE_TERRAIN_FRAG_SPV} > ${V_TYPE_TERRAIN_FRAG_HDR}
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/terrain.frag
+    )
+    add_custom_target(v_type_vk_shaders DEPENDS ${V_TYPE_TERRAIN_VERT_HDR} ${V_TYPE_TERRAIN_FRAG_HDR})
+    add_dependencies(v_type v_type_vk_shaders)
+    target_compile_definitions(v_type PRIVATE V_TYPE_HAS_TERRAIN_SHADERS=1)
+    target_include_directories(v_type PRIVATE ${V_TYPE_SHADER_GEN_DIR})
+else()
+    target_compile_definitions(v_type PRIVATE V_TYPE_HAS_TERRAIN_SHADERS=0)
+endif()
