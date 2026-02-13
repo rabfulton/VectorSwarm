@@ -662,12 +662,19 @@ static vg_result draw_crt_debug_ui(vg_context* ctx, float w, float h, const vg_c
 }
 
 static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const render_metrics* metrics) {
-    static const char* fire_labels[8] = {
+    static const char* synth_fire_labels[8] = {
         "WAVEFORM", "PITCH HZ", "ATTACK MS", "DECAY MS", "CUTOFF KHZ", "RESONANCE", "SWEEP ST", "SWEEP DECAY"
     };
-    static const char* thr_labels[6] = {
+    static const char* synth_thr_labels[6] = {
         "LEVEL", "PITCH HZ", "ATTACK MS", "RELEASE MS", "CUTOFF KHZ", "RESONANCE"
     };
+    static const char* combat_enemy_labels[6] = {
+        "LEVEL", "PITCH HZ", "ATTACK MS", "DECAY MS", "NOISE MIX", "PAN WIDTH"
+    };
+    static const char* combat_exp_labels[6] = {
+        "LEVEL", "PITCH HZ", "ATTACK MS", "DECAY MS", "NOISE MIX", "PAN WIDTH"
+    };
+    const int combat_page = (metrics->acoustics_page != 0);
 
     const float ui = ui_reference_scale(w, h);
     vg_stroke_style panel = {
@@ -691,26 +698,40 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
 
     vg_ui_slider_item fire_items[8];
     vg_ui_slider_item thr_items[6];
-    for (int i = 0; i < 8; ++i) {
-        fire_items[i].label = fire_labels[i];
-        fire_items[i].value_01 = metrics->acoustics_value_01[i];
-        fire_items[i].value_display = metrics->acoustics_display[i];
-        fire_items[i].selected = 0;
-    }
-    for (int i = 0; i < 6; ++i) {
-        thr_items[i].label = thr_labels[i];
-        thr_items[i].value_01 = metrics->acoustics_value_01[8 + i];
-        thr_items[i].value_display = metrics->acoustics_display[8 + i];
-        thr_items[i].selected = 0;
+    if (combat_page) {
+        for (int i = 0; i < 6; ++i) {
+            fire_items[i].label = combat_enemy_labels[i];
+            fire_items[i].value_01 = metrics->acoustics_combat_value_01[i];
+            fire_items[i].value_display = metrics->acoustics_combat_display[i];
+            fire_items[i].selected = (metrics->acoustics_combat_selected == i) ? 1 : 0;
+            thr_items[i].label = combat_exp_labels[i];
+            thr_items[i].value_01 = metrics->acoustics_combat_value_01[6 + i];
+            thr_items[i].value_display = metrics->acoustics_combat_display[6 + i];
+            thr_items[i].selected = (metrics->acoustics_combat_selected == (6 + i)) ? 1 : 0;
+        }
+    } else {
+        for (int i = 0; i < 8; ++i) {
+            fire_items[i].label = synth_fire_labels[i];
+            fire_items[i].value_01 = metrics->acoustics_value_01[i];
+            fire_items[i].value_display = metrics->acoustics_display[i];
+            fire_items[i].selected = (metrics->acoustics_selected == i) ? 1 : 0;
+        }
+        for (int i = 0; i < 6; ++i) {
+            thr_items[i].label = synth_thr_labels[i];
+            thr_items[i].value_01 = metrics->acoustics_value_01[8 + i];
+            thr_items[i].value_display = metrics->acoustics_display[8 + i];
+            thr_items[i].selected = (metrics->acoustics_selected == (8 + i)) ? 1 : 0;
+        }
     }
 
     const float value_col_width_px = acoustics_compute_value_col_width(
         ui,
         11.5f * ui,
-        metrics->acoustics_display,
-        ACOUSTICS_SLIDER_COUNT
+        combat_page ? metrics->acoustics_combat_display : metrics->acoustics_display,
+        combat_page ? ACOUSTICS_COMBAT_SLIDER_COUNT : ACOUSTICS_SLIDER_COUNT
     );
-    const acoustics_ui_layout l = make_acoustics_ui_layout(w, h, value_col_width_px);
+    const acoustics_ui_layout l = make_acoustics_ui_layout(w, h, value_col_width_px, combat_page ? 6 : 8, 6);
+    const vg_rect page_btn = acoustics_page_toggle_button_rect(w, h);
     const vg_rect fire_rect = l.panel[0];
     const vg_rect thr_rect = l.panel[1];
     const vg_rect fire_btn = l.button[0];
@@ -721,11 +742,11 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
 
     vg_ui_slider_panel_desc fire = {
         .rect = fire_rect,
-        .title_line_0 = "SHIPYARD ACOUSTICS - FIRE",
-        .title_line_1 = "ARROWS OR MOUSE TO TUNE",
+        .title_line_0 = combat_page ? "SHIPYARD ACOUSTICS - ENEMY FIRE" : "SHIPYARD ACOUSTICS - FIRE",
+        .title_line_1 = combat_page ? "Q/E SWITCH PAGE  ARROWS OR MOUSE TO TUNE" : "Q/E SWITCH PAGE  ARROWS OR MOUSE TO TUNE",
         .footer_line = NULL,
         .items = fire_items,
-        .item_count = 8u,
+        .item_count = combat_page ? 6u : 8u,
         .row_height_px = 34.0f * ui,
         .label_size_px = 11.0f * ui,
         .value_size_px = 11.5f * ui,
@@ -738,7 +759,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
     };
     vg_ui_slider_panel_desc thr = fire;
     thr.rect = thr_rect;
-    thr.title_line_0 = "SHIPYARD ACOUSTICS - THRUST";
+    thr.title_line_0 = combat_page ? "SHIPYARD ACOUSTICS - EXPLOSION" : "SHIPYARD ACOUSTICS - THRUST";
     thr.items = thr_items;
     thr.item_count = 6u;
 
@@ -780,11 +801,44 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
     }
 
     {
-        r = vg_draw_button(ctx, fire_btn, "TEST FIRE", 11.5f * ui, &panel, &text, 0);
+        vg_stroke_style header_active = text;
+        header_active.intensity *= 1.18f;
+        const char* page_label = combat_page ? "COMBAT" : "SHIP";
+        const float page_size = 18.0f * ui;
+        const float y = fmaxf(fire_rect.y + fire_rect.h + 14.0f * ui, page_btn.y + page_btn.h * 0.5f + 2.0f * ui);
+        r = draw_text_vector_glow(
+            ctx,
+            page_label,
+            (vg_vec2){fire_rect.x, y},
+            page_size,
+            0.78f * ui,
+            &panel,
+            &header_active
+        );
         if (r != VG_OK) {
             return r;
         }
-        r = vg_draw_button(ctx, thr_btn, "TEST THRUST", 11.5f * ui, &panel, &text, 0);
+
+        r = vg_draw_button(
+            ctx,
+            page_btn,
+            combat_page ? "GO SHIP PAGE" : "GO COMBAT PAGE",
+            10.8f * ui,
+            &panel,
+            &text,
+            0
+        );
+        if (r != VG_OK) {
+            return r;
+        }
+    }
+
+    {
+        r = vg_draw_button(ctx, fire_btn, combat_page ? "TEST ENEMY" : "TEST FIRE", 11.5f * ui, &panel, &text, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_draw_button(ctx, thr_btn, combat_page ? "TEST BOOM" : "TEST THRUST", 11.5f * ui, &panel, &text, 0);
         if (r != VG_OK) {
             return r;
         }
@@ -844,7 +898,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         }
         r = draw_text_vector_glow(
             ctx,
-            "ENV + PITCH SWEEP",
+            combat_page ? "ENEMY SHOT PREVIEW" : "ENV + PITCH SWEEP",
             (vg_vec2){fire_display.x + 8.0f * ui, fire_display.y + fire_display.h - 16.0f * ui},
             10.5f * ui,
             0.7f * ui,
@@ -912,7 +966,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         }
         r = draw_text_vector_glow(
             ctx,
-            "OSCILLOSCOPE",
+            combat_page ? "EXPLOSION PREVIEW" : "OSCILLOSCOPE",
             (vg_vec2){thr_display.x + 8.0f * ui, thr_display.y + thr_display.h - 16.0f * ui},
             10.5f * ui,
             0.7f * ui,
@@ -2794,6 +2848,26 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             }
         }
 
+        for (size_t i = 0; i < MAX_ENEMY_BULLETS; ++i) {
+            if (!g->enemy_bullets[i].active) {
+                continue;
+            }
+            float d0 = 0.0f;
+            float d1 = 0.0f;
+            const vg_vec2 a = project_cylinder_point(g, g->enemy_bullets[i].b.x - 5.0f, g->enemy_bullets[i].b.y, &d0);
+            const vg_vec2 b = project_cylinder_point(g, g->enemy_bullets[i].b.x + 5.0f, g->enemy_bullets[i].b.y, &d1);
+            vg_stroke_style es = enemy_style;
+            const float depth = 0.5f * (d0 + d1);
+            es.width_px *= 0.42f + depth * 0.95f;
+            es.intensity *= 0.32f + depth * 0.92f;
+            es.color.a *= 0.30f + depth * 0.80f;
+            const vg_vec2 bolt[] = {a, b};
+            r = vg_draw_polyline(ctx, bolt, 2, &es, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+
         for (size_t i = 0; i < MAX_ENEMIES; ++i) {
             if (!g->enemies[i].active) {
                 continue;
@@ -2986,6 +3060,25 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             {g->bullets[i].b.x + 8.0f, g->bullets[i].b.y}
         };
         r = vg_draw_polyline(ctx, bolt, 2, &bullet_style, 0);
+        if (r != VG_OK) {
+            (void)vg_transform_pop(ctx);
+            return r;
+        }
+    }
+
+    for (size_t i = 0; i < MAX_ENEMY_BULLETS; ++i) {
+        if (!g->enemy_bullets[i].active) {
+            continue;
+        }
+        const float dx = (g->enemy_bullets[i].b.vx < 0.0f) ? -5.0f : 5.0f;
+        const vg_vec2 bolt[] = {
+            {g->enemy_bullets[i].b.x - dx, g->enemy_bullets[i].b.y},
+            {g->enemy_bullets[i].b.x + dx, g->enemy_bullets[i].b.y}
+        };
+        vg_stroke_style es = enemy_style;
+        es.width_px *= 0.80f;
+        es.intensity *= 0.95f;
+        r = vg_draw_polyline(ctx, bolt, 2, &es, 0);
         if (r != VG_OK) {
             (void)vg_transform_pop(ctx);
             return r;

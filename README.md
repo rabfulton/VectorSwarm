@@ -9,9 +9,21 @@ VectorSwarm is an in-development side-scrolling vector space shooter written in 
 
 ## Features
 
-- Native Vulkan + DefconDraw vector rendering with CRT profile/post-processing pipeline
-- Multiple level styles, including `Defender`, `Enemy Radar`, and two `Event Horizon` render paths
+- Vivid monochromatic graphics with different phospher choices!
+- Multiple level styles, including `Defender`, `Enemy Radar`, `Event Horizon` and who could forget `High Plains Drifter`
 - Momentum-based 2D ship control (horizontal + vertical thrust with inertia) and elastic camera tracking
-- Modular ship/weapons setup with upgradeable multi-shot fire patterns
+- Your very own shipyard to tune your craft to perfection
 - Procedural enemy waves with formation, swarm, and kamikaze behaviors
 - Teletype wave announcements, in-game synth-driven weapon/thruster sound design, and acoustics tuning UI
+
+## Install
+
+Coming Soon
+
+## Build
+
+Coming Soon
+
+## AMA with Commander Nick
+### What are the green squiggly lines at the bottom of the screen?
+Space hills. Anymore dumb questions...

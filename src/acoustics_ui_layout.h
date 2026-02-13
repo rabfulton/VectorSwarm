@@ -28,6 +28,7 @@ float acoustics_compute_value_col_width(
 
 vg_ui_slider_panel_metrics acoustics_scaled_slider_metrics(float ui, float value_col_width_px);
 
-acoustics_ui_layout make_acoustics_ui_layout(float w, float h, float value_col_width_px);
+acoustics_ui_layout make_acoustics_ui_layout(float w, float h, float value_col_width_px, int row_count_left, int row_count_right);
+vg_rect acoustics_page_toggle_button_rect(float w, float h);
 
 #endif

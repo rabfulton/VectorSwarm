@@ -5,8 +5,10 @@
 
 #define MAX_STARS 64
 #define MAX_BULLETS 128
+#define MAX_ENEMY_BULLETS 512
 #define MAX_ENEMIES 64
 #define MAX_PARTICLES 1024
+#define MAX_AUDIO_EVENTS 64
 
 enum level_style_id {
     LEVEL_STYLE_DEFENDER = 0,
@@ -66,7 +68,30 @@ typedef struct enemy {
     float form_amp;
     float form_freq;
     float home_y;
+    int armed;
+    int weapon_id;
+    float fire_cooldown_s;
+    int burst_shots_left;
+    float burst_gap_timer_s;
 } enemy;
+
+typedef struct enemy_bullet {
+    int active;
+    body b;
+    float ttl_s;
+    float radius;
+} enemy_bullet;
+
+typedef enum game_audio_event_type {
+    GAME_AUDIO_EVENT_ENEMY_FIRE = 1,
+    GAME_AUDIO_EVENT_EXPLOSION = 2
+} game_audio_event_type;
+
+typedef struct game_audio_event {
+    game_audio_event_type type;
+    float x;
+    float y;
+} game_audio_event;
 
 typedef enum particle_type {
     PARTICLE_POINT = 0,
@@ -115,6 +140,7 @@ typedef struct game_state {
     float weapon_heat;
     int weapon_level;
     int active_particles;
+    int audio_event_count;
     float thruster_emit_accum;
     float camera_x;
     float camera_y;
@@ -124,8 +150,10 @@ typedef struct game_state {
     player_state player;
     star stars[MAX_STARS];
     bullet bullets[MAX_BULLETS];
+    enemy_bullet enemy_bullets[MAX_ENEMY_BULLETS];
     enemy enemies[MAX_ENEMIES];
     particle particles[MAX_PARTICLES];
+    game_audio_event audio_events[MAX_AUDIO_EVENTS];
 } game_state;
 
 void game_init(game_state* g, float world_w, float world_h);
@@ -137,5 +165,6 @@ float game_weapon_heat01(const game_state* g);
 float game_threat01(const game_state* g);
 int game_pop_wave_announcement(game_state* g, char* out, size_t out_cap);
 int game_pop_fire_sfx_count(game_state* g);
+int game_pop_audio_events(game_state* g, game_audio_event* out, int out_cap);
 
 #endif

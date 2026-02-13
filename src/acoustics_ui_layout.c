@@ -53,7 +53,7 @@ vg_ui_slider_panel_metrics acoustics_scaled_slider_metrics(float ui, float value
     return m;
 }
 
-acoustics_ui_layout make_acoustics_ui_layout(float w, float h, float value_col_width_px) {
+acoustics_ui_layout make_acoustics_ui_layout(float w, float h, float value_col_width_px, int row_count_left, int row_count_right) {
     acoustics_ui_layout l;
     memset(&l, 0, sizeof(l));
     const float ui = ui_reference_scale(w, h);
@@ -88,8 +88,8 @@ acoustics_ui_layout make_acoustics_ui_layout(float w, float h, float value_col_w
 
     l.value_col_width_px = value_col_width_px;
     l.row_h = 34.0f * ui;
-    l.row_count[0] = 8;
-    l.row_count[1] = 6;
+    l.row_count[0] = (row_count_left > 0) ? row_count_left : 8;
+    l.row_count[1] = (row_count_right > 0) ? row_count_right : 6;
     vg_ui_slider_panel_metrics sm = acoustics_scaled_slider_metrics(ui, value_col_width_px);
     vg_ui_slider_item dummy_fire[8] = {0};
     vg_ui_slider_item dummy_thr[6] = {0};
@@ -119,4 +119,14 @@ acoustics_ui_layout make_acoustics_ui_layout(float w, float h, float value_col_w
         }
     }
     return l;
+}
+
+vg_rect acoustics_page_toggle_button_rect(float w, float h) {
+    const vg_rect safe = make_ui_safe_frame(w, h);
+    return (vg_rect){
+        safe.x + safe.w * 0.79f,
+        safe.y + safe.h * 0.92f,
+        safe.w * 0.20f,
+        safe.h * 0.042f
+    };
 }
