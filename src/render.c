@@ -3490,17 +3490,7 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             return r;
         }
     } else if (g->level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2) {
-        vg_stroke_style plains_halo = land_halo;
-        vg_stroke_style plains_main = land_main;
-        plains_halo.intensity *= 1.10f;
-        plains_main.intensity *= 1.18f;
-        plains_halo.width_px *= 1.06f;
-        plains_main.width_px *= 1.02f;
-        plains_main.color = (vg_color){pal.secondary.r, pal.secondary.g, pal.secondary.b, 0.92f};
-        r = draw_high_plains_drifter_terrain_traditional(ctx, g, &plains_halo, &plains_main);
-        if (r != VG_OK) {
-            return r;
-        }
+        /* Terrain for drifter2 is rendered in a dedicated GPU pass from main.c. */
     } else {
         /* Foreground vector landscape layers for depth/parallax. */
         vg_stroke_style land1_halo = land_halo;

@@ -3445,7 +3445,7 @@ static int create_terrain_resources(app* a) {
     const uint32_t vcount = (uint32_t)(TERRAIN_ROWS * TERRAIN_COLS);
     const VkDeviceSize vbuf_size = (VkDeviceSize)vcount * sizeof(terrain_vertex);
     uint16_t tri_idx[(TERRAIN_ROWS - 1) * (TERRAIN_COLS - 1) * 6];
-    uint16_t line_idx[(TERRAIN_ROWS * (TERRAIN_COLS - 1) + (TERRAIN_ROWS - 1) * ((TERRAIN_COLS + 1) / 2)) * 2];
+    uint16_t line_idx[(TERRAIN_ROWS - 1) * (TERRAIN_COLS - 1) * 12];
     uint32_t tri_count = 0;
     uint32_t line_count = 0;
 
@@ -3459,20 +3459,20 @@ static int create_terrain_resources(app* a) {
             tri_idx[tri_count++] = i10; tri_idx[tri_count++] = i11; tri_idx[tri_count++] = i01;
         }
     }
-    for (int r = 0; r < TERRAIN_ROWS; ++r) {
+    for (int r = 0; r < TERRAIN_ROWS - 1; ++r) {
         for (int c = 0; c < TERRAIN_COLS - 1; ++c) {
-            const uint16_t i0 = (uint16_t)(r * TERRAIN_COLS + c);
-            const uint16_t i1 = (uint16_t)(r * TERRAIN_COLS + c + 1);
-            line_idx[line_count++] = i0;
-            line_idx[line_count++] = i1;
-        }
-    }
-    for (int c = 0; c < TERRAIN_COLS; c += 2) {
-        for (int r = 0; r < TERRAIN_ROWS - 1; ++r) {
-            const uint16_t i0 = (uint16_t)(r * TERRAIN_COLS + c);
-            const uint16_t i1 = (uint16_t)((r + 1) * TERRAIN_COLS + c);
-            line_idx[line_count++] = i0;
-            line_idx[line_count++] = i1;
+            const uint16_t i00 = (uint16_t)(r * TERRAIN_COLS + c);
+            const uint16_t i10 = (uint16_t)(r * TERRAIN_COLS + c + 1);
+            const uint16_t i01 = (uint16_t)((r + 1) * TERRAIN_COLS + c);
+            const uint16_t i11 = (uint16_t)((r + 1) * TERRAIN_COLS + c + 1);
+            /* Triangle 1 edges. */
+            line_idx[line_count++] = i00; line_idx[line_count++] = i10;
+            line_idx[line_count++] = i10; line_idx[line_count++] = i01;
+            line_idx[line_count++] = i01; line_idx[line_count++] = i00;
+            /* Triangle 2 edges. */
+            line_idx[line_count++] = i10; line_idx[line_count++] = i11;
+            line_idx[line_count++] = i11; line_idx[line_count++] = i01;
+            line_idx[line_count++] = i01; line_idx[line_count++] = i10;
         }
     }
 
@@ -3569,21 +3569,28 @@ static int create_terrain_resources(app* a) {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
         .polygonMode = VK_POLYGON_MODE_FILL,
         .lineWidth = 1.0f,
-        .cullMode = VK_CULL_MODE_NONE,
+        .cullMode = VK_CULL_MODE_BACK_BIT,
         .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE
     };
     VkPipelineMultisampleStateCreateInfo ms = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .rasterizationSamples = scene_samples(a)};
     VkPipelineColorBlendAttachmentState cb_att = {
-        .blendEnable = VK_FALSE,
-        .colorWriteMask = 0
+        .blendEnable = VK_TRUE,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .colorBlendOp = VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .alphaBlendOp = VK_BLEND_OP_ADD,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
     };
     VkPipelineColorBlendStateCreateInfo cb = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1, .pAttachments = &cb_att};
     VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
     VkPipelineDynamicStateCreateInfo ds = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .dynamicStateCount = 2, .pDynamicStates = dyn};
     VkPipelineDepthStencilStateCreateInfo depth = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-        .depthTestEnable = VK_TRUE,
-        .depthWriteEnable = VK_TRUE,
+        .depthTestEnable = VK_FALSE,
+        .depthWriteEnable = VK_FALSE,
         .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL
     };
     VkGraphicsPipelineCreateInfo gp = {
@@ -3610,6 +3617,7 @@ static int create_terrain_resources(app* a) {
 
     ia.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
     rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode = VK_CULL_MODE_NONE;
     cb_att.blendEnable = VK_TRUE;
     cb_att.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
     cb_att.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
@@ -3677,21 +3685,26 @@ static void update_gpu_high_plains_vertices(app* a) {
     const float h = (float)a->swapchain_extent.height;
     const float y_near = h * 0.04f;
     const float y_far = h * 0.34f;
-    const float cam = a->game.camera_x;
-    const float scroll = cam * 1.10f;
+    const float cam = a->game.camera_x * 1.10f;
+    const float center_x = w * 0.50f;
+    const float col_spacing = w * 0.050f;
+    const float col_span = col_spacing * (float)(TERRAIN_COLS - 1);
+    const int x0 = (int)floorf((cam - col_span * 0.5f) / col_spacing) - 2;
+    const float y_quant_step = h * 0.010f;
     for (int r = 0; r < TERRAIN_ROWS; ++r) {
         const float z = (float)r / (float)(TERRAIN_ROWS - 1);
-        const float p = powf(z, 0.78f);
+        const float p = powf(z, 0.82f);
+        const float zw = lerpf(360.0f, 4200.0f, p);
         const float y_base = lerpf(y_near, y_far, p);
-        const float half_w = lerpf(w * 0.78f, w * 0.54f, p);
-        const float center_x = w * 0.50f + lerpf(w * 0.03f, -w * 0.02f, p);
+        const float row_scale = lerpf(1.04f, 0.23f, p);
         const float amp = lerpf(h * 0.21f, h * 0.08f, p);
         for (int c = 0; c < TERRAIN_COLS; ++c) {
-            const float u = (float)c / (float)(TERRAIN_COLS - 1);
-            const float x = center_x + (u - 0.5f) * 2.0f * half_w;
-            const float world_x = scroll + (u - 0.5f) * (2200.0f + p * 1800.0f);
-            const float n = high_plains_looped_noise(world_x * 0.70f, p * 4.5f + 0.35f) * 1.95f;
-            const float y = y_base + n * amp;
+            const float xw = (float)(x0 + c) * col_spacing;
+            const float dx = xw - cam;
+            const float x = center_x + dx * row_scale;
+            const float n = high_plains_looped_noise(xw * 0.72f, zw * 0.0021f) * 1.95f;
+            float y = y_base + n * amp;
+            y = floorf(y / y_quant_step + 0.5f) * y_quant_step;
             const uint32_t idx = (uint32_t)r * TERRAIN_COLS + (uint32_t)c;
             vtx[idx].x = x;
             vtx[idx].y = y;
@@ -3701,7 +3714,7 @@ static void update_gpu_high_plains_vertices(app* a) {
 }
 
 static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd) {
-    const int enable_gpu_terrain = 0; /* disabled while rebuilding terrain path in renderer */
+    const int enable_gpu_terrain = 1;
     if (!enable_gpu_terrain) {
         return;
     }
@@ -3718,7 +3731,13 @@ static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd) {
 
     terrain_pc pc;
     memset(&pc, 0, sizeof(pc));
-    pc.color[3] = 1.0f;
+    if (a->palette_mode == 1) {
+        pc.color[0] = 1.0f; pc.color[1] = 0.73f; pc.color[2] = 0.34f; pc.color[3] = 1.0f;
+    } else if (a->palette_mode == 2) {
+        pc.color[0] = 0.60f; pc.color[1] = 0.88f; pc.color[2] = 1.0f; pc.color[3] = 1.0f;
+    } else {
+        pc.color[0] = 0.20f; pc.color[1] = 0.90f; pc.color[2] = 0.34f; pc.color[3] = 1.0f;
+    }
     pc.params[0] = (float)a->swapchain_extent.width;
     pc.params[1] = (float)a->swapchain_extent.height;
     pc.params[2] = 1.0f;
@@ -3729,13 +3748,13 @@ static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd) {
     vkCmdDrawIndexed(cmd, a->terrain_tri_index_count, 1, 0, 0, 0);
 
     if (a->palette_mode == 1) {
-        pc.color[0] = 1.0f; pc.color[1] = 0.82f; pc.color[2] = 0.45f; pc.color[3] = 0.88f;
+        pc.color[0] = 1.0f; pc.color[1] = 0.86f; pc.color[2] = 0.52f; pc.color[3] = 0.74f;
     } else if (a->palette_mode == 2) {
-        pc.color[0] = 0.62f; pc.color[1] = 0.90f; pc.color[2] = 1.0f; pc.color[3] = 0.88f;
+        pc.color[0] = 0.74f; pc.color[1] = 0.94f; pc.color[2] = 1.0f; pc.color[3] = 0.74f;
     } else {
-        pc.color[0] = 0.22f; pc.color[1] = 0.92f; pc.color[2] = 0.38f; pc.color[3] = 0.88f;
+        pc.color[0] = 0.30f; pc.color[1] = 0.95f; pc.color[2] = 0.44f; pc.color[3] = 0.74f;
     }
-    pc.params[2] = 0.95f;
+    pc.params[2] = 0.96f;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->terrain_line_pipeline);
     vkCmdPushConstants(cmd, a->terrain_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
     vkCmdBindIndexBuffer(cmd, a->terrain_line_index_buffer, 0, VK_INDEX_TYPE_UINT16);
