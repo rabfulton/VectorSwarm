@@ -92,8 +92,10 @@ enum acoustics_combat_slider_id {
     ACOUST_COMBAT_EXP_ATTACK = 8,
     ACOUST_COMBAT_EXP_DECAY = 9,
     ACOUST_COMBAT_EXP_NOISE = 10,
-    ACOUST_COMBAT_EXP_PANW = 11,
-    ACOUST_COMBAT_SLIDER_COUNT = 12
+    ACOUST_COMBAT_EXP_FM_DEPTH = 11,
+    ACOUST_COMBAT_EXP_FM_RATE = 12,
+    ACOUST_COMBAT_EXP_PANW = 13,
+    ACOUST_COMBAT_SLIDER_COUNT = 14
 };
 
 typedef struct audio_spatial_event {
@@ -112,6 +114,9 @@ typedef struct audio_combat_voice {
     float attack_s;
     float decay_s;
     float noise_mix;
+    float fm_depth_hz;
+    float fm_rate_hz;
+    float fm_phase;
     float time_s;
 } audio_combat_voice;
 
@@ -121,6 +126,8 @@ typedef struct combat_sound_params {
     float attack_ms;
     float decay_ms;
     float noise_mix;
+    float fm_depth_hz;
+    float fm_rate_hz;
     float pan_width;
 } combat_sound_params;
 
@@ -243,7 +250,7 @@ typedef struct app {
     float acoustics_fire_slots[ACOUSTICS_SLOT_COUNT][8];
     float acoustics_thr_slots[ACOUSTICS_SLOT_COUNT][6];
     float acoustics_enemy_slots[ACOUSTICS_SLOT_COUNT][6];
-    float acoustics_exp_slots[ACOUSTICS_SLOT_COUNT][6];
+    float acoustics_exp_slots[ACOUSTICS_SLOT_COUNT][8];
     int acoustics_mouse_drag;
     float acoustics_value_01[ACOUSTICS_SLIDER_COUNT];
     float acoustics_combat_value_01[ACOUST_COMBAT_SLIDER_COUNT];
@@ -368,19 +375,78 @@ static int resolution_index_from_wh(int w, int h) {
 
 static void map_mouse_to_scene_coords(const app* a, int mouse_x, int mouse_y, float* out_x, float* out_y);
 
+static float norm_range(float v, float lo, float hi) {
+    if (hi <= lo) {
+        return 0.0f;
+    }
+    float t = (v - lo) / (hi - lo);
+    if (t < 0.0f) {
+        return 0.0f;
+    }
+    if (t > 1.0f) {
+        return 1.0f;
+    }
+    return t;
+}
+
 static void video_menu_dial_geometry(const app* a, vg_vec2 centers[VIDEO_MENU_DIAL_COUNT], float* radius_px) {
     const float w = (float)a->swapchain_extent.width;
     const float h = (float)a->swapchain_extent.height;
     const vg_rect panel = make_ui_safe_frame(w, h);
     const vg_rect lab = {panel.x + panel.w * 0.42f, panel.y + panel.h * 0.07f, panel.w * 0.54f, panel.h * 0.86f};
-    *radius_px = lab.w * 0.070f;
+    *radius_px = lab.w * 0.052f;
     for (int i = 0; i < VIDEO_MENU_DIAL_COUNT; ++i) {
-        const int row = i / 3;
-        const int col = i % 3;
-        const float cx = lab.x + lab.w * (0.18f + 0.32f * (float)col);
+        const int row = i / 4;
+        const int col = i % 4;
+        const float cx = lab.x + lab.w * (0.12f + 0.25f * (float)col);
         const float cy = lab.y + lab.h * (0.72f - 0.29f * (float)row);
         centers[i] = (vg_vec2){cx, cy};
     }
+}
+
+static void crt_profile_from_video_dials(vg_crt_profile* crt, const float* dials) {
+    if (!crt || !dials) {
+        return;
+    }
+    crt->bloom_strength = lerpf(CRT_RANGE_BLOOM_STRENGTH_MIN, CRT_RANGE_BLOOM_STRENGTH_MAX, clampf(dials[0], 0.0f, 1.0f));
+    crt->bloom_radius_px = lerpf(CRT_RANGE_BLOOM_RADIUS_MIN, CRT_RANGE_BLOOM_RADIUS_MAX, clampf(dials[1], 0.0f, 1.0f));
+    crt->persistence_decay = lerpf(CRT_RANGE_PERSISTENCE_MIN, CRT_RANGE_PERSISTENCE_MAX, clampf(dials[2], 0.0f, 1.0f));
+    crt->jitter_amount = lerpf(CRT_RANGE_JITTER_MIN, CRT_RANGE_JITTER_MAX, clampf(dials[3], 0.0f, 1.0f));
+    crt->flicker_amount = lerpf(CRT_RANGE_FLICKER_MIN, CRT_RANGE_FLICKER_MAX, clampf(dials[4], 0.0f, 1.0f));
+    crt->beam_core_width_px = lerpf(CRT_RANGE_BEAM_CORE_MIN, CRT_RANGE_BEAM_CORE_MAX, clampf(dials[5], 0.0f, 1.0f));
+    crt->beam_halo_width_px = lerpf(CRT_RANGE_BEAM_HALO_MIN, CRT_RANGE_BEAM_HALO_MAX, clampf(dials[6], 0.0f, 1.0f));
+    crt->beam_intensity = lerpf(CRT_RANGE_BEAM_INTENSITY_MIN, CRT_RANGE_BEAM_INTENSITY_MAX, clampf(dials[7], 0.0f, 1.0f));
+    crt->scanline_strength = lerpf(CRT_RANGE_SCANLINE_MIN, CRT_RANGE_SCANLINE_MAX, clampf(dials[8], 0.0f, 1.0f));
+    crt->noise_strength = lerpf(CRT_RANGE_NOISE_MIN, CRT_RANGE_NOISE_MAX, clampf(dials[9], 0.0f, 1.0f));
+    crt->vignette_strength = lerpf(CRT_RANGE_VIGNETTE_MIN, CRT_RANGE_VIGNETTE_MAX, clampf(dials[10], 0.0f, 1.0f));
+    crt->barrel_distortion = lerpf(CRT_RANGE_BARREL_MIN, CRT_RANGE_BARREL_MAX, clampf(dials[11], 0.0f, 1.0f));
+}
+
+static void video_dials_from_crt_profile(float* dials, const vg_crt_profile* crt) {
+    if (!dials || !crt) {
+        return;
+    }
+    dials[0] = norm_range(crt->bloom_strength, CRT_RANGE_BLOOM_STRENGTH_MIN, CRT_RANGE_BLOOM_STRENGTH_MAX);
+    dials[1] = norm_range(crt->bloom_radius_px, CRT_RANGE_BLOOM_RADIUS_MIN, CRT_RANGE_BLOOM_RADIUS_MAX);
+    dials[2] = norm_range(crt->persistence_decay, CRT_RANGE_PERSISTENCE_MIN, CRT_RANGE_PERSISTENCE_MAX);
+    dials[3] = norm_range(crt->jitter_amount, CRT_RANGE_JITTER_MIN, CRT_RANGE_JITTER_MAX);
+    dials[4] = norm_range(crt->flicker_amount, CRT_RANGE_FLICKER_MIN, CRT_RANGE_FLICKER_MAX);
+    dials[5] = norm_range(crt->beam_core_width_px, CRT_RANGE_BEAM_CORE_MIN, CRT_RANGE_BEAM_CORE_MAX);
+    dials[6] = norm_range(crt->beam_halo_width_px, CRT_RANGE_BEAM_HALO_MIN, CRT_RANGE_BEAM_HALO_MAX);
+    dials[7] = norm_range(crt->beam_intensity, CRT_RANGE_BEAM_INTENSITY_MIN, CRT_RANGE_BEAM_INTENSITY_MAX);
+    dials[8] = norm_range(crt->scanline_strength, CRT_RANGE_SCANLINE_MIN, CRT_RANGE_SCANLINE_MAX);
+    dials[9] = norm_range(crt->noise_strength, CRT_RANGE_NOISE_MIN, CRT_RANGE_NOISE_MAX);
+    dials[10] = norm_range(crt->vignette_strength, CRT_RANGE_VIGNETTE_MIN, CRT_RANGE_VIGNETTE_MAX);
+    dials[11] = norm_range(crt->barrel_distortion, CRT_RANGE_BARREL_MIN, CRT_RANGE_BARREL_MAX);
+}
+
+static void sync_video_dials_from_live_crt(app* a) {
+    if (!a || !a->vg) {
+        return;
+    }
+    vg_crt_profile crt;
+    vg_get_crt_profile(a->vg, &crt);
+    video_dials_from_crt_profile(a->video_dial_01, &crt);
 }
 
 static void apply_video_lab_controls(app* a) {
@@ -389,15 +455,7 @@ static void apply_video_lab_controls(app* a) {
     }
     vg_crt_profile crt;
     vg_get_crt_profile(a->vg, &crt);
-    crt.bloom_strength = lerpf(0.20f, 1.80f, clampf(a->video_dial_01[0], 0.0f, 1.0f));
-    crt.persistence_decay = lerpf(0.70f, 0.92f, clampf(a->video_dial_01[1], 0.0f, 1.0f));
-    crt.jitter_amount = lerpf(0.0f, 0.30f, clampf(a->video_dial_01[2], 0.0f, 1.0f));
-    crt.flicker_amount = lerpf(0.0f, 0.18f, clampf(a->video_dial_01[3], 0.0f, 1.0f));
-    crt.scanline_strength = lerpf(0.02f, 0.42f, clampf(a->video_dial_01[4], 0.0f, 1.0f));
-    crt.noise_strength = lerpf(0.0f, 0.12f, clampf(a->video_dial_01[5], 0.0f, 1.0f));
-    crt.vignette_strength = lerpf(0.0f, 0.45f, clampf(a->video_dial_01[6], 0.0f, 1.0f));
-    crt.barrel_distortion = lerpf(0.0f, 0.08f, clampf(a->video_dial_01[7], 0.0f, 1.0f));
-    crt.beam_intensity = lerpf(0.60f, 1.40f, clampf(a->video_dial_01[8], 0.0f, 1.0f));
+    crt_profile_from_video_dials(&crt, a->video_dial_01);
     vg_set_crt_profile(a->vg, &crt);
 }
 
@@ -410,7 +468,7 @@ static int update_video_menu_dial_drag(app* a, int mouse_x, int mouse_y) {
     map_mouse_to_scene_coords(a, mouse_x, mouse_y, &mx, &my);
     const float h = fmaxf((float)a->swapchain_extent.height, 1.0f);
     const float dy = my - a->video_menu_dial_drag_start_y;
-    const float t = a->video_menu_dial_drag_start_value + (-dy / h) * 1.8f;
+    const float t = a->video_menu_dial_drag_start_value + (dy / h) * 1.8f;
     a->video_dial_01[a->video_menu_dial_drag] = clampf(t, 0.0f, 1.0f);
     apply_video_lab_controls(a);
     a->force_clear_frames = 1;
@@ -489,10 +547,6 @@ static int save_settings_to_path(const app* a, const char* path) {
 }
 
 static int save_settings(const app* a) {
-    int ok = 0;
-    if (save_settings_to_path(a, SETTINGS_PATH)) {
-        ok = 1;
-    }
     char xdg_path[PATH_MAX];
     if (make_xdg_settings_path(xdg_path, sizeof(xdg_path))) {
         char dir[PATH_MAX];
@@ -502,11 +556,9 @@ static int save_settings(const app* a) {
             *slash = '\0';
             (void)ensure_dir_recursive(dir);
         }
-        if (save_settings_to_path(a, xdg_path)) {
-            ok = 1;
-        }
+        return save_settings_to_path(a, xdg_path);
     }
-    return ok;
+    return 0;
 }
 
 static int load_settings_from_path(app* a, const char* path) {
@@ -570,9 +622,6 @@ static int load_settings_from_path(app* a, const char* path) {
 static int load_settings(app* a) {
     if (!a) {
         return 0;
-    }
-    if (load_settings_from_path(a, SETTINGS_PATH)) {
-        return 1;
     }
     char xdg_path[PATH_MAX];
     if (make_xdg_settings_path(xdg_path, sizeof(xdg_path))) {
@@ -816,6 +865,10 @@ static float acoustics_combat_value_to_display(int id, float t01) {
         case ACOUST_COMBAT_ENEMY_NOISE:
         case ACOUST_COMBAT_EXP_NOISE:
             return t;
+        case ACOUST_COMBAT_EXP_FM_DEPTH:
+            return lerpf(0.0f, 420.0f, t);
+        case ACOUST_COMBAT_EXP_FM_RATE:
+            return lerpf(8.0f, 1600.0f, t);
         case ACOUST_COMBAT_ENEMY_PANW:
         case ACOUST_COMBAT_EXP_PANW:
             return lerpf(0.25f, 1.20f, t);
@@ -838,6 +891,8 @@ static float acoustics_combat_value_to_ui_display(int id, float t01) {
         case ACOUST_COMBAT_EXP_ATTACK:
         case ACOUST_COMBAT_ENEMY_DECAY:
         case ACOUST_COMBAT_EXP_DECAY:
+        case ACOUST_COMBAT_EXP_FM_DEPTH:
+        case ACOUST_COMBAT_EXP_FM_RATE:
             return round_to(v, 1.0f);
         case ACOUST_COMBAT_ENEMY_PITCH:
         case ACOUST_COMBAT_EXP_PITCH:
@@ -881,6 +936,8 @@ static void acoustics_combat_defaults(app* a) {
     a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_ATTACK] = 0.07f;
     a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_DECAY] = 0.54f;
     a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_NOISE] = 0.64f;
+    a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_FM_DEPTH] = 0.28f;
+    a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_FM_RATE] = 0.21f;
     a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_PANW] = 0.90f;
 }
 
@@ -906,6 +963,8 @@ static void acoustics_slot_defaults(app* a) {
     for (int i = 0; i < 6; ++i) {
         a->acoustics_thr_slots[0][i] = a->acoustics_value_01[8 + i];
         a->acoustics_enemy_slots[0][i] = a->acoustics_combat_value_01[i];
+    }
+    for (int i = 0; i < 8; ++i) {
         a->acoustics_exp_slots[0][i] = a->acoustics_combat_value_01[6 + i];
     }
     a->acoustics_fire_slot_defined[0] = 1u;
@@ -967,7 +1026,7 @@ static void capture_current_to_selected_combat_slot(app* a, int is_enemy) {
         if (s < 0 || s >= ACOUSTICS_SLOT_COUNT) {
             return;
         }
-        for (int i = 0; i < 6; ++i) {
+        for (int i = 0; i < 8; ++i) {
             a->acoustics_exp_slots[s][i] = a->acoustics_combat_value_01[6 + i];
         }
         a->acoustics_exp_slot_defined[s] = 1u;
@@ -1021,7 +1080,7 @@ static void load_combat_slot_to_current(app* a, int is_enemy, int slot_idx, int 
         if (!a->acoustics_exp_slot_defined[slot_idx]) {
             return;
         }
-        for (int i = 0; i < 6; ++i) {
+        for (int i = 0; i < 8; ++i) {
             a->acoustics_combat_value_01[6 + i] = a->acoustics_exp_slots[slot_idx][i];
         }
     }
@@ -1054,6 +1113,8 @@ static int save_acoustics_slots(const app* a, const char* path) {
         for (int i = 0; i < 6; ++i) {
             fprintf(f, "tv%d_%d=%.9f\n", s, i, a->acoustics_thr_slots[s][i]);
             fprintf(f, "cfv%d_%d=%.9f\n", s, i, a->acoustics_enemy_slots[s][i]);
+        }
+        for (int i = 0; i < 8; ++i) {
             fprintf(f, "ctv%d_%d=%.9f\n", s, i, a->acoustics_exp_slots[s][i]);
         }
     }
@@ -1121,7 +1182,7 @@ static int load_acoustics_slots(app* a, const char* path) {
             a->acoustics_enemy_slots[s][i] = clampf(v, 0.0f, 1.0f);
             continue;
         }
-        if (sscanf(key, "ctv%d_%d", &s, &i) == 2 && s >= 0 && s < ACOUSTICS_SLOT_COUNT && i >= 0 && i < 6) {
+        if (sscanf(key, "ctv%d_%d", &s, &i) == 2 && s >= 0 && s < ACOUSTICS_SLOT_COUNT && i >= 0 && i < 8) {
             a->acoustics_exp_slots[s][i] = clampf(v, 0.0f, 1.0f);
             continue;
         }
@@ -1187,6 +1248,8 @@ static void apply_acoustics_locked(app* a) {
     a->enemy_fire_sound.attack_ms = acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_ATTACK, a->acoustics_combat_value_01[ACOUST_COMBAT_ENEMY_ATTACK]);
     a->enemy_fire_sound.decay_ms = acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_DECAY, a->acoustics_combat_value_01[ACOUST_COMBAT_ENEMY_DECAY]);
     a->enemy_fire_sound.noise_mix = acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_NOISE, a->acoustics_combat_value_01[ACOUST_COMBAT_ENEMY_NOISE]);
+    a->enemy_fire_sound.fm_depth_hz = 0.0f;
+    a->enemy_fire_sound.fm_rate_hz = 0.0f;
     a->enemy_fire_sound.pan_width = acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_PANW, a->acoustics_combat_value_01[ACOUST_COMBAT_ENEMY_PANW]);
 
     a->explosion_sound.level = acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_LEVEL, a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_LEVEL]);
@@ -1194,6 +1257,8 @@ static void apply_acoustics_locked(app* a) {
     a->explosion_sound.attack_ms = acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_ATTACK, a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_ATTACK]);
     a->explosion_sound.decay_ms = acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_DECAY, a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_DECAY]);
     a->explosion_sound.noise_mix = acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_NOISE, a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_NOISE]);
+    a->explosion_sound.fm_depth_hz = acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_FM_DEPTH, a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_FM_DEPTH]);
+    a->explosion_sound.fm_rate_hz = acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_FM_RATE, a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_FM_RATE]);
     a->explosion_sound.pan_width = acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_PANW, a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_PANW]);
 }
 
@@ -1250,7 +1315,7 @@ static int handle_acoustics_ui_mouse(app* a, int mouse_x, int mouse_y, int set_v
         display_values,
         display_count
     );
-    const acoustics_ui_layout l = make_acoustics_ui_layout(w, h, value_col_width_px, (a->acoustics_page == ACOUSTICS_PAGE_COMBAT) ? 6 : 8, 6);
+    const acoustics_ui_layout l = make_acoustics_ui_layout(w, h, value_col_width_px, (a->acoustics_page == ACOUSTICS_PAGE_COMBAT) ? 6 : 8, (a->acoustics_page == ACOUSTICS_PAGE_COMBAT) ? 8 : 6);
     const vg_rect page_btn = acoustics_page_toggle_button_rect(w, h);
     float mx = 0.0f;
     float my = 0.0f;
@@ -1551,6 +1616,9 @@ static void spawn_combat_voice(app* a, const audio_spatial_event* ev) {
     v->attack_s = fmaxf(0.0001f, p->attack_ms * 0.001f);
     v->decay_s = fmaxf(0.005f, p->decay_ms * 0.001f);
     v->noise_mix = clampf(p->noise_mix, 0.0f, 1.0f);
+    v->fm_depth_hz = (type == GAME_AUDIO_EVENT_EXPLOSION) ? fmaxf(0.0f, p->fm_depth_hz) : 0.0f;
+    v->fm_rate_hz = (type == GAME_AUDIO_EVENT_EXPLOSION) ? fmaxf(0.0f, p->fm_rate_hz) : 0.0f;
+    v->fm_phase = rand01_from_state(&a->audio_rng) * 6.28318530718f;
     v->time_s = 0.0f;
 }
 
@@ -1585,6 +1653,10 @@ static void render_combat_voices(app* a, float* left, float* right, uint32_t n) 
             if (v->type == GAME_AUDIO_EVENT_EXPLOSION) {
                 const float down = clampf((t / (v->decay_s + v->attack_s + 0.001f)), 0.0f, 1.0f);
                 freq *= (1.0f - 0.55f * down);
+                if (v->fm_depth_hz > 0.0f) {
+                    const float fm = sinf(v->fm_phase) * v->fm_depth_hz * (0.35f + 0.65f * env);
+                    freq = fmaxf(8.0f, freq + fm);
+                }
             }
             const float step = 2.0f * 3.14159265358979323846f * freq / sr;
             const float tone = sinf(v->phase);
@@ -1599,6 +1671,10 @@ static void render_combat_voices(app* a, float* left, float* right, uint32_t n) 
             v->phase += step;
             if (v->phase > 6.28318530718f) {
                 v->phase -= 6.28318530718f;
+            }
+            v->fm_phase += 2.0f * 3.14159265358979323846f * v->fm_rate_hz / sr;
+            if (v->fm_phase > 6.28318530718f) {
+                v->fm_phase -= 6.28318530718f;
             }
             v->time_s += 1.0f / sr;
         }
@@ -1886,47 +1962,56 @@ static void init_teletype_audio(app* a) {
     }
 }
 
-static void adjust_crt_profile(vg_context* vg, int selected, int dir) {
+static void adjust_crt_profile(app* a, int selected, int dir) {
+    if (!a || !a->vg) {
+        return;
+    }
     vg_crt_profile crt;
-    vg_get_crt_profile(vg, &crt);
+    vg_get_crt_profile(a->vg, &crt);
     switch (selected) {
-        case 0: crt.bloom_strength = clampf(crt.bloom_strength + 0.05f * (float)dir, 0.0f, 3.0f); break;
-        case 1: crt.bloom_radius_px = clampf(crt.bloom_radius_px + 0.35f * (float)dir, 0.0f, 14.0f); break;
-        case 2: crt.persistence_decay = clampf(crt.persistence_decay + 0.005f * (float)dir, 0.70f, 0.94f); break;
-        case 3: crt.jitter_amount = clampf(crt.jitter_amount + 0.02f * (float)dir, 0.0f, 1.5f); break;
-        case 4: crt.flicker_amount = clampf(crt.flicker_amount + 0.02f * (float)dir, 0.0f, 1.0f); break;
-        case 5: crt.beam_core_width_px = clampf(crt.beam_core_width_px + 0.05f * (float)dir, 0.5f, 3.5f); break;
-        case 6: crt.beam_halo_width_px = clampf(crt.beam_halo_width_px + 0.12f * (float)dir, 0.0f, 10.0f); break;
-        case 7: crt.beam_intensity = clampf(crt.beam_intensity + 0.05f * (float)dir, 0.2f, 3.0f); break;
-        case 8: crt.vignette_strength = clampf(crt.vignette_strength + 0.02f * (float)dir, 0.0f, 1.0f); break;
-        case 9: crt.barrel_distortion = clampf(crt.barrel_distortion + 0.01f * (float)dir, 0.0f, 0.30f); break;
-        case 10: crt.scanline_strength = clampf(crt.scanline_strength + 0.02f * (float)dir, 0.0f, 1.0f); break;
-        case 11: crt.noise_strength = clampf(crt.noise_strength + 0.01f * (float)dir, 0.0f, 0.30f); break;
+        case 0: crt.bloom_strength = clampf(crt.bloom_strength + 0.05f * (float)dir, CRT_RANGE_BLOOM_STRENGTH_MIN, CRT_RANGE_BLOOM_STRENGTH_MAX); break;
+        case 1: crt.bloom_radius_px = clampf(crt.bloom_radius_px + 0.35f * (float)dir, CRT_RANGE_BLOOM_RADIUS_MIN, CRT_RANGE_BLOOM_RADIUS_MAX); break;
+        case 2: crt.persistence_decay = clampf(crt.persistence_decay + 0.005f * (float)dir, CRT_RANGE_PERSISTENCE_MIN, CRT_RANGE_PERSISTENCE_MAX); break;
+        case 3: crt.jitter_amount = clampf(crt.jitter_amount + 0.02f * (float)dir, CRT_RANGE_JITTER_MIN, CRT_RANGE_JITTER_MAX); break;
+        case 4: crt.flicker_amount = clampf(crt.flicker_amount + 0.02f * (float)dir, CRT_RANGE_FLICKER_MIN, CRT_RANGE_FLICKER_MAX); break;
+        case 5: crt.beam_core_width_px = clampf(crt.beam_core_width_px + 0.05f * (float)dir, CRT_RANGE_BEAM_CORE_MIN, CRT_RANGE_BEAM_CORE_MAX); break;
+        case 6: crt.beam_halo_width_px = clampf(crt.beam_halo_width_px + 0.12f * (float)dir, CRT_RANGE_BEAM_HALO_MIN, CRT_RANGE_BEAM_HALO_MAX); break;
+        case 7: crt.beam_intensity = clampf(crt.beam_intensity + 0.05f * (float)dir, CRT_RANGE_BEAM_INTENSITY_MIN, CRT_RANGE_BEAM_INTENSITY_MAX); break;
+        case 8: crt.vignette_strength = clampf(crt.vignette_strength + 0.02f * (float)dir, CRT_RANGE_VIGNETTE_MIN, CRT_RANGE_VIGNETTE_MAX); break;
+        case 9: crt.barrel_distortion = clampf(crt.barrel_distortion + 0.01f * (float)dir, CRT_RANGE_BARREL_MIN, CRT_RANGE_BARREL_MAX); break;
+        case 10: crt.scanline_strength = clampf(crt.scanline_strength + 0.02f * (float)dir, CRT_RANGE_SCANLINE_MIN, CRT_RANGE_SCANLINE_MAX); break;
+        case 11: crt.noise_strength = clampf(crt.noise_strength + 0.01f * (float)dir, CRT_RANGE_NOISE_MIN, CRT_RANGE_NOISE_MAX); break;
         default: break;
     }
-    vg_set_crt_profile(vg, &crt);
+    vg_set_crt_profile(a->vg, &crt);
+    sync_video_dials_from_live_crt(a);
+    (void)save_settings(a);
 }
 
-static void set_crt_profile_value01(vg_context* vg, int selected, float value_01) {
+static void set_crt_profile_value01(app* a, int selected, float value_01) {
+    if (!a || !a->vg) {
+        return;
+    }
     vg_crt_profile crt;
-    vg_get_crt_profile(vg, &crt);
+    vg_get_crt_profile(a->vg, &crt);
     float t = clampf(value_01, 0.0f, 1.0f);
     switch (selected) {
-        case 0: crt.bloom_strength = lerpf(0.0f, 3.0f, t); break;
-        case 1: crt.bloom_radius_px = lerpf(0.0f, 14.0f, t); break;
-        case 2: crt.persistence_decay = lerpf(0.70f, 0.94f, t); break;
-        case 3: crt.jitter_amount = lerpf(0.0f, 1.5f, t); break;
-        case 4: crt.flicker_amount = lerpf(0.0f, 1.0f, t); break;
-        case 5: crt.beam_core_width_px = lerpf(0.5f, 3.5f, t); break;
-        case 6: crt.beam_halo_width_px = lerpf(0.0f, 10.0f, t); break;
-        case 7: crt.beam_intensity = lerpf(0.2f, 3.0f, t); break;
-        case 8: crt.vignette_strength = lerpf(0.0f, 1.0f, t); break;
-        case 9: crt.barrel_distortion = lerpf(0.0f, 0.30f, t); break;
-        case 10: crt.scanline_strength = lerpf(0.0f, 1.0f, t); break;
-        case 11: crt.noise_strength = lerpf(0.0f, 0.30f, t); break;
+        case 0: crt.bloom_strength = lerpf(CRT_RANGE_BLOOM_STRENGTH_MIN, CRT_RANGE_BLOOM_STRENGTH_MAX, t); break;
+        case 1: crt.bloom_radius_px = lerpf(CRT_RANGE_BLOOM_RADIUS_MIN, CRT_RANGE_BLOOM_RADIUS_MAX, t); break;
+        case 2: crt.persistence_decay = lerpf(CRT_RANGE_PERSISTENCE_MIN, CRT_RANGE_PERSISTENCE_MAX, t); break;
+        case 3: crt.jitter_amount = lerpf(CRT_RANGE_JITTER_MIN, CRT_RANGE_JITTER_MAX, t); break;
+        case 4: crt.flicker_amount = lerpf(CRT_RANGE_FLICKER_MIN, CRT_RANGE_FLICKER_MAX, t); break;
+        case 5: crt.beam_core_width_px = lerpf(CRT_RANGE_BEAM_CORE_MIN, CRT_RANGE_BEAM_CORE_MAX, t); break;
+        case 6: crt.beam_halo_width_px = lerpf(CRT_RANGE_BEAM_HALO_MIN, CRT_RANGE_BEAM_HALO_MAX, t); break;
+        case 7: crt.beam_intensity = lerpf(CRT_RANGE_BEAM_INTENSITY_MIN, CRT_RANGE_BEAM_INTENSITY_MAX, t); break;
+        case 8: crt.vignette_strength = lerpf(CRT_RANGE_VIGNETTE_MIN, CRT_RANGE_VIGNETTE_MAX, t); break;
+        case 9: crt.barrel_distortion = lerpf(CRT_RANGE_BARREL_MIN, CRT_RANGE_BARREL_MAX, t); break;
+        case 10: crt.scanline_strength = lerpf(CRT_RANGE_SCANLINE_MIN, CRT_RANGE_SCANLINE_MAX, t); break;
+        case 11: crt.noise_strength = lerpf(CRT_RANGE_NOISE_MIN, CRT_RANGE_NOISE_MAX, t); break;
         default: break;
     }
-    vg_set_crt_profile(vg, &crt);
+    vg_set_crt_profile(a->vg, &crt);
+    sync_video_dials_from_live_crt(a);
 }
 
 static int handle_crt_ui_mouse(app* a, int mouse_x, int mouse_y, int set_value) {
@@ -1978,7 +2063,7 @@ static int handle_crt_ui_mouse(app* a, int mouse_x, int mouse_y, int set_value) 
         a->crt_ui_selected = row;
         if (set_value) {
             float t = (mx - slider_x) / slider_w;
-            set_crt_profile_value01(a->vg, row, t);
+            set_crt_profile_value01(a, row, t);
         }
     }
     return 1;
@@ -3278,15 +3363,18 @@ int main(void) {
     a.video_menu_fullscreen = 0;
     a.palette_mode = 0;
     a.msaa_enabled = 1;
-    a.video_dial_01[0] = 0.56f; /* bloom */
-	    a.video_dial_01[1] = 0.44f; /* persistence */
-	    a.video_dial_01[2] = 0.22f; /* jitter */
-	    a.video_dial_01[3] = 0.18f; /* flicker */
-    a.video_dial_01[4] = 0.38f; /* scanline */
-    a.video_dial_01[5] = 0.32f; /* noise */
-    a.video_dial_01[6] = 0.30f; /* vignette */
-    a.video_dial_01[7] = 0.28f; /* barrel */
-    a.video_dial_01[8] = 0.40f; /* beam */
+    a.video_dial_01[0] = 0.56f; /* bloom strength */
+    a.video_dial_01[1] = 0.29f; /* bloom radius */
+    a.video_dial_01[2] = 0.44f; /* persistence */
+    a.video_dial_01[3] = 0.22f; /* jitter */
+    a.video_dial_01[4] = 0.18f; /* flicker */
+    a.video_dial_01[5] = 0.04f; /* beam core */
+    a.video_dial_01[6] = 0.28f; /* beam halo */
+    a.video_dial_01[7] = 0.40f; /* beam intensity */
+    a.video_dial_01[8] = 0.38f; /* scanline */
+    a.video_dial_01[9] = 0.32f; /* noise */
+    a.video_dial_01[10] = 0.30f; /* vignette */
+    a.video_dial_01[11] = 0.28f; /* barrel */
     a.video_menu_dial_drag = -1;
     a.video_menu_dial_drag_start_y = 0.0f;
     a.video_menu_dial_drag_start_value = 0.0f;
@@ -3401,6 +3489,7 @@ int main(void) {
                         a.show_planetarium = 0;
                         a.show_crt_ui = 0;
                         a.video_menu_dial_drag = -1;
+                        sync_video_dials_from_live_crt(&a);
                     }
                 } else if (ev.key.keysym.sym == SDLK_3) {
                     a.show_planetarium = !a.show_planetarium;
@@ -3542,9 +3631,9 @@ int main(void) {
                 } else if (a.show_crt_ui && ev.key.keysym.sym == SDLK_DOWN) {
                     a.crt_ui_selected = (a.crt_ui_selected + 1) % 12;
                 } else if (a.show_crt_ui && ev.key.keysym.sym == SDLK_LEFT) {
-                    adjust_crt_profile(a.vg, a.crt_ui_selected, -1);
+                    adjust_crt_profile(&a, a.crt_ui_selected, -1);
                 } else if (a.show_crt_ui && ev.key.keysym.sym == SDLK_RIGHT) {
-                    adjust_crt_profile(a.vg, a.crt_ui_selected, +1);
+                    adjust_crt_profile(&a, a.crt_ui_selected, +1);
                 }
             } else if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT) {
                 if (a.show_video_menu && handle_video_menu_mouse(&a, ev.button.x, ev.button.y, 1)) {
@@ -3564,6 +3653,9 @@ int main(void) {
                         (void)save_settings(&a);
                     }
                     a.video_menu_dial_drag = -1;
+                }
+                if (a.show_crt_ui && a.crt_ui_mouse_drag) {
+                    (void)save_settings(&a);
                 }
                 a.crt_ui_mouse_drag = 0;
                 a.acoustics_mouse_drag = 0;

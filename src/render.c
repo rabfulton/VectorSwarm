@@ -354,13 +354,13 @@ static palette_theme get_palette_theme(int mode) {
             p.thruster = (vg_color){0.75f, 0.96f, 1.0f, 0.92f};
             break;
         default: /* green */
-            p.primary = (vg_color){0.22f, 1.0f, 0.58f, 0.95f};
-            p.primary_dim = (vg_color){0.10f, 0.90f, 0.45f, 0.40f};
-            p.secondary = (vg_color){0.52f, 1.0f, 0.76f, 1.0f};
-            p.haze = (vg_color){0.02f, 0.10f, 0.08f, 0.55f};
-            p.star = (vg_color){0.30f, 0.72f, 1.0f, 1.0f};
-            p.ship = (vg_color){0.20f, 1.0f, 0.35f, 1.0f};
-            p.thruster = (vg_color){0.70f, 1.0f, 0.80f, 0.92f};
+            p.primary = (vg_color){0.12f, 0.92f, 0.27f, 0.95f};
+            p.primary_dim = (vg_color){0.05f, 0.74f, 0.18f, 0.40f};
+            p.secondary = (vg_color){0.22f, 0.92f, 0.38f, 1.0f};
+            p.haze = (vg_color){0.01f, 0.06f, 0.025f, 0.55f};
+            p.star = (vg_color){0.19f, 0.86f, 0.30f, 1.0f};
+            p.ship = (vg_color){0.14f, 0.92f, 0.25f, 1.0f};
+            p.thruster = (vg_color){0.28f, 0.92f, 0.45f, 0.92f};
             break;
     }
     return p;
@@ -455,10 +455,10 @@ static vg_result draw_top_meters(
     ms.fill.intensity = main_s->intensity * 1.15f;
     ms.tick = *main_s;
     ms.tick.blend = VG_BLEND_ALPHA;
-    ms.tick.width_px = 1.0f * ui;
+    ms.tick.width_px = fmaxf(main_s->width_px * 0.85f, 0.8f * ui);
     ms.tick.intensity = 0.9f;
     ms.text = ms.tick;
-    ms.text.width_px = 1.25f * ui;
+    ms.text.width_px = fmaxf(main_s->width_px * 1.05f, 1.0f * ui);
 
     vg_ui_meter_desc d;
     d.min_value = 0.0f;
@@ -601,18 +601,18 @@ static vg_result draw_crt_debug_ui(vg_context* ctx, float w, float h, const vg_c
         crt->noise_strength
     };
     float value_01[12] = {
-        norm_range(crt->bloom_strength, 0.0f, 3.0f),
-        norm_range(crt->bloom_radius_px, 0.0f, 14.0f),
-        norm_range(crt->persistence_decay, 0.70f, 0.94f),
-        norm_range(crt->jitter_amount, 0.0f, 1.5f),
-        norm_range(crt->flicker_amount, 0.0f, 1.0f),
-        norm_range(crt->beam_core_width_px, 0.5f, 3.5f),
-        norm_range(crt->beam_halo_width_px, 0.0f, 10.0f),
-        norm_range(crt->beam_intensity, 0.2f, 3.0f),
-        norm_range(crt->vignette_strength, 0.0f, 1.0f),
-        norm_range(crt->barrel_distortion, 0.0f, 0.30f),
-        norm_range(crt->scanline_strength, 0.0f, 1.0f),
-        norm_range(crt->noise_strength, 0.0f, 0.30f)
+        norm_range(crt->bloom_strength, CRT_RANGE_BLOOM_STRENGTH_MIN, CRT_RANGE_BLOOM_STRENGTH_MAX),
+        norm_range(crt->bloom_radius_px, CRT_RANGE_BLOOM_RADIUS_MIN, CRT_RANGE_BLOOM_RADIUS_MAX),
+        norm_range(crt->persistence_decay, CRT_RANGE_PERSISTENCE_MIN, CRT_RANGE_PERSISTENCE_MAX),
+        norm_range(crt->jitter_amount, CRT_RANGE_JITTER_MIN, CRT_RANGE_JITTER_MAX),
+        norm_range(crt->flicker_amount, CRT_RANGE_FLICKER_MIN, CRT_RANGE_FLICKER_MAX),
+        norm_range(crt->beam_core_width_px, CRT_RANGE_BEAM_CORE_MIN, CRT_RANGE_BEAM_CORE_MAX),
+        norm_range(crt->beam_halo_width_px, CRT_RANGE_BEAM_HALO_MIN, CRT_RANGE_BEAM_HALO_MAX),
+        norm_range(crt->beam_intensity, CRT_RANGE_BEAM_INTENSITY_MIN, CRT_RANGE_BEAM_INTENSITY_MAX),
+        norm_range(crt->vignette_strength, CRT_RANGE_VIGNETTE_MIN, CRT_RANGE_VIGNETTE_MAX),
+        norm_range(crt->barrel_distortion, CRT_RANGE_BARREL_MIN, CRT_RANGE_BARREL_MAX),
+        norm_range(crt->scanline_strength, CRT_RANGE_SCANLINE_MIN, CRT_RANGE_SCANLINE_MAX),
+        norm_range(crt->noise_strength, CRT_RANGE_NOISE_MIN, CRT_RANGE_NOISE_MAX)
     };
 
     const float ui_scale = ui_reference_scale(w, h);
@@ -671,16 +671,17 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
     static const char* combat_enemy_labels[6] = {
         "LEVEL", "PITCH HZ", "ATTACK MS", "DECAY MS", "NOISE MIX", "PAN WIDTH"
     };
-    static const char* combat_exp_labels[6] = {
-        "LEVEL", "PITCH HZ", "ATTACK MS", "DECAY MS", "NOISE MIX", "PAN WIDTH"
+    static const char* combat_exp_labels[8] = {
+        "LEVEL", "PITCH HZ", "ATTACK MS", "DECAY MS", "NOISE MIX", "FM DEPTH", "FM RATE", "PAN WIDTH"
     };
     const int combat_page = (metrics->acoustics_page != 0);
+    const palette_theme pal = get_palette_theme(metrics->palette_mode);
 
     const float ui = ui_reference_scale(w, h);
     vg_stroke_style panel = {
         .width_px = 1.45f * ui,
         .intensity = 0.95f,
-        .color = {0.22f, 1.0f, 0.55f, 0.95f},
+        .color = (vg_color){pal.primary.r, pal.primary.g, pal.primary.b, 0.95f},
         .cap = VG_LINE_CAP_ROUND,
         .join = VG_LINE_JOIN_ROUND,
         .miter_limit = 4.0f,
@@ -689,21 +690,23 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
     vg_stroke_style text = panel;
     text.width_px = 1.35f * ui;
     text.intensity = 1.12f;
-    text.color = (vg_color){0.40f, 1.0f, 0.62f, 1.0f};
+    text.color = (vg_color){pal.secondary.r, pal.secondary.g, pal.secondary.b, 1.0f};
     vg_fill_style trace_panel_fill = {
         .intensity = 0.75f,
-        .color = {0.04f, 0.13f, 0.08f, 0.35f},
+        .color = (vg_color){pal.haze.r, pal.haze.g, pal.haze.b, 0.35f},
         .blend = VG_BLEND_ALPHA
     };
 
     vg_ui_slider_item fire_items[8];
-    vg_ui_slider_item thr_items[6];
+    vg_ui_slider_item thr_items[8];
     if (combat_page) {
         for (int i = 0; i < 6; ++i) {
             fire_items[i].label = combat_enemy_labels[i];
             fire_items[i].value_01 = metrics->acoustics_combat_value_01[i];
             fire_items[i].value_display = metrics->acoustics_combat_display[i];
             fire_items[i].selected = (metrics->acoustics_combat_selected == i) ? 1 : 0;
+        }
+        for (int i = 0; i < 8; ++i) {
             thr_items[i].label = combat_exp_labels[i];
             thr_items[i].value_01 = metrics->acoustics_combat_value_01[6 + i];
             thr_items[i].value_display = metrics->acoustics_combat_display[6 + i];
@@ -730,7 +733,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         combat_page ? metrics->acoustics_combat_display : metrics->acoustics_display,
         combat_page ? ACOUSTICS_COMBAT_SLIDER_COUNT : ACOUSTICS_SLIDER_COUNT
     );
-    const acoustics_ui_layout l = make_acoustics_ui_layout(w, h, value_col_width_px, combat_page ? 6 : 8, 6);
+    const acoustics_ui_layout l = make_acoustics_ui_layout(w, h, value_col_width_px, combat_page ? 6 : 8, combat_page ? 8 : 6);
     const vg_rect page_btn = acoustics_page_toggle_button_rect(w, h);
     const vg_rect fire_rect = l.panel[0];
     const vg_rect thr_rect = l.panel[1];
@@ -761,7 +764,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
     thr.rect = thr_rect;
     thr.title_line_0 = combat_page ? "SHIPYARD ACOUSTICS - EXPLOSION" : "SHIPYARD ACOUSTICS - THRUST";
     thr.items = thr_items;
-    thr.item_count = 6u;
+    thr.item_count = combat_page ? 8u : 6u;
 
     vg_ui_slider_panel_layout fire_layout;
     vg_ui_slider_panel_layout thr_layout;
@@ -1197,9 +1200,9 @@ static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render
         const vg_rect lab = {panel.x + panel.w * 0.42f, panel.y + panel.h * 0.07f, panel.w * 0.54f, panel.h * 0.86f};
         {
             static const char* dial_labels[VIDEO_MENU_DIAL_COUNT] = {
-                "BLOOM", "PERSIST", "JITTER",
-                "FLICKER", "SCANLINE", "NOISE",
-                "VIGNETTE", "BARREL", "BEAM"
+                "BLOOM", "BLOOM RAD", "PERSIST", "JITTER",
+                "FLICKER", "BEAM CORE", "BEAM HALO", "BEAM",
+                "SCANLINE", "NOISE", "VIGNETTE", "BARREL"
             };
             vg_ui_meter_style ms;
             ms.frame = frame;
@@ -1219,12 +1222,12 @@ static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render
             d.show_ticks = 1;
             d.ui_scale = ui;
             d.text_scale = ui;
-            const float radius = lab.w * 0.070f;
+            const float radius = lab.w * 0.052f;
             for (int i = 0; i < VIDEO_MENU_DIAL_COUNT; ++i) {
-                const int row = i / 3;
-                const int col = i % 3;
+                const int row = i / 4;
+                const int col = i % 4;
                 const vg_vec2 c = {
-                    lab.x + lab.w * (0.18f + 0.32f * (float)col),
+                    lab.x + lab.w * (0.12f + 0.25f * (float)col),
                     lab.y + lab.h * (0.72f - 0.29f * (float)row)
                 };
                 float v = metrics->video_dial_01[i];
@@ -1530,7 +1533,11 @@ static vg_result draw_planetarium_ui(vg_context* ctx, float w, float h, const re
         marquee.offset_px = floorf(metrics->planetarium_marquee_offset_px + 0.5f);
         marquee.speed_px_s = 70.0f;
         marquee.gap_px = 48.0f;
-        vg_fill_style marq_bg = {.intensity = 1.0f, .color = {0.02f, 0.10f, 0.06f, 0.92f}, .blend = VG_BLEND_ALPHA};
+        vg_fill_style marq_bg = {
+            .intensity = 1.0f,
+            .color = {pal.haze.r, pal.haze.g, pal.haze.b, 0.92f},
+            .blend = VG_BLEND_ALPHA
+        };
         vg_stroke_style marq_bd = txt;
         marq_bd.width_px = 1.4f * ui;
         marq_bd.intensity = 0.85f;
@@ -1996,7 +2003,7 @@ static vg_result draw_parallax_landscape(
     const vg_stroke_style* halo,
     const vg_stroke_style* main
 ) {
-    enum { N = 56 };
+    enum { N = 96 };
     vg_vec2 line[N];
     for (int i = 0; i < N; ++i) {
         const float x = ((float)i / (float)(N - 1)) * w;
@@ -2005,7 +2012,7 @@ static vg_result draw_parallax_landscape(
             base_y +
             sinf(wx * 0.010f) * amp +
             sinf(wx * 0.026f + 1.4f) * amp * 0.55f +
-            sinf(wx * 0.046f + 2.2f) * amp * 0.20f;
+            sinf(wx * 0.040f + 2.2f) * amp * 0.12f;
         line[i].x = x;
         line[i].y = y;
     }
@@ -2436,8 +2443,7 @@ static vg_result draw_cylinder_wire(
                     const float modern_brightness = 0.68f;
 		            for (int j = 0; j < WORMHOLE_ROWS; ++j) {
 		                const float fade = wh.row_fade[j];
-
-		                vg_vec2 loop[WORMHOLE_VN];
+                        vg_vec2 loop[WORMHOLE_VN];
 		                for (int i = 0; i < WORMHOLE_VN; ++i) {
                             const float u = (float)i + loop_shift_modern;
                             const int i0 = wrapi((int)floorf(u), WORMHOLE_VN);
@@ -2678,29 +2684,32 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         fade_alpha = 1.0f;
     }
     const float flicker_n = 0.6f * sinf(g->t * 13.0f + 0.7f) + 0.4f * sinf(g->t * 23.0f);
-    float intensity_scale = 1.0f + crt.flicker_amount * 0.08f * flicker_n;
+    float intensity_scale = 1.0f + crt.flicker_amount * 0.30f * flicker_n;
     if (intensity_scale < 0.0f) {
         intensity_scale = 0.0f;
     }
     const vg_fill_style bg = make_fill(1.0f, (vg_color){0.0f, 0.0f, 0.0f, fade_alpha}, VG_BLEND_ALPHA);
-    const vg_fill_style star_fill = make_fill(0.75f * intensity_scale, pal.star, VG_BLEND_ADDITIVE);
-    const vg_stroke_style ship_style = make_stroke(2.0f, 1.15f * intensity_scale, pal.ship, VG_BLEND_ADDITIVE);
-    const vg_stroke_style bullet_style = make_stroke(2.6f, 1.0f * intensity_scale, (vg_color){1.0f, 0.9f, 0.55f, 1.0f}, VG_BLEND_ADDITIVE);
-    const vg_stroke_style enemy_style = make_stroke(2.5f, 1.0f * intensity_scale, (vg_color){1.0f, 0.3f, 0.3f, 1.0f}, VG_BLEND_ADDITIVE);
+    const vg_color starfield_color = (vg_color){0.62f, 0.86f, 1.0f, 1.0f};
+    const vg_fill_style star_fill = make_fill(0.68f * intensity_scale, starfield_color, VG_BLEND_ADDITIVE);
+    const vg_stroke_style ship_style = make_stroke(2.0f, 1.15f * intensity_scale, pal.ship, VG_BLEND_ALPHA);
+    const vg_stroke_style bullet_style = make_stroke(2.6f, 1.0f * intensity_scale, (vg_color){1.0f, 0.9f, 0.55f, 1.0f}, VG_BLEND_ALPHA);
+    const vg_stroke_style enemy_style = make_stroke(2.5f, 1.0f * intensity_scale, (vg_color){1.0f, 0.3f, 0.3f, 1.0f}, VG_BLEND_ALPHA);
     const vg_fill_style thruster_fill = make_fill(1.0f * intensity_scale, pal.thruster, VG_BLEND_ADDITIVE);
 
     const float main_line_width = 1.5f;
+    const vg_color streak_color = (vg_color){0.56f, 0.80f, 1.0f, 0.28f};
+    const vg_color streak_core_color = (vg_color){0.66f, 0.88f, 1.0f, 0.68f};
     const vg_stroke_style star_halo = make_stroke(
         (main_line_width * crt.beam_core_width_px + crt.beam_halo_width_px * 0.45f) * (1.0f + crt.bloom_radius_px * 0.03f),
-        0.30f * crt.beam_intensity * intensity_scale * (1.0f + crt.bloom_strength * 0.20f),
-        (vg_color){pal.star.r, pal.star.g, pal.star.b, 0.35f},
+        0.22f * crt.beam_intensity * intensity_scale * (1.0f + crt.bloom_strength * 0.14f),
+        streak_color,
         VG_BLEND_ADDITIVE
     );
     const vg_stroke_style star_main = make_stroke(
         main_line_width * crt.beam_core_width_px * 0.70f,
-        0.95f * crt.beam_intensity * intensity_scale,
-        (vg_color){pal.star.r, pal.star.g, pal.star.b, 0.85f},
-        VG_BLEND_ADDITIVE
+        0.80f * crt.beam_intensity * intensity_scale,
+        streak_core_color,
+        VG_BLEND_ALPHA
     );
     const vg_stroke_style txt_halo = make_stroke(
         (main_line_width * crt.beam_core_width_px + crt.beam_halo_width_px * 0.55f) * (1.0f + crt.bloom_radius_px * 0.02f),
@@ -2712,7 +2721,7 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         main_line_width * crt.beam_core_width_px,
         1.2f * crt.beam_intensity * intensity_scale,
         (vg_color){pal.primary.r, pal.primary.g, pal.primary.b, 1.0f},
-        VG_BLEND_ADDITIVE
+        VG_BLEND_ALPHA
     );
     vg_stroke_style over_halo = txt_halo;
     vg_stroke_style over_main = txt_main;
@@ -2730,7 +2739,7 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         main_line_width * crt.beam_core_width_px * 0.90f,
         0.92f * crt.beam_intensity * intensity_scale,
         (vg_color){pal.primary.r, pal.primary.g, pal.primary.b, 0.85f},
-        VG_BLEND_ADDITIVE
+        VG_BLEND_ALPHA
     );
 
     if (metrics->show_acoustics) {
@@ -2953,7 +2962,7 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             u = 1.0f;
         }
         const float parallax = 0.08f + u * 0.28f;
-        const float persistence_trail = 1.0f + (1.0f - crt.persistence_decay) * 6.0f;
+        const float persistence_trail = 1.0f + (1.0f - crt.persistence_decay) * 2.8f;
         float tx = g->stars[i].x + (g->stars[i].prev_x - g->stars[i].x) * (1.4f + 2.6f * u) * persistence_trail;
         const float ty = g->stars[i].y + (g->stars[i].prev_y - g->stars[i].y) * (1.4f + 2.6f * u);
         float sx = repeatf(g->stars[i].x - g->camera_x * parallax, g->world_w);
@@ -2969,10 +2978,10 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         };
         vg_stroke_style sh = star_halo;
         vg_stroke_style sm = star_main;
-        sh.width_px *= 0.85f + u * 0.9f;
-        sm.width_px *= 0.75f + u * 0.7f;
-        sh.intensity *= 0.7f + u * 0.7f;
-        sm.intensity *= 0.8f + u * 0.6f;
+        sh.width_px *= 0.70f + u * 0.55f;
+        sm.width_px *= 0.62f + u * 0.50f;
+        sh.intensity *= 0.40f + u * 0.36f;
+        sm.intensity *= 0.52f + u * 0.34f;
 
         r = vg_draw_polyline(ctx, seg, 2, &sh, 0);
         if (r != VG_OK) {
@@ -3123,7 +3132,13 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         }
     } else {
         /* Foreground vector landscape layers for depth/parallax. */
-        r = draw_parallax_landscape(ctx, g->world_w, g->world_h, g->camera_x, 1.20f, g->world_h * 0.18f, 22.0f, &land_halo, &land_main);
+        vg_stroke_style land1_halo = land_halo;
+        vg_stroke_style land1_main = land_main;
+        if (g->level_style == LEVEL_STYLE_DEFENDER) {
+            land1_halo.width_px *= 1.16f;
+            land1_main.width_px *= 1.14f;
+        }
+        r = draw_parallax_landscape(ctx, g->world_w, g->world_h, g->camera_x, 1.20f, g->world_h * 0.18f, 22.0f, &land1_halo, &land1_main);
         if (r != VG_OK) {
             return r;
         }
@@ -3131,6 +3146,10 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         vg_stroke_style land2_main = land_main;
         land2_halo.width_px *= 1.15f;
         land2_main.width_px *= 1.10f;
+        if (g->level_style == LEVEL_STYLE_DEFENDER) {
+            land2_halo.width_px *= 1.12f;
+            land2_main.width_px *= 1.10f;
+        }
         land2_halo.intensity *= 1.05f;
         land2_main.intensity *= 1.08f;
         land2_main.color = (vg_color){pal.secondary.r, pal.secondary.g, pal.secondary.b, 0.9f};
