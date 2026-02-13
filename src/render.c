@@ -34,7 +34,8 @@ typedef struct wormhole_cache {
     vg_vec2 loop_rel_modern[WORMHOLE_ROWS][WORMHOLE_VN];
     vg_vec2 loop_rel_legacy[WORMHOLE_ROWS][WORMHOLE_VN];
     float loop_face_legacy[WORMHOLE_ROWS][WORMHOLE_VN];
-    vg_vec2 rail_rel[WORMHOLE_COLS][WORMHOLE_ROWS];
+    vg_vec2 rail_rel_modern[WORMHOLE_COLS][WORMHOLE_ROWS];
+    vg_vec2 rail_rel_legacy[WORMHOLE_COLS][WORMHOLE_ROWS];
     float rail_face_legacy[WORMHOLE_COLS][WORMHOLE_ROWS];
     float row_fade[WORMHOLE_ROWS];
 } wormhole_cache;
@@ -191,14 +192,17 @@ static void wormhole_cache_build(wormhole_cache* c, float world_w, float world_h
         const float rx = row_rx[j];
         const float ry = row_ry[j];
         const float drdy = row_drdy[j];
+        /* Keep perceived "front" on the inner side of both halves of the hourglass. */
+        const float hemi = (sy < 0.0f) ? 1.0f : -1.0f;
 
         for (int i = 0; i < WORMHOLE_VN; ++i) {
             {
                 const float ang = (float)i / (float)WORMHOLE_VN * 6.28318530718f;
                 const float ca = cosf(ang);
                 const float sa = sinf(ang);
+                const float sa_hemi = sa * hemi;
                 c->loop_rel_modern[j][i].x = ca * rx;
-                c->loop_rel_modern[j][i].y = sy * h_span + sa * ry;
+                c->loop_rel_modern[j][i].y = sy * h_span + sa_hemi * ry;
             }
             {
                 const float ang = (float)i / (float)(WORMHOLE_VN - 1) * 6.28318530718f;
@@ -220,9 +224,14 @@ static void wormhole_cache_build(wormhole_cache* c, float world_w, float world_h
             const float sy = row_sy[j];
             const float rx = row_rx[j];
             const float ry = row_ry[j];
-            c->rail_rel[col][j].x = cp * rx;
-            c->rail_rel[col][j].y = sy * h_span + sp * ry;
-            c->rail_face_legacy[col][j] = facing01_from_normal((v3){cp, -row_drdy[j], sp}, view_dir) * c->row_fade[j];
+            const float hemi = (sy < 0.0f) ? 1.0f : -1.0f;
+            const float sp_hemi = sp * hemi;
+            c->rail_rel_modern[col][j].x = cp * rx;
+            c->rail_rel_modern[col][j].y = sy * h_span + sp_hemi * ry;
+            c->rail_rel_legacy[col][j].x = cp * rx;
+            c->rail_rel_legacy[col][j].y = sy * h_span + sp * ry;
+            c->rail_face_legacy[col][j] =
+                facing01_from_normal((v3){cp, -row_drdy[j], sp}, view_dir) * c->row_fade[j];
         }
     }
 }
@@ -2425,8 +2434,8 @@ static vg_result draw_cylinder_wire(
                         const int c1 = wrapi(c0 + 1, WORMHOLE_COLS);
                         const float ct = cu - floorf(cu);
 		                for (int j = 0; j < WORMHOLE_ROWS; ++j) {
-		                    rail[j].x = cx + lerpf(wh.rail_rel[c0][j].x, wh.rail_rel[c1][j].x, ct);
-		                    rail[j].y = cy + lerpf(wh.rail_rel[c0][j].y, wh.rail_rel[c1][j].y, ct);
+		                    rail[j].x = cx + lerpf(wh.rail_rel_legacy[c0][j].x, wh.rail_rel_legacy[c1][j].x, ct);
+		                    rail[j].y = cy + lerpf(wh.rail_rel_legacy[c0][j].y, wh.rail_rel_legacy[c1][j].y, ct);
                             rail_face[j] = lerpf(wh.rail_face_legacy[c0][j], wh.rail_face_legacy[c1][j], ct);
 		                }
 		                vg_stroke_style rs = *main;
@@ -2478,8 +2487,8 @@ static vg_result draw_cylinder_wire(
                         const int c1 = wrapi(c0 + 1, WORMHOLE_COLS);
                         const float ct = cu - floorf(cu);
 		                for (int j = 0; j < WORMHOLE_ROWS; ++j) {
-		                    rail[j].x = cx + lerpf(wh.rail_rel[c0][j].x, wh.rail_rel[c1][j].x, ct);
-		                    rail[j].y = cy + lerpf(wh.rail_rel[c0][j].y, wh.rail_rel[c1][j].y, ct);
+		                    rail[j].x = cx + lerpf(wh.rail_rel_modern[c0][j].x, wh.rail_rel_modern[c1][j].x, ct);
+		                    rail[j].y = cy + lerpf(wh.rail_rel_modern[c0][j].y, wh.rail_rel_modern[c1][j].y, ct);
 		                }
 		                const float fade = 0.90f;
 		                vg_stroke_style rh = *halo;
