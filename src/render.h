@@ -2,6 +2,7 @@
 #define V_TYPE_RENDER_H
 
 #include "game.h"
+#include "planetarium/planetarium_types.h"
 #include "vg.h"
 #include <stdint.h>
 
@@ -10,8 +11,6 @@
 #define ACOUSTICS_SLOT_COUNT 5
 #define VIDEO_MENU_RES_COUNT 6
 #define VIDEO_MENU_DIAL_COUNT 9
-#define PLANETARIUM_MAX_SYSTEMS 8
-
 typedef struct render_metrics {
     float fps;
     float dt;
@@ -32,6 +31,7 @@ typedef struct render_metrics {
     int acoustics_selected;
     int acoustics_fire_slot_selected;
     int acoustics_thr_slot_selected;
+    const planetary_system_def* planetarium_system;
     int planetarium_selected;
     int planetarium_system_count;
     int planetarium_systems_quelled;

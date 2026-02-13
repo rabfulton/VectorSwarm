@@ -1,4 +1,6 @@
 #include "game.h"
+#include "planetarium/planetarium_registry.h"
+#include "planetarium/planetarium_validate.h"
 #include "planetarium_propaganda.h"
 #include "render.h"
 #include "ui_layout.h"
@@ -42,8 +44,6 @@
 #define ACOUSTICS_SLOTS_PATH "acoustics_slots.cfg"
 #define SETTINGS_PATH "settings.cfg"
 #define ACOUSTICS_SCOPE_HISTORY_SAMPLES 8192
-
-#define PLANETARIUM_NODE_COUNT 6
 
 typedef struct video_resolution {
     int w;
@@ -175,9 +175,9 @@ typedef struct app {
     int acoustics_mouse_drag;
     float acoustics_value_01[ACOUSTICS_SLIDER_COUNT];
     int thruster_note_on;
+    int current_system_index;
     int planetarium_selected;
-    int planetarium_system_count;
-    int planetarium_nodes_quelled[PLANETARIUM_MAX_SYSTEMS];
+    int planetarium_nodes_quelled[PLANETARIUM_MAX_SYSTEMS][PLANETARIUM_MAX_SYSTEMS];
     uint8_t* nick_rgba8;
     uint32_t nick_w;
     uint32_t nick_h;
@@ -225,13 +225,59 @@ static float rand01_from_state(uint32_t* s) {
     return (float)((*s >> 8) & 0x00ffffffu) / 16777215.0f;
 }
 
-static int planetarium_quelled_count(const app* a) {
+static const planetary_system_def* app_planetarium_system(const app* a) {
+    if (!a) {
+        return NULL;
+    }
+    const planetary_system_def* sys = planetarium_get_system(a->current_system_index);
+    if (sys) {
+        return sys;
+    }
+    return planetarium_get_system(0);
+}
+
+static int app_planetarium_planet_count(const app* a) {
+    const planetary_system_def* sys = app_planetarium_system(a);
+    if (!sys || !sys->planets || sys->planet_count <= 0) {
+        return 1;
+    }
+    if (sys->planet_count > PLANETARIUM_MAX_SYSTEMS) {
+        return PLANETARIUM_MAX_SYSTEMS;
+    }
+    return sys->planet_count;
+}
+
+static int app_planetarium_node_quelled(const app* a, int planet_idx) {
     if (!a) {
         return 0;
     }
+    if (a->current_system_index < 0 || a->current_system_index >= PLANETARIUM_MAX_SYSTEMS) {
+        return 0;
+    }
+    if (planet_idx < 0 || planet_idx >= PLANETARIUM_MAX_SYSTEMS) {
+        return 0;
+    }
+    return a->planetarium_nodes_quelled[a->current_system_index][planet_idx] ? 1 : 0;
+}
+
+static void app_planetarium_set_node_quelled(app* a, int planet_idx, int quelled) {
+    if (!a) {
+        return;
+    }
+    if (a->current_system_index < 0 || a->current_system_index >= PLANETARIUM_MAX_SYSTEMS) {
+        return;
+    }
+    if (planet_idx < 0 || planet_idx >= PLANETARIUM_MAX_SYSTEMS) {
+        return;
+    }
+    a->planetarium_nodes_quelled[a->current_system_index][planet_idx] = quelled ? 1 : 0;
+}
+
+static int planetarium_quelled_count(const app* a) {
+    const int planets = app_planetarium_planet_count(a);
     int count = 0;
-    for (int i = 0; i < a->planetarium_system_count && i < PLANETARIUM_MAX_SYSTEMS; ++i) {
-        if (a->planetarium_nodes_quelled[i]) {
+    for (int i = 0; i < planets; ++i) {
+        if (app_planetarium_node_quelled(a, i)) {
             count++;
         }
     }
@@ -515,16 +561,28 @@ static void set_tty_message(app* a, const char* msg) {
     a->wave_tty.timer_s = 0.02f;
 }
 
+static void sync_planetarium_marquee(app* a) {
+    vg_text_fx_marquee_set_text(&a->planetarium_marquee, k_planetarium_propaganda_marquee);
+}
+
 static void announce_planetarium_selection(app* a) {
     if (!a) {
         return;
     }
-    if (a->planetarium_selected >= 0 && a->planetarium_selected < a->planetarium_system_count) {
-        char msg[64];
-        snprintf(msg, sizeof(msg), "SYSTEM %02d CONTRACT", a->planetarium_selected + 1);
-        set_tty_message(a, msg);
+    const planetary_system_def* sys = app_planetarium_system(a);
+    const int planet_count = app_planetarium_planet_count(a);
+    if (sys && a->planetarium_selected >= 0 && a->planetarium_selected < planet_count &&
+        sys->planets && a->planetarium_selected < sys->planet_count) {
+        const char* title = sys->planets[a->planetarium_selected].display_name;
+        if (title && title[0] != '\0') {
+            set_tty_message(a, title);
+            return;
+        }
+    }
+    if (sys && sys->boss_gate_label && sys->boss_gate_label[0] != '\0') {
+        set_tty_message(a, sys->boss_gate_label);
     } else {
-        set_tty_message(a, "BOSS GATE CONTRACT");
+        set_tty_message(a, "BOSS GATE");
     }
 }
 
@@ -1544,19 +1602,20 @@ static void planetarium_node_center(const app* a, int idx, float* out_x, float* 
     const float w = (float)a->swapchain_extent.width;
     const float h = (float)a->swapchain_extent.height;
     const vg_rect panel = make_ui_safe_frame(w, h);
-    const vg_rect map = {panel.x + panel.w * 0.03f, panel.y + panel.h * 0.10f, panel.w * 0.56f, panel.h * 0.82f};
+    const vg_rect map = {panel.x + panel.w * 0.03f, panel.y + panel.h * 0.08f, panel.w * 0.56f, panel.h * 0.85f};
     const float cx = map.x + map.w * 0.50f;
     const float cy = map.y + map.h * 0.52f;
     const float t_s = (float)SDL_GetTicks() * 0.001f;
     if (idx < 0) {
         idx = 0;
     }
-    if (idx >= a->planetarium_system_count) {
+    const int planet_count = app_planetarium_planet_count(a);
+    if (idx >= planet_count) {
         *out_x = cx + map.w * 0.38f;
-        *out_y = cy;
+        *out_y = cy - map.h * 0.08f;
         return;
     }
-    const float orbit_t = ((float)idx + 1.0f) / ((float)a->planetarium_system_count + 1.0f);
+    const float orbit_t = ((float)idx + 1.0f) / ((float)planet_count + 1.0f);
     const float rx = map.w * (0.12f + orbit_t * 0.30f);
     const float ry = map.h * (0.04f + orbit_t * 0.11f);
     const float rot = 0.22f;
@@ -1582,7 +1641,7 @@ static int handle_planetarium_mouse(app* a, int mouse_x, int mouse_y, int set_va
     if (mx < panel.x || mx > panel.x + panel.w || my < panel.y || my > panel.y + panel.h) {
         return 0;
     }
-    const int boss_idx = a->planetarium_system_count;
+    const int boss_idx = app_planetarium_planet_count(a);
     const float r = fminf(w, h) * 0.024f;
     for (int i = 0; i <= boss_idx; ++i) {
         float cx = 0.0f;
@@ -2583,8 +2642,9 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .acoustics_selected = a->acoustics_selected,
         .acoustics_fire_slot_selected = a->acoustics_fire_slot_selected,
         .acoustics_thr_slot_selected = a->acoustics_thr_slot_selected,
+        .planetarium_system = app_planetarium_system(a),
         .planetarium_selected = a->planetarium_selected,
-        .planetarium_system_count = a->planetarium_system_count,
+        .planetarium_system_count = app_planetarium_planet_count(a),
         .planetarium_systems_quelled = planetarium_quelled_count(a),
         .nick_rgba8 = a->nick_rgba8,
         .nick_w = a->nick_w,
@@ -2609,7 +2669,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         metrics.video_res_h[i] = k_video_resolutions[i].h;
     }
     for (int i = 0; i < PLANETARIUM_MAX_SYSTEMS; ++i) {
-        metrics.planetarium_nodes_quelled[i] = a->planetarium_nodes_quelled[i] ? 1 : 0;
+        metrics.planetarium_nodes_quelled[i] = app_planetarium_node_quelled(a, i);
     }
     for (int i = 0; i < VIDEO_MENU_DIAL_COUNT; ++i) {
         metrics.video_dial_01[i] = a->video_dial_01[i];
@@ -2749,8 +2809,8 @@ int main(void) {
     a.acoustics_mouse_drag = 0;
     a.wave_tty_text[0] = '\0';
     a.wave_tty_visible[0] = '\0';
+    a.current_system_index = 0;
     a.planetarium_selected = 0;
-    a.planetarium_system_count = PLANETARIUM_NODE_COUNT;
     memset(a.planetarium_nodes_quelled, 0, sizeof(a.planetarium_nodes_quelled));
     acoustics_defaults(&a);
     acoustics_slot_defaults(&a);
@@ -2799,6 +2859,9 @@ int main(void) {
     }
 
     init_planetarium_assets(&a);
+    if (!planetarium_validate_registry(stderr)) {
+        fprintf(stderr, "planetarium validation failed; continuing with best-effort defaults\n");
+    }
 
     game_init(&a.game, (float)a.swapchain_extent.width, (float)a.swapchain_extent.height);
     apply_video_lab_controls(&a);
@@ -2807,10 +2870,7 @@ int main(void) {
     vg_text_fx_typewriter_set_beep_profile(&a.wave_tty, 900.0f, 55.0f, 0.028f, 0.14f);
     vg_text_fx_typewriter_enable_beep(&a.wave_tty, 1);
     set_tty_message(&a, "TACTICAL UPLINK READY");
-    vg_text_fx_marquee_set_text(
-        &a.planetarium_marquee,
-        k_planetarium_propaganda_marquee
-    );
+    sync_planetarium_marquee(&a);
     vg_text_fx_marquee_set_speed(&a.planetarium_marquee, 70.0f);
     vg_text_fx_marquee_set_gap(&a.planetarium_marquee, 48.0f);
 
@@ -2859,6 +2919,7 @@ int main(void) {
                         a.show_acoustics = 0;
                         a.show_crt_ui = 0;
                         a.video_menu_dial_drag = -1;
+                        sync_planetarium_marquee(&a);
                         announce_planetarium_selection(&a);
                     }
                 } else if (a.show_video_menu && ev.key.keysym.sym == SDLK_a) {
@@ -2892,29 +2953,43 @@ int main(void) {
                         a.show_video_menu = 0;
                     }
                 } else if (a.show_planetarium && ev.key.keysym.sym == SDLK_LEFT) {
-                    const int max_idx = a.planetarium_system_count;
+                    const int max_idx = app_planetarium_planet_count(&a);
                     a.planetarium_selected = (a.planetarium_selected + max_idx) % (max_idx + 1);
                     announce_planetarium_selection(&a);
                 } else if (a.show_planetarium && ev.key.keysym.sym == SDLK_RIGHT) {
-                    const int max_idx = a.planetarium_system_count;
+                    const int max_idx = app_planetarium_planet_count(&a);
                     a.planetarium_selected = (a.planetarium_selected + 1) % (max_idx + 1);
                     announce_planetarium_selection(&a);
                 } else if (a.show_planetarium &&
                            (ev.key.keysym.sym == SDLK_RETURN || ev.key.keysym.sym == SDLK_KP_ENTER || ev.key.keysym.sym == SDLK_SPACE)) {
-                    const int boss_idx = a.planetarium_system_count;
+                    const planetary_system_def* sys = app_planetarium_system(&a);
+                    const int boss_idx = app_planetarium_planet_count(&a);
                     const int quelled = planetarium_quelled_count(&a);
                     if (a.planetarium_selected < boss_idx) {
-                        if (!a.planetarium_nodes_quelled[a.planetarium_selected]) {
-                            a.planetarium_nodes_quelled[a.planetarium_selected] = 1;
+                        if (!app_planetarium_node_quelled(&a, a.planetarium_selected)) {
+                            app_planetarium_set_node_quelled(&a, a.planetarium_selected, 1);
                             set_tty_message(&a, "contract accepted: system marked quelled");
                         } else {
                             set_tty_message(&a, "system already quelled");
                         }
                     } else if (quelled >= boss_idx) {
                         a.show_planetarium = 0;
-                        set_tty_message(&a, "boss contract armed: launching sortie");
+                        if (sys && sys->boss_gate_ready_text && sys->boss_gate_ready_text[0] != '\0') {
+                            set_tty_message(&a, sys->boss_gate_ready_text);
+                        } else {
+                            set_tty_message(&a, "boss contract armed: launching sortie");
+                        }
+                        if (a.current_system_index + 1 < planetarium_get_system_count()) {
+                            a.current_system_index++;
+                            a.planetarium_selected = 0;
+                            sync_planetarium_marquee(&a);
+                        }
                     } else {
-                        set_tty_message(&a, "boss locked: quell all systems first");
+                        if (sys && sys->boss_gate_locked_text && sys->boss_gate_locked_text[0] != '\0') {
+                            set_tty_message(&a, sys->boss_gate_locked_text);
+                        } else {
+                            set_tty_message(&a, "boss locked: quell all systems first");
+                        }
                     }
                 } else if (a.show_acoustics && ev.key.keysym.sym == SDLK_s) {
                     capture_current_to_selected_slots(&a);

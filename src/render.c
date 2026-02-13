@@ -1,15 +1,19 @@
 #include "render.h"
 
+#include "planetarium/commander_nick_dialogues.h"
 #include "vg_ui.h"
 #include "vg_ui_ext.h"
 #include "vg_pointer.h"
 #include "vg_image.h"
 #include "vg_svg.h"
 #include "vg_text_fx.h"
+#include "vg_text_layout.h"
 #include "ui_layout.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 
 typedef struct v3 {
     float x;
@@ -1033,7 +1037,7 @@ static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render
 static void planetarium_node_center(float w, float h, int system_count, int idx, float t_s, float* out_x, float* out_y) {
     static const int k_primes[PLANETARIUM_MAX_SYSTEMS] = {2, 3, 5, 7, 11, 13, 17, 19};
     const vg_rect panel = make_ui_safe_frame(w, h);
-    const vg_rect map = {panel.x + panel.w * 0.03f, panel.y + panel.h * 0.10f, panel.w * 0.56f, panel.h * 0.82f};
+    const vg_rect map = {panel.x + panel.w * 0.03f, panel.y + panel.h * 0.08f, panel.w * 0.56f, panel.h * 0.85f};
     const float cx = map.x + map.w * 0.50f;
     const float cy = map.y + map.h * 0.52f;
     if (idx < system_count) {
@@ -1050,47 +1054,231 @@ static void planetarium_node_center(float w, float h, int system_count, int idx,
         *out_y = cy + c * rx * sinf(rot) + s * ry * cosf(rot);
     } else {
         *out_x = cx + map.w * 0.38f;
-        *out_y = cy;
+        *out_y = cy - map.h * 0.08f;
     }
 }
 
+static const planet_def* metrics_planet(const render_metrics* metrics, int idx) {
+    if (!metrics || !metrics->planetarium_system || !metrics->planetarium_system->planets) {
+        return NULL;
+    }
+    if (idx < 0 || idx >= metrics->planetarium_system->planet_count) {
+        return NULL;
+    }
+    return &metrics->planetarium_system->planets[idx];
+}
+
+static const char* fallback_planet_label(int idx) {
+    static char label[32];
+    snprintf(label, sizeof(label), "SYSTEM %02d", idx + 1);
+    return label;
+}
+
+static int append_char_dyn(char** buf, size_t* len, size_t* cap, char c) {
+    if (!buf || !len || !cap) {
+        return 0;
+    }
+    if (*len + 1u >= *cap) {
+        size_t next = (*cap == 0u) ? 256u : (*cap * 2u);
+        char* grown = (char*)realloc(*buf, next);
+        if (!grown) {
+            return 0;
+        }
+        *buf = grown;
+        *cap = next;
+    }
+    (*buf)[(*len)++] = c;
+    (*buf)[*len] = '\0';
+    return 1;
+}
+
+static int append_cstr_dyn(char** buf, size_t* len, size_t* cap, const char* s) {
+    if (!s) {
+        return 1;
+    }
+    for (const char* p = s; *p; ++p) {
+        if (!append_char_dyn(buf, len, cap, *p)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static char* wrap_text_wordwise(const char* text, float size_px, float letter_spacing_px, float width_px) {
+    if (!text) {
+        return NULL;
+    }
+    char* out = NULL;
+    size_t out_len = 0u;
+    size_t out_cap = 0u;
+    float line_w = 0.0f;
+    int at_line_start = 1;
+    const float space_w = vg_measure_text(" ", size_px, letter_spacing_px);
+
+    const char* p = text;
+    while (*p) {
+        if (*p == '\n') {
+            if (!append_char_dyn(&out, &out_len, &out_cap, '\n')) {
+                free(out);
+                return NULL;
+            }
+            line_w = 0.0f;
+            at_line_start = 1;
+            p++;
+            while (*p == ' ' || *p == '\t') {
+                p++;
+            }
+            continue;
+        }
+        while (*p == ' ' || *p == '\t' || *p == '\r') {
+            p++;
+        }
+        if (!*p) {
+            break;
+        }
+
+        char word[512];
+        size_t wi = 0u;
+        while (*p && *p != '\n' && *p != ' ' && *p != '\t' && *p != '\r') {
+            if (wi + 1u < sizeof(word)) {
+                word[wi++] = *p;
+            }
+            p++;
+        }
+        word[wi] = '\0';
+        if (wi == 0u) {
+            continue;
+        }
+
+        const float word_w = vg_measure_text(word, size_px, letter_spacing_px);
+        const float needed = at_line_start ? word_w : (line_w + space_w + word_w);
+        if (!at_line_start && needed > width_px) {
+            if (!append_char_dyn(&out, &out_len, &out_cap, '\n')) {
+                free(out);
+                return NULL;
+            }
+            line_w = 0.0f;
+            at_line_start = 1;
+        }
+
+        if (!at_line_start) {
+            if (!append_char_dyn(&out, &out_len, &out_cap, ' ')) {
+                free(out);
+                return NULL;
+            }
+            line_w += space_w;
+        }
+        if (!append_cstr_dyn(&out, &out_len, &out_cap, word)) {
+            free(out);
+            return NULL;
+        }
+        line_w += word_w;
+        at_line_start = 0;
+    }
+
+    if (!out) {
+        out = (char*)malloc(1u);
+        if (!out) {
+            return NULL;
+        }
+        out[0] = '\0';
+    }
+    return out;
+}
+
+static vg_result draw_wrapped_text_block_down(
+    vg_context* ctx,
+    const char* text,
+    float x,
+    float top_y,
+    float bottom_y,
+    float width,
+    float size_px,
+    float letter_spacing_px,
+    const vg_stroke_style* frame_style,
+    const vg_stroke_style* text_style,
+    float* out_height_px
+) {
+    if (!ctx || !text || !frame_style || !text_style || width <= 0.0f || top_y <= bottom_y) {
+        return VG_ERROR_INVALID_ARGUMENT;
+    }
+    const float line_h = size_px * 1.60f;
+    const float avail_h = top_y - bottom_y;
+    if (avail_h < line_h) {
+        if (out_height_px) {
+            *out_height_px = 0.0f;
+        }
+        return VG_OK;
+    }
+
+    char* normalized = wrap_text_wordwise(text, size_px, letter_spacing_px, width);
+    if (!normalized) {
+        return VG_ERROR_OUT_OF_MEMORY;
+    }
+    size_t measured_lines = 0u;
+    (void)vg_measure_text_wrapped(normalized, size_px, letter_spacing_px, width, &measured_lines);
+
+    vg_text_layout layout = {0};
+    vg_text_layout_params params = {
+        .bounds = (vg_rect){0.0f, 0.0f, width, avail_h},
+        .size_px = size_px,
+        .letter_spacing_px = letter_spacing_px,
+        .line_height_px = line_h,
+        .align = VG_TEXT_ALIGN_LEFT
+    };
+    vg_result r = vg_text_layout_build(normalized, &params, &layout);
+    if (r != VG_OK) {
+        free(normalized);
+        vg_text_layout_reset(&layout);
+        return r;
+    }
+
+    int max_lines = (int)floorf(avail_h / line_h);
+    if (max_lines < 0) {
+        max_lines = 0;
+    }
+    int draw_lines = (int)layout.line_count;
+    if (draw_lines > max_lines) {
+        draw_lines = max_lines;
+    }
+    if ((size_t)draw_lines > measured_lines && measured_lines > 0u) {
+        draw_lines = (int)measured_lines;
+    }
+
+    for (int i = 0; i < draw_lines; ++i) {
+        const vg_text_layout_line* ln = &layout.lines[i];
+        char line_buf[1024];
+        size_t n = ln->text_length;
+        if (n >= sizeof(line_buf)) {
+            n = sizeof(line_buf) - 1u;
+        }
+        memcpy(line_buf, layout.text + ln->text_offset, n);
+        line_buf[n] = '\0';
+        r = draw_text_vector_glow(
+            ctx,
+            line_buf,
+            (vg_vec2){x, top_y - (float)i * line_h},
+            size_px,
+            letter_spacing_px,
+            frame_style,
+            text_style
+        );
+        if (r != VG_OK) {
+            free(normalized);
+            vg_text_layout_reset(&layout);
+            return r;
+        }
+    }
+
+    if (out_height_px) {
+        *out_height_px = (float)draw_lines * line_h;
+    }
+    free(normalized);
+    vg_text_layout_reset(&layout);
+    return VG_OK;
+}
+
 static vg_result draw_planetarium_ui(vg_context* ctx, float w, float h, const render_metrics* metrics, float t_s) {
-    static const char* k_system_names[PLANETARIUM_MAX_SYSTEMS] = {
-        "THETA PRI",
-        "KELVIN ARC",
-        "NOVA REACH",
-        "VANTA BELT",
-        "EMBER VEIL",
-        "ORBITAL IX",
-        "CERULEAN RIFT",
-        "BLACK SITE"
-    };
-    static const char* k_system_lore[PLANETARIUM_MAX_SYSTEMS][3] = {
-        {"RELAY SHELL OVERRUN BY SCAV DRONES.",
-         "NICK: CLEAR LANES, RECOVER NAV SHARDS.",
-         "PROFILE: INTERCEPTOR HEAVY, LOW ARMOR."},
-        {"FRACTURED MINING ARC, UNSTABLE GRIDS.",
-         "NICK: STRIKE BEFORE DEFENSES RE ARM.",
-         "PROFILE: MEDIUM THREAT, BURST FIGHTS."},
-        {"TRADE SPINE DARK AFTER CONVOY LOSSES.",
-         "NICK: REOPEN ESCORT CORRIDOR FAST.",
-         "PROFILE: MIXED FORMATIONS, STEADY HEAT."},
-        {"DERELICT BELT MASKING HOT SIGNATURES.",
-         "NICK: TRUST SCANS OVER VISUAL NOISE.",
-         "PROFILE: AMBUSH VECTORS, COLLISION RISK."},
-        {"THERMAL FRONTS AROUND OLD HABITATS.",
-         "NICK: TARGET BLOOMS, AVOID DEAD ZONES.",
-         "PROFILE: AGGRESSIVE PACKS, FAST WAVES."},
-        {"OUTER PATROL RING FEEDING COMMAND.",
-         "NICK: SEVER UPLINKS BEFORE REINFORCE.",
-         "PROFILE: COMMAND ESCORTS, SHARP RETURN."},
-        {"IONIC FRACTURE BENDS LONG RANGE SCAN.",
-         "NICK: MAINTAIN FORMATION UNDER DRIFT.",
-         "PROFILE: EVASIVE TARGETS, TRACKING TEST."},
-        {"BLACK CHANNEL LOCKS FINAL BOSS GATE.",
-         "NICK: THIS IS THE BREACH CORRIDOR.",
-         "PROFILE: ELITE DEFENSES, BOSS PREP."}
-    };
     const float ui = ui_reference_scale(w, h);
     const palette_theme pal = get_palette_theme(metrics->palette_mode);
     vg_stroke_style frame = {
@@ -1108,9 +1296,10 @@ static vg_result draw_planetarium_ui(vg_context* ctx, float w, float h, const re
     vg_fill_style haze = {.intensity = 0.30f, .color = pal.haze, .blend = VG_BLEND_ALPHA};
 
     const vg_rect panel = make_ui_safe_frame(w, h);
-    const vg_rect map = {panel.x + panel.w * 0.03f, panel.y + panel.h * 0.10f, panel.w * 0.56f, panel.h * 0.82f};
-    const vg_rect side = {panel.x + panel.w * 0.62f, panel.y + panel.h * 0.10f, panel.w * 0.35f, panel.h * 0.82f};
+    const vg_rect map = {panel.x + panel.w * 0.03f, panel.y + panel.h * 0.08f, panel.w * 0.56f, panel.h * 0.85f};
+    const vg_rect side = {panel.x + panel.w * 0.62f, panel.y + panel.h * 0.08f, panel.w * 0.35f, panel.h * 0.85f};
     const vg_rect nick_rect = {side.x + side.w * 0.05f, side.y + side.h * 0.56f, side.w * 0.32f, side.h * 0.40f};
+    const planetary_system_def* system = metrics->planetarium_system;
 
     vg_result r = vg_fill_rect(ctx, panel, &haze);
     if (r != VG_OK) return r;
@@ -1151,7 +1340,7 @@ static vg_result draw_planetarium_ui(vg_context* ctx, float w, float h, const re
         );
         if (r != VG_OK) return r;
     }
-    r = draw_text_vector_glow(ctx, "3 TO EXIT   LEFT/RIGHT SELECT   ENTER ACCEPT", (vg_vec2){panel.x + panel.w * 0.03f, panel.y + panel.h * 0.03f}, 9.5f * ui, 0.75f * ui, &frame, &txt);
+    r = draw_text_vector_glow(ctx, "3 TO EXIT   LEFT/RIGHT SELECT   ENTER ACCEPT", (vg_vec2){panel.x + panel.w * 0.03f, panel.y + panel.h * 0.03f}, 11.8f * ui, 0.90f * ui, &frame, &txt);
     if (r != VG_OK) return r;
     {
         char tty_fallback[96];
@@ -1160,9 +1349,17 @@ static vg_result draw_planetarium_ui(vg_context* ctx, float w, float h, const re
             int tty_selected = metrics->planetarium_selected;
             if (tty_selected < 0) tty_selected = 0;
             if (tty_selected >= metrics->planetarium_system_count) {
-                snprintf(tty_fallback, sizeof(tty_fallback), "BOSS GATE CONTRACT");
+                const char* boss = (system && system->boss_gate_label && system->boss_gate_label[0] != '\0')
+                                       ? system->boss_gate_label
+                                       : "BOSS GATE";
+                snprintf(tty_fallback, sizeof(tty_fallback), "%s", boss);
             } else {
-                snprintf(tty_fallback, sizeof(tty_fallback), "SYSTEM %02d CONTRACT", tty_selected + 1);
+                const planet_def* p = metrics_planet(metrics, tty_selected);
+                if (p && p->display_name && p->display_name[0] != '\0') {
+                    snprintf(tty_fallback, sizeof(tty_fallback), "%s", p->display_name);
+                } else {
+                    snprintf(tty_fallback, sizeof(tty_fallback), "SYSTEM %02d", tty_selected + 1);
+                }
             }
             tty_line = tty_fallback;
         }
@@ -1170,8 +1367,8 @@ static vg_result draw_planetarium_ui(vg_context* ctx, float w, float h, const re
             ctx,
             tty_line,
             (vg_vec2){map.x + map.w * 0.02f, map.y + map.h * 0.95f},
-            10.8f * ui,
-            0.72f * ui,
+            13.4f * ui,
+            0.90f * ui,
             &frame,
             &txt
         );
@@ -1197,15 +1394,31 @@ static vg_result draw_planetarium_ui(vg_context* ctx, float w, float h, const re
         char left_status[80];
         const int boss_unlocked = (metrics->planetarium_systems_quelled >= systems);
         if (selected_idx >= systems) {
-            snprintf(left_title, sizeof(left_title), "BOSS GATE CONTRACT");
+            const char* boss = (system && system->boss_gate_label && system->boss_gate_label[0] != '\0')
+                                   ? system->boss_gate_label
+                                   : "BOSS GATE";
+            snprintf(left_title, sizeof(left_title), "%s", boss);
             snprintf(left_status, sizeof(left_status), "STATUS  %s", boss_unlocked ? "READY" : "LOCKED");
         } else {
-            snprintf(left_title, sizeof(left_title), "%s CONTRACT", k_system_names[selected_idx % PLANETARIUM_MAX_SYSTEMS]);
-            snprintf(left_status, sizeof(left_status), "STATUS  %s", metrics->planetarium_nodes_quelled[selected_idx] ? "QUELLED" : "PENDING");
+            const planet_def* p = metrics_planet(metrics, selected_idx);
+            const char* pending = "PENDING";
+            const char* quelled = "QUELLED";
+            if (p) {
+                if (p->lore.status_pending && p->lore.status_pending[0] != '\0') {
+                    pending = p->lore.status_pending;
+                }
+                if (p->lore.status_quelled && p->lore.status_quelled[0] != '\0') {
+                    quelled = p->lore.status_quelled;
+                }
+            }
+            left_title[0] = '\0';
+            snprintf(left_status, sizeof(left_status), "STATUS  %s", metrics->planetarium_nodes_quelled[selected_idx] ? quelled : pending);
         }
-        r = draw_text_vector_glow(ctx, left_title, (vg_vec2){map.x + map.w * 0.02f, map.y + map.h * 0.90f}, 12.8f * ui, 0.88f * ui, &frame, &txt);
-        if (r != VG_OK) return r;
-        r = draw_text_vector_glow(ctx, left_status, (vg_vec2){map.x + map.w * 0.02f, map.y + map.h * 0.86f}, 9.6f * ui, 0.70f * ui, &frame, &txt);
+        if (left_title[0] != '\0') {
+            r = draw_text_vector_glow(ctx, left_title, (vg_vec2){map.x + map.w * 0.02f, map.y + map.h * 0.90f}, 12.8f * ui, 0.88f * ui, &frame, &txt);
+            if (r != VG_OK) return r;
+        }
+        r = draw_text_vector_glow(ctx, left_status, (vg_vec2){map.x + map.w * 0.02f, map.y + map.h * 0.91f}, 9.6f * ui, 0.70f * ui, &frame, &txt);
         if (r != VG_OK) return r;
     }
 
@@ -1267,7 +1480,10 @@ static vg_result draw_planetarium_ui(vg_context* ctx, float w, float h, const re
         if (r != VG_OK) return r;
 
         {
-            const char* label = k_system_names[i % PLANETARIUM_MAX_SYSTEMS];
+            const planet_def* p = metrics_planet(metrics, i);
+            const char* label = (p && p->display_name && p->display_name[0] != '\0')
+                                    ? p->display_name
+                                    : fallback_planet_label(i);
             const float lx = nx + node_r * 1.6f;
             const float ly = ny + node_r * (i & 1 ? -1.2f : 1.4f);
         r = draw_text_vector_glow(ctx, label, (vg_vec2){lx, ly}, 7.4f * ui, 0.60f * ui, &frame, &txt);
@@ -1285,9 +1501,6 @@ static vg_result draw_planetarium_ui(vg_context* ctx, float w, float h, const re
         gate.width_px = 1.2f * ui;
         gate.intensity = 0.78f;
         gate.color.a = 0.50f;
-        vg_vec2 bridge[2] = {{cx + map.w * 0.30f, cy}, {bx, by}};
-        r = vg_draw_polyline(ctx, bridge, 2, &gate, 0);
-        if (r != VG_OK) return r;
         vg_fill_style bf = {
             .intensity = 1.0f,
             .color = boss_unlocked ? (vg_color){1.0f, 0.34f, 0.32f, 0.95f} : (vg_color){0.52f, 0.20f, 0.22f, 0.58f},
@@ -1309,7 +1522,12 @@ static vg_result draw_planetarium_ui(vg_context* ctx, float w, float h, const re
             r = vg_draw_polyline(ctx, ring, cn, &gate, 1);
             if (r != VG_OK) return r;
         }
-        r = draw_text_vector_glow(ctx, "BOSS GATE", (vg_vec2){bx + node_r * 2.0f, by + node_r * 1.6f}, 8.0f * ui, 0.62f * ui, &frame, &txt);
+        {
+            const char* boss_label = (system && system->boss_gate_label && system->boss_gate_label[0] != '\0')
+                                         ? system->boss_gate_label
+                                         : "BOSS GATE";
+            r = draw_text_vector_glow(ctx, boss_label, (vg_vec2){bx + node_r * 2.0f, by + node_r * 1.6f}, 8.0f * ui, 0.62f * ui, &frame, &txt);
+        }
         if (r != VG_OK) return r;
     }
 
@@ -1335,60 +1553,161 @@ static vg_result draw_planetarium_ui(vg_context* ctx, float w, float h, const re
         const int boss_unlocked = (metrics->planetarium_systems_quelled >= systems);
         const int remaining = systems - metrics->planetarium_systems_quelled;
         const float stats_x = side.x + side.w * 0.42f;
+        const float meta_size = 11.0f * ui;
+        const float meta_weight = 0.42f * ui;
+        const float body_size = 11.2f * ui;
+        const float body_weight = 0.34f * ui;
+        vg_stroke_style frame_emph = frame;
+        frame_emph.intensity *= 1.18f;
+        frame_emph.width_px *= 1.20f;
+        vg_stroke_style txt_emph = txt;
+        txt_emph.intensity *= 1.24f;
+        txt_emph.width_px *= 1.20f;
         char stat_line[128];
-        r = draw_text_vector_glow(ctx, "COMMANDER NICK", (vg_vec2){side.x + side.w * 0.06f, side.y + side.h * 0.95f}, 10.4f * ui, 0.76f * ui, &frame, &txt);
+        r = draw_text_vector_glow(
+            ctx,
+            "MISSION BRIEFING FROM COMMANDER NICK",
+            (vg_vec2){side.x + side.w * 0.06f, side.y + side.h * 0.95f},
+            11.8f * ui,
+            0.92f * ui,
+            &frame_emph,
+            &txt_emph
+        );
         if (r != VG_OK) return r;
+        if (system && system->display_name && system->display_name[0] != '\0') {
+            snprintf(stat_line, sizeof(stat_line), "SECTOR  %s", system->display_name);
+            r = draw_text_vector_glow(ctx, stat_line, (vg_vec2){stats_x, side.y + side.h * 0.86f}, meta_size, meta_weight, &frame, &txt);
+            if (r != VG_OK) return r;
+        }
         snprintf(stat_line, sizeof(stat_line), "SYSTEMS QUELLED  %d / %d", metrics->planetarium_systems_quelled, systems);
-        r = draw_text_vector_glow(ctx, stat_line, (vg_vec2){stats_x, side.y + side.h * 0.92f}, 7.4f * ui, 0.62f * ui, &frame, &txt);
+        r = draw_text_vector_glow(ctx, stat_line, (vg_vec2){stats_x, side.y + side.h * 0.82f}, meta_size, meta_weight, &frame, &txt);
         if (r != VG_OK) return r;
         snprintf(stat_line, sizeof(stat_line), "SYSTEMS REMAINING  %d", remaining > 0 ? remaining : 0);
-        r = draw_text_vector_glow(ctx, stat_line, (vg_vec2){stats_x, side.y + side.h * 0.88f}, 7.4f * ui, 0.62f * ui, &frame, &txt);
+        r = draw_text_vector_glow(ctx, stat_line, (vg_vec2){stats_x, side.y + side.h * 0.78f}, meta_size, meta_weight, &frame, &txt);
         if (r != VG_OK) return r;
         snprintf(stat_line, sizeof(stat_line), "BOSS GATE  %s", boss_unlocked ? "UNLOCKED" : "LOCKED");
-        r = draw_text_vector_glow(ctx, stat_line, (vg_vec2){stats_x, side.y + side.h * 0.84f}, 7.4f * ui, 0.62f * ui, &frame, &txt);
+        r = draw_text_vector_glow(ctx, stat_line, (vg_vec2){stats_x, side.y + side.h * 0.74f}, meta_size, meta_weight, &frame, &txt);
         if (r != VG_OK) return r;
-        snprintf(stat_line, sizeof(stat_line), "SELECTED  %s",
-                 (selected < systems) ? k_system_names[selected % PLANETARIUM_MAX_SYSTEMS] : "BOSS GATE");
-        r = draw_text_vector_glow(ctx, stat_line, (vg_vec2){stats_x, side.y + side.h * 0.80f}, 7.4f * ui, 0.62f * ui, &frame, &txt);
-        if (r != VG_OK) return r;
-        r = draw_text_vector_glow(ctx, "MISSION BRIEFING", (vg_vec2){side.x + side.w * 0.06f, side.y + side.h * 0.50f}, 9.8f * ui, 0.74f * ui, &frame, &txt);
-        if (r != VG_OK) return r;
-        if (selected < systems) {
-            for (int li = 0; li < 3; ++li) {
-                r = draw_text_vector_glow(
-                    ctx,
-                    k_system_lore[selected % PLANETARIUM_MAX_SYSTEMS][li],
-                    (vg_vec2){side.x + side.w * 0.06f, side.y + side.h * (0.44f - 0.045f * (float)li)},
-                    7.8f * ui,
-                    0.58f * ui,
-                    &frame,
-                    &txt
-                );
+        {
+            const planet_def* p = metrics_planet(metrics, selected);
+            const char* selected_label = (selected < systems)
+                                             ? ((p && p->display_name && p->display_name[0] != '\0')
+                                                    ? p->display_name
+                                                    : fallback_planet_label(selected))
+                                             : ((system && system->boss_gate_label && system->boss_gate_label[0] != '\0')
+                                                    ? system->boss_gate_label
+                                                    : "BOSS GATE");
+            snprintf(stat_line, sizeof(stat_line), "SELECTED  %s", selected_label);
+            r = draw_text_vector_glow(ctx, stat_line, (vg_vec2){stats_x, side.y + side.h * 0.70f}, meta_size, meta_weight, &frame, &txt);
+            if (r != VG_OK) return r;
+            if (p) {
+                snprintf(stat_line, sizeof(stat_line), "ORBIT LANE  %d", p->orbit_lane + 1);
+                r = draw_text_vector_glow(ctx, stat_line, (vg_vec2){stats_x, side.y + side.h * 0.66f}, meta_size, meta_weight, &frame, &txt);
                 if (r != VG_OK) return r;
             }
-        } else {
-            r = draw_text_vector_glow(ctx, "BOSS GATE TELEMETRY SYNCHRONIZED.", (vg_vec2){side.x + side.w * 0.06f, side.y + side.h * 0.43f}, 7.8f * ui, 0.58f * ui, &frame, &txt);
-            if (r != VG_OK) return r;
-            r = draw_text_vector_glow(ctx, "ALL SYSTEMS MUST BE QUELLED BEFORE LAUNCH.", (vg_vec2){side.x + side.w * 0.06f, side.y + side.h * 0.385f}, 7.8f * ui, 0.58f * ui, &frame, &txt);
-            if (r != VG_OK) return r;
-            r = draw_text_vector_glow(ctx, "EXPECT COORDINATED ELITE RESISTANCE.", (vg_vec2){side.x + side.w * 0.06f, side.y + side.h * 0.34f}, 7.8f * ui, 0.58f * ui, &frame, &txt);
-            if (r != VG_OK) return r;
         }
-    }
+        if (selected < systems) {
+            const planet_def* p = metrics_planet(metrics, selected);
+            float y = side.y + side.h * 0.53f;
+            const float text_x = side.x + side.w * 0.06f;
+            const float text_w = side.w * 0.90f;
+            const float text_bottom = side.y + side.h * 0.03f;
+            const float gap = body_size * 0.70f;
+            r = draw_text_vector_glow(ctx, "NICK:", (vg_vec2){side.x + side.w * 0.06f, y}, meta_size, meta_weight * 1.10f, &frame_emph, &txt_emph);
+            if (r != VG_OK) return r;
+            y -= body_size * 1.75f;
 
-    {
-        vg_rect prog = {side.x + side.w * 0.42f, side.y + side.h * 0.60f, side.w * 0.53f, side.h * 0.07f};
-        r = vg_draw_rect(ctx, prog, &frame);
-        if (r != VG_OK) return r;
-        const float p01 = clampf((float)metrics->planetarium_systems_quelled / fmaxf((float)systems, 1.0f), 0.0f, 1.0f);
-        vg_fill_style pf = {.intensity = 1.0f, .color = pal.primary, .blend = VG_BLEND_ALPHA};
-        vg_rect fill = {prog.x + 2.0f, prog.y + 2.0f, (prog.w - 4.0f) * p01, prog.h - 4.0f};
-        if (fill.w > 0.5f && fill.h > 0.5f) {
-            r = vg_fill_rect(ctx, fill, &pf);
+            {
+                const char* msg = "KEEP YOUR HEAD COOL, KID.\nFLY CLEAN.";
+                const float remaining_h = y - text_bottom;
+                float used_h = 0.0f;
+                if (p) {
+                    msg = commander_nick_dialogue(p->lore.commander_message_id);
+                }
+                if (remaining_h > body_size * 1.35f) {
+                    r = draw_wrapped_text_block_down(
+                        ctx,
+                        msg,
+                        text_x,
+                        y,
+                        text_bottom,
+                        text_w,
+                        body_size,
+                        body_weight,
+                        &frame,
+                        &txt,
+                        &used_h
+                    );
+                    if (r != VG_OK) return r;
+                    y -= used_h + gap;
+                }
+            }
+
+            if (y - text_bottom > body_size * 1.8f) {
+                r = draw_text_vector_glow(ctx, "INTEL:", (vg_vec2){side.x + side.w * 0.06f, y}, meta_size, meta_weight * 1.10f, &frame_emph, &txt_emph);
+                if (r != VG_OK) return r;
+                y -= body_size * 1.65f;
+            }
+
+            int paragraph_count = 0;
+            if (p && p->lore.mission_paragraph_count > 0) {
+                paragraph_count = p->lore.mission_paragraph_count;
+                if (paragraph_count > 3) {
+                    paragraph_count = 3;
+                }
+            }
+            if (paragraph_count <= 0) {
+                paragraph_count = 1;
+            }
+            for (int pi = 0; pi < paragraph_count; ++pi) {
+                const char* para = (p && p->lore.mission_paragraphs[pi] && p->lore.mission_paragraphs[pi][0] != '\0')
+                                       ? p->lore.mission_paragraphs[pi]
+                                       : ((p && p->lore.briefing_lines[pi] && p->lore.briefing_lines[pi][0] != '\0')
+                                              ? p->lore.briefing_lines[pi]
+                                              : "NO ADDITIONAL INTEL.");
+                const float remaining_h = y - text_bottom;
+                float used_h = 0.0f;
+                if (remaining_h <= body_size * 1.35f) {
+                    break;
+                }
+                r = draw_wrapped_text_block_down(
+                    ctx,
+                    para,
+                    text_x,
+                    y,
+                    text_bottom,
+                    text_w,
+                    body_size,
+                    body_weight,
+                    &frame,
+                    &txt,
+                    &used_h
+                );
+                if (r != VG_OK) return r;
+                y -= used_h + gap;
+            }
+        } else {
+            const char* boss_ready = (system && system->boss_gate_ready_text && system->boss_gate_ready_text[0] != '\0')
+                                         ? system->boss_gate_ready_text
+                                         : "BOSS GATE TELEMETRY SYNCHRONIZED.";
+            const char* boss_locked = (system && system->boss_gate_locked_text && system->boss_gate_locked_text[0] != '\0')
+                                          ? system->boss_gate_locked_text
+                                          : "ALL SYSTEMS MUST BE QUELLED BEFORE LAUNCH.";
+            const float text_x = side.x + side.w * 0.06f;
+            const float text_w = side.w * 0.90f;
+            const float text_bottom = side.y + side.h * 0.03f;
+            float y = side.y + side.h * 0.47f;
+            float used_h = 0.0f;
+            const float gap = body_size * 0.55f;
+            r = draw_wrapped_text_block_down(ctx, boss_ready, text_x, y, text_bottom, text_w, body_size, body_weight, &frame, &txt, &used_h);
+            if (r != VG_OK) return r;
+            y -= used_h + gap;
+            r = draw_wrapped_text_block_down(ctx, boss_locked, text_x, y, text_bottom, text_w, body_size, body_weight, &frame, &txt, &used_h);
+            if (r != VG_OK) return r;
+            y -= used_h + gap;
+            r = draw_wrapped_text_block_down(ctx, "EXPECT COORDINATED ELITE RESISTANCE.", text_x, y, text_bottom, text_w, body_size, body_weight, &frame, &txt, &used_h);
             if (r != VG_OK) return r;
         }
-        r = draw_text_vector_glow(ctx, "THREAT INDEX CONTROL", (vg_vec2){prog.x, prog.y + prog.h + 10.0f * ui}, 8.2f * ui, 0.66f * ui, &frame, &txt);
-        if (r != VG_OK) return r;
     }
 
     if (metrics->nick_rgba8 && metrics->nick_w > 0 && metrics->nick_h > 0 && metrics->nick_stride > 0) {
@@ -1399,17 +1718,17 @@ static vg_result draw_planetarium_ui(vg_context* ctx, float w, float h, const re
             .stride_bytes = metrics->nick_stride
         };
         vg_image_style is = {
-            .kind = VG_IMAGE_STYLE_BLOCK_GRAPHICS,
-            .threshold = 0.47f,
-            .contrast = 1.45f,
-            .scanline_pitch_px = 2.6f,
-            .min_line_width_px = 0.55f,
-            .max_line_width_px = 2.35f,
+            .kind = VG_IMAGE_STYLE_MONO_SCANLINE,
+            .threshold = 0.40f,
+            .contrast = 1.18f,
+            .scanline_pitch_px = 1.65f,
+            .min_line_width_px = 0.42f,
+            .max_line_width_px = 1.45f,
             .line_jitter_px = 0.0f,
-            .cell_width_px = 8.0f,
-            .cell_height_px = 6.0f,
-            .block_levels = 16,
-            .intensity = 0.96f,
+            .cell_width_px = 0.0f,
+            .cell_height_px = 0.0f,
+            .block_levels = 0,
+            .intensity = 1.0f,
             .tint_color = pal.secondary,
             .blend = VG_BLEND_ALPHA,
             .use_crt_palette = 0,

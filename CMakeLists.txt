@@ -15,6 +15,8 @@ find_package(Vulkan REQUIRED)
 add_executable(v_type
     src/game.c
     src/main.c
+    src/planetarium/planetarium_registry.c
+    src/planetarium/planetarium_validate.c
     src/render.c
     src/wavetable_poly_synth_lib.c
 )
