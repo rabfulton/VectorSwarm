@@ -47,6 +47,12 @@ static float cylinder_period(const game_state* g) {
     return fmaxf(g->world_w * 2.4f, 1.0f);
 }
 
+static int level_uses_cylinder(int level_style) {
+    return level_style == LEVEL_STYLE_ENEMY_RADAR ||
+           level_style == LEVEL_STYLE_EVENT_HORIZON ||
+           level_style == LEVEL_STYLE_EVENT_HORIZON_LEGACY;
+}
+
 static float gameplay_ui_scale(const game_state* g) {
     const float sx = g->world_w / 1920.0f;
     const float sy = g->world_h / 1080.0f;
@@ -64,7 +70,7 @@ static float wrap_delta(float a, float b, float period) {
 }
 
 static float dist_sq_level(const game_state* g, float ax, float ay, float bx, float by) {
-    if (!g || g->level_style == LEVEL_STYLE_DEFENDER) {
+    if (!g || !level_uses_cylinder(g->level_style)) {
         return dist_sq(ax, ay, bx, by);
     }
     const float dx = wrap_delta(ax, bx, cylinder_period(g));
@@ -377,7 +383,7 @@ static void update_enemy_formation(game_state* g, enemy* e, float dt) {
         const float lead = 0.45f;
         const float tx = g->player.b.x + g->player.b.vx * lead;
         const float ty = g->player.b.y + g->player.b.vy * lead;
-        float dir_x = (g->level_style != LEVEL_STYLE_DEFENDER) ? wrap_delta(tx, e->b.x, cylinder_period(g)) : (tx - e->b.x);
+        float dir_x = level_uses_cylinder(g->level_style) ? wrap_delta(tx, e->b.x, cylinder_period(g)) : (tx - e->b.x);
         float dir_y = ty - e->b.y;
         normalize2(&dir_x, &dir_y);
         steer_to_velocity(&e->b, dir_x * (e->max_speed * 1.18f), dir_y * (e->max_speed * 1.18f), e->accel * 1.25f, 1.0f);
@@ -394,7 +400,7 @@ static void update_enemy_kamikaze(game_state* g, enemy* e, float dt) {
     const float lead = 0.25f;
     const float tx = g->player.b.x + g->player.b.vx * lead;
     const float ty = g->player.b.y + g->player.b.vy * lead;
-    float dir_x = (g->level_style != LEVEL_STYLE_DEFENDER) ? wrap_delta(tx, e->b.x, cylinder_period(g)) : (tx - e->b.x);
+    float dir_x = level_uses_cylinder(g->level_style) ? wrap_delta(tx, e->b.x, cylinder_period(g)) : (tx - e->b.x);
     float dir_y = ty - e->b.y;
     normalize2(&dir_x, &dir_y);
     steer_to_velocity(&e->b, dir_x * e->max_speed, dir_y * e->max_speed, e->accel * 1.35f, 0.8f);
@@ -417,7 +423,7 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt) {
         if (!o->active || o == e || o->archetype != ENEMY_ARCH_SWARM) {
             continue;
         }
-        const float dx = (g->level_style != LEVEL_STYLE_DEFENDER) ? wrap_delta(o->b.x, e->b.x, cylinder_period(g)) : (o->b.x - e->b.x);
+        const float dx = level_uses_cylinder(g->level_style) ? wrap_delta(o->b.x, e->b.x, cylinder_period(g)) : (o->b.x - e->b.x);
         const float dy = o->b.y - e->b.y;
         const float d2 = dx * dx + dy * dy;
         if (d2 < 1e-4f) {
@@ -451,7 +457,7 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt) {
     float avoid_x = 0.0f;
     float avoid_y = 0.0f;
     {
-        float dx = (g->level_style != LEVEL_STYLE_DEFENDER) ? wrap_delta(e->b.x, g->player.b.x, cylinder_period(g)) : (e->b.x - g->player.b.x);
+        float dx = level_uses_cylinder(g->level_style) ? wrap_delta(e->b.x, g->player.b.x, cylinder_period(g)) : (e->b.x - g->player.b.x);
         float dy = e->b.y - g->player.b.y;
         float d2 = dx * dx + dy * dy;
         if (d2 < (185.0f * su) * (185.0f * su)) {
@@ -464,7 +470,7 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt) {
     }
 
     float goal_x = (g->player.b.x + 280.0f * su) - e->b.x;
-    if (g->level_style != LEVEL_STYLE_DEFENDER) {
+    if (level_uses_cylinder(g->level_style)) {
         goal_x = wrap_delta(g->player.b.x + 280.0f * su, e->b.x, cylinder_period(g));
     }
     float goal_y = (g->player.b.y + sinf(g->t * 0.7f + (float)e->slot_index * 0.35f) * 80.0f * su) - e->b.y;
@@ -639,7 +645,7 @@ void game_update(game_state* g, float dt, const game_input* in) {
         bullet* b = &g->bullets[i];
         integrate_body(&b->b, dt);
         b->ttl_s -= dt;
-        if (g->level_style != LEVEL_STYLE_DEFENDER) {
+        if (level_uses_cylinder(g->level_style)) {
             const float period = cylinder_period(g);
             const float travel = fabsf(wrap_delta(b->b.x, b->spawn_x, period));
             if (b->ttl_s <= 0.0f || travel >= period * (1.0f / 3.0f)) {
@@ -681,7 +687,7 @@ void game_update(game_state* g, float dt, const game_input* in) {
             e->b.vy *= s;
         }
 
-        if (g->level_style == LEVEL_STYLE_DEFENDER && e->b.x < g->camera_x - g->world_w * 0.72f) {
+        if (!level_uses_cylinder(g->level_style) && e->b.x < g->camera_x - g->world_w * 0.72f) {
             e->active = 0;
             continue;
         }
@@ -754,7 +760,7 @@ void game_update(game_state* g, float dt, const game_input* in) {
         float rear_bias = 0.25f;
         float spring_k = 18.0f;
         float damping = 8.2f;
-        if (g->level_style != LEVEL_STYLE_DEFENDER) {
+        if (level_uses_cylinder(g->level_style)) {
             rear_bias = 0.08f;
             spring_k = 26.0f;
             damping = 10.2f;

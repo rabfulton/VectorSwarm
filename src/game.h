@@ -13,7 +13,8 @@ enum level_style_id {
     LEVEL_STYLE_ENEMY_RADAR = 1,
     LEVEL_STYLE_EVENT_HORIZON = 2,
     LEVEL_STYLE_EVENT_HORIZON_LEGACY = 3,
-    LEVEL_STYLE_COUNT = 4
+    LEVEL_STYLE_HIGH_PLAINS_DRIFTER = 4,
+    LEVEL_STYLE_COUNT = 5
 };
 
 typedef struct star {

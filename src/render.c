@@ -262,6 +262,66 @@ static float lerpf(float a, float b, float t) {
     return a + (b - a) * t;
 }
 
+static int level_uses_cylinder_render(int level_style) {
+    return level_style == LEVEL_STYLE_ENEMY_RADAR ||
+           level_style == LEVEL_STYLE_EVENT_HORIZON ||
+           level_style == LEVEL_STYLE_EVENT_HORIZON_LEGACY;
+}
+
+static float perlin_fade(float t) {
+    return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+}
+
+static uint32_t hash_u32(uint32_t x) {
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+static float hash01_2i(int ix, int iy) {
+    const uint32_t hx = hash_u32((uint32_t)ix * 0x9e3779b9u);
+    const uint32_t hy = hash_u32((uint32_t)iy * 0x85ebca6bu);
+    const uint32_t h = hash_u32(hx ^ hy ^ 0x27d4eb2du);
+    return (float)(h & 0x00ffffffu) / 16777215.0f;
+}
+
+static float perlin_grad_dot(int ix, int iy, float x, float y) {
+    const float a = hash01_2i(ix, iy) * 6.28318530718f;
+    const float gx = cosf(a);
+    const float gy = sinf(a);
+    return gx * (x - (float)ix) + gy * (y - (float)iy);
+}
+
+static float perlin2(float x, float y) {
+    const int x0 = (int)floorf(x);
+    const int y0 = (int)floorf(y);
+    const int x1 = x0 + 1;
+    const int y1 = y0 + 1;
+    const float sx = perlin_fade(x - (float)x0);
+    const float sy = perlin_fade(y - (float)y0);
+    const float n00 = perlin_grad_dot(x0, y0, x, y);
+    const float n10 = perlin_grad_dot(x1, y0, x, y);
+    const float n01 = perlin_grad_dot(x0, y1, x, y);
+    const float n11 = perlin_grad_dot(x1, y1, x, y);
+    const float ix0 = lerpf(n00, n10, sx);
+    const float ix1 = lerpf(n01, n11, sx);
+    return lerpf(ix0, ix1, sy);
+}
+
+static float high_plains_looped_noise(float world_x, float z) {
+    const float period_world = 8192.0f;
+    const float u = repeatf(world_x, period_world) / period_world;
+    const float a = u * 6.28318530718f;
+    const float nx = cosf(a) * 2.3f + z * 0.85f + 19.7f;
+    const float ny = sinf(a) * 2.3f - z * 0.55f + 7.3f;
+    const float n0 = perlin2(nx, ny);
+    const float n1 = perlin2(nx * 1.9f + 13.2f, ny * 1.9f - 4.6f);
+    return n0 * 0.78f + n1 * 0.22f;
+}
+
 typedef struct palette_theme {
     vg_color primary;
     vg_color primary_dim;
@@ -1903,6 +1963,109 @@ static vg_result draw_parallax_landscape(
     return vg_draw_polyline(ctx, line, N, main, 0);
 }
 
+static vg_result draw_high_plains_drifter_terrain(
+    vg_context* ctx,
+    const game_state* g,
+    const vg_stroke_style* halo,
+    const vg_stroke_style* main
+) {
+    enum { ROWS = 24, COLS = 70 };
+    vg_vec2 pts[ROWS][COLS];
+    float row_depth[ROWS];
+    const float w = g->world_w;
+    const float h = g->world_h;
+    const float y_near = h * 0.04f;
+    const float y_far = h * 0.34f;
+    const float cam = g->camera_x;
+
+    for (int r = 0; r < ROWS; ++r) {
+        const float z = (float)r / (float)(ROWS - 1);
+        const float p = powf(z, 0.78f);
+        row_depth[r] = z;
+        const float y_base = lerpf(y_near, y_far, p);
+        const float half_w = lerpf(w * 0.78f, w * 0.54f, p);
+        const float center_x = w * 0.50f + lerpf(w * 0.03f, -w * 0.02f, p);
+        const float amp = lerpf(h * 0.21f, h * 0.08f, p);
+        for (int c = 0; c < COLS; ++c) {
+            const float u = (float)c / (float)(COLS - 1);
+            const float x = center_x + (u - 0.5f) * 2.0f * half_w;
+            const float world_x = cam * (0.85f + p * 1.35f) + (u - 0.5f) * (2200.0f + p * 1800.0f);
+            const float n = high_plains_looped_noise(world_x * 0.70f, p * 4.5f + 0.35f) * 1.95f;
+            const float y = y_base + n * amp;
+            pts[r][c] = (vg_vec2){x, y};
+        }
+    }
+
+    for (int r = 0; r < ROWS; ++r) {
+        const float z = row_depth[r];
+        const float fade = 0.10f + (1.0f - z) * (1.0f - z) * 0.90f;
+        for (int c = 0; c < COLS - 1; ++c) {
+            vg_stroke_style sh = *halo;
+            vg_stroke_style sm = *main;
+            vg_stroke_style glow = sm;
+            sh.intensity *= fade * 0.72f;
+            sm.intensity *= fade * 0.82f;
+            glow.intensity *= fade * 0.38f;
+            sh.color.a *= fade;
+            sm.color.a *= fade;
+            glow.color.a *= fade * 0.45f;
+            sh.width_px *= 0.94f + (1.0f - z) * 0.62f;
+            sm.width_px *= 0.90f + (1.0f - z) * 0.56f;
+            glow.width_px = fmaxf(glow.width_px * (1.35f + (1.0f - z) * 0.45f), sm.width_px * 1.35f);
+            glow.blend = VG_BLEND_ADDITIVE;
+            const vg_vec2 seg[2] = {pts[r][c], pts[r][c + 1]};
+            vg_result vr = vg_draw_polyline(ctx, seg, 2, &glow, 0);
+            if (vr != VG_OK) {
+                return vr;
+            }
+            vr = vg_draw_polyline(ctx, seg, 2, &sh, 0);
+            if (vr != VG_OK) {
+                return vr;
+            }
+            vr = vg_draw_polyline(ctx, seg, 2, &sm, 0);
+            if (vr != VG_OK) {
+                return vr;
+            }
+        }
+    }
+
+    for (int c = 0; c < COLS; c += 2) {
+            const int major = (c % 8) == 0;
+        const float major_boost = major ? 1.0f : 0.62f;
+        for (int r = 0; r < ROWS - 1; ++r) {
+            const float z = 0.5f * (row_depth[r] + row_depth[r + 1]);
+            const float fade = 0.09f + (1.0f - z) * (1.0f - z) * 0.91f;
+            vg_stroke_style sh = *halo;
+            vg_stroke_style sm = *main;
+            vg_stroke_style glow = sm;
+            sh.intensity *= fade * 0.56f * major_boost;
+            sm.intensity *= fade * 0.66f * major_boost;
+            glow.intensity *= fade * 0.34f * major_boost;
+            sh.color.a *= fade;
+            sm.color.a *= fade;
+            glow.color.a *= fade * 0.42f;
+            sh.width_px *= 0.82f + (1.0f - z) * 0.44f;
+            sm.width_px *= 0.80f + (1.0f - z) * 0.40f;
+            glow.width_px = fmaxf(glow.width_px * (1.28f + (1.0f - z) * 0.40f), sm.width_px * 1.30f);
+            glow.blend = VG_BLEND_ADDITIVE;
+            const vg_vec2 seg[2] = {pts[r][c], pts[r + 1][c]};
+            vg_result vr = vg_draw_polyline(ctx, seg, 2, &glow, 0);
+            if (vr != VG_OK) {
+                return vr;
+            }
+            vr = vg_draw_polyline(ctx, seg, 2, &sh, 0);
+            if (vr != VG_OK) {
+                return vr;
+            }
+            vr = vg_draw_polyline(ctx, seg, 2, &sm, 0);
+            if (vr != VG_OK) {
+                return vr;
+            }
+        }
+    }
+    return VG_OK;
+}
+
 static float cylinder_period(const game_state* g) {
     return fmaxf(g->world_w * 2.4f, 1.0f);
 }
@@ -2561,7 +2724,7 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         return r;
     }
 
-    if (g->level_style != LEVEL_STYLE_DEFENDER) {
+    if (level_uses_cylinder_render(g->level_style)) {
         const float period = cylinder_period(g);
         vg_stroke_style cyl_halo = land_halo;
         vg_stroke_style cyl_main = land_main;
@@ -2853,21 +3016,35 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         return r;
     }
 
-    /* Foreground vector landscape layers for depth/parallax. */
-    r = draw_parallax_landscape(ctx, g->world_w, g->world_h, g->camera_x, 1.20f, g->world_h * 0.18f, 22.0f, &land_halo, &land_main);
-    if (r != VG_OK) {
-        return r;
-    }
-    vg_stroke_style land2_halo = land_halo;
-    vg_stroke_style land2_main = land_main;
-    land2_halo.width_px *= 1.15f;
-    land2_main.width_px *= 1.10f;
-    land2_halo.intensity *= 1.05f;
-    land2_main.intensity *= 1.08f;
-    land2_main.color = (vg_color){pal.secondary.r, pal.secondary.g, pal.secondary.b, 0.9f};
-    r = draw_parallax_landscape(ctx, g->world_w, g->world_h, g->camera_x, 1.55f, g->world_h * 0.10f, 30.0f, &land2_halo, &land2_main);
-    if (r != VG_OK) {
-        return r;
+    if (g->level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER) {
+        vg_stroke_style plains_halo = land_halo;
+        vg_stroke_style plains_main = land_main;
+        plains_halo.intensity *= 1.10f;
+        plains_main.intensity *= 1.18f;
+        plains_halo.width_px *= 1.08f;
+        plains_main.width_px *= 1.04f;
+        plains_main.color = (vg_color){pal.secondary.r, pal.secondary.g, pal.secondary.b, 0.92f};
+        r = draw_high_plains_drifter_terrain(ctx, g, &plains_halo, &plains_main);
+        if (r != VG_OK) {
+            return r;
+        }
+    } else {
+        /* Foreground vector landscape layers for depth/parallax. */
+        r = draw_parallax_landscape(ctx, g->world_w, g->world_h, g->camera_x, 1.20f, g->world_h * 0.18f, 22.0f, &land_halo, &land_main);
+        if (r != VG_OK) {
+            return r;
+        }
+        vg_stroke_style land2_halo = land_halo;
+        vg_stroke_style land2_main = land_main;
+        land2_halo.width_px *= 1.15f;
+        land2_main.width_px *= 1.10f;
+        land2_halo.intensity *= 1.05f;
+        land2_main.intensity *= 1.08f;
+        land2_main.color = (vg_color){pal.secondary.r, pal.secondary.g, pal.secondary.b, 0.9f};
+        r = draw_parallax_landscape(ctx, g->world_w, g->world_h, g->camera_x, 1.55f, g->world_h * 0.10f, 30.0f, &land2_halo, &land2_main);
+        if (r != VG_OK) {
+            return r;
+        }
     }
 
     r = draw_top_meters(ctx, g, &txt_halo, &txt_main);

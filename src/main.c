@@ -2836,6 +2836,8 @@ int main(void) {
                         set_tty_message(&a, "level mode: event horizon");
                     } else if (a.game.level_style == LEVEL_STYLE_EVENT_HORIZON_LEGACY) {
                         set_tty_message(&a, "level mode: event horizon legacy");
+                    } else if (a.game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER) {
+                        set_tty_message(&a, "level mode: high plains drifter");
                     } else {
                         set_tty_message(&a, "level mode: defender");
                     }
