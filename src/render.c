@@ -1557,6 +1557,9 @@ static vg_result draw_planetarium_ui(vg_context* ctx, float w, float h, const re
         const float meta_weight = 0.42f * ui;
         const float body_size = 11.2f * ui;
         const float body_weight = 0.34f * ui;
+        const float top_y = side.y + side.h * 0.95f;
+        const float bottom_y = side.y + side.h * 0.03f;
+        const float meta_step = body_size * 3.00f;
         vg_stroke_style frame_emph = frame;
         frame_emph.intensity *= 1.18f;
         frame_emph.width_px *= 1.20f;
@@ -1564,30 +1567,38 @@ static vg_result draw_planetarium_ui(vg_context* ctx, float w, float h, const re
         txt_emph.intensity *= 1.24f;
         txt_emph.width_px *= 1.20f;
         char stat_line[128];
+        float cursor_y = top_y;
         r = draw_text_vector_glow(
             ctx,
             "MISSION BRIEFING FROM COMMANDER NICK",
-            (vg_vec2){side.x + side.w * 0.06f, side.y + side.h * 0.95f},
+            (vg_vec2){side.x + side.w * 0.06f, cursor_y},
             11.8f * ui,
             0.92f * ui,
             &frame_emph,
             &txt_emph
         );
         if (r != VG_OK) return r;
+        cursor_y -= body_size * 2.10f;
+
+        float stats_cursor_y = cursor_y - body_size * 2.20f;
         if (system && system->display_name && system->display_name[0] != '\0') {
             snprintf(stat_line, sizeof(stat_line), "SECTOR  %s", system->display_name);
-            r = draw_text_vector_glow(ctx, stat_line, (vg_vec2){stats_x, side.y + side.h * 0.86f}, meta_size, meta_weight, &frame, &txt);
+            r = draw_text_vector_glow(ctx, stat_line, (vg_vec2){stats_x, stats_cursor_y}, meta_size, meta_weight, &frame, &txt);
             if (r != VG_OK) return r;
+            stats_cursor_y -= meta_step;
         }
         snprintf(stat_line, sizeof(stat_line), "SYSTEMS QUELLED  %d / %d", metrics->planetarium_systems_quelled, systems);
-        r = draw_text_vector_glow(ctx, stat_line, (vg_vec2){stats_x, side.y + side.h * 0.82f}, meta_size, meta_weight, &frame, &txt);
+        r = draw_text_vector_glow(ctx, stat_line, (vg_vec2){stats_x, stats_cursor_y}, meta_size, meta_weight, &frame, &txt);
         if (r != VG_OK) return r;
+        stats_cursor_y -= meta_step;
         snprintf(stat_line, sizeof(stat_line), "SYSTEMS REMAINING  %d", remaining > 0 ? remaining : 0);
-        r = draw_text_vector_glow(ctx, stat_line, (vg_vec2){stats_x, side.y + side.h * 0.78f}, meta_size, meta_weight, &frame, &txt);
+        r = draw_text_vector_glow(ctx, stat_line, (vg_vec2){stats_x, stats_cursor_y}, meta_size, meta_weight, &frame, &txt);
         if (r != VG_OK) return r;
+        stats_cursor_y -= meta_step;
         snprintf(stat_line, sizeof(stat_line), "BOSS GATE  %s", boss_unlocked ? "UNLOCKED" : "LOCKED");
-        r = draw_text_vector_glow(ctx, stat_line, (vg_vec2){stats_x, side.y + side.h * 0.74f}, meta_size, meta_weight, &frame, &txt);
+        r = draw_text_vector_glow(ctx, stat_line, (vg_vec2){stats_x, stats_cursor_y}, meta_size, meta_weight, &frame, &txt);
         if (r != VG_OK) return r;
+        stats_cursor_y -= meta_step;
         {
             const planet_def* p = metrics_planet(metrics, selected);
             const char* selected_label = (selected < systems)
@@ -1598,20 +1609,24 @@ static vg_result draw_planetarium_ui(vg_context* ctx, float w, float h, const re
                                                     ? system->boss_gate_label
                                                     : "BOSS GATE");
             snprintf(stat_line, sizeof(stat_line), "SELECTED  %s", selected_label);
-            r = draw_text_vector_glow(ctx, stat_line, (vg_vec2){stats_x, side.y + side.h * 0.70f}, meta_size, meta_weight, &frame, &txt);
+            r = draw_text_vector_glow(ctx, stat_line, (vg_vec2){stats_x, stats_cursor_y}, meta_size, meta_weight, &frame, &txt);
             if (r != VG_OK) return r;
+            stats_cursor_y -= meta_step;
             if (p) {
                 snprintf(stat_line, sizeof(stat_line), "ORBIT LANE  %d", p->orbit_lane + 1);
-                r = draw_text_vector_glow(ctx, stat_line, (vg_vec2){stats_x, side.y + side.h * 0.66f}, meta_size, meta_weight, &frame, &txt);
+                r = draw_text_vector_glow(ctx, stat_line, (vg_vec2){stats_x, stats_cursor_y}, meta_size, meta_weight, &frame, &txt);
                 if (r != VG_OK) return r;
             }
         }
         if (selected < systems) {
             const planet_def* p = metrics_planet(metrics, selected);
-            float y = side.y + side.h * 0.53f;
+            float y = fminf(nick_rect.y - body_size * 0.95f, stats_cursor_y - body_size * 0.95f);
+            if (y > top_y - body_size * 2.5f) {
+                y = top_y - body_size * 2.5f;
+            }
             const float text_x = side.x + side.w * 0.06f;
             const float text_w = side.w * 0.90f;
-            const float text_bottom = side.y + side.h * 0.03f;
+            const float text_bottom = bottom_y;
             const float gap = body_size * 0.70f;
             r = draw_text_vector_glow(ctx, "NICK:", (vg_vec2){side.x + side.w * 0.06f, y}, meta_size, meta_weight * 1.10f, &frame_emph, &txt_emph);
             if (r != VG_OK) return r;
@@ -1695,8 +1710,8 @@ static vg_result draw_planetarium_ui(vg_context* ctx, float w, float h, const re
                                           : "ALL SYSTEMS MUST BE QUELLED BEFORE LAUNCH.";
             const float text_x = side.x + side.w * 0.06f;
             const float text_w = side.w * 0.90f;
-            const float text_bottom = side.y + side.h * 0.03f;
-            float y = side.y + side.h * 0.47f;
+            const float text_bottom = bottom_y;
+            float y = fminf(nick_rect.y - body_size * 0.95f, stats_cursor_y - body_size * 0.95f);
             float used_h = 0.0f;
             const float gap = body_size * 0.55f;
             r = draw_wrapped_text_block_down(ctx, boss_ready, text_x, y, text_bottom, text_w, body_size, body_weight, &frame, &txt, &used_h);
