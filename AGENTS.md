@@ -12,6 +12,14 @@ This file captures project-specific quirks for future coding agents working in `
 
 ## High-Risk Areas (Read Before Editing)
 
+### 0. Prefer unification over parallel implementations
+
+When adding features or fixes, do not introduce duplicate systems/logic paths if an existing one can be extended cleanly.
+
+If the requested change would otherwise create parallel implementations (separate layout code, separate data pipeline, separate rendering path for similar UI), pause and suggest a targeted refactor to the user first.
+
+Goal: one source of truth per behavior whenever practical, with fewer moving parts and less drift risk.
+
 ### 1. Planetarium geometry is duplicated in two files
 
 `planetarium_node_center(...)` exists in:

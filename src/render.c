@@ -1,5 +1,6 @@
 #include "render.h"
 
+#include "acoustics_ui_layout.h"
 #include "planetarium/commander_nick_dialogues.h"
 #include "vg_ui.h"
 #include "vg_ui_ext.h"
@@ -479,6 +480,46 @@ static vg_ui_slider_panel_metrics scaled_slider_metrics(float ui, float value_co
     return m;
 }
 
+static vg_result draw_beam_trace(
+    vg_context* ctx,
+    const vg_vec2* points,
+    size_t point_count,
+    const vg_stroke_style* base,
+    vg_color color,
+    float core_width_px,
+    float intensity
+) {
+    if (!ctx || !points || point_count < 2u || !base) {
+        return VG_ERROR_INVALID_ARGUMENT;
+    }
+    vg_stroke_style halo = *base;
+    halo.color = color;
+    halo.width_px = fmaxf(1.0f, core_width_px * 2.6f);
+    halo.intensity = intensity * 0.30f;
+    halo.blend = VG_BLEND_ADDITIVE;
+    vg_result r = vg_draw_polyline(ctx, points, point_count, &halo, 0);
+    if (r != VG_OK) {
+        return r;
+    }
+
+    vg_stroke_style mid = *base;
+    mid.color = color;
+    mid.width_px = fmaxf(1.0f, core_width_px * 1.6f);
+    mid.intensity = intensity * 0.55f;
+    mid.blend = VG_BLEND_ADDITIVE;
+    r = vg_draw_polyline(ctx, points, point_count, &mid, 0);
+    if (r != VG_OK) {
+        return r;
+    }
+
+    vg_stroke_style core = *base;
+    core.color = color;
+    core.width_px = fmaxf(1.0f, core_width_px);
+    core.intensity = intensity;
+    core.blend = VG_BLEND_ALPHA;
+    return vg_draw_polyline(ctx, points, point_count, &core, 0);
+}
+
 static vg_result draw_crt_debug_ui(vg_context* ctx, float w, float h, const vg_crt_profile* crt, int selected) {
     static const char* labels[12] = {
         "BLOOM STRENGTH", "BLOOM RADIUS", "PERSISTENCE", "JITTER",
@@ -569,8 +610,6 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
     };
 
     const float ui = ui_reference_scale(w, h);
-    const vg_rect screen_safe = make_ui_safe_frame(w, h);
-
     vg_stroke_style panel = {
         .width_px = 1.45f * ui,
         .intensity = 0.95f,
@@ -581,9 +620,14 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         .blend = VG_BLEND_ALPHA
     };
     vg_stroke_style text = panel;
-    text.width_px = 1.2f * ui;
-    text.intensity = 1.0f;
-    text.color = (vg_color){0.52f, 1.0f, 0.72f, 1.0f};
+    text.width_px = 1.35f * ui;
+    text.intensity = 1.12f;
+    text.color = (vg_color){0.40f, 1.0f, 0.62f, 1.0f};
+    vg_fill_style trace_panel_fill = {
+        .intensity = 0.75f,
+        .color = {0.04f, 0.13f, 0.08f, 0.35f},
+        .blend = VG_BLEND_ALPHA
+    };
 
     vg_ui_slider_item fire_items[8];
     vg_ui_slider_item thr_items[6];
@@ -600,33 +644,20 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         thr_items[i].selected = 0;
     }
 
-    const vg_rect fire_rect = {screen_safe.x + screen_safe.w * 0.01f, screen_safe.y + screen_safe.h * 0.10f, screen_safe.w * 0.47f, screen_safe.h * 0.80f};
-    const vg_rect thr_rect = {screen_safe.x + screen_safe.w * 0.52f, screen_safe.y + screen_safe.h * 0.10f, screen_safe.w * 0.47f, screen_safe.h * 0.80f};
-    const float btn_x_pad = fire_rect.w * 0.03f;
-    const float btn_w_fire = fire_rect.w * (0.28f * 0.85f);
-    const float btn_w_thr = thr_rect.w * (0.32f * 0.85f);
-    const float btn_h = fire_rect.h * 0.042f;
-    const float btn_y_off = fire_rect.h * 0.08f;
-    const vg_rect fire_btn = {fire_rect.x + btn_x_pad, fire_rect.y + fire_rect.h - btn_y_off, btn_w_fire, btn_h};
-    const vg_rect thr_btn = {thr_rect.x + btn_x_pad, thr_rect.y + thr_rect.h - btn_y_off, btn_w_thr, btn_h};
-    const float save_w_fire = fire_rect.w * 0.15f;
-    const float save_w_thr = thr_rect.w * 0.15f;
-    const vg_rect fire_save_btn = {fire_rect.x + fire_rect.w - fire_rect.w * 0.03f - save_w_fire, fire_btn.y, save_w_fire, btn_h};
-    const vg_rect thr_save_btn = {thr_rect.x + thr_rect.w - thr_rect.w * 0.03f - save_w_thr, thr_btn.y, save_w_thr, btn_h};
-    vg_rect fire_slot_btn[ACOUSTICS_SLOT_COUNT];
-    vg_rect thr_slot_btn[ACOUSTICS_SLOT_COUNT];
-    {
-        const float fire_sx = fire_btn.x + fire_btn.w + fire_rect.w * 0.02f;
-        const float thr_sx = thr_btn.x + thr_btn.w + thr_rect.w * 0.02f;
-        const float fire_sw = fire_rect.w * 0.052f;
-        const float thr_sw = thr_rect.w * 0.052f;
-        const float gap = fire_rect.w * 0.006f;
-        for (int i = 0; i < ACOUSTICS_SLOT_COUNT; ++i) {
-            fire_slot_btn[i] = (vg_rect){fire_sx + (fire_sw + gap) * (float)i, fire_btn.y, fire_sw, btn_h};
-            thr_slot_btn[i] = (vg_rect){thr_sx + (thr_sw + gap) * (float)i, thr_btn.y, thr_sw, btn_h};
-        }
-    }
-    const vg_ui_slider_panel_metrics sm = scaled_slider_metrics(ui, 70.0f * ui);
+    const float value_col_width_px = acoustics_compute_value_col_width(
+        ui,
+        11.5f * ui,
+        metrics->acoustics_display,
+        ACOUSTICS_SLIDER_COUNT
+    );
+    const acoustics_ui_layout l = make_acoustics_ui_layout(w, h, value_col_width_px);
+    const vg_rect fire_rect = l.panel[0];
+    const vg_rect thr_rect = l.panel[1];
+    const vg_rect fire_btn = l.button[0];
+    const vg_rect thr_btn = l.button[1];
+    const vg_rect fire_save_btn = l.save_button[0];
+    const vg_rect thr_save_btn = l.save_button[1];
+    const vg_ui_slider_panel_metrics sm = acoustics_scaled_slider_metrics(ui, l.value_col_width_px);
 
     vg_ui_slider_panel_desc fire = {
         .rect = fire_rect,
@@ -715,7 +746,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
             }
             r = vg_draw_button(
                 ctx,
-                fire_slot_btn[i],
+                l.slot_button[0][i],
                 label,
                 11.0f * ui,
                 &panel,
@@ -731,7 +762,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
             }
             r = vg_draw_button(
                 ctx,
-                thr_slot_btn[i],
+                l.slot_button[1][i],
                 label,
                 11.0f * ui,
                 &panel,
@@ -743,6 +774,10 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
             }
         }
 
+        r = vg_fill_rect(ctx, fire_display, &trace_panel_fill);
+        if (r != VG_OK) {
+            return r;
+        }
         r = vg_draw_rect(ctx, fire_display, &panel);
         if (r != VG_OK) {
             return r;
@@ -760,14 +795,15 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
             return r;
         }
 
-        vg_vec2 amp_line[32];
-        vg_vec2 pitch_line[32];
+        enum { FIRE_TRACE_SAMPLES = 96 };
+        vg_vec2 amp_line[FIRE_TRACE_SAMPLES];
+        vg_vec2 pitch_line[FIRE_TRACE_SAMPLES];
         const float a_ms = metrics->acoustics_display[2];
         const float d_ms = metrics->acoustics_display[3];
         const float sweep_st = metrics->acoustics_display[6];
         const float sweep_d_ms = metrics->acoustics_display[7];
-        for (int i = 0; i < 32; ++i) {
-            const float t = (float)i / 31.0f;
+        for (int i = 0; i < FIRE_TRACE_SAMPLES; ++i) {
+            const float t = (float)i / (float)(FIRE_TRACE_SAMPLES - 1);
             const float x = fire_display.x + 8.0f * ui + (fire_display.w - 16.0f * ui) * t;
             float amp;
             if (t < a_ms / 280.0f) {
@@ -781,19 +817,35 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
             amp_line[i] = (vg_vec2){x, fire_display.y + 8.0f * ui + amp * (fire_display.h - 20.0f * ui)};
             pitch_line[i] = (vg_vec2){x, fire_display.y + 8.0f * ui + p * (fire_display.h - 20.0f * ui)};
         }
-        vg_stroke_style amp_s = text;
-        amp_s.color = (vg_color){0.35f, 1.0f, 0.65f, 1.0f};
-        vg_stroke_style pitch_s = text;
-        pitch_s.color = (vg_color){0.85f, 1.0f, 0.25f, 1.0f};
-        r = vg_draw_polyline(ctx, amp_line, 32, &amp_s, 0);
+        r = draw_beam_trace(
+            ctx,
+            amp_line,
+            FIRE_TRACE_SAMPLES,
+            &text,
+            (vg_color){0.35f, 1.0f, 0.65f, 1.0f},
+            1.45f * ui,
+            1.05f
+        );
         if (r != VG_OK) {
             return r;
         }
-        r = vg_draw_polyline(ctx, pitch_line, 32, &pitch_s, 0);
+        r = draw_beam_trace(
+            ctx,
+            pitch_line,
+            FIRE_TRACE_SAMPLES,
+            &text,
+            (vg_color){0.95f, 1.0f, 0.30f, 1.0f},
+            1.5f * ui,
+            1.08f
+        );
         if (r != VG_OK) {
             return r;
         }
 
+        r = vg_fill_rect(ctx, thr_display, &trace_panel_fill);
+        if (r != VG_OK) {
+            return r;
+        }
         r = vg_draw_rect(ctx, thr_display, &panel);
         if (r != VG_OK) {
             return r;
@@ -824,17 +876,59 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
             return r;
         }
 
+        static float scope_hold[ACOUSTICS_SCOPE_SAMPLES] = {0.0f};
+        static float scope_smooth[ACOUSTICS_SCOPE_SAMPLES] = {0.0f};
+        static int scope_init = 0;
+        if (!scope_init) {
+            for (int i = 0; i < ACOUSTICS_SCOPE_SAMPLES; ++i) {
+                const float s0 = metrics->acoustics_scope[i];
+                scope_hold[i] = s0;
+                scope_smooth[i] = s0;
+            }
+            scope_init = 1;
+        }
+        const float dt = clampf(metrics->dt, 0.001f, 0.10f);
+        const float hold_decay = expf(-dt / 0.30f);
+        const float smooth_alpha = 1.0f - expf(-dt / 0.040f);
+
         vg_vec2 scope_line[ACOUSTICS_SCOPE_SAMPLES];
+        vg_vec2 scope_hold_line[ACOUSTICS_SCOPE_SAMPLES];
         for (int i = 0; i < ACOUSTICS_SCOPE_SAMPLES; ++i) {
             const float t = (float)i / (float)(ACOUSTICS_SCOPE_SAMPLES - 1);
             const float x = thr_display.x + 8.0f * ui + (thr_display.w - 16.0f * ui) * t;
-            const float s = metrics->acoustics_scope[i];
-            const float y = thr_display.y + thr_display.h * 0.5f + s * (thr_display.h * 0.35f);
-            scope_line[i] = (vg_vec2){x, y};
+            const float s = clampf(metrics->acoustics_scope[i], -1.0f, 1.0f);
+            scope_smooth[i] += (s - scope_smooth[i]) * smooth_alpha;
+            if (fabsf(scope_smooth[i]) > fabsf(scope_hold[i])) {
+                scope_hold[i] = scope_smooth[i];
+            } else {
+                scope_hold[i] *= hold_decay;
+            }
+            const float y_core = thr_display.y + thr_display.h * 0.5f + scope_smooth[i] * (thr_display.h * 0.35f);
+            const float y_hold = thr_display.y + thr_display.h * 0.5f + scope_hold[i] * (thr_display.h * 0.35f);
+            scope_line[i] = (vg_vec2){x, y_core};
+            scope_hold_line[i] = (vg_vec2){x, y_hold};
         }
-        vg_stroke_style scope_s = text;
-        scope_s.color = (vg_color){0.42f, 0.95f, 1.0f, 1.0f};
-        r = vg_draw_polyline(ctx, scope_line, ACOUSTICS_SCOPE_SAMPLES, &scope_s, 0);
+        r = draw_beam_trace(
+            ctx,
+            scope_hold_line,
+            ACOUSTICS_SCOPE_SAMPLES,
+            &text,
+            (vg_color){0.35f, 0.80f, 1.0f, 0.95f},
+            1.9f * ui,
+            0.62f
+        );
+        if (r != VG_OK) {
+            return r;
+        }
+        r = draw_beam_trace(
+            ctx,
+            scope_line,
+            ACOUSTICS_SCOPE_SAMPLES,
+            &text,
+            (vg_color){0.55f, 1.0f, 1.0f, 1.0f},
+            1.4f * ui,
+            1.10f
+        );
         if (r != VG_OK) {
             return r;
         }
@@ -2423,7 +2517,8 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
     );
 
     if (metrics->show_acoustics) {
-        vg_result r = vg_fill_rect(ctx, (vg_rect){0.0f, 0.0f, g->world_w, g->world_h}, &bg);
+        const vg_fill_style bg_acoustics = make_fill(1.0f, (vg_color){0.0f, 0.0f, 0.0f, 1.0f}, VG_BLEND_ALPHA);
+        vg_result r = vg_fill_rect(ctx, (vg_rect){0.0f, 0.0f, g->world_w, g->world_h}, &bg_acoustics);
         if (r != VG_OK) {
             return r;
         }

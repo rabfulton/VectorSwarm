@@ -13,6 +13,7 @@ pkg_check_modules(SDL2_IMAGE QUIET SDL2_image)
 find_package(Vulkan REQUIRED)
 
 add_executable(v_type
+    src/acoustics_ui_layout.c
     src/game.c
     src/main.c
     src/planetarium/planetarium_registry.c

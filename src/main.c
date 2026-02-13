@@ -1,4 +1,5 @@
 #include "game.h"
+#include "acoustics_ui_layout.h"
 #include "planetarium/planetarium_registry.h"
 #include "planetarium/planetarium_validate.h"
 #include "planetarium_propaganda.h"
@@ -907,18 +908,6 @@ static void apply_acoustics(app* a) {
     SDL_UnlockAudioDevice(a->audio_dev);
 }
 
-typedef struct acoustics_ui_layout {
-    vg_rect panel[2];
-    vg_rect button[2];
-    vg_rect save_button[2];
-    vg_rect slot_button[2][ACOUSTICS_SLOT_COUNT];
-    float row_y0[2];
-    float row_h;
-    float slider_x[2];
-    float slider_w[2];
-    int row_count[2];
-} acoustics_ui_layout;
-
 static vg_ui_slider_panel_metrics make_scaled_slider_metrics(float ui, float value_col_width_px) {
     vg_ui_slider_panel_metrics m;
     vg_ui_slider_panel_default_metrics(&m);
@@ -941,75 +930,21 @@ static vg_ui_slider_panel_metrics make_scaled_slider_metrics(float ui, float val
     return m;
 }
 
-static acoustics_ui_layout make_acoustics_ui_layout(float w, float h) {
-    acoustics_ui_layout l;
-    memset(&l, 0, sizeof(l));
-    const float ui = ui_reference_scale(w, h);
-    const vg_rect safe = make_ui_safe_frame(w, h);
-    l.panel[0] = (vg_rect){safe.x + safe.w * 0.01f, safe.y + safe.h * 0.10f, safe.w * 0.47f, safe.h * 0.80f};
-    l.panel[1] = (vg_rect){safe.x + safe.w * 0.52f, safe.y + safe.h * 0.10f, safe.w * 0.47f, safe.h * 0.80f};
-    l.button[0] = (vg_rect){
-        l.panel[0].x + l.panel[0].w * 0.03f,
-        l.panel[0].y + l.panel[0].h - l.panel[0].h * 0.08f,
-        l.panel[0].w * (0.28f * 0.85f),
-        l.panel[0].h * 0.042f
-    };
-    l.button[1] = (vg_rect){
-        l.panel[1].x + l.panel[1].w * 0.03f,
-        l.panel[1].y + l.panel[1].h - l.panel[1].h * 0.08f,
-        l.panel[1].w * (0.32f * 0.85f),
-        l.panel[1].h * 0.042f
-    };
-    for (int p = 0; p < 2; ++p) {
-        const vg_rect btn = l.button[p];
-        const vg_rect panel = l.panel[p];
-        const float save_w = panel.w * 0.15f;
-        l.save_button[p] = (vg_rect){panel.x + panel.w - panel.w * 0.03f - save_w, btn.y, save_w, btn.h};
-        const float sx = btn.x + btn.w + panel.w * 0.02f;
-        const float sw = panel.w * 0.052f;
-        const float sg = panel.w * 0.006f;
-        for (int s = 0; s < ACOUSTICS_SLOT_COUNT; ++s) {
-            l.slot_button[p][s] = (vg_rect){sx + (sw + sg) * (float)s, btn.y, sw, btn.h};
-        }
-    }
-    l.row_h = 34.0f * ui;
-    l.row_count[0] = 8;
-    l.row_count[1] = 6;
-    vg_ui_slider_panel_metrics sm = make_scaled_slider_metrics(ui, 70.0f * ui);
-    vg_ui_slider_item dummy_fire[8] = {0};
-    vg_ui_slider_item dummy_thr[6] = {0};
-    for (int p = 0; p < 2; ++p) {
-        const vg_rect r = l.panel[p];
-        vg_ui_slider_panel_desc desc = {
-            .rect = r,
-            .items = (p == 0) ? dummy_fire : dummy_thr,
-            .item_count = (size_t)l.row_count[p],
-            .row_height_px = l.row_h,
-            .label_size_px = 11.0f * ui,
-            .value_size_px = 11.5f * ui,
-            .value_text_x_offset_px = 0.0f,
-            .metrics = &sm
-        };
-        vg_ui_slider_panel_layout panel_layout;
-        vg_ui_slider_panel_row_layout row_layout;
-        if (vg_ui_slider_panel_compute_layout(&desc, &panel_layout) == VG_OK &&
-            vg_ui_slider_panel_compute_row_layout(&desc, &panel_layout, 0u, &row_layout) == VG_OK) {
-            l.row_y0[p] = panel_layout.row_start_y;
-            l.slider_x[p] = row_layout.slider_rect.x;
-            l.slider_w[p] = row_layout.slider_rect.w;
-        } else {
-            l.row_y0[p] = r.y + sm.rows_top_offset_px;
-            l.slider_x[p] = r.x + sm.pad_left_px + r.w * sm.label_col_frac + sm.col_gap_px;
-            l.slider_w[p] = r.w - (l.slider_x[p] - r.x) - sm.value_col_width_px - sm.pad_right_px;
-        }
-    }
-    return l;
-}
-
 static int handle_acoustics_ui_mouse(app* a, int mouse_x, int mouse_y, int set_value) {
     const float w = (float)a->swapchain_extent.width;
     const float h = (float)a->swapchain_extent.height;
-    const acoustics_ui_layout l = make_acoustics_ui_layout(w, h);
+    const float ui = ui_reference_scale(w, h);
+    float display_values[ACOUSTICS_SLIDER_COUNT];
+    for (int i = 0; i < ACOUSTICS_SLIDER_COUNT; ++i) {
+        display_values[i] = acoustics_value_to_ui_display(i, a->acoustics_value_01[i]);
+    }
+    const float value_col_width_px = acoustics_compute_value_col_width(
+        ui,
+        11.5f * ui,
+        display_values,
+        ACOUSTICS_SLIDER_COUNT
+    );
+    const acoustics_ui_layout l = make_acoustics_ui_layout(w, h, value_col_width_px);
     float mx = 0.0f;
     float my = 0.0f;
     map_mouse_to_scene_coords(a, mouse_x, mouse_y, &mx, &my);
