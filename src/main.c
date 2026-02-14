@@ -3967,7 +3967,9 @@ static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd) {
     if (!enable_gpu_terrain) {
         return;
     }
-    if (!a || !cmd || a->game.level_style != LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2) {
+    if (!a || !cmd ||
+        (a->game.level_style != LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2 &&
+         a->game.level_style != LEVEL_STYLE_HIGH_PLAINS_DRIFTER)) {
         return;
     }
     if (!a->terrain_fill_pipeline || !a->terrain_line_pipeline || !a->terrain_vertex_buffer) {
@@ -3996,12 +3998,16 @@ static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd) {
     pc.tune[2] = a->terrain_tuning.normal_variation;
     pc.tune[3] = a->terrain_tuning.depth_fade;
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->terrain_fill_pipeline);
-    vkCmdPushConstants(cmd, a->terrain_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
-    vkCmdBindIndexBuffer(cmd, a->terrain_tri_index_buffer, 0, VK_INDEX_TYPE_UINT16);
-    vkCmdDrawIndexed(cmd, a->terrain_tri_index_count, 1, 0, 0, 0);
+    const int draw_fill = (a->game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2);
+    if (draw_fill) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->terrain_fill_pipeline);
+        vkCmdPushConstants(cmd, a->terrain_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+        vkCmdBindIndexBuffer(cmd, a->terrain_tri_index_buffer, 0, VK_INDEX_TYPE_UINT16);
+        vkCmdDrawIndexed(cmd, a->terrain_tri_index_count, 1, 0, 0, 0);
+    }
 
-    if (a->terrain_wire_enabled) {
+    const int draw_wire = (a->game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER) ? 1 : a->terrain_wire_enabled;
+    if (draw_wire) {
         const float wire_boost = 1.28f;
         pc.color[0] = clampf(pc.color[0] * wire_boost, 0.0f, 1.0f);
         pc.color[1] = clampf(pc.color[1] * wire_boost, 0.0f, 1.0f);
@@ -4090,6 +4096,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
                                 a->terrain_tuning_show &&
                                 a->game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2)
             ? a->terrain_tuning_text : NULL,
+        .use_gpu_terrain = 0,
         .scene_phase = 0
     };
     {
@@ -4139,7 +4146,8 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
     }
     {
         const int split_terrain_layer =
-            (a->game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2) &&
+            (a->game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2 ||
+             a->game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER) &&
             !a->show_acoustics &&
             !a->show_video_menu &&
             !a->show_planetarium;
@@ -4147,6 +4155,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             clear_scene_color_depth(cmd, a->swapchain_extent);
             record_gpu_high_plains_terrain(a, cmd);
             clear_scene_depth(cmd, a->swapchain_extent);
+            metrics.use_gpu_terrain = 1;
             metrics.scene_phase = 3;
             vr = render_frame(a->vg, &a->game, &metrics);
             if (vr != VG_OK) {

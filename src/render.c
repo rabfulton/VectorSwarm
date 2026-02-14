@@ -2190,20 +2190,24 @@ static vg_result draw_high_plains_drifter_terrain(
     const float y_far = h * 0.34f;
     const float cam = g->camera_x;
     const int enable_horizon_cull = (g->level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2);
+    const float center_x = w * 0.50f;
+    const float col_spacing = w * 0.050f;
+    const float col_span = col_spacing * (float)(COLS - 1);
+    const int x0 = (int)floorf((cam - col_span * 0.5f) / col_spacing) - 2;
 
     for (int r = 0; r < ROWS; ++r) {
         const float z = (float)r / (float)(ROWS - 1);
-        const float p = powf(z, 0.78f);
+        const float p = powf(z, 0.82f);
+        const float zw = lerpf(360.0f, 4200.0f, p);
         row_depth[r] = z;
         const float y_base = lerpf(y_near, y_far, p);
-        const float half_w = lerpf(w * 0.78f, w * 0.54f, p);
-        const float center_x = w * 0.50f + lerpf(w * 0.03f, -w * 0.02f, p);
+        const float row_scale = lerpf(1.04f, 0.23f, p);
         const float amp = lerpf(h * 0.21f, h * 0.08f, p);
         for (int c = 0; c < COLS; ++c) {
-            const float u = (float)c / (float)(COLS - 1);
-            const float x = center_x + (u - 0.5f) * 2.0f * half_w;
-            const float world_x = cam * (0.85f + p * 1.35f) + (u - 0.5f) * (2200.0f + p * 1800.0f);
-            const float n = high_plains_looped_noise(world_x * 0.70f, p * 4.5f + 0.35f) * 1.95f;
+            const float world_x = (float)(x0 + c) * col_spacing;
+            const float dx = world_x - cam;
+            const float x = center_x + dx * row_scale;
+            const float n = high_plains_looped_noise(world_x * 0.72f, zw * 0.0021f) * 1.95f;
             const float y = y_base + n * amp;
             pts[r][c] = (vg_vec2){x, y};
         }
@@ -2339,23 +2343,12 @@ static vg_result draw_high_plains_drifter_terrain(
         }
     }
 
-    enum { COL_CHUNK_SEGMENTS = 6 };
-    vg_vec2 vline[COL_CHUNK_SEGMENTS + 1];
     for (int c = 0; c < COLS; c += 2) {
         const int major = (c % 8) == 0;
         const float major_boost = major ? 1.0f : 0.62f;
-        for (int rs = 0; rs < ROWS - 1; rs += COL_CHUNK_SEGMENTS) {
-            const int re = (rs + COL_CHUNK_SEGMENTS < ROWS) ? (rs + COL_CHUNK_SEGMENTS) : (ROWS - 1);
-            const int pt_count = re - rs + 1;
-            if (pt_count < 2) {
-                continue;
-            }
-            float z_sum = 0.0f;
-            for (int r = rs; r <= re; ++r) {
-                z_sum += row_depth[r];
-                vline[r - rs] = pts[r][c];
-            }
-            const float z = z_sum / (float)pt_count;
+        for (int r = 0; r < ROWS - 1; ++r) {
+            const vg_vec2 seg[2] = {pts[r][c], pts[r + 1][c]};
+            const float z = 0.5f * (row_depth[r] + row_depth[r + 1]);
             const float fade = 0.09f + (1.0f - z) * (1.0f - z) * 0.91f;
             vg_stroke_style sh = *halo;
             vg_stroke_style sm = *main;
@@ -2370,15 +2363,15 @@ static vg_result draw_high_plains_drifter_terrain(
             sm.width_px *= 0.80f + (1.0f - z) * 0.40f;
             glow.width_px = fmaxf(glow.width_px * (1.28f + (1.0f - z) * 0.40f), sm.width_px * 1.30f);
             glow.blend = VG_BLEND_ADDITIVE;
-            vg_result vr = vg_draw_polyline(ctx, vline, pt_count, &glow, 0);
+            vg_result vr = vg_draw_polyline(ctx, seg, 2, &glow, 0);
             if (vr != VG_OK) {
                 return vr;
             }
-            vr = vg_draw_polyline(ctx, vline, pt_count, &sh, 0);
+            vr = vg_draw_polyline(ctx, seg, 2, &sh, 0);
             if (vr != VG_OK) {
                 return vr;
             }
-            vr = vg_draw_polyline(ctx, vline, pt_count, &sm, 0);
+            vr = vg_draw_polyline(ctx, seg, 2, &sm, 0);
             if (vr != VG_OK) {
                 return vr;
             }
@@ -3495,16 +3488,18 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
 
     if (!foreground_only) {
         if (g->level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER) {
-            vg_stroke_style plains_halo = land_halo;
-            vg_stroke_style plains_main = land_main;
-            plains_halo.intensity *= 1.10f;
-            plains_main.intensity *= 1.18f;
-            plains_halo.width_px *= 1.08f;
-            plains_main.width_px *= 1.04f;
-            plains_main.color = (vg_color){pal.secondary.r, pal.secondary.g, pal.secondary.b, 0.92f};
-            r = draw_high_plains_drifter_terrain(ctx, g, &plains_halo, &plains_main);
-            if (r != VG_OK) {
-                return r;
+            if (!metrics->use_gpu_terrain) {
+                vg_stroke_style plains_halo = land_halo;
+                vg_stroke_style plains_main = land_main;
+                plains_halo.intensity *= 1.10f;
+                plains_main.intensity *= 1.18f;
+                plains_halo.width_px *= 1.08f;
+                plains_main.width_px *= 1.04f;
+                plains_main.color = (vg_color){pal.secondary.r, pal.secondary.g, pal.secondary.b, 0.92f};
+                r = draw_high_plains_drifter_terrain(ctx, g, &plains_halo, &plains_main);
+                if (r != VG_OK) {
+                    return r;
+                }
             }
         } else if (g->level_style != LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2) {
             /* Foreground vector landscape layers for depth/parallax. */
