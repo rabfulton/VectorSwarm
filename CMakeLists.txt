@@ -55,12 +55,14 @@ if(GLSLANG_VALIDATOR AND XXD_EXECUTABLE)
     set(V_TYPE_TERRAIN_WIRE_FRAG_SPV ${V_TYPE_SHADER_GEN_DIR}/terrain_wire.frag.spv)
     set(V_TYPE_PARTICLE_VERT_SPV ${V_TYPE_SHADER_GEN_DIR}/particle.vert.spv)
     set(V_TYPE_PARTICLE_FRAG_SPV ${V_TYPE_SHADER_GEN_DIR}/particle.frag.spv)
+    set(V_TYPE_PARTICLE_BLOOM_FRAG_SPV ${V_TYPE_SHADER_GEN_DIR}/particle_bloom.frag.spv)
     set(V_TYPE_TERRAIN_VERT_HDR ${V_TYPE_SHADER_GEN_DIR}/terrain_vert_spv.h)
     set(V_TYPE_TERRAIN_FRAG_HDR ${V_TYPE_SHADER_GEN_DIR}/terrain_frag_spv.h)
     set(V_TYPE_TERRAIN_WIRE_VERT_HDR ${V_TYPE_SHADER_GEN_DIR}/terrain_wire_vert_spv.h)
     set(V_TYPE_TERRAIN_WIRE_FRAG_HDR ${V_TYPE_SHADER_GEN_DIR}/terrain_wire_frag_spv.h)
     set(V_TYPE_PARTICLE_VERT_HDR ${V_TYPE_SHADER_GEN_DIR}/particle_vert_spv.h)
     set(V_TYPE_PARTICLE_FRAG_HDR ${V_TYPE_SHADER_GEN_DIR}/particle_frag_spv.h)
+    set(V_TYPE_PARTICLE_BLOOM_FRAG_HDR ${V_TYPE_SHADER_GEN_DIR}/particle_bloom_frag_spv.h)
 
     add_custom_command(
         OUTPUT ${V_TYPE_TERRAIN_VERT_HDR}
@@ -98,7 +100,13 @@ if(GLSLANG_VALIDATOR AND XXD_EXECUTABLE)
         COMMAND ${XXD_EXECUTABLE} -i -n v_type_particle_frag_spv ${V_TYPE_PARTICLE_FRAG_SPV} > ${V_TYPE_PARTICLE_FRAG_HDR}
         DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/particle.frag
     )
-    add_custom_target(v_type_vk_shaders DEPENDS ${V_TYPE_TERRAIN_VERT_HDR} ${V_TYPE_TERRAIN_FRAG_HDR} ${V_TYPE_TERRAIN_WIRE_VERT_HDR} ${V_TYPE_TERRAIN_WIRE_FRAG_HDR} ${V_TYPE_PARTICLE_VERT_HDR} ${V_TYPE_PARTICLE_FRAG_HDR})
+    add_custom_command(
+        OUTPUT ${V_TYPE_PARTICLE_BLOOM_FRAG_HDR}
+        COMMAND ${GLSLANG_VALIDATOR} -V ${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/particle_bloom.frag -o ${V_TYPE_PARTICLE_BLOOM_FRAG_SPV}
+        COMMAND ${XXD_EXECUTABLE} -i -n v_type_particle_bloom_frag_spv ${V_TYPE_PARTICLE_BLOOM_FRAG_SPV} > ${V_TYPE_PARTICLE_BLOOM_FRAG_HDR}
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/particle_bloom.frag
+    )
+    add_custom_target(v_type_vk_shaders DEPENDS ${V_TYPE_TERRAIN_VERT_HDR} ${V_TYPE_TERRAIN_FRAG_HDR} ${V_TYPE_TERRAIN_WIRE_VERT_HDR} ${V_TYPE_TERRAIN_WIRE_FRAG_HDR} ${V_TYPE_PARTICLE_VERT_HDR} ${V_TYPE_PARTICLE_FRAG_HDR} ${V_TYPE_PARTICLE_BLOOM_FRAG_HDR})
     add_dependencies(v_type v_type_vk_shaders)
     target_compile_definitions(v_type PRIVATE V_TYPE_HAS_TERRAIN_SHADERS=1)
     target_include_directories(v_type PRIVATE ${V_TYPE_SHADER_GEN_DIR})

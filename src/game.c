@@ -298,7 +298,7 @@ static void emit_explosion(game_state* g, float x, float y, float bias_vx, float
             f->b.ay = 0.0f;
             f->age_s = 0.0f;
             f->life_s = 0.20f + frand01() * 0.08f;
-            f->size = (14.0f + frand01() * 10.0f) * su;
+            f->size = (10.0f + frand01() * 7.0f) * su;
             f->spin = 0.0f;
             f->spin_rate = 0.0f;
             f->r = 1.0f;
@@ -324,7 +324,7 @@ static void emit_explosion(game_state* g, float x, float y, float bias_vx, float
         p->b.ay = 0.0f;
         p->age_s = 0.0f;
         p->life_s = 0.55f + frand01() * 0.85f;
-        p->size = (3.8f + frand01() * 8.8f) * su;
+        p->size = (2.7f + frand01() * 6.2f) * su;
         p->spin = frand01() * 6.2831853f;
         p->spin_rate = frands1() * 9.0f;
         p->r = 0.95f + frand01() * 0.05f;
@@ -374,7 +374,7 @@ static void emit_thruster(game_state* g, float dt) {
         p->b.ay = -p->b.vy * 1.6f;
         p->age_s = 0.0f;
         p->life_s = 0.10f + frand01() * 0.15f;
-        p->size = (2.8f + frand01() * 5.0f) * su;
+        p->size = (2.1f + frand01() * 3.6f) * su;
         p->spin = frand01() * 6.2831853f;
         p->spin_rate = frands1() * 15.0f;
         p->r = 0.35f;

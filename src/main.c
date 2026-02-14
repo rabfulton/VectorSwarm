@@ -50,6 +50,7 @@
 #include "terrain_vert_spv.h"
 #include "particle_vert_spv.h"
 #include "particle_frag_spv.h"
+#include "particle_bloom_frag_spv.h"
 #endif
 
 #define APP_WIDTH 1280
@@ -248,6 +249,7 @@ typedef struct app {
     VkPipeline terrain_line_pipeline;
     VkPipelineLayout particle_layout;
     VkPipeline particle_pipeline;
+    VkPipeline particle_bloom_pipeline;
     VkBuffer particle_instance_buffer;
     VkDeviceMemory particle_instance_memory;
     void* particle_instance_map;
@@ -269,6 +271,7 @@ typedef struct app {
     char terrain_tuning_text[192];
     int particle_tuning_enabled; /* VTYPE_PARTICLE_TRACE */
     int particle_tuning_show;
+    int particle_bloom_enabled;
     float particle_core_gain;
     float particle_trail_gain;
     float particle_heat_cooling;
@@ -1141,6 +1144,7 @@ static void update_gpu_high_plains_vertices(app* a);
 static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd);
 static void update_gpu_particle_instances(app* a);
 static void record_gpu_particles(app* a, VkCommandBuffer cmd);
+static void record_gpu_particles_bloom(app* a, VkCommandBuffer cmd);
 static void reset_terrain_tuning(app* a);
 static void sync_terrain_tuning_text(app* a);
 static int handle_terrain_tuning_key(app* a, SDL_Keycode key);
@@ -2881,6 +2885,7 @@ static void cleanup(app* a) {
     if (a->terrain_fill_pipeline) vkDestroyPipeline(a->device, a->terrain_fill_pipeline, NULL);
     if (a->terrain_line_pipeline) vkDestroyPipeline(a->device, a->terrain_line_pipeline, NULL);
     if (a->particle_pipeline) vkDestroyPipeline(a->device, a->particle_pipeline, NULL);
+    if (a->particle_bloom_pipeline) vkDestroyPipeline(a->device, a->particle_bloom_pipeline, NULL);
     if (a->post_layout) vkDestroyPipelineLayout(a->device, a->post_layout, NULL);
     if (a->terrain_layout) vkDestroyPipelineLayout(a->device, a->terrain_layout, NULL);
     if (a->particle_layout) vkDestroyPipelineLayout(a->device, a->particle_layout, NULL);
@@ -2984,6 +2989,10 @@ static void destroy_render_runtime(app* a) {
     if (a->particle_pipeline) {
         vkDestroyPipeline(a->device, a->particle_pipeline, NULL);
         a->particle_pipeline = VK_NULL_HANDLE;
+    }
+    if (a->particle_bloom_pipeline) {
+        vkDestroyPipeline(a->device, a->particle_bloom_pipeline, NULL);
+        a->particle_bloom_pipeline = VK_NULL_HANDLE;
     }
     if (a->post_layout) {
         vkDestroyPipelineLayout(a->device, a->post_layout, NULL);
@@ -4044,12 +4053,23 @@ static int create_particle_resources(app* a) {
         .codeSize = v_type_particle_frag_spv_len,
         .pCode = (const uint32_t*)v_type_particle_frag_spv
     };
+    VkShaderModuleCreateInfo fs_bloom_ci = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = v_type_particle_bloom_frag_spv_len,
+        .pCode = (const uint32_t*)v_type_particle_bloom_frag_spv
+    };
     VkShaderModule vs = VK_NULL_HANDLE;
     VkShaderModule fs = VK_NULL_HANDLE;
+    VkShaderModule fs_bloom = VK_NULL_HANDLE;
     if (!check_vk(vkCreateShaderModule(a->device, &vs_ci, NULL, &vs), "vkCreateShaderModule(particle vs)")) {
         return 0;
     }
     if (!check_vk(vkCreateShaderModule(a->device, &fs_ci, NULL, &fs), "vkCreateShaderModule(particle fs)")) {
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+    if (!check_vk(vkCreateShaderModule(a->device, &fs_bloom_ci, NULL, &fs_bloom), "vkCreateShaderModule(particle bloom fs)")) {
+        vkDestroyShaderModule(a->device, fs, NULL);
         vkDestroyShaderModule(a->device, vs, NULL);
         return 0;
     }
@@ -4139,10 +4159,25 @@ static int create_particle_resources(app* a) {
         .subpass = 0
     };
     if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->particle_pipeline), "vkCreateGraphicsPipelines(particles)")) {
+        vkDestroyShaderModule(a->device, fs_bloom, NULL);
         vkDestroyShaderModule(a->device, fs, NULL);
         vkDestroyShaderModule(a->device, vs, NULL);
         return 0;
     }
+
+    stages[1].module = fs_bloom;
+    cb_att.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    cb_att.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    cb_att.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    cb_att.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    gp.renderPass = a->bloom_render_pass;
+    if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->particle_bloom_pipeline), "vkCreateGraphicsPipelines(particle bloom)")) {
+        vkDestroyShaderModule(a->device, fs_bloom, NULL);
+        vkDestroyShaderModule(a->device, fs, NULL);
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+    vkDestroyShaderModule(a->device, fs_bloom, NULL);
     vkDestroyShaderModule(a->device, fs, NULL);
     vkDestroyShaderModule(a->device, vs, NULL);
     return 1;
@@ -4400,6 +4435,33 @@ static void record_gpu_particles(app* a, VkCommandBuffer cmd) {
     pc.params[2] = a->particle_core_gain;
     pc.params[3] = a->particle_trail_gain;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->particle_pipeline);
+    vkCmdPushConstants(cmd, a->particle_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    VkDeviceSize off = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &a->particle_instance_buffer, &off);
+    vkCmdDraw(cmd, 4, a->particle_instance_count, 0, 0);
+#endif
+}
+
+static void record_gpu_particles_bloom(app* a, VkCommandBuffer cmd) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    (void)cmd;
+#else
+    if (!a || !cmd || !a->particle_bloom_pipeline || !a->particle_instance_buffer) {
+        return;
+    }
+    update_gpu_particle_instances(a);
+    if (a->particle_instance_count == 0) {
+        return;
+    }
+    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    particle_pc pc;
+    memset(&pc, 0, sizeof(pc));
+    pc.params[0] = (float)a->swapchain_extent.width;
+    pc.params[1] = (float)a->swapchain_extent.height;
+    pc.params[2] = a->particle_core_gain;
+    pc.params[3] = a->particle_trail_gain;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->particle_bloom_pipeline);
     vkCmdPushConstants(cmd, a->particle_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
     VkDeviceSize off = 0;
     vkCmdBindVertexBuffers(cmd, 0, 1, &a->particle_instance_buffer, &off);
@@ -4676,6 +4738,10 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
     pc.p3[1] = 0.76f;
     vkCmdPushConstants(cmd, a->post_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
+    if (a->particle_bloom_enabled &&
+        !a->show_acoustics && !a->show_video_menu && !a->show_planetarium) {
+        record_gpu_particles_bloom(a, cmd);
+    }
     vkCmdEndRenderPass(cmd);
 
     VkClearValue present_clear = {.color = {{0.0f, 0.0f, 0.0f, 1.0f}}};
@@ -4742,6 +4808,7 @@ int main(void) {
     a.terrain_tuning_show = 1;
     a.particle_tuning_enabled = env_flag_enabled("VTYPE_PARTICLE_TRACE");
     a.particle_tuning_show = 1;
+    a.particle_bloom_enabled = 1;
     reset_terrain_tuning(&a);
     sync_terrain_tuning_text(&a);
     reset_particle_tuning(&a);
@@ -4925,6 +4992,9 @@ int main(void) {
                 } else if (ev.key.keysym.sym == SDLK_4) {
                     a.terrain_wire_enabled = !a.terrain_wire_enabled;
                     set_tty_message(&a, a.terrain_wire_enabled ? "terrain wire: on" : "terrain wire: off");
+                } else if (ev.key.keysym.sym == SDLK_b) {
+                    a.particle_bloom_enabled = !a.particle_bloom_enabled;
+                    set_tty_message(&a, a.particle_bloom_enabled ? "particle bloom: on" : "particle bloom: off");
                 } else if (a.show_planetarium && ev.key.keysym.sym == SDLK_LEFT) {
                     const int max_idx = app_planetarium_planet_count(&a);
                     a.planetarium_selected = (a.planetarium_selected + max_idx) % (max_idx + 1);

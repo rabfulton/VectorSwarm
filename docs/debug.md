@@ -1,5 +1,9 @@
 # Debug Controls
 
+## Global Runtime Toggles
+
+- `B`: toggle particle bloom pass on/off
+
 ## Terrain Tuning (High Plains Drifter 2)
 
 Terrain tuning controls are disabled by default.

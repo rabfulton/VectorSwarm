@@ -22,11 +22,11 @@ void main() {
     else corner = vec2(1.0, 1.0);
 
     /* Keep GPU particles visually close to legacy CPU particle size. */
-    float size_mul = 1.90;
+    float size_mul = 1.45;
     if (in_p0.w < 0.5) {
-        size_mul = 2.20;
+        size_mul = 1.65;
     } else if (in_p0.w > 1.5) {
-        size_mul = 2.90;
+        size_mul = 2.15;
     }
     vec2 dir = in_aux.xy;
     float dir_len = length(dir);
