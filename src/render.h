@@ -81,7 +81,7 @@ typedef struct render_metrics {
     uint32_t nick_h;
     uint32_t nick_stride;
     const void* surveillance_svg_asset;
-    int scene_phase; /* 0=full, 1=background-only, 2=foreground-only */
+    int scene_phase; /* 0=full, 1=background-only, 2=foreground-only, 3=overlay-no-clear */
 } render_metrics;
 
 vg_result render_frame(vg_context* ctx, const game_state* g, const render_metrics* metrics);

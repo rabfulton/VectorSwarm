@@ -2590,6 +2590,26 @@ static void clear_scene_depth(VkCommandBuffer cmd, VkExtent2D extent) {
     vkCmdClearAttachments(cmd, 1, &clear, 1, &rect);
 }
 
+static void clear_scene_color_depth(VkCommandBuffer cmd, VkExtent2D extent) {
+    VkClearAttachment clears[2];
+    memset(clears, 0, sizeof(clears));
+    clears[0].aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    clears[0].colorAttachment = 0;
+    clears[0].clearValue.color.float32[0] = 0.0f;
+    clears[0].clearValue.color.float32[1] = 0.0f;
+    clears[0].clearValue.color.float32[2] = 0.0f;
+    clears[0].clearValue.color.float32[3] = 1.0f;
+    clears[1].aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    clears[1].clearValue.depthStencil.depth = 1.0f;
+    clears[1].clearValue.depthStencil.stencil = 0;
+
+    VkClearRect rect;
+    memset(&rect, 0, sizeof(rect));
+    rect.rect.extent = extent;
+    rect.layerCount = 1;
+    vkCmdClearAttachments(cmd, 2, clears, 1, &rect);
+}
+
 static void cleanup(app* a) {
     if (a->device != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(a->device);
@@ -3975,19 +3995,13 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             !a->show_video_menu &&
             !a->show_planetarium;
         if (split_terrain_layer) {
-            metrics.scene_phase = 1;
-            vr = render_frame(a->vg, &a->game, &metrics);
-            if (vr != VG_OK) {
-                fprintf(stderr, "VG failure: render_frame(bg) -> %s (%d)\n", vg_result_string(vr), (int)vr);
-                return 0;
-            }
-            clear_scene_depth(cmd, a->swapchain_extent);
+            clear_scene_color_depth(cmd, a->swapchain_extent);
             record_gpu_high_plains_terrain(a, cmd);
             clear_scene_depth(cmd, a->swapchain_extent);
-            metrics.scene_phase = 2;
+            metrics.scene_phase = 3;
             vr = render_frame(a->vg, &a->game, &metrics);
             if (vr != VG_OK) {
-                fprintf(stderr, "VG failure: render_frame(fg) -> %s (%d)\n", vg_result_string(vr), (int)vr);
+                fprintf(stderr, "VG failure: render_frame(overlay) -> %s (%d)\n", vg_result_string(vr), (int)vr);
                 return 0;
             }
         } else {

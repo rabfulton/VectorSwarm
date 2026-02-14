@@ -3009,7 +3009,11 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
     if (persistence > 1.0f) {
         persistence = 1.0f;
     }
-    float frame_decay = powf(persistence, metrics->dt * 95.0f);
+    /* Stabilize persistence clear against frame-time jitter (major on line-dense scenes). */
+    static float persistence_dt_s = 1.0f / 60.0f;
+    const float dt_clamped = clampf(metrics->dt, 1.0f / 120.0f, 1.0f / 45.0f);
+    persistence_dt_s += (dt_clamped - persistence_dt_s) * 0.08f;
+    float frame_decay = powf(persistence, persistence_dt_s * 95.0f);
     float fade_alpha = 1.0f - frame_decay;
     if (fade_alpha < 0.08f) {
         fade_alpha = 0.08f;
@@ -3115,11 +3119,13 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
     const float jy = cosf(g->t * 21.0f) * crt.jitter_amount * 0.75f;
     const int background_only = (metrics->scene_phase == 1);
     const int foreground_only = (metrics->scene_phase == 2);
+    const int overlay_no_clear = (metrics->scene_phase == 3);
 
+    vg_transform_reset(ctx);
     vg_transform_translate(ctx, jx, jy);
 
     vg_result r = VG_OK;
-    if (!foreground_only) {
+    if (!foreground_only && !overlay_no_clear) {
         r = vg_fill_rect(ctx, (vg_rect){0.0f, 0.0f, g->world_w, g->world_h}, &bg);
         if (r != VG_OK) {
             return r;
