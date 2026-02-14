@@ -13,7 +13,8 @@
 #define ACOUSTICS_SLOT_COUNT 5
 #define VIDEO_MENU_RES_COUNT 6
 #define VIDEO_MENU_DIAL_COUNT 12
-#define WORMHOLE_GPU_MAX_VERTS 5136u
+#define WORMHOLE_GPU_MAX_VERTS 8192u
+#define WORMHOLE_GPU_MAX_TRI_VERTS 6144u
 
 #define CRT_RANGE_BLOOM_STRENGTH_MIN 0.0f
 #define CRT_RANGE_BLOOM_STRENGTH_MAX 1.8f
@@ -99,6 +100,7 @@ typedef struct wormhole_line_vertex {
 } wormhole_line_vertex;
 
 size_t render_build_event_horizon_gpu_lines(const game_state* g, wormhole_line_vertex* out, size_t out_cap);
+size_t render_build_event_horizon_gpu_tris(const game_state* g, wormhole_line_vertex* out, size_t out_cap);
 
 vg_result render_frame(vg_context* ctx, const game_state* g, const render_metrics* metrics);
 

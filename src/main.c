@@ -259,7 +259,12 @@ typedef struct app {
     VkPipeline particle_pipeline;
     VkPipeline particle_bloom_pipeline;
     VkPipelineLayout wormhole_line_layout;
+    VkPipeline wormhole_depth_pipeline;
     VkPipeline wormhole_line_pipeline;
+    VkBuffer wormhole_tri_vertex_buffer;
+    VkDeviceMemory wormhole_tri_vertex_memory;
+    void* wormhole_tri_vertex_map;
+    uint32_t wormhole_tri_vertex_count;
     VkBuffer wormhole_line_vertex_buffer;
     VkDeviceMemory wormhole_line_vertex_memory;
     void* wormhole_line_vertex_map;
@@ -2924,6 +2929,7 @@ static void cleanup(app* a) {
     if (a->terrain_line_pipeline) vkDestroyPipeline(a->device, a->terrain_line_pipeline, NULL);
     if (a->particle_pipeline) vkDestroyPipeline(a->device, a->particle_pipeline, NULL);
     if (a->particle_bloom_pipeline) vkDestroyPipeline(a->device, a->particle_bloom_pipeline, NULL);
+    if (a->wormhole_depth_pipeline) vkDestroyPipeline(a->device, a->wormhole_depth_pipeline, NULL);
     if (a->wormhole_line_pipeline) vkDestroyPipeline(a->device, a->wormhole_line_pipeline, NULL);
     if (a->post_layout) vkDestroyPipelineLayout(a->device, a->post_layout, NULL);
     if (a->terrain_layout) vkDestroyPipelineLayout(a->device, a->terrain_layout, NULL);
@@ -2966,12 +2972,18 @@ static void cleanup(app* a) {
         vkUnmapMemory(a->device, a->wormhole_line_vertex_memory);
         a->wormhole_line_vertex_map = NULL;
     }
+    if (a->wormhole_tri_vertex_map && a->wormhole_tri_vertex_memory) {
+        vkUnmapMemory(a->device, a->wormhole_tri_vertex_memory);
+        a->wormhole_tri_vertex_map = NULL;
+    }
     if (a->particle_instance_buffer) vkDestroyBuffer(a->device, a->particle_instance_buffer, NULL);
+    if (a->wormhole_tri_vertex_buffer) vkDestroyBuffer(a->device, a->wormhole_tri_vertex_buffer, NULL);
     if (a->wormhole_line_vertex_buffer) vkDestroyBuffer(a->device, a->wormhole_line_vertex_buffer, NULL);
     if (a->terrain_vertex_memory) vkFreeMemory(a->device, a->terrain_vertex_memory, NULL);
     if (a->terrain_tri_index_memory) vkFreeMemory(a->device, a->terrain_tri_index_memory, NULL);
     if (a->terrain_wire_vertex_memory) vkFreeMemory(a->device, a->terrain_wire_vertex_memory, NULL);
     if (a->particle_instance_memory) vkFreeMemory(a->device, a->particle_instance_memory, NULL);
+    if (a->wormhole_tri_vertex_memory) vkFreeMemory(a->device, a->wormhole_tri_vertex_memory, NULL);
     if (a->wormhole_line_vertex_memory) vkFreeMemory(a->device, a->wormhole_line_vertex_memory, NULL);
 
     for (uint32_t i = 0; i < a->swapchain_image_count; ++i) {
@@ -3039,6 +3051,10 @@ static void destroy_render_runtime(app* a) {
     if (a->particle_bloom_pipeline) {
         vkDestroyPipeline(a->device, a->particle_bloom_pipeline, NULL);
         a->particle_bloom_pipeline = VK_NULL_HANDLE;
+    }
+    if (a->wormhole_depth_pipeline) {
+        vkDestroyPipeline(a->device, a->wormhole_depth_pipeline, NULL);
+        a->wormhole_depth_pipeline = VK_NULL_HANDLE;
     }
     if (a->wormhole_line_pipeline) {
         vkDestroyPipeline(a->device, a->wormhole_line_pipeline, NULL);
@@ -3156,6 +3172,10 @@ static void destroy_render_runtime(app* a) {
         vkUnmapMemory(a->device, a->wormhole_line_vertex_memory);
         a->wormhole_line_vertex_map = NULL;
     }
+    if (a->wormhole_tri_vertex_map && a->wormhole_tri_vertex_memory) {
+        vkUnmapMemory(a->device, a->wormhole_tri_vertex_memory);
+        a->wormhole_tri_vertex_map = NULL;
+    }
     if (a->particle_instance_buffer) {
         vkDestroyBuffer(a->device, a->particle_instance_buffer, NULL);
         a->particle_instance_buffer = VK_NULL_HANDLE;
@@ -3163,6 +3183,10 @@ static void destroy_render_runtime(app* a) {
     if (a->wormhole_line_vertex_buffer) {
         vkDestroyBuffer(a->device, a->wormhole_line_vertex_buffer, NULL);
         a->wormhole_line_vertex_buffer = VK_NULL_HANDLE;
+    }
+    if (a->wormhole_tri_vertex_buffer) {
+        vkDestroyBuffer(a->device, a->wormhole_tri_vertex_buffer, NULL);
+        a->wormhole_tri_vertex_buffer = VK_NULL_HANDLE;
     }
     if (a->terrain_vertex_memory) {
         vkFreeMemory(a->device, a->terrain_vertex_memory, NULL);
@@ -3183,6 +3207,10 @@ static void destroy_render_runtime(app* a) {
     if (a->wormhole_line_vertex_memory) {
         vkFreeMemory(a->device, a->wormhole_line_vertex_memory, NULL);
         a->wormhole_line_vertex_memory = VK_NULL_HANDLE;
+    }
+    if (a->wormhole_tri_vertex_memory) {
+        vkFreeMemory(a->device, a->wormhole_tri_vertex_memory, NULL);
+        a->wormhole_tri_vertex_memory = VK_NULL_HANDLE;
     }
     for (uint32_t i = 0; i < APP_MAX_SWAPCHAIN_IMAGES; ++i) {
         if (a->present_framebuffers[i]) {
@@ -4260,6 +4288,15 @@ static void update_gpu_wormhole_vertices(app* a) {
     a->wormhole_line_vertex_count = (uint32_t)((n > (size_t)UINT32_MAX) ? (size_t)UINT32_MAX : n);
 }
 
+static void update_gpu_wormhole_tri_vertices(app* a) {
+    if (!a || !a->wormhole_tri_vertex_map) {
+        return;
+    }
+    wormhole_line_vertex* out = (wormhole_line_vertex*)a->wormhole_tri_vertex_map;
+    const size_t n = render_build_event_horizon_gpu_tris(&a->game, out, (size_t)WORMHOLE_GPU_MAX_TRI_VERTS);
+    a->wormhole_tri_vertex_count = (uint32_t)((n > (size_t)UINT32_MAX) ? (size_t)UINT32_MAX : n);
+}
+
 static int create_wormhole_resources(app* a) {
 #if !V_TYPE_HAS_TERRAIN_SHADERS
     (void)a;
@@ -4269,6 +4306,7 @@ static int create_wormhole_resources(app* a) {
         return 0;
     }
     const VkDeviceSize vbuf_size = (VkDeviceSize)WORMHOLE_GPU_MAX_VERTS * sizeof(wormhole_line_vertex);
+    const VkDeviceSize tbuf_size = (VkDeviceSize)WORMHOLE_GPU_MAX_TRI_VERTS * sizeof(wormhole_line_vertex);
     if (!create_buffer(
             a, vbuf_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -4278,6 +4316,16 @@ static int create_wormhole_resources(app* a) {
     if (!check_vk(vkMapMemory(a->device, a->wormhole_line_vertex_memory, 0, vbuf_size, 0, &a->wormhole_line_vertex_map), "vkMapMemory(wormhole lines)")) {
         return 0;
     }
+    if (!create_buffer(
+            a, tbuf_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &a->wormhole_tri_vertex_buffer, &a->wormhole_tri_vertex_memory)) {
+        return 0;
+    }
+    if (!check_vk(vkMapMemory(a->device, a->wormhole_tri_vertex_memory, 0, tbuf_size, 0, &a->wormhole_tri_vertex_map), "vkMapMemory(wormhole tris)")) {
+        return 0;
+    }
+    a->wormhole_tri_vertex_count = 0u;
     a->wormhole_line_vertex_count = 0u;
 
     VkPushConstantRange pc = {
@@ -4339,9 +4387,13 @@ static int create_wormhole_resources(app* a) {
         .vertexAttributeDescriptionCount = 2,
         .pVertexAttributeDescriptions = attr
     };
-    VkPipelineInputAssemblyStateCreateInfo ia = {
+    VkPipelineInputAssemblyStateCreateInfo ia_line = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
         .topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST
+    };
+    VkPipelineInputAssemblyStateCreateInfo ia_tri = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
     };
     VkPipelineViewportStateCreateInfo vp = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .scissorCount = 1};
     const float dpi_scale = drawable_scale_y(a);
@@ -4369,16 +4421,16 @@ static int create_wormhole_resources(app* a) {
     VkPipelineDynamicStateCreateInfo ds = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .dynamicStateCount = 2, .pDynamicStates = dyn};
     VkPipelineDepthStencilStateCreateInfo depth = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-        .depthTestEnable = VK_FALSE,
+        .depthTestEnable = VK_TRUE,
         .depthWriteEnable = VK_FALSE,
-        .depthCompareOp = VK_COMPARE_OP_ALWAYS
+        .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL
     };
     VkGraphicsPipelineCreateInfo gp = {
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .stageCount = 2,
         .pStages = stages,
         .pVertexInputState = &vi,
-        .pInputAssemblyState = &ia,
+        .pInputAssemblyState = &ia_line,
         .pViewportState = &vp,
         .pRasterizationState = &rs,
         .pMultisampleState = &ms,
@@ -4390,6 +4442,28 @@ static int create_wormhole_resources(app* a) {
         .subpass = 0
     };
     if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->wormhole_line_pipeline), "vkCreateGraphicsPipelines(wormhole line)")) {
+        vkDestroyShaderModule(a->device, fs, NULL);
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+
+    VkPipelineColorBlendAttachmentState cb_att_depth = {0};
+    cb_att_depth.colorWriteMask = 0;
+    VkPipelineColorBlendStateCreateInfo cb_depth = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .attachmentCount = 1,
+        .pAttachments = &cb_att_depth
+    };
+    VkPipelineDepthStencilStateCreateInfo depth_only = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .depthTestEnable = VK_TRUE,
+        .depthWriteEnable = VK_TRUE,
+        .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL
+    };
+    gp.pInputAssemblyState = &ia_tri;
+    gp.pColorBlendState = &cb_depth;
+    gp.pDepthStencilState = &depth_only;
+    if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->wormhole_depth_pipeline), "vkCreateGraphicsPipelines(wormhole depth)")) {
         vkDestroyShaderModule(a->device, fs, NULL);
         vkDestroyShaderModule(a->device, vs, NULL);
         return 0;
@@ -4693,17 +4767,20 @@ static void record_gpu_wormhole(app* a, VkCommandBuffer cmd) {
 #else
     if (!a || !cmd || !a->use_gpu_wormhole ||
         a->game.level_style != LEVEL_STYLE_EVENT_HORIZON ||
-        !a->wormhole_line_pipeline || !a->wormhole_line_vertex_buffer) {
+        !a->wormhole_line_pipeline || !a->wormhole_depth_pipeline ||
+        !a->wormhole_line_vertex_buffer || !a->wormhole_tri_vertex_buffer) {
         return;
     }
     update_gpu_wormhole_vertices(a);
+    update_gpu_wormhole_tri_vertices(a);
     if (a->wormhole_line_vertex_count < 2u) {
+        return;
+    }
+    if (a->wormhole_tri_vertex_count < 3u) {
         return;
     }
     set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
     VkDeviceSize off = 0;
-    vkCmdBindVertexBuffers(cmd, 0, 1, &a->wormhole_line_vertex_buffer, &off);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->wormhole_line_pipeline);
 
     wormhole_line_pc pc;
     memset(&pc, 0, sizeof(pc));
@@ -4732,6 +4809,22 @@ static void record_gpu_wormhole(app* a, VkCommandBuffer cmd) {
         {0.0f, -1.0f}
     };
 
+    /* Depth prepass for hidden-line removal. */
+    VkDeviceSize toff = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &a->wormhole_tri_vertex_buffer, &toff);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->wormhole_depth_pipeline);
+    pc.color[0] = 0.0f;
+    pc.color[1] = 0.0f;
+    pc.color[2] = 0.0f;
+    pc.color[3] = 0.0f;
+    pc.params[2] = 1.0f;
+    pc.offset[0] = 0.0f;
+    pc.offset[1] = 0.0f;
+    vkCmdPushConstants(cmd, a->wormhole_line_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cmd, a->wormhole_tri_vertex_count, 1, 0, 0);
+
+    vkCmdBindVertexBuffers(cmd, 0, 1, &a->wormhole_line_vertex_buffer, &off);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->wormhole_line_pipeline);
     pc.color[0] = primary_dim[0];
     pc.color[1] = primary_dim[1];
     pc.color[2] = primary_dim[2];

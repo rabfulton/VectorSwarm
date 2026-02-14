@@ -24,7 +24,7 @@ typedef struct v3 {
 
 /* Event Horizon wormhole mesh is static; cache it to avoid per-frame recompute. */
 #define WORMHOLE_VN 84
-#define WORMHOLE_ROWS 24
+#define WORMHOLE_ROWS 33
 #define WORMHOLE_COLS 24
 
 typedef struct wormhole_cache {
@@ -204,9 +204,9 @@ static void wormhole_cache_build(wormhole_cache* c, float world_w, float world_h
 
     const float h_span = world_h * 0.46f;
     const float rx_outer = world_w * 0.64f;
-    const float rx_throat = world_w * 0.030f;
-    const float ry_ratio = 0.18f;
-    const float flare_s = 3.4f; /* larger = longer/narrower, still curved */
+    const float rx_throat = world_w * 0.024f;
+    const float ry_ratio = 0.17f;
+    const float flare_s = 3.9f; /* larger = longer/narrower, still curved */
     const float flare_norm = 1.0f / sinhf(flare_s);
     const v3 view_dir = (v3){0.0f, 0.0f, 1.0f};
 
@@ -220,7 +220,7 @@ static void wormhole_cache_build(wormhole_cache* c, float world_w, float world_h
         const float sy = tj * 2.0f - 1.0f;
         const float a = fabsf(sy);
         float k = sinhf(flare_s * a) * flare_norm;
-        k = powf(k, 1.35f);
+        k = powf(k, 1.45f);
         row_sy[j] = sy;
         row_rx[j] = rx_throat + (rx_outer - rx_throat) * k;
         row_ry[j] = row_rx[j] * (ry_ratio * (0.92f + 0.10f * (1.0f - k)));
@@ -246,8 +246,8 @@ static void wormhole_cache_build(wormhole_cache* c, float world_w, float world_h
         const float rx = row_rx[j];
         const float ry = row_ry[j];
         const float drdy = row_drdy[j];
-        /* Keep perceived "front" on the inner side of both halves of the hourglass. */
-        const float hemi = (sy < 0.0f) ? 1.0f : -1.0f;
+        /* Smooth hemisphere transition through center to avoid a visible spacing seam. */
+        const float hemi = -tanhf(sy * 7.0f);
 
         for (int i = 0; i < WORMHOLE_VN; ++i) {
             {
@@ -278,7 +278,7 @@ static void wormhole_cache_build(wormhole_cache* c, float world_w, float world_h
             const float sy = row_sy[j];
             const float rx = row_rx[j];
             const float ry = row_ry[j];
-            const float hemi = (sy < 0.0f) ? 1.0f : -1.0f;
+            const float hemi = -tanhf(sy * 7.0f);
             const float sp_hemi = sp * hemi;
             c->rail_rel_modern[col][j].x = cp * rx;
             c->rail_rel_modern[col][j].y = sy * h_span + sp_hemi * ry;
@@ -307,14 +307,37 @@ static size_t wormhole_emit_segment(
     float ay,
     float bx,
     float by,
+    float az,
+    float bz,
     float fade
 ) {
     if (!out || count + 2u > out_cap) {
         return count;
     }
-    out[count + 0u] = (wormhole_line_vertex){ax, ay, 0.0f, fade};
-    out[count + 1u] = (wormhole_line_vertex){bx, by, 0.0f, fade};
+    out[count + 0u] = (wormhole_line_vertex){ax, ay, az, fade};
+    out[count + 1u] = (wormhole_line_vertex){bx, by, bz, fade};
     return count + 2u;
+}
+
+static float wormhole_phase_depth(float phase, float hemi) {
+    /* Modern wormhole flips angular hemisphere between top/bottom halves. */
+    const float s = sinf(phase) * hemi;
+    return clampf(0.52f - 0.28f * s, 0.04f, 0.96f);
+}
+
+static float wormhole_row_sy(int j) {
+    const float tj = (float)j / (float)(WORMHOLE_ROWS - 1);
+    return tj * 2.0f - 1.0f;
+}
+
+static float wormhole_row_hemi_smooth(int j) {
+    const float sy = wormhole_row_sy(j);
+    /* Keep top behavior; flip bottom-half orientation to align center column winding. */
+    float h = -tanhf(sy * 6.0f);
+    if (sy < 0.0f) {
+        h = -h;
+    }
+    return h;
 }
 
 size_t render_build_event_horizon_gpu_lines(const game_state* g, wormhole_line_vertex* out, size_t out_cap) {
@@ -339,6 +362,7 @@ size_t render_build_event_horizon_gpu_lines(const game_state* g, wormhole_line_v
     size_t count = 0u;
     for (int j = 0; j < WORMHOLE_ROWS; ++j) {
         const float fade = wh.row_fade[j];
+        const float hemi = wormhole_row_hemi_smooth(j);
         vg_vec2 loop[WORMHOLE_VN];
         for (int i = 0; i < WORMHOLE_VN; ++i) {
             const float u = (float)i + loop_shift_modern;
@@ -350,7 +374,46 @@ size_t render_build_event_horizon_gpu_lines(const game_state* g, wormhole_line_v
         }
         for (int i = 0; i < WORMHOLE_VN; ++i) {
             const int i1 = wrapi(i + 1, WORMHOLE_VN);
-            count = wormhole_emit_segment(out, out_cap, count, loop[i].x, loop[i].y, loop[i1].x, loop[i1].y, fade);
+            const float u0 = (float)i + loop_shift_modern;
+            const float u1 = (float)(i + 1) + loop_shift_modern;
+            const float phase0 = (u0 / (float)WORMHOLE_VN) * 6.28318530718f;
+            const float phase1 = (u1 / (float)WORMHOLE_VN) * 6.28318530718f;
+            const float z0 = clampf(wormhole_phase_depth(phase0, hemi) - 0.0025f, 0.0f, 1.0f);
+            const float z1 = clampf(wormhole_phase_depth(phase1, hemi) - 0.0025f, 0.0f, 1.0f);
+            count = wormhole_emit_segment(out, out_cap, count, loop[i].x, loop[i].y, loop[i1].x, loop[i1].y, z0, z1, fade);
+            if (count + 1u >= out_cap) {
+                return count;
+            }
+        }
+    }
+
+    /* Ensure a visible waist ring for even row counts (no exact sy=0 row). */
+    if ((WORMHOLE_ROWS % 2) == 0) {
+        const int j0 = (WORMHOLE_ROWS / 2) - 1;
+        const int j1 = (WORMHOLE_ROWS / 2);
+        const float fade = 0.5f * (wh.row_fade[j0] + wh.row_fade[j1]);
+        vg_vec2 loop[WORMHOLE_VN];
+        for (int i = 0; i < WORMHOLE_VN; ++i) {
+            const float u = (float)i + loop_shift_modern;
+            const int i0 = wrapi((int)floorf(u), WORMHOLE_VN);
+            const int i1 = wrapi(i0 + 1, WORMHOLE_VN);
+            const float t = u - floorf(u);
+            const float x0 = lerpf(wh.loop_rel_modern[j0][i0].x, wh.loop_rel_modern[j0][i1].x, t);
+            const float y0 = lerpf(wh.loop_rel_modern[j0][i0].y, wh.loop_rel_modern[j0][i1].y, t);
+            const float x1 = lerpf(wh.loop_rel_modern[j1][i0].x, wh.loop_rel_modern[j1][i1].x, t);
+            const float y1 = lerpf(wh.loop_rel_modern[j1][i0].y, wh.loop_rel_modern[j1][i1].y, t);
+            loop[i].x = cx + 0.5f * (x0 + x1);
+            loop[i].y = cy + 0.5f * (y0 + y1);
+        }
+        for (int i = 0; i < WORMHOLE_VN; ++i) {
+            const int i1 = wrapi(i + 1, WORMHOLE_VN);
+            const float u0 = (float)i + loop_shift_modern;
+            const float u1 = (float)(i + 1) + loop_shift_modern;
+            const float phase0 = (u0 / (float)WORMHOLE_VN) * 6.28318530718f;
+            const float phase1 = (u1 / (float)WORMHOLE_VN) * 6.28318530718f;
+            const float z0 = clampf(wormhole_phase_depth(phase0, 0.0f) - 0.0035f, 0.0f, 1.0f);
+            const float z1 = clampf(wormhole_phase_depth(phase1, 0.0f) - 0.0035f, 0.0f, 1.0f);
+            count = wormhole_emit_segment(out, out_cap, count, loop[i].x, loop[i].y, loop[i1].x, loop[i1].y, z0, z1, fade);
             if (count + 1u >= out_cap) {
                 return count;
             }
@@ -368,10 +431,71 @@ size_t render_build_event_horizon_gpu_lines(const game_state* g, wormhole_line_v
             rail[j].y = cy + lerpf(wh.rail_rel_modern[c0][j].y, wh.rail_rel_modern[c1][j].y, ct);
         }
         for (int j = 0; j + 1 < WORMHOLE_ROWS; ++j) {
-            count = wormhole_emit_segment(out, out_cap, count, rail[j].x, rail[j].y, rail[j + 1].x, rail[j + 1].y, 0.90f);
+            const float phase = (cu / (float)WORMHOLE_COLS) * 6.28318530718f;
+            const float hemi0 = wormhole_row_hemi_smooth(j);
+            const float hemi1 = wormhole_row_hemi_smooth(j + 1);
+            const float z0 = clampf(wormhole_phase_depth(phase, hemi0) - 0.0025f, 0.0f, 1.0f);
+            const float z1 = clampf(wormhole_phase_depth(phase, hemi1) - 0.0025f, 0.0f, 1.0f);
+            count = wormhole_emit_segment(out, out_cap, count, rail[j].x, rail[j].y, rail[j + 1].x, rail[j + 1].y, z0, z1, 0.90f);
             if (count + 1u >= out_cap) {
                 return count;
             }
+        }
+    }
+    return count;
+}
+
+size_t render_build_event_horizon_gpu_tris(const game_state* g, wormhole_line_vertex* out, size_t out_cap) {
+    if (!g || !out || out_cap == 0u) {
+        return 0u;
+    }
+    if (g->level_style != LEVEL_STYLE_EVENT_HORIZON) {
+        return 0u;
+    }
+
+    static wormhole_cache wh;
+    wormhole_cache_ensure(&wh, g->world_w, g->world_h);
+
+    const float period = cylinder_period(g);
+    const vg_vec2 vc = project_cylinder_point(g, g->camera_x, g->world_h * 0.50f, NULL);
+    const float cx = vc.x;
+    const float cy = vc.y;
+    const float phase_turns = repeatf((-1.0f) * g->player.b.x / fmaxf(period * 0.85f, 1.0f), 1.0f);
+    const float rail_shift = phase_turns * (float)WORMHOLE_COLS;
+
+    vg_vec2 p[WORMHOLE_COLS][WORMHOLE_ROWS];
+    float z[WORMHOLE_COLS][WORMHOLE_ROWS];
+    for (int c = 0; c < WORMHOLE_COLS; ++c) {
+        const float cu = (float)c + rail_shift;
+        const int c0 = wrapi((int)floorf(cu), WORMHOLE_COLS);
+        const int c1 = wrapi(c0 + 1, WORMHOLE_COLS);
+        const float ct = cu - floorf(cu);
+        const float phase = (cu / (float)WORMHOLE_COLS) * 6.28318530718f;
+        for (int j = 0; j < WORMHOLE_ROWS; ++j) {
+            const float hemi = wormhole_row_hemi_smooth(j);
+            p[c][j].x = cx + lerpf(wh.rail_rel_modern[c0][j].x, wh.rail_rel_modern[c1][j].x, ct);
+            p[c][j].y = cy + lerpf(wh.rail_rel_modern[c0][j].y, wh.rail_rel_modern[c1][j].y, ct);
+            z[c][j] = wormhole_phase_depth(phase, hemi);
+        }
+    }
+
+    size_t count = 0u;
+    for (int c = 0; c < WORMHOLE_COLS; ++c) {
+        const int cn = wrapi(c + 1, WORMHOLE_COLS);
+        for (int j = 0; j + 1 < WORMHOLE_ROWS; ++j) {
+            const wormhole_line_vertex a = {p[c][j].x, p[c][j].y, z[c][j], 1.0f};
+            const wormhole_line_vertex b = {p[cn][j].x, p[cn][j].y, z[cn][j], 1.0f};
+            const wormhole_line_vertex d = {p[cn][j + 1].x, p[cn][j + 1].y, z[cn][j + 1], 1.0f};
+            const wormhole_line_vertex e = {p[c][j + 1].x, p[c][j + 1].y, z[c][j + 1], 1.0f};
+            if (count + 6u > out_cap) {
+                return count;
+            }
+            out[count++] = a;
+            out[count++] = b;
+            out[count++] = d;
+            out[count++] = a;
+            out[count++] = d;
+            out[count++] = e;
         }
     }
     return count;
