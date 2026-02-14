@@ -96,7 +96,8 @@ typedef struct game_audio_event {
 
 typedef enum particle_type {
     PARTICLE_POINT = 0,
-    PARTICLE_GEOM = 1
+    PARTICLE_GEOM = 1,
+    PARTICLE_FLASH = 2
 } particle_type;
 
 typedef struct particle {

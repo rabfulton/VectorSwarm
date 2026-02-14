@@ -2729,41 +2729,6 @@ static vg_result draw_cylinder_wire(
             }
         }
 
-        for (size_t i = 0; i < MAX_ENEMIES; ++i) {
-            const enemy* e = &g->enemies[i];
-            if (!e->active) {
-                continue;
-            }
-            const float theta = (e->b.x - g->camera_x) / period * 6.28318530718f;
-            const float z01 = cosf(theta) * 0.5f + 0.5f;
-            const float zfade = 0.03f + z01 * z01 * 0.97f;
-            const float r01 = 0.24f + 0.70f * (e->b.y / fmaxf(g->world_h, 1.0f));
-            float u = fmodf(theta / 6.28318530718f + phase_turns, 1.0f);
-            if (u < 0.0f) {
-                u += 1.0f;
-            }
-            const float fi = u * (float)(N - 1);
-            const int i0 = wrapi((int)floorf(fi), N - 1);
-            const int i1 = wrapi(i0 + 1, N - 1);
-            const float ft = fi - floorf(fi);
-            const vg_vec2 edge_p = {
-                lerpf(edge[i0].x, edge[i1].x, ft),
-                lerpf(edge[i0].y, edge[i1].y, ft)
-            };
-            const vg_vec2 blip = {
-                cx + (edge_p.x - cx) * 1.45f * r01,
-                cy + (edge_p.y - cy) * 1.45f * r01
-            };
-            vg_fill_style bf = {
-                .intensity = 1.0f * zfade,
-                .color = {tr_m.color.r, tr_m.color.g, tr_m.color.b, 0.95f * zfade},
-                .blend = VG_BLEND_ADDITIVE
-            };
-            vg_result vr = vg_fill_circle(ctx, blip, 1.8f, &bf, 10);
-            if (vr != VG_OK) {
-                return vr;
-            }
-        }
     }
     }
 
@@ -3224,39 +3189,73 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
 
     if (level_uses_cylinder_render(g->level_style)) {
         const float period = cylinder_period(g);
-        vg_stroke_style cyl_halo = land_halo;
-        vg_stroke_style cyl_main = land_main;
-        cyl_halo.intensity *= 1.15f;
-        cyl_main.intensity *= 1.20f;
-        r = draw_cylinder_wire(ctx, g, &cyl_halo, &cyl_main, g->level_style);
-        if (r != VG_OK) {
-            return r;
-        }
-
-        for (size_t i = 0; i < MAX_STARS; ++i) {
-            const float su = repeatf(g->stars[i].x - g->camera_x * 0.22f, g->world_w) / fmaxf(g->world_w, 1.0f);
-            const float sx_world = g->camera_x + (su - 0.5f) * period;
-            float depth = 0.0f;
-            const vg_vec2 sp = project_cylinder_point(g, sx_world, g->stars[i].y, &depth);
-            vg_fill_style sf = star_fill;
-            sf.intensity *= 0.45f + depth * 0.9f;
-            r = vg_fill_circle(ctx, sp, g->stars[i].size * (0.5f + depth), &sf, 8);
+        if (!foreground_only) {
+            vg_stroke_style cyl_halo = land_halo;
+            vg_stroke_style cyl_main = land_main;
+            cyl_halo.intensity *= 1.15f;
+            cyl_main.intensity *= 1.20f;
+            r = draw_cylinder_wire(ctx, g, &cyl_halo, &cyl_main, g->level_style);
             if (r != VG_OK) {
                 return r;
             }
+
+            for (size_t i = 0; i < MAX_STARS; ++i) {
+                const float su = repeatf(g->stars[i].x - g->camera_x * 0.22f, g->world_w) / fmaxf(g->world_w, 1.0f);
+                const float sx_world = g->camera_x + (su - 0.5f) * period;
+                float depth = 0.0f;
+                const vg_vec2 sp = project_cylinder_point(g, sx_world, g->stars[i].y, &depth);
+                vg_fill_style sf = star_fill;
+                sf.intensity *= 0.45f + depth * 0.9f;
+                r = vg_fill_circle(ctx, sp, g->stars[i].size * (0.5f + depth), &sf, 8);
+                if (r != VG_OK) {
+                    return r;
+                }
+            }
         }
 
-        for (size_t i = 0; i < MAX_PARTICLES; ++i) {
-            const particle* p = &g->particles[i];
-            if (!p->active) {
-                continue;
-            }
-            float depth = 0.0f;
-            const vg_vec2 pp = project_cylinder_point(g, p->b.x, p->b.y, &depth);
-            vg_fill_style pf = make_fill(1.0f, (vg_color){p->r, p->g, p->bcol, p->a}, VG_BLEND_ADDITIVE);
-            r = vg_fill_circle(ctx, pp, p->size * (0.35f + 0.9f * depth), &pf, 8);
-            if (r != VG_OK) {
-                return r;
+        if (background_only) {
+            return VG_OK;
+        }
+
+        if (!metrics->use_gpu_particles) {
+            for (size_t i = 0; i < MAX_PARTICLES; ++i) {
+                /* Particle LOD: keep frame time stable under heavy explosion loads. */
+                const int active_particles = g->active_particles;
+                int stride = 1;
+                if (active_particles > 360) {
+                    stride = 2;
+                }
+                if (active_particles > 620) {
+                    stride = 3;
+                }
+                if (active_particles > 900) {
+                    stride = 4;
+                }
+                if ((int)(i % (size_t)stride) != 0) {
+                    continue;
+                }
+                const particle* p = &g->particles[i];
+                if (!p->active) {
+                    continue;
+                }
+                if (p->a <= 0.02f || p->size <= 0.15f) {
+                    continue;
+                }
+                float depth = 0.0f;
+                const vg_vec2 pp = project_cylinder_point(g, p->b.x, p->b.y, &depth);
+                const float pr = p->size * (0.35f + 0.9f * depth);
+                if (pp.x < -24.0f || pp.x > g->world_w + 24.0f || pp.y < -24.0f || pp.y > g->world_h + 24.0f) {
+                    continue;
+                }
+                if (pr <= 0.10f) {
+                    continue;
+                }
+                vg_fill_style pf = make_fill(1.0f, (vg_color){p->r, p->g, p->bcol, p->a}, VG_BLEND_ADDITIVE);
+                const float rr = (p->type == PARTICLE_FLASH) ? (pr * 1.7f) : pr;
+                r = vg_fill_circle(ctx, pp, rr, &pf, 8);
+                if (r != VG_OK) {
+                    return r;
+                }
             }
         }
 
@@ -3541,15 +3540,40 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
     }
     vg_transform_translate(ctx, g->world_w * 0.5f - g->camera_x, g->world_h * 0.5f - g->camera_y);
 
+    if (!metrics->use_gpu_particles) {
     for (size_t i = 0; i < MAX_PARTICLES; ++i) {
+        /* Particle LOD: keep frame time stable under heavy explosion loads. */
+        const int active_particles = g->active_particles;
+        int stride = 1;
+        if (active_particles > 360) {
+            stride = 2;
+        }
+        if (active_particles > 620) {
+            stride = 3;
+        }
+        if (active_particles > 900) {
+            stride = 4;
+        }
+        if ((int)(i % (size_t)stride) != 0) {
+            continue;
+        }
         const particle* p = &g->particles[i];
         if (!p->active) {
             continue;
         }
+        if (p->a <= 0.02f || p->size <= 0.15f) {
+            continue;
+        }
+        if (p->b.x < g->camera_x - g->world_w * 0.58f || p->b.x > g->camera_x + g->world_w * 0.58f ||
+            p->b.y < g->camera_y - g->world_h * 0.58f || p->b.y > g->camera_y + g->world_h * 0.58f) {
+            continue;
+        }
         vg_fill_style pf = make_fill(1.0f, (vg_color){p->r, p->g, p->bcol, p->a}, VG_BLEND_ADDITIVE);
         vg_stroke_style ps = make_stroke(1.0f, 1.0f, (vg_color){p->r, p->g, p->bcol, p->a}, VG_BLEND_ADDITIVE);
-        if (p->type == PARTICLE_POINT) {
-            r = vg_fill_circle(ctx, (vg_vec2){p->b.x, p->b.y}, p->size, &pf, 8);
+        const int simplify_geom = (active_particles > 520);
+        if (p->type == PARTICLE_POINT || p->type == PARTICLE_FLASH || simplify_geom) {
+            const float rr = (p->type == PARTICLE_FLASH) ? (p->size * 1.7f) : p->size;
+            r = vg_fill_circle(ctx, (vg_vec2){p->b.x, p->b.y}, rr, &pf, 8);
             if (r != VG_OK) {
                 (void)vg_transform_pop(ctx);
                 return r;
@@ -3575,6 +3599,7 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
                 return r;
             }
         }
+    }
     }
 
     if (g->lives > 0) {

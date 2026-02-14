@@ -286,6 +286,27 @@ static void game_push_audio_event(game_state* g, game_audio_event_type type, flo
 static void emit_explosion(game_state* g, float x, float y, float bias_vx, float bias_vy, int count) {
     game_push_audio_event(g, GAME_AUDIO_EVENT_EXPLOSION, x, y);
     const float su = gameplay_ui_scale(g);
+    {
+        particle* f = alloc_particle(g);
+        if (f) {
+            f->type = PARTICLE_FLASH;
+            f->b.x = x;
+            f->b.y = y;
+            f->b.vx = 0.0f;
+            f->b.vy = 0.0f;
+            f->b.ax = 0.0f;
+            f->b.ay = 0.0f;
+            f->age_s = 0.0f;
+            f->life_s = 0.20f + frand01() * 0.08f;
+            f->size = (14.0f + frand01() * 10.0f) * su;
+            f->spin = 0.0f;
+            f->spin_rate = 0.0f;
+            f->r = 1.0f;
+            f->g = 0.96f;
+            f->bcol = 0.72f;
+            f->a = 1.0f;
+        }
+    }
     for (int i = 0; i < count; ++i) {
         particle* p = alloc_particle(g);
         if (!p) {
@@ -298,16 +319,17 @@ static void emit_explosion(game_state* g, float x, float y, float bias_vx, float
         p->b.y = y + frands1() * 6.0f * su;
         p->b.vx = cosf(a) * spd + bias_vx * 0.4f;
         p->b.vy = sinf(a) * spd + bias_vy * 0.4f;
-        p->b.ax = -p->b.vx * 1.6f;
-        p->b.ay = -p->b.vy * 1.6f;
+        /* Keep explosion motion expanding outward for full lifetime. */
+        p->b.ax = 0.0f;
+        p->b.ay = 0.0f;
         p->age_s = 0.0f;
-        p->life_s = 0.35f + frand01() * 0.55f;
-        p->size = (1.2f + frand01() * 3.0f) * su;
+        p->life_s = 0.55f + frand01() * 0.85f;
+        p->size = (3.8f + frand01() * 8.8f) * su;
         p->spin = frand01() * 6.2831853f;
         p->spin_rate = frands1() * 9.0f;
-        p->r = 0.9f + frand01() * 0.1f;
-        p->g = 0.4f + frand01() * 0.6f;
-        p->bcol = 0.2f + frand01() * 0.4f;
+        p->r = 0.95f + frand01() * 0.05f;
+        p->g = 0.55f + frand01() * 0.45f;
+        p->bcol = 0.25f + frand01() * 0.40f;
         p->a = 1.0f;
     }
 }
@@ -352,7 +374,7 @@ static void emit_thruster(game_state* g, float dt) {
         p->b.ay = -p->b.vy * 1.6f;
         p->age_s = 0.0f;
         p->life_s = 0.10f + frand01() * 0.15f;
-        p->size = (1.0f + frand01() * 2.2f) * su;
+        p->size = (2.8f + frand01() * 5.0f) * su;
         p->spin = frand01() * 6.2831853f;
         p->spin_rate = frands1() * 15.0f;
         p->r = 0.35f;
@@ -1102,7 +1124,15 @@ void game_update(game_state* g, float dt, const game_input* in) {
         integrate_body(&p->b, dt);
         {
             const float t01 = p->age_s / p->life_s;
-            p->a = (1.0f - t01) * (1.0f - t01);
+            const float inv = 1.0f - t01;
+            if (p->type == PARTICLE_FLASH) {
+                p->a = inv * inv * inv;
+            } else if (p->life_s > 0.30f) {
+                /* Explosion particles should hold brightness longer, then fall off. */
+                p->a = powf(inv, 1.35f);
+            } else {
+                p->a = inv * inv;
+            }
         }
     }
 

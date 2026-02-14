@@ -48,6 +48,8 @@
 #include "terrain_wire_vert_spv.h"
 #include "terrain_wire_frag_spv.h"
 #include "terrain_vert_spv.h"
+#include "particle_vert_spv.h"
+#include "particle_frag_spv.h"
 #endif
 
 #define APP_WIDTH 1280
@@ -59,6 +61,7 @@
 #define AUDIO_SPATIAL_EVENT_CAP 256
 #define AUDIO_COMBAT_VOICE_COUNT 24
 #define AUDIO_MAX_BEEP_SAMPLES 4096
+#define GPU_PARTICLE_MAX_INSTANCES MAX_PARTICLES
 #define TERRAIN_ROWS 24
 #define TERRAIN_COLS 70
 
@@ -107,6 +110,25 @@ typedef struct terrain_pc {
     float params[4]; /* x=viewport_width, y=viewport_height, z=intensity, w=hue_shift */
     float tune[4];   /* x=brightness, y=opacity, z=normal_variation, w=depth_fade */
 } terrain_pc;
+
+typedef struct particle_instance {
+    float x;
+    float y;
+    float radius_px;
+    float kind;
+    float r;
+    float g;
+    float b;
+    float a;
+    float dir_x;
+    float dir_y;
+    float trail;
+    float heat;
+} particle_instance;
+
+typedef struct particle_pc {
+    float params[4]; /* x=viewport_width, y=viewport_height, z=core_gain, w=trail_gain */
+} particle_pc;
 
 typedef struct terrain_tuning {
     float hue_shift;
@@ -224,6 +246,12 @@ typedef struct app {
     VkPipelineLayout terrain_layout;
     VkPipeline terrain_fill_pipeline;
     VkPipeline terrain_line_pipeline;
+    VkPipelineLayout particle_layout;
+    VkPipeline particle_pipeline;
+    VkBuffer particle_instance_buffer;
+    VkDeviceMemory particle_instance_memory;
+    void* particle_instance_map;
+    uint32_t particle_instance_count;
     VkBuffer terrain_vertex_buffer;
     VkDeviceMemory terrain_vertex_memory;
     void* terrain_vertex_map;
@@ -239,6 +267,12 @@ typedef struct app {
     int terrain_tuning_enabled;
     int terrain_tuning_show;
     char terrain_tuning_text[192];
+    int particle_tuning_enabled; /* VTYPE_PARTICLE_TRACE */
+    int particle_tuning_show;
+    float particle_core_gain;
+    float particle_trail_gain;
+    float particle_heat_cooling;
+    char particle_tuning_text[192];
 
     VkCommandPool command_pool;
     VkCommandBuffer command_buffers[APP_MAX_SWAPCHAIN_IMAGES];
@@ -417,6 +451,80 @@ static void sync_terrain_tuning_text(app* a) {
         a->terrain_tuning.normal_variation,
         a->terrain_tuning.depth_fade
     );
+}
+
+static void reset_particle_tuning(app* a) {
+    if (!a) {
+        return;
+    }
+    a->particle_core_gain = 0.50f;
+    a->particle_trail_gain = 1.90f;
+    a->particle_heat_cooling = 2.50f;
+}
+
+static void sync_particle_tuning_text(app* a) {
+    if (!a) {
+        return;
+    }
+    snprintf(
+        a->particle_tuning_text,
+        sizeof(a->particle_tuning_text),
+        "PARTICLE TUNE core %.3f trail %.3f cool %.3f (KP* hud, KP Enter dump, KP . reset)",
+        a->particle_core_gain,
+        a->particle_trail_gain,
+        a->particle_heat_cooling
+    );
+}
+
+static void print_particle_tuning(const app* a) {
+    if (!a) {
+        return;
+    }
+    printf(
+        "[particle_tune] core_gain=%.6ff trail_gain=%.6ff heat_cooling=%.6ff\n",
+        a->particle_core_gain,
+        a->particle_trail_gain,
+        a->particle_heat_cooling
+    );
+    fflush(stdout);
+}
+
+static int handle_particle_tuning_key(app* a, SDL_Keycode key) {
+    if (!a || !a->particle_tuning_enabled) {
+        return 0;
+    }
+    int handled = 1;
+    switch (key) {
+        case SDLK_KP_7: a->particle_core_gain += 0.10f; break;
+        case SDLK_KP_4: a->particle_core_gain -= 0.10f; break;
+        case SDLK_KP_8: a->particle_trail_gain += 0.10f; break;
+        case SDLK_KP_5: a->particle_trail_gain -= 0.10f; break;
+        case SDLK_KP_9: a->particle_heat_cooling += 0.10f; break;
+        case SDLK_KP_6: a->particle_heat_cooling -= 0.10f; break;
+        case SDLK_KP_MULTIPLY:
+            a->particle_tuning_show = !a->particle_tuning_show;
+            set_tty_message(a, a->particle_tuning_show ? "particle tune hud: on" : "particle tune hud: off");
+            break;
+        case SDLK_KP_PERIOD:
+            reset_particle_tuning(a);
+            set_tty_message(a, "particle tuning reset");
+            break;
+        case SDLK_KP_ENTER:
+            print_particle_tuning(a);
+            set_tty_message(a, "particle tuning dumped to stdout");
+            break;
+        default:
+            handled = 0;
+            break;
+    }
+    if (!handled) {
+        return 0;
+    }
+    a->particle_core_gain = clampf(a->particle_core_gain, 0.50f, 3.00f);
+    a->particle_trail_gain = clampf(a->particle_trail_gain, 0.00f, 3.00f);
+    a->particle_heat_cooling = clampf(a->particle_heat_cooling, 0.20f, 3.00f);
+    sync_particle_tuning_text(a);
+    return 1;
 }
 
 static void print_terrain_tuning(const app* a) {
@@ -1026,10 +1134,13 @@ static int create_commands(app* a);
 static int create_sync(app* a);
 static int create_post_resources(app* a);
 static int create_terrain_resources(app* a);
+static int create_particle_resources(app* a);
 static int create_vg_context(app* a);
 static void set_tty_message(app* a, const char* msg);
 static void update_gpu_high_plains_vertices(app* a);
 static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd);
+static void update_gpu_particle_instances(app* a);
+static void record_gpu_particles(app* a, VkCommandBuffer cmd);
 static void reset_terrain_tuning(app* a);
 static void sync_terrain_tuning_text(app* a);
 static int handle_terrain_tuning_key(app* a, SDL_Keycode key);
@@ -2769,8 +2880,10 @@ static void cleanup(app* a) {
     if (a->composite_pipeline) vkDestroyPipeline(a->device, a->composite_pipeline, NULL);
     if (a->terrain_fill_pipeline) vkDestroyPipeline(a->device, a->terrain_fill_pipeline, NULL);
     if (a->terrain_line_pipeline) vkDestroyPipeline(a->device, a->terrain_line_pipeline, NULL);
+    if (a->particle_pipeline) vkDestroyPipeline(a->device, a->particle_pipeline, NULL);
     if (a->post_layout) vkDestroyPipelineLayout(a->device, a->post_layout, NULL);
     if (a->terrain_layout) vkDestroyPipelineLayout(a->device, a->terrain_layout, NULL);
+    if (a->particle_layout) vkDestroyPipelineLayout(a->device, a->particle_layout, NULL);
     if (a->post_desc_pool) vkDestroyDescriptorPool(a->device, a->post_desc_pool, NULL);
     if (a->post_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->post_desc_layout, NULL);
     if (a->post_sampler) vkDestroySampler(a->device, a->post_sampler, NULL);
@@ -2800,9 +2913,15 @@ static void cleanup(app* a) {
         a->terrain_wire_vertex_map = NULL;
     }
     if (a->terrain_wire_vertex_buffer) vkDestroyBuffer(a->device, a->terrain_wire_vertex_buffer, NULL);
+    if (a->particle_instance_map && a->particle_instance_memory) {
+        vkUnmapMemory(a->device, a->particle_instance_memory);
+        a->particle_instance_map = NULL;
+    }
+    if (a->particle_instance_buffer) vkDestroyBuffer(a->device, a->particle_instance_buffer, NULL);
     if (a->terrain_vertex_memory) vkFreeMemory(a->device, a->terrain_vertex_memory, NULL);
     if (a->terrain_tri_index_memory) vkFreeMemory(a->device, a->terrain_tri_index_memory, NULL);
     if (a->terrain_wire_vertex_memory) vkFreeMemory(a->device, a->terrain_wire_vertex_memory, NULL);
+    if (a->particle_instance_memory) vkFreeMemory(a->device, a->particle_instance_memory, NULL);
 
     for (uint32_t i = 0; i < a->swapchain_image_count; ++i) {
         if (a->present_framebuffers[i]) vkDestroyFramebuffer(a->device, a->present_framebuffers[i], NULL);
@@ -2862,6 +2981,10 @@ static void destroy_render_runtime(app* a) {
         vkDestroyPipeline(a->device, a->terrain_line_pipeline, NULL);
         a->terrain_line_pipeline = VK_NULL_HANDLE;
     }
+    if (a->particle_pipeline) {
+        vkDestroyPipeline(a->device, a->particle_pipeline, NULL);
+        a->particle_pipeline = VK_NULL_HANDLE;
+    }
     if (a->post_layout) {
         vkDestroyPipelineLayout(a->device, a->post_layout, NULL);
         a->post_layout = VK_NULL_HANDLE;
@@ -2869,6 +2992,10 @@ static void destroy_render_runtime(app* a) {
     if (a->terrain_layout) {
         vkDestroyPipelineLayout(a->device, a->terrain_layout, NULL);
         a->terrain_layout = VK_NULL_HANDLE;
+    }
+    if (a->particle_layout) {
+        vkDestroyPipelineLayout(a->device, a->particle_layout, NULL);
+        a->particle_layout = VK_NULL_HANDLE;
     }
     if (a->post_desc_pool) {
         vkDestroyDescriptorPool(a->device, a->post_desc_pool, NULL);
@@ -2958,6 +3085,14 @@ static void destroy_render_runtime(app* a) {
         vkDestroyBuffer(a->device, a->terrain_wire_vertex_buffer, NULL);
         a->terrain_wire_vertex_buffer = VK_NULL_HANDLE;
     }
+    if (a->particle_instance_map && a->particle_instance_memory) {
+        vkUnmapMemory(a->device, a->particle_instance_memory);
+        a->particle_instance_map = NULL;
+    }
+    if (a->particle_instance_buffer) {
+        vkDestroyBuffer(a->device, a->particle_instance_buffer, NULL);
+        a->particle_instance_buffer = VK_NULL_HANDLE;
+    }
     if (a->terrain_vertex_memory) {
         vkFreeMemory(a->device, a->terrain_vertex_memory, NULL);
         a->terrain_vertex_memory = VK_NULL_HANDLE;
@@ -2969,6 +3104,10 @@ static void destroy_render_runtime(app* a) {
     if (a->terrain_wire_vertex_memory) {
         vkFreeMemory(a->device, a->terrain_wire_vertex_memory, NULL);
         a->terrain_wire_vertex_memory = VK_NULL_HANDLE;
+    }
+    if (a->particle_instance_memory) {
+        vkFreeMemory(a->device, a->particle_instance_memory, NULL);
+        a->particle_instance_memory = VK_NULL_HANDLE;
     }
     for (uint32_t i = 0; i < APP_MAX_SWAPCHAIN_IMAGES; ++i) {
         if (a->present_framebuffers[i]) {
@@ -3036,6 +3175,7 @@ static int recreate_render_runtime(app* a) {
         !create_sync(a) ||
         !create_post_resources(a) ||
         !create_terrain_resources(a) ||
+        !create_particle_resources(a) ||
         !create_vg_context(a)) {
         return 0;
     }
@@ -3863,6 +4003,152 @@ static int create_terrain_resources(app* a) {
 #endif
 }
 
+static int create_particle_resources(app* a) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    return 1;
+#else
+    const VkDeviceSize ibuf_size = (VkDeviceSize)GPU_PARTICLE_MAX_INSTANCES * sizeof(particle_instance);
+    if (!create_buffer(
+            a, ibuf_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &a->particle_instance_buffer, &a->particle_instance_memory)) {
+        return 0;
+    }
+    if (!check_vk(vkMapMemory(a->device, a->particle_instance_memory, 0, ibuf_size, 0, &a->particle_instance_map), "vkMapMemory(particles)")) {
+        return 0;
+    }
+    a->particle_instance_count = 0;
+
+    VkPushConstantRange pc = {
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        .offset = 0,
+        .size = sizeof(particle_pc)
+    };
+    VkPipelineLayoutCreateInfo pli = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &pc
+    };
+    if (!check_vk(vkCreatePipelineLayout(a->device, &pli, NULL, &a->particle_layout), "vkCreatePipelineLayout(particles)")) {
+        return 0;
+    }
+
+    VkShaderModuleCreateInfo vs_ci = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = v_type_particle_vert_spv_len,
+        .pCode = (const uint32_t*)v_type_particle_vert_spv
+    };
+    VkShaderModuleCreateInfo fs_ci = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = v_type_particle_frag_spv_len,
+        .pCode = (const uint32_t*)v_type_particle_frag_spv
+    };
+    VkShaderModule vs = VK_NULL_HANDLE;
+    VkShaderModule fs = VK_NULL_HANDLE;
+    if (!check_vk(vkCreateShaderModule(a->device, &vs_ci, NULL, &vs), "vkCreateShaderModule(particle vs)")) {
+        return 0;
+    }
+    if (!check_vk(vkCreateShaderModule(a->device, &fs_ci, NULL, &fs), "vkCreateShaderModule(particle fs)")) {
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+    VkPipelineShaderStageCreateInfo stages[2] = {
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vs, .pName = "main"},
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = fs, .pName = "main"}
+    };
+
+    VkVertexInputBindingDescription binding = {
+        .binding = 0,
+        .stride = sizeof(particle_instance),
+        .inputRate = VK_VERTEX_INPUT_RATE_INSTANCE
+    };
+    VkVertexInputAttributeDescription attr[2];
+    memset(attr, 0, sizeof(attr));
+    attr[0].location = 0;
+    attr[0].binding = 0;
+    attr[0].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    attr[0].offset = 0;
+    attr[1].location = 1;
+    attr[1].binding = 0;
+    attr[1].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    attr[1].offset = sizeof(float) * 4;
+    VkVertexInputAttributeDescription attr3[3];
+    memset(attr3, 0, sizeof(attr3));
+    attr3[0] = attr[0];
+    attr3[1] = attr[1];
+    attr3[2].location = 2;
+    attr3[2].binding = 0;
+    attr3[2].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    attr3[2].offset = sizeof(float) * 8;
+    VkPipelineVertexInputStateCreateInfo vi = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .vertexBindingDescriptionCount = 1,
+        .pVertexBindingDescriptions = &binding,
+        .vertexAttributeDescriptionCount = 3,
+        .pVertexAttributeDescriptions = attr3
+    };
+    VkPipelineInputAssemblyStateCreateInfo ia = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP
+    };
+    VkPipelineViewportStateCreateInfo vp = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .scissorCount = 1};
+    VkPipelineRasterizationStateCreateInfo rs = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .lineWidth = 1.0f,
+        .cullMode = VK_CULL_MODE_NONE,
+        .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE
+    };
+    VkPipelineMultisampleStateCreateInfo ms = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .rasterizationSamples = scene_samples(a)};
+    VkPipelineColorBlendAttachmentState cb_att = {
+        .blendEnable = VK_TRUE,
+        /* Alpha-scaled additive: preserves glow while making p->a/lifetime meaningful. */
+        .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE,
+        .colorBlendOp = VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .alphaBlendOp = VK_BLEND_OP_ADD,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
+    };
+    VkPipelineColorBlendStateCreateInfo cb = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1, .pAttachments = &cb_att};
+    VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo ds = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .dynamicStateCount = 2, .pDynamicStates = dyn};
+    VkPipelineDepthStencilStateCreateInfo depth = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .depthTestEnable = VK_FALSE,
+        .depthWriteEnable = VK_FALSE,
+        .depthCompareOp = VK_COMPARE_OP_ALWAYS
+    };
+    VkGraphicsPipelineCreateInfo gp = {
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .stageCount = 2,
+        .pStages = stages,
+        .pVertexInputState = &vi,
+        .pInputAssemblyState = &ia,
+        .pViewportState = &vp,
+        .pRasterizationState = &rs,
+        .pMultisampleState = &ms,
+        .pDepthStencilState = &depth,
+        .pColorBlendState = &cb,
+        .pDynamicState = &ds,
+        .layout = a->particle_layout,
+        .renderPass = a->scene_render_pass,
+        .subpass = 0
+    };
+    if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->particle_pipeline), "vkCreateGraphicsPipelines(particles)")) {
+        vkDestroyShaderModule(a->device, fs, NULL);
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+    vkDestroyShaderModule(a->device, fs, NULL);
+    vkDestroyShaderModule(a->device, vs, NULL);
+    return 1;
+#endif
+}
+
 static int create_vg_context(app* a) {
     vg_context_desc desc;
     memset(&desc, 0, sizeof(desc));
@@ -3960,6 +4246,165 @@ static void update_gpu_high_plains_vertices(app* a) {
             }
         }
     }
+}
+
+static int level_uses_cylinder_gpu(int level_style) {
+    return level_style == LEVEL_STYLE_ENEMY_RADAR ||
+           level_style == LEVEL_STYLE_EVENT_HORIZON ||
+           level_style == LEVEL_STYLE_EVENT_HORIZON_LEGACY;
+}
+
+static float cylinder_period_gpu(const game_state* g) {
+    return fmaxf(g->world_w * 2.4f, 1.0f);
+}
+
+static void project_cylinder_point_gpu(const game_state* g, float x, float y, float* out_x, float* out_y, float* out_depth01) {
+    const float w = g->world_w;
+    const float h = g->world_h;
+    const float cx = w * 0.5f;
+    const float cy = h * 0.50f;
+    const float period = cylinder_period_gpu(g);
+    const float theta = (x - g->camera_x) / period * 6.28318530718f;
+    const float depth = cosf(theta) * 0.5f + 0.5f;
+    const float radius = w * 0.485f;
+    const float y_scale = 0.44f + depth * 0.62f;
+    *out_x = cx + sinf(theta) * radius;
+    *out_y = cy + (y - cy) * y_scale;
+    if (out_depth01) {
+        *out_depth01 = depth;
+    }
+}
+
+static void update_gpu_particle_instances(app* a) {
+    if (!a || !a->particle_instance_map) {
+        return;
+    }
+    static float trace_last_t = -1000.0f;
+    const int trace_enabled = a->particle_tuning_enabled;
+    particle_instance* out = (particle_instance*)a->particle_instance_map;
+    uint32_t n = 0;
+    const game_state* g = &a->game;
+    const int use_cyl = level_uses_cylinder_gpu(g->level_style);
+    float r_sum = 0.0f;
+    float r_min = 1e9f;
+    float r_max = 0.0f;
+    for (size_t i = 0; i < MAX_PARTICLES; ++i) {
+        const particle* p = &g->particles[i];
+        if (!p->active || p->a <= 0.01f || p->size <= 0.10f) {
+            continue;
+        }
+        if (n >= GPU_PARTICLE_MAX_INSTANCES) {
+            break;
+        }
+        float sx = p->b.x;
+        float sy = p->b.y;
+        float depth = 1.0f;
+        float radius = p->size;
+        if (use_cyl) {
+            project_cylinder_point_gpu(g, p->b.x, p->b.y, &sx, &sy, &depth);
+            radius *= (0.35f + 0.9f * depth);
+        } else {
+            /* Match vg foreground world->screen transform:
+               translate(world by -camera, then center in viewport). */
+            sx = p->b.x + g->world_w * 0.5f - g->camera_x;
+            sy = p->b.y + g->world_h * 0.5f - g->camera_y;
+        }
+        if (sx < -24.0f || sx > g->world_w + 24.0f || sy < -24.0f || sy > g->world_h + 24.0f) {
+            continue;
+        }
+        if (radius <= 0.10f) {
+            continue;
+        }
+        if (radius < r_min) r_min = radius;
+        if (radius > r_max) r_max = radius;
+        r_sum += radius;
+        out[n].x = sx;
+        out[n].y = sy;
+        out[n].radius_px = radius;
+        if (p->type == PARTICLE_POINT) {
+            out[n].kind = 0.0f;
+        } else if (p->type == PARTICLE_FLASH) {
+            out[n].kind = 2.0f;
+        } else {
+            out[n].kind = 1.0f;
+        }
+        {
+            float emission_boost = 1.0f;
+            /* Explosion particles live longer than thruster particles;
+               give them a short spawn-time brightness kick. */
+            if (p->life_s > 0.30f) {
+                const float life_t = clampf(p->age_s / fmaxf(p->life_s, 1e-5f), 0.0f, 1.0f);
+                const float spawn_t = 1.0f - life_t;
+                emission_boost += 0.55f * spawn_t * spawn_t;
+            }
+            out[n].r = clampf(p->r * emission_boost, 0.0f, 1.0f);
+            out[n].g = clampf(p->g * emission_boost, 0.0f, 1.0f);
+            out[n].b = clampf(p->bcol * emission_boost, 0.0f, 1.0f);
+            out[n].a = p->a;
+        }
+        {
+            const float spd = sqrtf(p->b.vx * p->b.vx + p->b.vy * p->b.vy);
+            float dx = 1.0f;
+            float dy = 0.0f;
+            if (spd > 1e-3f) {
+                dx = p->b.vx / spd;
+                dy = p->b.vy / spd;
+            }
+            float life_t = clampf(p->age_s / fmaxf(p->life_s, 1e-5f), 0.0f, 1.0f);
+            float trail = 0.0f;
+            float heat = 0.0f;
+            if (p->type == PARTICLE_FLASH) {
+                heat = 2.0f;
+            } else if (p->life_s > 0.30f) {
+                /* Explosion sparks: hot at spawn, with short phosphor streak. */
+                const float speed01 = clampf(spd / 520.0f, 0.0f, 1.0f);
+                trail = speed01 * (1.0f - life_t) * 0.95f * a->particle_trail_gain;
+                heat = powf(1.0f - life_t, a->particle_heat_cooling);
+            }
+            out[n].dir_x = dx;
+            out[n].dir_y = dy;
+            out[n].trail = trail;
+            out[n].heat = heat;
+        }
+        ++n;
+    }
+    a->particle_instance_count = n;
+    if (trace_enabled && n > 0 && (g->t - trace_last_t) >= 0.5f) {
+        const float r_avg = r_sum / (float)n;
+        fprintf(
+            stderr,
+            "[particles] gpu=1 lvl=%d n=%u radius_px[min=%.2f avg=%.2f max=%.2f] active=%d\n",
+            g->level_style, n, r_min, r_avg, r_max, g->active_particles
+        );
+        trace_last_t = g->t;
+    }
+}
+
+static void record_gpu_particles(app* a, VkCommandBuffer cmd) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    (void)cmd;
+#else
+    if (!a || !cmd || !a->particle_pipeline || !a->particle_instance_buffer) {
+        return;
+    }
+    update_gpu_particle_instances(a);
+    if (a->particle_instance_count == 0) {
+        return;
+    }
+    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    particle_pc pc;
+    memset(&pc, 0, sizeof(pc));
+    pc.params[0] = (float)a->swapchain_extent.width;
+    pc.params[1] = (float)a->swapchain_extent.height;
+    pc.params[2] = a->particle_core_gain;
+    pc.params[3] = a->particle_trail_gain;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->particle_pipeline);
+    vkCmdPushConstants(cmd, a->particle_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    VkDeviceSize off = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &a->particle_instance_buffer, &off);
+    vkCmdDraw(cmd, 4, a->particle_instance_count, 0, 0);
+#endif
 }
 
 static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd) {
@@ -4092,10 +4537,15 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .nick_h = a->nick_h,
         .nick_stride = a->nick_stride,
         .surveillance_svg_asset = a->surveillance_svg_asset,
-        .terrain_tuning_text = (a->terrain_tuning_enabled &&
-                                a->terrain_tuning_show &&
-                                a->game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2)
-            ? a->terrain_tuning_text : NULL,
+        .terrain_tuning_text = (a->particle_tuning_enabled &&
+                                a->particle_tuning_show &&
+                                !a->show_acoustics && !a->show_video_menu && !a->show_planetarium)
+            ? a->particle_tuning_text
+            : ((a->terrain_tuning_enabled &&
+                a->terrain_tuning_show &&
+                a->game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2)
+                ? a->terrain_tuning_text : NULL),
+        .use_gpu_particles = 0,
         .use_gpu_terrain = 0,
         .scene_phase = 0
     };
@@ -4145,21 +4595,33 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         metrics.acoustics_scope[i] = a->scope_window[i];
     }
     {
-        const int split_terrain_layer =
-            (a->game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2 ||
-             a->game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER) &&
+        const int split_scene =
             !a->show_acoustics &&
             !a->show_video_menu &&
             !a->show_planetarium;
-        if (split_terrain_layer) {
-            clear_scene_color_depth(cmd, a->swapchain_extent);
-            record_gpu_high_plains_terrain(a, cmd);
-            clear_scene_depth(cmd, a->swapchain_extent);
-            metrics.use_gpu_terrain = 1;
-            metrics.scene_phase = 3;
+        const int use_gpu_terrain =
+            (a->game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2 ||
+             a->game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER);
+        if (split_scene) {
+            metrics.use_gpu_particles = 1;
+            metrics.use_gpu_terrain = use_gpu_terrain ? 1 : 0;
+
+            metrics.scene_phase = 1; /* background-only */
             vr = render_frame(a->vg, &a->game, &metrics);
             if (vr != VG_OK) {
-                fprintf(stderr, "VG failure: render_frame(overlay) -> %s (%d)\n", vg_result_string(vr), (int)vr);
+                fprintf(stderr, "VG failure: render_frame(background) -> %s (%d)\n", vg_result_string(vr), (int)vr);
+                return 0;
+            }
+            if (use_gpu_terrain) {
+                record_gpu_high_plains_terrain(a, cmd);
+                clear_scene_depth(cmd, a->swapchain_extent);
+            }
+            record_gpu_particles(a, cmd);
+
+            metrics.scene_phase = 2; /* foreground-only */
+            vr = render_frame(a->vg, &a->game, &metrics);
+            if (vr != VG_OK) {
+                fprintf(stderr, "VG failure: render_frame(foreground) -> %s (%d)\n", vg_result_string(vr), (int)vr);
                 return 0;
             }
         } else {
@@ -4278,8 +4740,12 @@ int main(void) {
     a.terrain_wire_enabled = 1;
     a.terrain_tuning_enabled = env_flag_enabled("VTYPE_TERRAIN_TUNING");
     a.terrain_tuning_show = 1;
+    a.particle_tuning_enabled = env_flag_enabled("VTYPE_PARTICLE_TRACE");
+    a.particle_tuning_show = 1;
     reset_terrain_tuning(&a);
     sync_terrain_tuning_text(&a);
+    reset_particle_tuning(&a);
+    sync_particle_tuning_text(&a);
     a.video_menu_selected = 1;
     a.video_menu_fullscreen = 0;
     a.palette_mode = 0;
@@ -4351,6 +4817,7 @@ int main(void) {
         !create_sync(&a) ||
         !create_post_resources(&a) ||
         !create_terrain_resources(&a) ||
+        !create_particle_resources(&a) ||
         !create_vg_context(&a)) {
         cleanup(&a);
         return 1;
@@ -4533,6 +5000,10 @@ int main(void) {
                     a.show_crt_ui = !a.show_crt_ui;
                 } else if (ev.key.keysym.sym == SDLK_r) {
                     restart_pressed = 1;
+                } else if (a.particle_tuning_enabled &&
+                           !a.show_acoustics && !a.show_video_menu && !a.show_planetarium &&
+                           handle_particle_tuning_key(&a, ev.key.keysym.sym)) {
+                    /* handled by particle tuning controls */
                 } else if (a.terrain_tuning_enabled &&
                            !a.show_acoustics && !a.show_video_menu && !a.show_planetarium &&
                            handle_terrain_tuning_key(&a, ev.key.keysym.sym)) {
