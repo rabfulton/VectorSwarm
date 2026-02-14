@@ -104,8 +104,17 @@ typedef struct terrain_wire_vertex {
 
 typedef struct terrain_pc {
     float color[4];
-    float params[4]; /* x=viewport_width, y=viewport_height, z=intensity */
+    float params[4]; /* x=viewport_width, y=viewport_height, z=intensity, w=hue_shift */
+    float tune[4];   /* x=brightness, y=opacity, z=normal_variation, w=depth_fade */
 } terrain_pc;
+
+typedef struct terrain_tuning {
+    float hue_shift;
+    float brightness;
+    float opacity;
+    float normal_variation;
+    float depth_fade;
+} terrain_tuning;
 
 enum acoustics_page_id {
     ACOUSTICS_PAGE_SYNTH = 0,
@@ -226,6 +235,10 @@ typedef struct app {
     uint32_t terrain_tri_index_count;
     uint32_t terrain_wire_vertex_count;
     int terrain_wire_enabled;
+    terrain_tuning terrain_tuning;
+    int terrain_tuning_enabled;
+    int terrain_tuning_show;
+    char terrain_tuning_text[192];
 
     VkCommandPool command_pool;
     VkCommandBuffer command_buffers[APP_MAX_SWAPCHAIN_IMAGES];
@@ -360,6 +373,117 @@ static float repeatf(float v, float period) {
         x += period;
     }
     return x;
+}
+
+static void set_tty_message(app* a, const char* msg);
+
+static int env_flag_enabled(const char* name) {
+    const char* v = getenv(name);
+    if (!v || !v[0]) {
+        return 0;
+    }
+    if ((strcmp(v, "1") == 0) ||
+        (strcmp(v, "true") == 0) || (strcmp(v, "TRUE") == 0) ||
+        (strcmp(v, "yes") == 0) || (strcmp(v, "YES") == 0) ||
+        (strcmp(v, "on") == 0) || (strcmp(v, "ON") == 0)) {
+        return 1;
+    }
+    return 0;
+}
+
+static void reset_terrain_tuning(app* a) {
+    if (!a) {
+        return;
+    }
+    a->terrain_tuning.hue_shift = -0.05f;
+    a->terrain_tuning.brightness = 0.50f;
+    a->terrain_tuning.opacity = 1.00f;
+    a->terrain_tuning.normal_variation = 0.65f;
+    a->terrain_tuning.depth_fade = 0.60f;
+}
+
+static void sync_terrain_tuning_text(app* a) {
+    if (!a) {
+        return;
+    }
+    snprintf(
+        a->terrain_tuning_text,
+        sizeof(a->terrain_tuning_text),
+        "TERRAIN TUNE hue %.3f bright %.3f alpha %.3f nvar %.3f zfade %.3f (KP Enter dump, KP . reset)",
+        a->terrain_tuning.hue_shift,
+        a->terrain_tuning.brightness,
+        a->terrain_tuning.opacity,
+        a->terrain_tuning.normal_variation,
+        a->terrain_tuning.depth_fade
+    );
+}
+
+static void print_terrain_tuning(const app* a) {
+    if (!a) {
+        return;
+    }
+    printf(
+        "[terrain_tune] hue_shift=%.6ff brightness=%.6ff opacity=%.6ff normal_variation=%.6ff depth_fade=%.6ff\n",
+        a->terrain_tuning.hue_shift,
+        a->terrain_tuning.brightness,
+        a->terrain_tuning.opacity,
+        a->terrain_tuning.normal_variation,
+        a->terrain_tuning.depth_fade
+    );
+    printf(
+        "[terrain_tune] hardcode: pc.params[3]=%.6ff; pc.tune[0]=%.6ff; pc.tune[1]=%.6ff; pc.tune[2]=%.6ff; pc.tune[3]=%.6ff;\n",
+        a->terrain_tuning.hue_shift,
+        a->terrain_tuning.brightness,
+        a->terrain_tuning.opacity,
+        a->terrain_tuning.normal_variation,
+        a->terrain_tuning.depth_fade
+    );
+    fflush(stdout);
+}
+
+static int handle_terrain_tuning_key(app* a, SDL_Keycode key) {
+    if (!a || !a->terrain_tuning_enabled || a->game.level_style != LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2) {
+        return 0;
+    }
+    int handled = 1;
+    switch (key) {
+        case SDLK_KP_7: a->terrain_tuning.hue_shift += 0.010f; break;
+        case SDLK_KP_4: a->terrain_tuning.hue_shift -= 0.010f; break;
+        case SDLK_KP_8: a->terrain_tuning.brightness += 0.050f; break;
+        case SDLK_KP_5: a->terrain_tuning.brightness -= 0.050f; break;
+        case SDLK_KP_9: a->terrain_tuning.opacity += 0.050f; break;
+        case SDLK_KP_6: a->terrain_tuning.opacity -= 0.050f; break;
+        case SDLK_KP_1: a->terrain_tuning.normal_variation -= 0.050f; break;
+        case SDLK_KP_2: a->terrain_tuning.normal_variation += 0.050f; break;
+        case SDLK_KP_3: a->terrain_tuning.depth_fade += 0.050f; break;
+        case SDLK_KP_0: a->terrain_tuning.depth_fade -= 0.050f; break;
+        case SDLK_KP_MULTIPLY:
+            a->terrain_tuning_show = !a->terrain_tuning_show;
+            set_tty_message(a, a->terrain_tuning_show ? "terrain tune hud: on" : "terrain tune hud: off");
+            break;
+        case SDLK_KP_PERIOD:
+            reset_terrain_tuning(a);
+            set_tty_message(a, "terrain tuning reset");
+            break;
+        case SDLK_KP_ENTER:
+            print_terrain_tuning(a);
+            set_tty_message(a, "terrain tuning dumped to stdout");
+            break;
+        default:
+            handled = 0;
+            break;
+    }
+
+    if (!handled) {
+        return 0;
+    }
+    a->terrain_tuning.hue_shift = clampf(a->terrain_tuning.hue_shift, -0.50f, 0.50f);
+    a->terrain_tuning.brightness = clampf(a->terrain_tuning.brightness, 0.20f, 2.50f);
+    a->terrain_tuning.opacity = clampf(a->terrain_tuning.opacity, 0.15f, 1.00f);
+    a->terrain_tuning.normal_variation = clampf(a->terrain_tuning.normal_variation, 0.0f, 1.50f);
+    a->terrain_tuning.depth_fade = clampf(a->terrain_tuning.depth_fade, 0.0f, 1.80f);
+    sync_terrain_tuning_text(a);
+    return 1;
 }
 
 static float perlin_fade(float t) {
@@ -902,8 +1026,12 @@ static int create_sync(app* a);
 static int create_post_resources(app* a);
 static int create_terrain_resources(app* a);
 static int create_vg_context(app* a);
+static void set_tty_message(app* a, const char* msg);
 static void update_gpu_high_plains_vertices(app* a);
 static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd);
+static void reset_terrain_tuning(app* a);
+static void sync_terrain_tuning_text(app* a);
+static int handle_terrain_tuning_key(app* a, SDL_Keycode key);
 static int apply_video_mode(app* a);
 static void map_mouse_to_scene_coords(const app* a, int mouse_x, int mouse_y, float* out_x, float* out_y);
 
@@ -3560,7 +3688,7 @@ static int create_terrain_resources(app* a) {
     a->terrain_tri_index_count = tri_count;
     a->terrain_wire_vertex_count = wire_vcount;
 
-    VkPushConstantRange pc = {.stageFlags = VK_SHADER_STAGE_VERTEX_BIT, .offset = 0, .size = sizeof(terrain_pc)};
+    VkPushConstantRange pc = {.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 0, .size = sizeof(terrain_pc)};
     VkPipelineLayoutCreateInfo pli = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .setLayoutCount = 0,
@@ -3661,7 +3789,13 @@ static int create_terrain_resources(app* a) {
     };
     VkPipelineMultisampleStateCreateInfo ms = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .rasterizationSamples = scene_samples(a)};
     VkPipelineColorBlendAttachmentState cb_att = {
-        .blendEnable = VK_FALSE,
+        .blendEnable = VK_TRUE,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .colorBlendOp = VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .alphaBlendOp = VK_BLEND_OP_ADD,
         .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                           VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
     };
@@ -3855,14 +3989,23 @@ static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd) {
     pc.params[0] = (float)a->swapchain_extent.width;
     pc.params[1] = (float)a->swapchain_extent.height;
     pc.params[2] = 1.0f;
+    pc.params[3] = a->terrain_tuning.hue_shift;
+    pc.tune[0] = a->terrain_tuning.brightness;
+    pc.tune[1] = a->terrain_tuning.opacity;
+    pc.tune[2] = a->terrain_tuning.normal_variation;
+    pc.tune[3] = a->terrain_tuning.depth_fade;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->terrain_fill_pipeline);
-    vkCmdPushConstants(cmd, a->terrain_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
+    vkCmdPushConstants(cmd, a->terrain_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
     vkCmdBindIndexBuffer(cmd, a->terrain_tri_index_buffer, 0, VK_INDEX_TYPE_UINT16);
     vkCmdDrawIndexed(cmd, a->terrain_tri_index_count, 1, 0, 0, 0);
 
     if (a->terrain_wire_enabled) {
-        pc.color[0] = 0.74f; pc.color[1] = 0.94f; pc.color[2] = 1.0f; pc.color[3] = 0.74f;
+        const float wire_boost = 1.28f;
+        pc.color[0] = clampf(pc.color[0] * wire_boost, 0.0f, 1.0f);
+        pc.color[1] = clampf(pc.color[1] * wire_boost, 0.0f, 1.0f);
+        pc.color[2] = clampf(pc.color[2] * wire_boost, 0.0f, 1.0f);
+        pc.color[3] = 0.82f;
         pc.params[2] = 0.96f;
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->terrain_line_pipeline);
         vkCmdPushConstants(cmd, a->terrain_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
@@ -3941,6 +4084,10 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .nick_h = a->nick_h,
         .nick_stride = a->nick_stride,
         .surveillance_svg_asset = a->surveillance_svg_asset,
+        .terrain_tuning_text = (a->terrain_tuning_enabled &&
+                                a->terrain_tuning_show &&
+                                a->game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2)
+            ? a->terrain_tuning_text : NULL,
         .scene_phase = 0
     };
     {
@@ -4117,6 +4264,10 @@ int main(void) {
 	    a.show_video_menu = 0;
     a.show_planetarium = 0;
     a.terrain_wire_enabled = 1;
+    a.terrain_tuning_enabled = env_flag_enabled("VTYPE_TERRAIN_TUNING");
+    a.terrain_tuning_show = 1;
+    reset_terrain_tuning(&a);
+    sync_terrain_tuning_text(&a);
     a.video_menu_selected = 1;
     a.video_menu_fullscreen = 0;
     a.palette_mode = 0;
@@ -4365,6 +4516,10 @@ int main(void) {
                     a.show_crt_ui = !a.show_crt_ui;
                 } else if (ev.key.keysym.sym == SDLK_r) {
                     restart_pressed = 1;
+                } else if (a.terrain_tuning_enabled &&
+                           !a.show_acoustics && !a.show_video_menu && !a.show_planetarium &&
+                           handle_terrain_tuning_key(&a, ev.key.keysym.sym)) {
+                    /* handled by terrain tuning controls */
                 } else if (a.show_acoustics && ev.key.keysym.sym == SDLK_UP) {
                     if (a.acoustics_page == ACOUSTICS_PAGE_COMBAT) {
                         a.acoustics_combat_selected =

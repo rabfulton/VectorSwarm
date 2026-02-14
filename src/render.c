@@ -447,6 +447,29 @@ static vg_result draw_teletype_overlay(
     return VG_OK;
 }
 
+static vg_result draw_terrain_tuning_overlay(
+    vg_context* ctx,
+    float w,
+    float h,
+    const char* text,
+    const vg_stroke_style* halo_style,
+    const vg_stroke_style* main_style
+) {
+    if (!text || text[0] == '\0') {
+        return VG_OK;
+    }
+    const float ui = ui_reference_scale(w, h);
+    return draw_text_vector_glow(
+        ctx,
+        text,
+        (vg_vec2){14.0f * ui, h - 18.0f * ui},
+        10.0f * ui,
+        0.75f * ui,
+        halo_style,
+        main_style
+    );
+}
+
 static vg_result draw_top_meters(
     vg_context* ctx,
     const game_state* g,
@@ -3261,6 +3284,10 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         if (r != VG_OK) {
             return r;
         }
+        r = draw_terrain_tuning_overlay(ctx, g->world_w, g->world_h, metrics->terrain_tuning_text, &txt_halo, &txt_main);
+        if (r != VG_OK) {
+            return r;
+        }
         if (g->lives <= 0) {
             const float ui = ui_reference_scale(g->world_w, g->world_h);
             const float go_size = 36.0f * ui;
@@ -3555,6 +3582,10 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
     }
 
     r = draw_teletype_overlay(ctx, g->world_w, g->world_h, metrics->teletype_text, &txt_halo, &txt_main);
+    if (r != VG_OK) {
+        return r;
+    }
+    r = draw_terrain_tuning_overlay(ctx, g->world_w, g->world_h, metrics->terrain_tuning_text, &txt_halo, &txt_main);
     if (r != VG_OK) {
         return r;
     }

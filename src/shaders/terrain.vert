@@ -6,7 +6,8 @@ layout(location = 1) out vec3 v_pos;
 
 layout(push_constant) uniform Push {
     vec4 color;
-    vec4 params; /* x=viewport_width, y=viewport_height, z=intensity */
+    vec4 params; /* x=viewport_width, y=viewport_height, z=intensity, w=hue_shift */
+    vec4 tune;   /* x=brightness, y=opacity, z=normal_variation, w=depth_fade */
 } pc;
 
 void main() {
