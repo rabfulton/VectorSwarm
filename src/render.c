@@ -114,16 +114,55 @@ static vg_result draw_polyline_culled(
     if (!ctx || !pts || !facing01 || !base || count < 2) {
         return VG_OK;
     }
-    for (int i = 0; i < count - 1; ++i) {
+    /* Batch contiguous visible segments to reduce draw-call count. */
+    enum { FADE_BUCKETS = 8, MAX_BATCH_EDGES = 512 };
+    uint8_t edge_bucket[MAX_BATCH_EDGES];
+    const int edge_count = count - 1;
+    if (edge_count > MAX_BATCH_EDGES) {
+        for (int i = 0; i < edge_count; ++i) {
+            const float f = facing_soft(0.5f * (facing01[i] + facing01[i + 1]), cutoff01);
+            if (f <= 0.0f) {
+                continue;
+            }
+            vg_stroke_style s = *base;
+            s.intensity *= f;
+            s.color.a *= f;
+            const vg_vec2 seg[2] = {pts[i], pts[i + 1]};
+            vg_result r = vg_draw_polyline(ctx, seg, 2, &s, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+        return VG_OK;
+    }
+    for (int i = 0; i < edge_count; ++i) {
         const float f = facing_soft(0.5f * (facing01[i] + facing01[i + 1]), cutoff01);
-        if (f <= 0.0f) {
+        int b = (int)floorf(f * (float)FADE_BUCKETS + 0.5f);
+        if (b < 0) b = 0;
+        if (b > FADE_BUCKETS) b = FADE_BUCKETS;
+        edge_bucket[i] = (uint8_t)b;
+    }
+    int i = 0;
+    while (i < edge_count) {
+        const uint8_t b = edge_bucket[i];
+        if (b == 0u) {
+            ++i;
+            continue;
+        }
+        const int start = i;
+        ++i;
+        while (i < edge_count && edge_bucket[i] == b) {
+            ++i;
+        }
+        const int pt_count = (i - start) + 1;
+        if (pt_count < 2) {
             continue;
         }
         vg_stroke_style s = *base;
-        s.intensity *= f;
-        s.color.a *= f;
-        const vg_vec2 seg[2] = {pts[i], pts[i + 1]};
-        vg_result r = vg_draw_polyline(ctx, seg, 2, &s, 0);
+        const float fade = (float)b / (float)FADE_BUCKETS;
+        s.intensity *= fade;
+        s.color.a *= fade;
+        vg_result r = vg_draw_polyline(ctx, &pts[start], pt_count, &s, 0);
         if (r != VG_OK) {
             return r;
         }
@@ -134,10 +173,14 @@ static vg_result draw_polyline_culled(
             vg_stroke_style s = *base;
             s.intensity *= f;
             s.color.a *= f;
-            const vg_vec2 seg[2] = {pts[count - 1], pts[0]};
-            vg_result r = vg_draw_polyline(ctx, seg, 2, &s, 0);
-            if (r != VG_OK) {
-                return r;
+            const vg_vec2 a = pts[count - 1];
+            const vg_vec2 b = pts[0];
+            if (fabsf(a.x - b.x) > 1e-5f || fabsf(a.y - b.y) > 1e-5f) {
+                const vg_vec2 seg[2] = {a, b};
+                vg_result r = vg_draw_polyline(ctx, seg, 2, &s, 0);
+                if (r != VG_OK) {
+                    return r;
+                }
             }
         }
     }
@@ -465,6 +508,28 @@ static vg_result draw_terrain_tuning_overlay(
         (vg_vec2){14.0f * ui, h - 18.0f * ui},
         10.0f * ui,
         0.75f * ui,
+        halo_style,
+        main_style
+    );
+}
+
+static vg_result draw_fps_overlay(
+    vg_context* ctx,
+    float w,
+    float h,
+    float fps,
+    const vg_stroke_style* halo_style,
+    const vg_stroke_style* main_style
+) {
+    char fps_text[32];
+    snprintf(fps_text, sizeof(fps_text), "FPS %.1f", fps);
+    const float ui = ui_reference_scale(w, h);
+    return draw_text_vector_glow(
+        ctx,
+        fps_text,
+        (vg_vec2){14.0f * ui, 24.0f * ui},
+        12.0f * ui,
+        0.70f * ui,
         halo_style,
         main_style
     );
@@ -2243,45 +2308,54 @@ static vg_result draw_high_plains_drifter_terrain(
         return VG_OK;
     }
 
+    /* Non-culled drifter path: batch rows/columns into long polylines to cut draw calls. */
     for (int r = 0; r < ROWS; ++r) {
         const float z = row_depth[r];
         const float fade = 0.10f + (1.0f - z) * (1.0f - z) * 0.90f;
-        for (int c = 0; c < COLS - 1; ++c) {
-            const vg_vec2 seg[2] = {pts[r][c], pts[r][c + 1]};
-            vg_stroke_style sh = *halo;
-            vg_stroke_style sm = *main;
-            vg_stroke_style glow = sm;
-            sh.intensity *= fade * 0.72f;
-            sm.intensity *= fade * 0.82f;
-            glow.intensity *= fade * 0.38f;
-            sh.color.a *= fade;
-            sm.color.a *= fade;
-            glow.color.a *= fade * 0.45f;
-            sh.width_px *= 0.94f + (1.0f - z) * 0.62f;
-            sm.width_px *= 0.90f + (1.0f - z) * 0.56f;
-            glow.width_px = fmaxf(glow.width_px * (1.35f + (1.0f - z) * 0.45f), sm.width_px * 1.35f);
-            glow.blend = VG_BLEND_ADDITIVE;
-            vg_result vr = vg_draw_polyline(ctx, seg, 2, &glow, 0);
-            if (vr != VG_OK) {
-                return vr;
-            }
-            vr = vg_draw_polyline(ctx, seg, 2, &sh, 0);
-            if (vr != VG_OK) {
-                return vr;
-            }
-            vr = vg_draw_polyline(ctx, seg, 2, &sm, 0);
-            if (vr != VG_OK) {
-                return vr;
-            }
+        vg_stroke_style sh = *halo;
+        vg_stroke_style sm = *main;
+        vg_stroke_style glow = sm;
+        sh.intensity *= fade * 0.72f;
+        sm.intensity *= fade * 0.82f;
+        glow.intensity *= fade * 0.38f;
+        sh.color.a *= fade;
+        sm.color.a *= fade;
+        glow.color.a *= fade * 0.45f;
+        sh.width_px *= 0.94f + (1.0f - z) * 0.62f;
+        sm.width_px *= 0.90f + (1.0f - z) * 0.56f;
+        glow.width_px = fmaxf(glow.width_px * (1.35f + (1.0f - z) * 0.45f), sm.width_px * 1.35f);
+        glow.blend = VG_BLEND_ADDITIVE;
+        vg_result vr = vg_draw_polyline(ctx, pts[r], COLS, &glow, 0);
+        if (vr != VG_OK) {
+            return vr;
+        }
+        vr = vg_draw_polyline(ctx, pts[r], COLS, &sh, 0);
+        if (vr != VG_OK) {
+            return vr;
+        }
+        vr = vg_draw_polyline(ctx, pts[r], COLS, &sm, 0);
+        if (vr != VG_OK) {
+            return vr;
         }
     }
 
+    enum { COL_CHUNK_SEGMENTS = 6 };
+    vg_vec2 vline[COL_CHUNK_SEGMENTS + 1];
     for (int c = 0; c < COLS; c += 2) {
         const int major = (c % 8) == 0;
         const float major_boost = major ? 1.0f : 0.62f;
-        for (int r = 0; r < ROWS - 1; ++r) {
-            const vg_vec2 seg[2] = {pts[r][c], pts[r + 1][c]};
-            const float z = 0.5f * (row_depth[r] + row_depth[r + 1]);
+        for (int rs = 0; rs < ROWS - 1; rs += COL_CHUNK_SEGMENTS) {
+            const int re = (rs + COL_CHUNK_SEGMENTS < ROWS) ? (rs + COL_CHUNK_SEGMENTS) : (ROWS - 1);
+            const int pt_count = re - rs + 1;
+            if (pt_count < 2) {
+                continue;
+            }
+            float z_sum = 0.0f;
+            for (int r = rs; r <= re; ++r) {
+                z_sum += row_depth[r];
+                vline[r - rs] = pts[r][c];
+            }
+            const float z = z_sum / (float)pt_count;
             const float fade = 0.09f + (1.0f - z) * (1.0f - z) * 0.91f;
             vg_stroke_style sh = *halo;
             vg_stroke_style sm = *main;
@@ -2296,15 +2370,15 @@ static vg_result draw_high_plains_drifter_terrain(
             sm.width_px *= 0.80f + (1.0f - z) * 0.40f;
             glow.width_px = fmaxf(glow.width_px * (1.28f + (1.0f - z) * 0.40f), sm.width_px * 1.30f);
             glow.blend = VG_BLEND_ADDITIVE;
-            vg_result vr = vg_draw_polyline(ctx, seg, 2, &glow, 0);
+            vg_result vr = vg_draw_polyline(ctx, vline, pt_count, &glow, 0);
             if (vr != VG_OK) {
                 return vr;
             }
-            vr = vg_draw_polyline(ctx, seg, 2, &sh, 0);
+            vr = vg_draw_polyline(ctx, vline, pt_count, &sh, 0);
             if (vr != VG_OK) {
                 return vr;
             }
-            vr = vg_draw_polyline(ctx, seg, 2, &sm, 0);
+            vr = vg_draw_polyline(ctx, vline, pt_count, &sm, 0);
             if (vr != VG_OK) {
                 return vr;
             }
@@ -3271,6 +3345,9 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         }
 
         r = draw_top_meters(ctx, g, &txt_halo, &txt_main);
+        if (r == VG_OK && metrics->show_fps) {
+            r = draw_fps_overlay(ctx, g->world_w, g->world_h, metrics->fps, &txt_halo, &txt_main);
+        }
         if (r == VG_OK && metrics->show_crt_ui) {
             vg_crt_profile crt_ui;
             vg_get_crt_profile(ctx, &crt_ui);
@@ -3572,6 +3649,9 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
     }
 
     r = draw_top_meters(ctx, g, &txt_halo, &txt_main);
+    if (r == VG_OK && metrics->show_fps) {
+        r = draw_fps_overlay(ctx, g->world_w, g->world_h, metrics->fps, &txt_halo, &txt_main);
+    }
     if (r == VG_OK && metrics->show_crt_ui) {
         vg_crt_profile crt_ui;
         vg_get_crt_profile(ctx, &crt_ui);

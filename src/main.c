@@ -285,6 +285,7 @@ typedef struct app {
     uint32_t thruster_test_frames_left;
     int force_clear_frames;
     int show_crt_ui;
+    int show_fps_counter;
     int crt_ui_selected;
     int crt_ui_mouse_drag;
     int show_acoustics;
@@ -4057,6 +4058,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
     render_metrics metrics = {
         .fps = fps,
         .dt = dt,
+        .show_fps = a->show_fps_counter,
         .ui_time_s = (float)SDL_GetTicks() * 0.001f,
         .force_clear = (a->force_clear_frames > 0) ? 1 : 0,
         .show_crt_ui = a->show_crt_ui,
@@ -4260,6 +4262,7 @@ int main(void) {
     a.force_clear_frames = 2;
     a.crt_ui_selected = 0;
     a.crt_ui_mouse_drag = 0;
+    a.show_fps_counter = 0;
     a.show_acoustics = 0;
 	    a.show_video_menu = 0;
     a.show_planetarium = 0;
@@ -4494,11 +4497,16 @@ int main(void) {
                     } else {
                         set_tty_message(&a, "acoustics slots save failed");
                     }
-                } else if (a.show_acoustics && ev.key.keysym.sym == SDLK_f) {
-                    if (a.acoustics_page == ACOUSTICS_PAGE_COMBAT) {
-                        trigger_enemy_fire_test(&a);
+                } else if (ev.key.keysym.sym == SDLK_f) {
+                    if (a.show_acoustics) {
+                        if (a.acoustics_page == ACOUSTICS_PAGE_COMBAT) {
+                            trigger_enemy_fire_test(&a);
+                        } else {
+                            trigger_fire_test(&a);
+                        }
                     } else {
-                        trigger_fire_test(&a);
+                        a.show_fps_counter = !a.show_fps_counter;
+                        set_tty_message(&a, a.show_fps_counter ? "fps counter: on" : "fps counter: off");
                     }
                 } else if (a.show_acoustics && ev.key.keysym.sym == SDLK_g) {
                     if (a.acoustics_page == ACOUSTICS_PAGE_COMBAT) {
