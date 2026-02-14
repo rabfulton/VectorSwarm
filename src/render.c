@@ -3113,12 +3113,17 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
 
     const float jx = sinf(g->t * 17.0f + 0.2f) * crt.jitter_amount * 0.75f;
     const float jy = cosf(g->t * 21.0f) * crt.jitter_amount * 0.75f;
+    const int background_only = (metrics->scene_phase == 1);
+    const int foreground_only = (metrics->scene_phase == 2);
 
     vg_transform_translate(ctx, jx, jy);
 
-    vg_result r = vg_fill_rect(ctx, (vg_rect){0.0f, 0.0f, g->world_w, g->world_h}, &bg);
-    if (r != VG_OK) {
-        return r;
+    vg_result r = VG_OK;
+    if (!foreground_only) {
+        r = vg_fill_rect(ctx, (vg_rect){0.0f, 0.0f, g->world_w, g->world_h}, &bg);
+        if (r != VG_OK) {
+            return r;
+        }
     }
 
     if (level_uses_cylinder_render(g->level_style)) {
@@ -3286,87 +3291,136 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         return VG_OK;
     }
 
-    for (size_t i = 0; i < MAX_STARS; ++i) {
-        const float speed_u = (g->stars[i].speed - 50.0f) / 190.0f;
-        float u = speed_u;
-        if (u < 0.0f) {
-            u = 0.0f;
-        }
-        if (u > 1.0f) {
-            u = 1.0f;
-        }
-        const float parallax = 0.08f + u * 0.28f;
-        const float persistence_trail = 1.0f + (1.0f - crt.persistence_decay) * 2.8f;
-        const float dt_safe = fmaxf(metrics->dt, 1e-4f);
-        const float vx = (g->stars[i].prev_x - g->stars[i].x) / dt_safe;
-        const float vy = (g->stars[i].prev_y - g->stars[i].y) / dt_safe;
-        const float exposure_s = (1.0f / 60.0f) * (1.4f + 2.6f * u) * persistence_trail;
-        float tx = g->stars[i].x + vx * exposure_s;
-        const float ty = g->stars[i].y + vy * exposure_s;
-        float sx = repeatf(g->stars[i].x - g->camera_x * parallax, g->world_w);
-        float stx = repeatf(tx - g->camera_x * parallax, g->world_w);
-        if (stx - sx > g->world_w * 0.5f) {
-            stx -= g->world_w;
-        } else if (sx - stx > g->world_w * 0.5f) {
-            stx += g->world_w;
-        }
-        const vg_vec2 seg[] = {
-            {stx, ty},
-            {sx, g->stars[i].y}
-        };
-        const vg_vec2 mid = {
-            seg[0].x + (seg[1].x - seg[0].x) * 0.55f,
-            seg[0].y + (seg[1].y - seg[0].y) * 0.55f
-        };
-        const vg_vec2 seg_tail[] = {seg[0], mid};
-        const vg_vec2 seg_head[] = {mid, seg[1]};
-        vg_stroke_style sh = star_halo;
-        vg_stroke_style sm = star_main;
-        sh.width_px *= 0.70f + u * 0.55f;
-        sm.width_px *= 0.62f + u * 0.50f;
-        sh.intensity *= 0.40f + u * 0.36f;
-        sm.intensity *= 0.52f + u * 0.34f;
-        vg_stroke_style sh_tail = sh;
-        vg_stroke_style sm_tail = sm;
-        /* Fade the back half faster so tails don't stay bright too long. */
-        sh_tail.intensity *= 0.34f;
-        sm_tail.intensity *= 0.40f;
-        sh_tail.color.a *= 0.38f;
-        sm_tail.color.a *= 0.44f;
+    if (!foreground_only) {
+        for (size_t i = 0; i < MAX_STARS; ++i) {
+            const float speed_u = (g->stars[i].speed - 50.0f) / 190.0f;
+            float u = speed_u;
+            if (u < 0.0f) {
+                u = 0.0f;
+            }
+            if (u > 1.0f) {
+                u = 1.0f;
+            }
+            const float parallax = 0.08f + u * 0.28f;
+            const float persistence_trail = 1.0f + (1.0f - crt.persistence_decay) * 2.8f;
+            const float dt_safe = fmaxf(metrics->dt, 1e-4f);
+            const float vx = (g->stars[i].prev_x - g->stars[i].x) / dt_safe;
+            const float vy = (g->stars[i].prev_y - g->stars[i].y) / dt_safe;
+            const float exposure_s = (1.0f / 60.0f) * (1.4f + 2.6f * u) * persistence_trail;
+            float tx = g->stars[i].x + vx * exposure_s;
+            const float ty = g->stars[i].y + vy * exposure_s;
+            float sx = repeatf(g->stars[i].x - g->camera_x * parallax, g->world_w);
+            float stx = repeatf(tx - g->camera_x * parallax, g->world_w);
+            if (stx - sx > g->world_w * 0.5f) {
+                stx -= g->world_w;
+            } else if (sx - stx > g->world_w * 0.5f) {
+                stx += g->world_w;
+            }
+            const vg_vec2 seg[] = {
+                {stx, ty},
+                {sx, g->stars[i].y}
+            };
+            const vg_vec2 mid = {
+                seg[0].x + (seg[1].x - seg[0].x) * 0.55f,
+                seg[0].y + (seg[1].y - seg[0].y) * 0.55f
+            };
+            const vg_vec2 seg_tail[] = {seg[0], mid};
+            const vg_vec2 seg_head[] = {mid, seg[1]};
+            vg_stroke_style sh = star_halo;
+            vg_stroke_style sm = star_main;
+            sh.width_px *= 0.70f + u * 0.55f;
+            sm.width_px *= 0.62f + u * 0.50f;
+            sh.intensity *= 0.40f + u * 0.36f;
+            sm.intensity *= 0.52f + u * 0.34f;
+            vg_stroke_style sh_tail = sh;
+            vg_stroke_style sm_tail = sm;
+            /* Fade the back half faster so tails don't stay bright too long. */
+            sh_tail.intensity *= 0.34f;
+            sm_tail.intensity *= 0.40f;
+            sh_tail.color.a *= 0.38f;
+            sm_tail.color.a *= 0.44f;
 
-        r = vg_draw_polyline(ctx, seg_tail, 2, &sh_tail, 0);
-        if (r != VG_OK) {
-            return r;
-        }
-        r = vg_draw_polyline(ctx, seg_tail, 2, &sm_tail, 0);
-        if (r != VG_OK) {
-            return r;
-        }
-        r = vg_draw_polyline(ctx, seg_head, 2, &sh, 0);
-        if (r != VG_OK) {
-            return r;
-        }
-        r = vg_draw_polyline(ctx, seg_head, 2, &sm, 0);
-        if (r != VG_OK) {
-            return r;
-        }
-
-        r = vg_fill_circle(ctx, (vg_vec2){sx, g->stars[i].y}, g->stars[i].size + 0.4f * u, &star_fill, 10);
-        if (r != VG_OK) {
-            return r;
-        }
-        /* Draw seam-duplicate heads near edges for continuous wrap. */
-        if (sx < 8.0f) {
-            r = vg_fill_circle(ctx, (vg_vec2){sx + g->world_w, g->stars[i].y}, g->stars[i].size + 0.4f * u, &star_fill, 10);
+            r = vg_draw_polyline(ctx, seg_tail, 2, &sh_tail, 0);
             if (r != VG_OK) {
                 return r;
             }
-        } else if (sx > g->world_w - 8.0f) {
-            r = vg_fill_circle(ctx, (vg_vec2){sx - g->world_w, g->stars[i].y}, g->stars[i].size + 0.4f * u, &star_fill, 10);
+            r = vg_draw_polyline(ctx, seg_tail, 2, &sm_tail, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_draw_polyline(ctx, seg_head, 2, &sh, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_draw_polyline(ctx, seg_head, 2, &sm, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+
+            r = vg_fill_circle(ctx, (vg_vec2){sx, g->stars[i].y}, g->stars[i].size + 0.4f * u, &star_fill, 10);
+            if (r != VG_OK) {
+                return r;
+            }
+            /* Draw seam-duplicate heads near edges for continuous wrap. */
+            if (sx < 8.0f) {
+                r = vg_fill_circle(ctx, (vg_vec2){sx + g->world_w, g->stars[i].y}, g->stars[i].size + 0.4f * u, &star_fill, 10);
+                if (r != VG_OK) {
+                    return r;
+                }
+            } else if (sx > g->world_w - 8.0f) {
+                r = vg_fill_circle(ctx, (vg_vec2){sx - g->world_w, g->stars[i].y}, g->stars[i].size + 0.4f * u, &star_fill, 10);
+                if (r != VG_OK) {
+                    return r;
+                }
+            }
+        }
+    }
+
+    if (!foreground_only) {
+        if (g->level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER) {
+            vg_stroke_style plains_halo = land_halo;
+            vg_stroke_style plains_main = land_main;
+            plains_halo.intensity *= 1.10f;
+            plains_main.intensity *= 1.18f;
+            plains_halo.width_px *= 1.08f;
+            plains_main.width_px *= 1.04f;
+            plains_main.color = (vg_color){pal.secondary.r, pal.secondary.g, pal.secondary.b, 0.92f};
+            r = draw_high_plains_drifter_terrain(ctx, g, &plains_halo, &plains_main);
+            if (r != VG_OK) {
+                return r;
+            }
+        } else if (g->level_style != LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2) {
+            /* Foreground vector landscape layers for depth/parallax. */
+            vg_stroke_style land1_halo = land_halo;
+            vg_stroke_style land1_main = land_main;
+            if (g->level_style == LEVEL_STYLE_DEFENDER) {
+                land1_halo.width_px *= 1.16f;
+                land1_main.width_px *= 1.14f;
+            }
+            r = draw_parallax_landscape(ctx, g->world_w, g->world_h, g->camera_x, 1.20f, g->world_h * 0.18f, 22.0f, &land1_halo, &land1_main);
+            if (r != VG_OK) {
+                return r;
+            }
+            vg_stroke_style land2_halo = land_halo;
+            vg_stroke_style land2_main = land_main;
+            land2_halo.width_px *= 1.15f;
+            land2_main.width_px *= 1.10f;
+            if (g->level_style == LEVEL_STYLE_DEFENDER) {
+                land2_halo.width_px *= 1.12f;
+                land2_main.width_px *= 1.10f;
+            }
+            land2_halo.intensity *= 1.05f;
+            land2_main.intensity *= 1.08f;
+            land2_main.color = (vg_color){pal.secondary.r, pal.secondary.g, pal.secondary.b, 0.9f};
+            r = draw_parallax_landscape(ctx, g->world_w, g->world_h, g->camera_x, 1.55f, g->world_h * 0.10f, 30.0f, &land2_halo, &land2_main);
             if (r != VG_OK) {
                 return r;
             }
         }
+    }
+
+    if (background_only) {
+        return VG_OK;
     }
 
     r = vg_transform_push(ctx);
@@ -3475,49 +3529,6 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
     r = vg_transform_pop(ctx);
     if (r != VG_OK) {
         return r;
-    }
-
-    if (g->level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER) {
-        vg_stroke_style plains_halo = land_halo;
-        vg_stroke_style plains_main = land_main;
-        plains_halo.intensity *= 1.10f;
-        plains_main.intensity *= 1.18f;
-        plains_halo.width_px *= 1.08f;
-        plains_main.width_px *= 1.04f;
-        plains_main.color = (vg_color){pal.secondary.r, pal.secondary.g, pal.secondary.b, 0.92f};
-        r = draw_high_plains_drifter_terrain(ctx, g, &plains_halo, &plains_main);
-        if (r != VG_OK) {
-            return r;
-        }
-    } else if (g->level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2) {
-        /* Terrain for drifter2 is rendered in a dedicated GPU pass from main.c. */
-    } else {
-        /* Foreground vector landscape layers for depth/parallax. */
-        vg_stroke_style land1_halo = land_halo;
-        vg_stroke_style land1_main = land_main;
-        if (g->level_style == LEVEL_STYLE_DEFENDER) {
-            land1_halo.width_px *= 1.16f;
-            land1_main.width_px *= 1.14f;
-        }
-        r = draw_parallax_landscape(ctx, g->world_w, g->world_h, g->camera_x, 1.20f, g->world_h * 0.18f, 22.0f, &land1_halo, &land1_main);
-        if (r != VG_OK) {
-            return r;
-        }
-        vg_stroke_style land2_halo = land_halo;
-        vg_stroke_style land2_main = land_main;
-        land2_halo.width_px *= 1.15f;
-        land2_main.width_px *= 1.10f;
-        if (g->level_style == LEVEL_STYLE_DEFENDER) {
-            land2_halo.width_px *= 1.12f;
-            land2_main.width_px *= 1.10f;
-        }
-        land2_halo.intensity *= 1.05f;
-        land2_main.intensity *= 1.08f;
-        land2_main.color = (vg_color){pal.secondary.r, pal.secondary.g, pal.secondary.b, 0.9f};
-        r = draw_parallax_landscape(ctx, g->world_w, g->world_h, g->camera_x, 1.55f, g->world_h * 0.10f, 30.0f, &land2_halo, &land2_main);
-        if (r != VG_OK) {
-            return r;
-        }
     }
 
     r = draw_top_meters(ctx, g, &txt_halo, &txt_main);

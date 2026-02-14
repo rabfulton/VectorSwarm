@@ -45,6 +45,8 @@
 
 #if V_TYPE_HAS_TERRAIN_SHADERS
 #include "terrain_frag_spv.h"
+#include "terrain_wire_vert_spv.h"
+#include "terrain_wire_frag_spv.h"
 #include "terrain_vert_spv.h"
 #endif
 
@@ -90,6 +92,15 @@ typedef struct terrain_vertex {
     float y;
     float z;
 } terrain_vertex;
+
+typedef struct terrain_wire_vertex {
+    float x;
+    float y;
+    float z;
+    float bx;
+    float by;
+    float bz;
+} terrain_wire_vertex;
 
 typedef struct terrain_pc {
     float color[4];
@@ -209,10 +220,12 @@ typedef struct app {
     void* terrain_vertex_map;
     VkBuffer terrain_tri_index_buffer;
     VkDeviceMemory terrain_tri_index_memory;
-    VkBuffer terrain_line_index_buffer;
-    VkDeviceMemory terrain_line_index_memory;
+    VkBuffer terrain_wire_vertex_buffer;
+    VkDeviceMemory terrain_wire_vertex_memory;
+    void* terrain_wire_vertex_map;
     uint32_t terrain_tri_index_count;
-    uint32_t terrain_line_index_count;
+    uint32_t terrain_wire_vertex_count;
+    int terrain_wire_enabled;
 
     VkCommandPool command_pool;
     VkCommandBuffer command_buffers[APP_MAX_SWAPCHAIN_IMAGES];
@@ -2620,10 +2633,14 @@ static void cleanup(app* a) {
     }
     if (a->terrain_vertex_buffer) vkDestroyBuffer(a->device, a->terrain_vertex_buffer, NULL);
     if (a->terrain_tri_index_buffer) vkDestroyBuffer(a->device, a->terrain_tri_index_buffer, NULL);
-    if (a->terrain_line_index_buffer) vkDestroyBuffer(a->device, a->terrain_line_index_buffer, NULL);
+    if (a->terrain_wire_vertex_map && a->terrain_wire_vertex_memory) {
+        vkUnmapMemory(a->device, a->terrain_wire_vertex_memory);
+        a->terrain_wire_vertex_map = NULL;
+    }
+    if (a->terrain_wire_vertex_buffer) vkDestroyBuffer(a->device, a->terrain_wire_vertex_buffer, NULL);
     if (a->terrain_vertex_memory) vkFreeMemory(a->device, a->terrain_vertex_memory, NULL);
     if (a->terrain_tri_index_memory) vkFreeMemory(a->device, a->terrain_tri_index_memory, NULL);
-    if (a->terrain_line_index_memory) vkFreeMemory(a->device, a->terrain_line_index_memory, NULL);
+    if (a->terrain_wire_vertex_memory) vkFreeMemory(a->device, a->terrain_wire_vertex_memory, NULL);
 
     for (uint32_t i = 0; i < a->swapchain_image_count; ++i) {
         if (a->present_framebuffers[i]) vkDestroyFramebuffer(a->device, a->present_framebuffers[i], NULL);
@@ -2771,9 +2788,13 @@ static void destroy_render_runtime(app* a) {
         vkDestroyBuffer(a->device, a->terrain_tri_index_buffer, NULL);
         a->terrain_tri_index_buffer = VK_NULL_HANDLE;
     }
-    if (a->terrain_line_index_buffer) {
-        vkDestroyBuffer(a->device, a->terrain_line_index_buffer, NULL);
-        a->terrain_line_index_buffer = VK_NULL_HANDLE;
+    if (a->terrain_wire_vertex_map && a->terrain_wire_vertex_memory) {
+        vkUnmapMemory(a->device, a->terrain_wire_vertex_memory);
+        a->terrain_wire_vertex_map = NULL;
+    }
+    if (a->terrain_wire_vertex_buffer) {
+        vkDestroyBuffer(a->device, a->terrain_wire_vertex_buffer, NULL);
+        a->terrain_wire_vertex_buffer = VK_NULL_HANDLE;
     }
     if (a->terrain_vertex_memory) {
         vkFreeMemory(a->device, a->terrain_vertex_memory, NULL);
@@ -2783,9 +2804,9 @@ static void destroy_render_runtime(app* a) {
         vkFreeMemory(a->device, a->terrain_tri_index_memory, NULL);
         a->terrain_tri_index_memory = VK_NULL_HANDLE;
     }
-    if (a->terrain_line_index_memory) {
-        vkFreeMemory(a->device, a->terrain_line_index_memory, NULL);
-        a->terrain_line_index_memory = VK_NULL_HANDLE;
+    if (a->terrain_wire_vertex_memory) {
+        vkFreeMemory(a->device, a->terrain_wire_vertex_memory, NULL);
+        a->terrain_wire_vertex_memory = VK_NULL_HANDLE;
     }
     for (uint32_t i = 0; i < APP_MAX_SWAPCHAIN_IMAGES; ++i) {
         if (a->present_framebuffers[i]) {
@@ -2983,12 +3004,21 @@ static int create_device(app* a) {
         qcount = 2;
     }
     const char* dev_exts[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+    VkPhysicalDeviceFeatures supported;
+    memset(&supported, 0, sizeof(supported));
+    vkGetPhysicalDeviceFeatures(a->physical_device, &supported);
+    VkPhysicalDeviceFeatures enabled;
+    memset(&enabled, 0, sizeof(enabled));
+    if (supported.fillModeNonSolid) {
+        enabled.fillModeNonSolid = VK_TRUE;
+    }
     VkDeviceCreateInfo ci = {
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
         .queueCreateInfoCount = qcount,
         .pQueueCreateInfos = qci,
         .enabledExtensionCount = 1,
-        .ppEnabledExtensionNames = dev_exts
+        .ppEnabledExtensionNames = dev_exts,
+        .pEnabledFeatures = &enabled
     };
     if (!check_vk(vkCreateDevice(a->physical_device, &ci, NULL, &a->device), "vkCreateDevice")) return 0;
     vkGetDeviceQueue(a->device, a->graphics_queue_family, 0, &a->graphics_queue);
@@ -3444,10 +3474,10 @@ static int create_terrain_resources(app* a) {
 #else
     const uint32_t vcount = (uint32_t)(TERRAIN_ROWS * TERRAIN_COLS);
     const VkDeviceSize vbuf_size = (VkDeviceSize)vcount * sizeof(terrain_vertex);
+    const uint32_t wire_vcount = (uint32_t)(TERRAIN_ROWS - 1) * (uint32_t)(TERRAIN_COLS - 1) * 6u;
+    const VkDeviceSize wire_vbuf_size = (VkDeviceSize)wire_vcount * sizeof(terrain_wire_vertex);
     uint16_t tri_idx[(TERRAIN_ROWS - 1) * (TERRAIN_COLS - 1) * 6];
-    uint16_t line_idx[(TERRAIN_ROWS - 1) * (TERRAIN_COLS - 1) * 12];
     uint32_t tri_count = 0;
-    uint32_t line_count = 0;
 
     for (int r = 0; r < TERRAIN_ROWS - 1; ++r) {
         for (int c = 0; c < TERRAIN_COLS - 1; ++c) {
@@ -3457,22 +3487,6 @@ static int create_terrain_resources(app* a) {
             const uint16_t i11 = (uint16_t)((r + 1) * TERRAIN_COLS + c + 1);
             tri_idx[tri_count++] = i00; tri_idx[tri_count++] = i10; tri_idx[tri_count++] = i01;
             tri_idx[tri_count++] = i10; tri_idx[tri_count++] = i11; tri_idx[tri_count++] = i01;
-        }
-    }
-    for (int r = 0; r < TERRAIN_ROWS - 1; ++r) {
-        for (int c = 0; c < TERRAIN_COLS - 1; ++c) {
-            const uint16_t i00 = (uint16_t)(r * TERRAIN_COLS + c);
-            const uint16_t i10 = (uint16_t)(r * TERRAIN_COLS + c + 1);
-            const uint16_t i01 = (uint16_t)((r + 1) * TERRAIN_COLS + c);
-            const uint16_t i11 = (uint16_t)((r + 1) * TERRAIN_COLS + c + 1);
-            /* Triangle 1 edges. */
-            line_idx[line_count++] = i00; line_idx[line_count++] = i10;
-            line_idx[line_count++] = i10; line_idx[line_count++] = i01;
-            line_idx[line_count++] = i01; line_idx[line_count++] = i00;
-            /* Triangle 2 edges. */
-            line_idx[line_count++] = i10; line_idx[line_count++] = i11;
-            line_idx[line_count++] = i11; line_idx[line_count++] = i01;
-            line_idx[line_count++] = i01; line_idx[line_count++] = i10;
         }
     }
 
@@ -3485,18 +3499,21 @@ static int create_terrain_resources(app* a) {
     if (!check_vk(vkMapMemory(a->device, a->terrain_vertex_memory, 0, vbuf_size, 0, &a->terrain_vertex_map), "vkMapMemory(terrain verts)")) {
         return 0;
     }
+    if (!create_buffer(
+            a, wire_vbuf_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &a->terrain_wire_vertex_buffer, &a->terrain_wire_vertex_memory)) {
+        return 0;
+    }
+    if (!check_vk(vkMapMemory(a->device, a->terrain_wire_vertex_memory, 0, wire_vbuf_size, 0, &a->terrain_wire_vertex_map), "vkMapMemory(terrain wire verts)")) {
+        return 0;
+    }
     update_gpu_high_plains_vertices(a);
 
     if (!create_buffer(
             a, (VkDeviceSize)tri_count * sizeof(uint16_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
             &a->terrain_tri_index_buffer, &a->terrain_tri_index_memory)) {
-        return 0;
-    }
-    if (!create_buffer(
-            a, (VkDeviceSize)line_count * sizeof(uint16_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            &a->terrain_line_index_buffer, &a->terrain_line_index_memory)) {
         return 0;
     }
     {
@@ -3507,16 +3524,8 @@ static int create_terrain_resources(app* a) {
         memcpy(p, tri_idx, (size_t)tri_count * sizeof(uint16_t));
         vkUnmapMemory(a->device, a->terrain_tri_index_memory);
     }
-    {
-        void* p = NULL;
-        if (!check_vk(vkMapMemory(a->device, a->terrain_line_index_memory, 0, VK_WHOLE_SIZE, 0, &p), "vkMapMemory(terrain line idx)")) {
-            return 0;
-        }
-        memcpy(p, line_idx, (size_t)line_count * sizeof(uint16_t));
-        vkUnmapMemory(a->device, a->terrain_line_index_memory);
-    }
     a->terrain_tri_index_count = tri_count;
-    a->terrain_line_index_count = line_count;
+    a->terrain_wire_vertex_count = wire_vcount;
 
     VkPushConstantRange pc = {.stageFlags = VK_SHADER_STAGE_VERTEX_BIT, .offset = 0, .size = sizeof(terrain_pc)};
     VkPipelineLayoutCreateInfo pli = {
@@ -3540,8 +3549,20 @@ static int create_terrain_resources(app* a) {
         .codeSize = v_type_terrain_frag_spv_len,
         .pCode = (const uint32_t*)v_type_terrain_frag_spv
     };
+    VkShaderModuleCreateInfo vs_wire_ci = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = v_type_terrain_wire_vert_spv_len,
+        .pCode = (const uint32_t*)v_type_terrain_wire_vert_spv
+    };
+    VkShaderModuleCreateInfo fs_wire_ci = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = v_type_terrain_wire_frag_spv_len,
+        .pCode = (const uint32_t*)v_type_terrain_wire_frag_spv
+    };
     VkShaderModule vs = VK_NULL_HANDLE;
+    VkShaderModule vs_wire = VK_NULL_HANDLE;
     VkShaderModule fs = VK_NULL_HANDLE;
+    VkShaderModule fs_wire = VK_NULL_HANDLE;
     if (!check_vk(vkCreateShaderModule(a->device, &vs_ci, NULL, &vs), "vkCreateShaderModule(terrain vs)")) {
         return 0;
     }
@@ -3549,19 +3570,52 @@ static int create_terrain_resources(app* a) {
         vkDestroyShaderModule(a->device, vs, NULL);
         return 0;
     }
+    if (!check_vk(vkCreateShaderModule(a->device, &vs_wire_ci, NULL, &vs_wire), "vkCreateShaderModule(terrain wire vs)")) {
+        vkDestroyShaderModule(a->device, fs, NULL);
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+    if (!check_vk(vkCreateShaderModule(a->device, &fs_wire_ci, NULL, &fs_wire), "vkCreateShaderModule(terrain wire fs)")) {
+        vkDestroyShaderModule(a->device, vs_wire, NULL);
+        vkDestroyShaderModule(a->device, fs, NULL);
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
 
-    VkPipelineShaderStageCreateInfo stages[2] = {
+    VkPipelineShaderStageCreateInfo stages_fill[2] = {
         {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vs, .pName = "main"},
         {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = fs, .pName = "main"}
     };
-    VkVertexInputBindingDescription binding = {.binding = 0, .stride = sizeof(terrain_vertex), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
-    VkVertexInputAttributeDescription attr = {.location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 0};
-    VkPipelineVertexInputStateCreateInfo vi = {
+    VkPipelineShaderStageCreateInfo stages_line[2] = {
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vs_wire, .pName = "main"},
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = fs_wire, .pName = "main"}
+    };
+    VkVertexInputBindingDescription binding_fill = {.binding = 0, .stride = sizeof(terrain_vertex), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
+    VkVertexInputAttributeDescription attr_fill = {.location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 0};
+    VkPipelineVertexInputStateCreateInfo vi_fill = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
         .vertexBindingDescriptionCount = 1,
-        .pVertexBindingDescriptions = &binding,
+        .pVertexBindingDescriptions = &binding_fill,
         .vertexAttributeDescriptionCount = 1,
-        .pVertexAttributeDescriptions = &attr
+        .pVertexAttributeDescriptions = &attr_fill
+    };
+    VkVertexInputBindingDescription binding_line = {.binding = 0, .stride = sizeof(terrain_wire_vertex), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
+    VkVertexInputAttributeDescription attr_line[2];
+    memset(attr_line, 0, sizeof(attr_line));
+    attr_line[0].location = 0;
+    attr_line[0].binding = 0;
+    attr_line[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attr_line[0].offset = 0;
+    attr_line[1].location = 1;
+    attr_line[1].binding = 0;
+    attr_line[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attr_line[1].offset = sizeof(float) * 3;
+    VkPipelineVertexInputStateCreateInfo vi_line = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .vertexBindingDescriptionCount = 1,
+        .pVertexBindingDescriptions = &binding_line,
+        .vertexAttributeDescriptionCount = 2,
+        .pVertexAttributeDescriptions = attr_line
     };
     VkPipelineInputAssemblyStateCreateInfo ia = {.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO, .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST};
     VkPipelineViewportStateCreateInfo vp = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .scissorCount = 1};
@@ -3574,13 +3628,7 @@ static int create_terrain_resources(app* a) {
     };
     VkPipelineMultisampleStateCreateInfo ms = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .rasterizationSamples = scene_samples(a)};
     VkPipelineColorBlendAttachmentState cb_att = {
-        .blendEnable = VK_TRUE,
-        .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
-        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
-        .colorBlendOp = VK_BLEND_OP_ADD,
-        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
-        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
-        .alphaBlendOp = VK_BLEND_OP_ADD,
+        .blendEnable = VK_FALSE,
         .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                           VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
     };
@@ -3589,15 +3637,15 @@ static int create_terrain_resources(app* a) {
     VkPipelineDynamicStateCreateInfo ds = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .dynamicStateCount = 2, .pDynamicStates = dyn};
     VkPipelineDepthStencilStateCreateInfo depth = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-        .depthTestEnable = VK_FALSE,
-        .depthWriteEnable = VK_FALSE,
+        .depthTestEnable = VK_TRUE,
+        .depthWriteEnable = VK_TRUE,
         .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL
     };
     VkGraphicsPipelineCreateInfo gp = {
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .stageCount = 2,
-        .pStages = stages,
-        .pVertexInputState = &vi,
+        .pStages = stages_fill,
+        .pVertexInputState = &vi_fill,
         .pInputAssemblyState = &ia,
         .pViewportState = &vp,
         .pRasterizationState = &rs,
@@ -3610,29 +3658,37 @@ static int create_terrain_resources(app* a) {
         .subpass = 0
     };
     if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->terrain_fill_pipeline), "vkCreateGraphicsPipelines(terrain fill)")) {
+        vkDestroyShaderModule(a->device, vs_wire, NULL);
+        vkDestroyShaderModule(a->device, fs_wire, NULL);
         vkDestroyShaderModule(a->device, fs, NULL);
         vkDestroyShaderModule(a->device, vs, NULL);
         return 0;
     }
 
-    ia.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
-    rs.polygonMode = VK_POLYGON_MODE_FILL;
-    rs.cullMode = VK_CULL_MODE_NONE;
+    rs.cullMode = VK_CULL_MODE_BACK_BIT;
+    rs.depthBiasEnable = VK_FALSE;
     cb_att.blendEnable = VK_TRUE;
-    cb_att.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
-    cb_att.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    cb_att.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    cb_att.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     cb_att.colorBlendOp = VK_BLEND_OP_ADD;
     cb_att.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     cb_att.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     cb_att.alphaBlendOp = VK_BLEND_OP_ADD;
     cb_att.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    depth.depthTestEnable = VK_TRUE;
     depth.depthWriteEnable = VK_FALSE;
+    gp.pStages = stages_line;
+    gp.pVertexInputState = &vi_line;
     if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->terrain_line_pipeline), "vkCreateGraphicsPipelines(terrain line)")) {
+        vkDestroyShaderModule(a->device, vs_wire, NULL);
+        vkDestroyShaderModule(a->device, fs_wire, NULL);
         vkDestroyShaderModule(a->device, fs, NULL);
         vkDestroyShaderModule(a->device, vs, NULL);
         return 0;
     }
 
+    vkDestroyShaderModule(a->device, vs_wire, NULL);
+    vkDestroyShaderModule(a->device, fs_wire, NULL);
     vkDestroyShaderModule(a->device, fs, NULL);
     vkDestroyShaderModule(a->device, vs, NULL);
     return 1;
@@ -3711,6 +3767,31 @@ static void update_gpu_high_plains_vertices(app* a) {
             vtx[idx].z = z;
         }
     }
+
+    if (a->terrain_wire_vertex_map) {
+        terrain_wire_vertex* wv = (terrain_wire_vertex*)a->terrain_wire_vertex_map;
+        uint32_t wi = 0;
+        for (int r = 0; r < TERRAIN_ROWS - 1; ++r) {
+            for (int c = 0; c < TERRAIN_COLS - 1; ++c) {
+                const uint32_t i00 = (uint32_t)r * TERRAIN_COLS + (uint32_t)c;
+                const uint32_t i10 = (uint32_t)r * TERRAIN_COLS + (uint32_t)c + 1u;
+                const uint32_t i01 = (uint32_t)(r + 1) * TERRAIN_COLS + (uint32_t)c;
+                const uint32_t i11 = (uint32_t)(r + 1) * TERRAIN_COLS + (uint32_t)c + 1u;
+                const terrain_vertex p00 = vtx[i00];
+                const terrain_vertex p10 = vtx[i10];
+                const terrain_vertex p01 = vtx[i01];
+                const terrain_vertex p11 = vtx[i11];
+
+                wv[wi++] = (terrain_wire_vertex){p00.x, p00.y, p00.z, 1.0f, 0.0f, 0.0f};
+                wv[wi++] = (terrain_wire_vertex){p10.x, p10.y, p10.z, 0.0f, 1.0f, 0.0f};
+                wv[wi++] = (terrain_wire_vertex){p01.x, p01.y, p01.z, 0.0f, 0.0f, 1.0f};
+
+                wv[wi++] = (terrain_wire_vertex){p10.x, p10.y, p10.z, 1.0f, 0.0f, 0.0f};
+                wv[wi++] = (terrain_wire_vertex){p11.x, p11.y, p11.z, 0.0f, 1.0f, 0.0f};
+                wv[wi++] = (terrain_wire_vertex){p01.x, p01.y, p01.z, 0.0f, 0.0f, 1.0f};
+            }
+        }
+    }
 }
 
 static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd) {
@@ -3747,18 +3828,18 @@ static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd) {
     vkCmdBindIndexBuffer(cmd, a->terrain_tri_index_buffer, 0, VK_INDEX_TYPE_UINT16);
     vkCmdDrawIndexed(cmd, a->terrain_tri_index_count, 1, 0, 0, 0);
 
-    if (a->palette_mode == 1) {
-        pc.color[0] = 1.0f; pc.color[1] = 0.86f; pc.color[2] = 0.52f; pc.color[3] = 0.74f;
-    } else if (a->palette_mode == 2) {
+    if (a->terrain_wire_enabled) {
         pc.color[0] = 0.74f; pc.color[1] = 0.94f; pc.color[2] = 1.0f; pc.color[3] = 0.74f;
-    } else {
-        pc.color[0] = 0.30f; pc.color[1] = 0.95f; pc.color[2] = 0.44f; pc.color[3] = 0.74f;
+        pc.params[2] = 0.96f;
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->terrain_line_pipeline);
+        vkCmdPushConstants(cmd, a->terrain_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
+        if (a->terrain_wire_vertex_buffer && a->terrain_wire_vertex_count > 0) {
+            VkDeviceSize wb_off = 0;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &a->terrain_wire_vertex_buffer, &wb_off);
+            vkCmdDraw(cmd, a->terrain_wire_vertex_count, 1, 0, 0);
+            vkCmdBindVertexBuffers(cmd, 0, 1, &a->terrain_vertex_buffer, &vb_off);
+        }
     }
-    pc.params[2] = 0.96f;
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->terrain_line_pipeline);
-    vkCmdPushConstants(cmd, a->terrain_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
-    vkCmdBindIndexBuffer(cmd, a->terrain_line_index_buffer, 0, VK_INDEX_TYPE_UINT16);
-    vkCmdDrawIndexed(cmd, a->terrain_line_index_count, 1, 0, 0, 0);
 }
 
 static int record_submit_present(app* a, uint32_t image_index, float t, float dt, float fps) {
@@ -3826,7 +3907,8 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .nick_w = a->nick_w,
         .nick_h = a->nick_h,
         .nick_stride = a->nick_stride,
-        .surveillance_svg_asset = a->surveillance_svg_asset
+        .surveillance_svg_asset = a->surveillance_svg_asset,
+        .scene_phase = 0
     };
     {
         int mx = 0;
@@ -3873,10 +3955,34 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
     for (int i = 0; i < ACOUSTICS_SCOPE_SAMPLES; ++i) {
         metrics.acoustics_scope[i] = a->scope_window[i];
     }
-    vr = render_frame(a->vg, &a->game, &metrics);
-    if (vr != VG_OK) {
-        fprintf(stderr, "VG failure: render_frame -> %s (%d)\n", vg_result_string(vr), (int)vr);
-        return 0;
+    {
+        const int split_terrain_layer =
+            (a->game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2) &&
+            !a->show_acoustics &&
+            !a->show_video_menu &&
+            !a->show_planetarium;
+        if (split_terrain_layer) {
+            metrics.scene_phase = 1;
+            vr = render_frame(a->vg, &a->game, &metrics);
+            if (vr != VG_OK) {
+                fprintf(stderr, "VG failure: render_frame(bg) -> %s (%d)\n", vg_result_string(vr), (int)vr);
+                return 0;
+            }
+            record_gpu_high_plains_terrain(a, cmd);
+            metrics.scene_phase = 2;
+            vr = render_frame(a->vg, &a->game, &metrics);
+            if (vr != VG_OK) {
+                fprintf(stderr, "VG failure: render_frame(fg) -> %s (%d)\n", vg_result_string(vr), (int)vr);
+                return 0;
+            }
+        } else {
+            metrics.scene_phase = 0;
+            vr = render_frame(a->vg, &a->game, &metrics);
+            if (vr != VG_OK) {
+                fprintf(stderr, "VG failure: render_frame -> %s (%d)\n", vg_result_string(vr), (int)vr);
+                return 0;
+            }
+        }
     }
     if (a->force_clear_frames > 0) {
         a->force_clear_frames--;
@@ -3886,7 +3992,6 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         fprintf(stderr, "VG failure: vg_end_frame -> %s (%d)\n", vg_result_string(vr), (int)vr);
         return 0;
     }
-    record_gpu_high_plains_terrain(a, cmd);
     vkCmdEndRenderPass(cmd);
 
     VkClearValue bloom_clear = {.color = {{0.0f, 0.0f, 0.0f, 1.0f}}};
@@ -3982,6 +4087,7 @@ int main(void) {
     a.show_acoustics = 0;
 	    a.show_video_menu = 0;
     a.show_planetarium = 0;
+    a.terrain_wire_enabled = 1;
     a.video_menu_selected = 1;
     a.video_menu_fullscreen = 0;
     a.palette_mode = 0;
@@ -4157,6 +4263,9 @@ int main(void) {
                         a.show_planetarium = 0;
                         a.show_video_menu = 0;
                     }
+                } else if (ev.key.keysym.sym == SDLK_4) {
+                    a.terrain_wire_enabled = !a.terrain_wire_enabled;
+                    set_tty_message(&a, a.terrain_wire_enabled ? "terrain wire: on" : "terrain wire: off");
                 } else if (a.show_planetarium && ev.key.keysym.sym == SDLK_LEFT) {
                     const int max_idx = app_planetarium_planet_count(&a);
                     a.planetarium_selected = (a.planetarium_selected + max_idx) % (max_idx + 1);

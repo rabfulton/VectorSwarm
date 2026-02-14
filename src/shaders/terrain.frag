@@ -13,9 +13,11 @@ void main() {
     float ridge = pow(slope, 0.75);
     float depth_fade = 1.0 - clamp(v_pos.z, 0.0, 1.0) * 0.72;
 
-    float alpha = (0.06 + ridge * 0.28) * depth_fade;
-    alpha = clamp(alpha, 0.04, 0.38);
-
-    vec3 color = v_color.rgb * (0.48 + ridge * 0.52);
-    out_color = vec4(color, alpha * v_color.a);
+    vec3 debug_hue = vec3(
+        0.35 + 0.65 * ridge,
+        0.30 + 0.70 * (1.0 - clamp(v_pos.z, 0.0, 1.0)),
+        0.25 + 0.75 * (0.5 + 0.5 * n.y)
+    );
+    vec3 color = v_color.rgb * (0.42 + ridge * 0.58) * debug_hue;
+    out_color = vec4(color, 1.0);
 }
