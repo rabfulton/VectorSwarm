@@ -2776,8 +2776,8 @@ static vg_result draw_cylinder_wire(
 
 		                vg_stroke_style vh = *halo;
 		                vg_stroke_style vm = *main;
-		                vh.color = (vg_color){0.38f, 0.92f, 1.0f, 0.20f * fade};
-		                vm.color = (vg_color){0.44f, 0.97f, 1.0f, 0.58f * fade};
+		                vh.color = (vg_color){halo->color.r, halo->color.g, halo->color.b, 0.20f * fade};
+		                vm.color = (vg_color){main->color.r, main->color.g, main->color.b, 0.58f * fade};
 		                vh.intensity *= 0.42f + fade * 0.48f;
 		                vm.intensity *= 0.48f + fade * 0.56f;
 		                vg_result vr = draw_polyline_culled(ctx, loop, loop_face, WORMHOLE_VN, &vh, 1, face_cutoff);
@@ -2812,8 +2812,8 @@ static vg_result draw_cylinder_wire(
                         const float fade = 0.90f;
 		                vg_stroke_style rh = *halo;
 		                vg_stroke_style rm = *main;
-		                rh.color = (vg_color){0.38f, 0.92f, 1.0f, 0.20f * fade};
-		                rm.color = (vg_color){0.44f, 0.97f, 1.0f, 0.58f * fade};
+		                rh.color = (vg_color){halo->color.r, halo->color.g, halo->color.b, 0.20f * fade};
+		                rm.color = (vg_color){main->color.r, main->color.g, main->color.b, 0.58f * fade};
 		                rh.width_px *= 1.55f;
 		                rm.width_px *= 1.35f;
 		                rh.intensity *= 0.42f + fade * 0.48f;
@@ -2844,8 +2844,8 @@ static vg_result draw_cylinder_wire(
 
 		                vg_stroke_style vh = *halo;
 		                vg_stroke_style vm = *main;
-		                vh.color = (vg_color){0.38f, 0.92f, 1.0f, 0.20f * fade * modern_brightness};
-		                vm.color = (vg_color){0.44f, 0.97f, 1.0f, 0.58f * fade * modern_brightness};
+		                vh.color = (vg_color){halo->color.r, halo->color.g, halo->color.b, 0.20f * fade * modern_brightness};
+		                vm.color = (vg_color){main->color.r, main->color.g, main->color.b, 0.58f * fade * modern_brightness};
 		                vh.width_px *= 1.40f;
 		                vm.width_px *= 1.25f;
 		                vh.intensity *= (0.42f + fade * 0.48f) * modern_brightness;
@@ -2873,8 +2873,8 @@ static vg_result draw_cylinder_wire(
 		                const float fade = 0.90f;
 		                vg_stroke_style rh = *halo;
 		                vg_stroke_style rm = *main;
-		                rh.color = (vg_color){0.38f, 0.92f, 1.0f, 0.20f * fade * modern_brightness};
-		                rm.color = (vg_color){0.44f, 0.97f, 1.0f, 0.58f * fade * modern_brightness};
+		                rh.color = (vg_color){halo->color.r, halo->color.g, halo->color.b, 0.20f * fade * modern_brightness};
+		                rm.color = (vg_color){main->color.r, main->color.g, main->color.b, 0.58f * fade * modern_brightness};
 		                rh.width_px *= 1.40f;
 		                rm.width_px *= 1.25f;
 		                rh.intensity *= 0.42f * modern_brightness;
