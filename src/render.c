@@ -411,13 +411,13 @@ static palette_theme get_palette_theme(int mode) {
             p.thruster = (vg_color){0.75f, 0.96f, 1.0f, 0.92f};
             break;
         default: /* green */
-            p.primary = (vg_color){0.12f, 0.92f, 0.27f, 0.95f};
-            p.primary_dim = (vg_color){0.05f, 0.74f, 0.18f, 0.40f};
-            p.secondary = (vg_color){0.22f, 0.92f, 0.38f, 1.0f};
-            p.haze = (vg_color){0.01f, 0.06f, 0.025f, 0.55f};
-            p.star = (vg_color){0.19f, 0.86f, 0.30f, 1.0f};
-            p.ship = (vg_color){0.14f, 0.92f, 0.25f, 1.0f};
-            p.thruster = (vg_color){0.28f, 0.92f, 0.45f, 0.92f};
+            p.primary = (vg_color){0.08f, 0.66f, 0.18f, 0.95f};
+            p.primary_dim = (vg_color){0.03f, 0.52f, 0.12f, 0.40f};
+            p.secondary = (vg_color){0.13f, 0.66f, 0.25f, 1.0f};
+            p.haze = (vg_color){0.008f, 0.050f, 0.020f, 0.55f};
+            p.star = (vg_color){0.11f, 0.60f, 0.20f, 1.0f};
+            p.ship = (vg_color){0.09f, 0.66f, 0.17f, 1.0f};
+            p.thruster = (vg_color){0.18f, 0.66f, 0.30f, 0.92f};
             break;
     }
     return p;
