@@ -3293,6 +3293,13 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
 
     if (!foreground_only) {
         for (size_t i = 0; i < MAX_STARS; ++i) {
+            if (g->level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2 ||
+                g->level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER) {
+                /* Keep stars behind terrain band in drifter levels, independent of depth state. */
+                if (g->stars[i].y < g->world_h * 0.40f) {
+                    continue;
+                }
+            }
             const float speed_u = (g->stars[i].speed - 50.0f) / 190.0f;
             float u = speed_u;
             if (u < 0.0f) {

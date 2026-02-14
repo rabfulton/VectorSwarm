@@ -2577,6 +2577,19 @@ static void set_viewport_scissor(VkCommandBuffer cmd, uint32_t w, uint32_t h) {
     vkCmdSetScissor(cmd, 0, 1, &sc);
 }
 
+static void clear_scene_depth(VkCommandBuffer cmd, VkExtent2D extent) {
+    VkClearAttachment clear;
+    memset(&clear, 0, sizeof(clear));
+    clear.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    clear.clearValue.depthStencil.depth = 1.0f;
+    clear.clearValue.depthStencil.stencil = 0;
+    VkClearRect rect;
+    memset(&rect, 0, sizeof(rect));
+    rect.rect.extent = extent;
+    rect.layerCount = 1;
+    vkCmdClearAttachments(cmd, 1, &clear, 1, &rect);
+}
+
 static void cleanup(app* a) {
     if (a->device != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(a->device);
@@ -3968,7 +3981,9 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
                 fprintf(stderr, "VG failure: render_frame(bg) -> %s (%d)\n", vg_result_string(vr), (int)vr);
                 return 0;
             }
+            clear_scene_depth(cmd, a->swapchain_extent);
             record_gpu_high_plains_terrain(a, cmd);
+            clear_scene_depth(cmd, a->swapchain_extent);
             metrics.scene_phase = 2;
             vr = render_frame(a->vg, &a->game, &metrics);
             if (vr != VG_OK) {
