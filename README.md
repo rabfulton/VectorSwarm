@@ -6,6 +6,7 @@ VectorSwarm is an in-development side-scrolling vector space shooter written in 
 
 ![Event Horizon Level](screenshots/event_horizon.png)
 ![Enemy Radar Level](screenshots/radar.png)
+![Terrain Level](screenshots/terrain.png)
 
 ## Features
 
@@ -22,7 +23,16 @@ Coming Soon
 
 ## Build
 
-Coming Soon
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+```
+
+Run:
+
+```bash
+./build/VectorSwarm
+```
 
 ## AMA with Commander Nick
 ### What are the green squiggly lines at the bottom of the screen?

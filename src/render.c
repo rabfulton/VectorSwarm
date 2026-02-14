@@ -2956,6 +2956,7 @@ static vg_result draw_cylinder_wire(
 
 			        if (level_style == LEVEL_STYLE_EVENT_HORIZON_LEGACY) {
 		            /* Legacy cull-based wireframe (from older render.c). */
+                    const float legacy_brightness = 0.78f;
 		            for (int j = 0; j < WORMHOLE_ROWS; ++j) {
 		                const float fade = wh.row_fade[j];
                         const int is_top = (j >= (WORMHOLE_ROWS / 2));
@@ -2984,10 +2985,10 @@ static vg_result draw_cylinder_wire(
 
 		                vg_stroke_style vh = *halo;
 		                vg_stroke_style vm = *main;
-		                vh.color = (vg_color){halo->color.r, halo->color.g, halo->color.b, 0.20f * fade};
-		                vm.color = (vg_color){main->color.r, main->color.g, main->color.b, 0.58f * fade};
-		                vh.intensity *= 0.42f + fade * 0.48f;
-		                vm.intensity *= 0.48f + fade * 0.56f;
+		                vh.color = (vg_color){halo->color.r, halo->color.g, halo->color.b, 0.20f * fade * legacy_brightness};
+		                vm.color = (vg_color){main->color.r, main->color.g, main->color.b, 0.58f * fade * legacy_brightness};
+		                vh.intensity *= (0.42f + fade * 0.48f) * legacy_brightness;
+		                vm.intensity *= (0.48f + fade * 0.56f) * legacy_brightness;
 		                vg_result vr = draw_polyline_culled(ctx, loop, loop_face, WORMHOLE_VN, &vh, 1, face_cutoff);
 		                if (vr != VG_OK) {
 		                    return vr;
@@ -3020,12 +3021,12 @@ static vg_result draw_cylinder_wire(
                         const float fade = 0.90f;
 		                vg_stroke_style rh = *halo;
 		                vg_stroke_style rm = *main;
-		                rh.color = (vg_color){halo->color.r, halo->color.g, halo->color.b, 0.20f * fade};
-		                rm.color = (vg_color){main->color.r, main->color.g, main->color.b, 0.58f * fade};
+		                rh.color = (vg_color){halo->color.r, halo->color.g, halo->color.b, 0.20f * fade * legacy_brightness};
+		                rm.color = (vg_color){main->color.r, main->color.g, main->color.b, 0.58f * fade * legacy_brightness};
 		                rh.width_px *= 1.55f;
 		                rm.width_px *= 1.35f;
-		                rh.intensity *= 0.42f + fade * 0.48f;
-		                rm.intensity *= 0.48f + fade * 0.56f;
+		                rh.intensity *= (0.42f + fade * 0.48f) * legacy_brightness;
+		                rm.intensity *= (0.48f + fade * 0.56f) * legacy_brightness;
 		                vg_result vr = draw_polyline_culled(ctx, rail, rail_face, WORMHOLE_ROWS, &rh, 0, 0.02f);
 		                if (vr != VG_OK) {
 		                    return vr;
