@@ -51,6 +51,8 @@
 #include "particle_vert_spv.h"
 #include "particle_frag_spv.h"
 #include "particle_bloom_frag_spv.h"
+#include "wormhole_line_vert_spv.h"
+#include "wormhole_line_frag_spv.h"
 #endif
 
 #define APP_WIDTH 1280
@@ -130,6 +132,12 @@ typedef struct particle_instance {
 typedef struct particle_pc {
     float params[4]; /* x=viewport_width, y=viewport_height, z=core_gain, w=trail_gain */
 } particle_pc;
+
+typedef struct wormhole_line_pc {
+    float params[4]; /* x=viewport_width, y=viewport_height, z=intensity */
+    float color[4];
+    float offset[4]; /* x=offset_px_x, y=offset_px_y */
+} wormhole_line_pc;
 
 typedef struct terrain_tuning {
     float hue_shift;
@@ -250,6 +258,13 @@ typedef struct app {
     VkPipelineLayout particle_layout;
     VkPipeline particle_pipeline;
     VkPipeline particle_bloom_pipeline;
+    VkPipelineLayout wormhole_line_layout;
+    VkPipeline wormhole_line_pipeline;
+    VkBuffer wormhole_line_vertex_buffer;
+    VkDeviceMemory wormhole_line_vertex_memory;
+    void* wormhole_line_vertex_map;
+    uint32_t wormhole_line_vertex_count;
+    int use_gpu_wormhole;
     VkBuffer particle_instance_buffer;
     VkDeviceMemory particle_instance_memory;
     void* particle_instance_map;
@@ -726,6 +741,7 @@ static int resolution_index_from_wh(int w, int h) {
 }
 
 static void map_mouse_to_scene_coords(const app* a, int mouse_x, int mouse_y, float* out_x, float* out_y);
+static float drawable_scale_y(const app* a);
 
 static float norm_range(float v, float lo, float hi) {
     if (hi <= lo) {
@@ -1025,6 +1041,26 @@ static void map_mouse_to_scene_coords(const app* a, int mouse_x, int mouse_y, fl
     *out_y = y;
 }
 
+static float drawable_scale_y(const app* a) {
+    if (!a || !a->window) {
+        return 1.0f;
+    }
+    int win_w = 0;
+    int win_h = 0;
+    SDL_GetWindowSize(a->window, &win_w, &win_h);
+    if (win_h <= 0) {
+        return 1.0f;
+    }
+    int draw_w = 0;
+    int draw_h = 0;
+    SDL_Vulkan_GetDrawableSize(a->window, &draw_w, &draw_h);
+    if (draw_h <= 0) {
+        draw_h = (int)a->swapchain_extent.height;
+    }
+    const float s = (float)draw_h / (float)win_h;
+    return clampf(s, 1.0f, 3.0f);
+}
+
 static void set_tty_message(app* a, const char* msg) {
     if (!a || !msg) {
         return;
@@ -1138,6 +1174,7 @@ static int create_sync(app* a);
 static int create_post_resources(app* a);
 static int create_terrain_resources(app* a);
 static int create_particle_resources(app* a);
+static int create_wormhole_resources(app* a);
 static int create_vg_context(app* a);
 static void set_tty_message(app* a, const char* msg);
 static void update_gpu_high_plains_vertices(app* a);
@@ -1145,6 +1182,7 @@ static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd);
 static void update_gpu_particle_instances(app* a);
 static void record_gpu_particles(app* a, VkCommandBuffer cmd);
 static void record_gpu_particles_bloom(app* a, VkCommandBuffer cmd);
+static void record_gpu_wormhole(app* a, VkCommandBuffer cmd);
 static void reset_terrain_tuning(app* a);
 static void sync_terrain_tuning_text(app* a);
 static int handle_terrain_tuning_key(app* a, SDL_Keycode key);
@@ -2886,9 +2924,11 @@ static void cleanup(app* a) {
     if (a->terrain_line_pipeline) vkDestroyPipeline(a->device, a->terrain_line_pipeline, NULL);
     if (a->particle_pipeline) vkDestroyPipeline(a->device, a->particle_pipeline, NULL);
     if (a->particle_bloom_pipeline) vkDestroyPipeline(a->device, a->particle_bloom_pipeline, NULL);
+    if (a->wormhole_line_pipeline) vkDestroyPipeline(a->device, a->wormhole_line_pipeline, NULL);
     if (a->post_layout) vkDestroyPipelineLayout(a->device, a->post_layout, NULL);
     if (a->terrain_layout) vkDestroyPipelineLayout(a->device, a->terrain_layout, NULL);
     if (a->particle_layout) vkDestroyPipelineLayout(a->device, a->particle_layout, NULL);
+    if (a->wormhole_line_layout) vkDestroyPipelineLayout(a->device, a->wormhole_line_layout, NULL);
     if (a->post_desc_pool) vkDestroyDescriptorPool(a->device, a->post_desc_pool, NULL);
     if (a->post_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->post_desc_layout, NULL);
     if (a->post_sampler) vkDestroySampler(a->device, a->post_sampler, NULL);
@@ -2922,11 +2962,17 @@ static void cleanup(app* a) {
         vkUnmapMemory(a->device, a->particle_instance_memory);
         a->particle_instance_map = NULL;
     }
+    if (a->wormhole_line_vertex_map && a->wormhole_line_vertex_memory) {
+        vkUnmapMemory(a->device, a->wormhole_line_vertex_memory);
+        a->wormhole_line_vertex_map = NULL;
+    }
     if (a->particle_instance_buffer) vkDestroyBuffer(a->device, a->particle_instance_buffer, NULL);
+    if (a->wormhole_line_vertex_buffer) vkDestroyBuffer(a->device, a->wormhole_line_vertex_buffer, NULL);
     if (a->terrain_vertex_memory) vkFreeMemory(a->device, a->terrain_vertex_memory, NULL);
     if (a->terrain_tri_index_memory) vkFreeMemory(a->device, a->terrain_tri_index_memory, NULL);
     if (a->terrain_wire_vertex_memory) vkFreeMemory(a->device, a->terrain_wire_vertex_memory, NULL);
     if (a->particle_instance_memory) vkFreeMemory(a->device, a->particle_instance_memory, NULL);
+    if (a->wormhole_line_vertex_memory) vkFreeMemory(a->device, a->wormhole_line_vertex_memory, NULL);
 
     for (uint32_t i = 0; i < a->swapchain_image_count; ++i) {
         if (a->present_framebuffers[i]) vkDestroyFramebuffer(a->device, a->present_framebuffers[i], NULL);
@@ -2994,6 +3040,10 @@ static void destroy_render_runtime(app* a) {
         vkDestroyPipeline(a->device, a->particle_bloom_pipeline, NULL);
         a->particle_bloom_pipeline = VK_NULL_HANDLE;
     }
+    if (a->wormhole_line_pipeline) {
+        vkDestroyPipeline(a->device, a->wormhole_line_pipeline, NULL);
+        a->wormhole_line_pipeline = VK_NULL_HANDLE;
+    }
     if (a->post_layout) {
         vkDestroyPipelineLayout(a->device, a->post_layout, NULL);
         a->post_layout = VK_NULL_HANDLE;
@@ -3005,6 +3055,10 @@ static void destroy_render_runtime(app* a) {
     if (a->particle_layout) {
         vkDestroyPipelineLayout(a->device, a->particle_layout, NULL);
         a->particle_layout = VK_NULL_HANDLE;
+    }
+    if (a->wormhole_line_layout) {
+        vkDestroyPipelineLayout(a->device, a->wormhole_line_layout, NULL);
+        a->wormhole_line_layout = VK_NULL_HANDLE;
     }
     if (a->post_desc_pool) {
         vkDestroyDescriptorPool(a->device, a->post_desc_pool, NULL);
@@ -3098,9 +3152,17 @@ static void destroy_render_runtime(app* a) {
         vkUnmapMemory(a->device, a->particle_instance_memory);
         a->particle_instance_map = NULL;
     }
+    if (a->wormhole_line_vertex_map && a->wormhole_line_vertex_memory) {
+        vkUnmapMemory(a->device, a->wormhole_line_vertex_memory);
+        a->wormhole_line_vertex_map = NULL;
+    }
     if (a->particle_instance_buffer) {
         vkDestroyBuffer(a->device, a->particle_instance_buffer, NULL);
         a->particle_instance_buffer = VK_NULL_HANDLE;
+    }
+    if (a->wormhole_line_vertex_buffer) {
+        vkDestroyBuffer(a->device, a->wormhole_line_vertex_buffer, NULL);
+        a->wormhole_line_vertex_buffer = VK_NULL_HANDLE;
     }
     if (a->terrain_vertex_memory) {
         vkFreeMemory(a->device, a->terrain_vertex_memory, NULL);
@@ -3117,6 +3179,10 @@ static void destroy_render_runtime(app* a) {
     if (a->particle_instance_memory) {
         vkFreeMemory(a->device, a->particle_instance_memory, NULL);
         a->particle_instance_memory = VK_NULL_HANDLE;
+    }
+    if (a->wormhole_line_vertex_memory) {
+        vkFreeMemory(a->device, a->wormhole_line_vertex_memory, NULL);
+        a->wormhole_line_vertex_memory = VK_NULL_HANDLE;
     }
     for (uint32_t i = 0; i < APP_MAX_SWAPCHAIN_IMAGES; ++i) {
         if (a->present_framebuffers[i]) {
@@ -3185,6 +3251,7 @@ static int recreate_render_runtime(app* a) {
         !create_post_resources(a) ||
         !create_terrain_resources(a) ||
         !create_particle_resources(a) ||
+        !create_wormhole_resources(a) ||
         !create_vg_context(a)) {
         return 0;
     }
@@ -4116,7 +4183,7 @@ static int create_particle_resources(app* a) {
     VkPipelineRasterizationStateCreateInfo rs = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
         .polygonMode = VK_POLYGON_MODE_FILL,
-        .lineWidth = 1.0f,
+        .lineWidth = 2.2f,
         .cullMode = VK_CULL_MODE_NONE,
         .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE
     };
@@ -4178,6 +4245,156 @@ static int create_particle_resources(app* a) {
         return 0;
     }
     vkDestroyShaderModule(a->device, fs_bloom, NULL);
+    vkDestroyShaderModule(a->device, fs, NULL);
+    vkDestroyShaderModule(a->device, vs, NULL);
+    return 1;
+#endif
+}
+
+static void update_gpu_wormhole_vertices(app* a) {
+    if (!a || !a->wormhole_line_vertex_map) {
+        return;
+    }
+    wormhole_line_vertex* out = (wormhole_line_vertex*)a->wormhole_line_vertex_map;
+    const size_t n = render_build_event_horizon_gpu_lines(&a->game, out, (size_t)WORMHOLE_GPU_MAX_VERTS);
+    a->wormhole_line_vertex_count = (uint32_t)((n > (size_t)UINT32_MAX) ? (size_t)UINT32_MAX : n);
+}
+
+static int create_wormhole_resources(app* a) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    return 1;
+#else
+    if (!a) {
+        return 0;
+    }
+    const VkDeviceSize vbuf_size = (VkDeviceSize)WORMHOLE_GPU_MAX_VERTS * sizeof(wormhole_line_vertex);
+    if (!create_buffer(
+            a, vbuf_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &a->wormhole_line_vertex_buffer, &a->wormhole_line_vertex_memory)) {
+        return 0;
+    }
+    if (!check_vk(vkMapMemory(a->device, a->wormhole_line_vertex_memory, 0, vbuf_size, 0, &a->wormhole_line_vertex_map), "vkMapMemory(wormhole lines)")) {
+        return 0;
+    }
+    a->wormhole_line_vertex_count = 0u;
+
+    VkPushConstantRange pc = {
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        .offset = 0,
+        .size = sizeof(wormhole_line_pc)
+    };
+    VkPipelineLayoutCreateInfo pli = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &pc
+    };
+    if (!check_vk(vkCreatePipelineLayout(a->device, &pli, NULL, &a->wormhole_line_layout), "vkCreatePipelineLayout(wormhole line)")) {
+        return 0;
+    }
+
+    VkShaderModuleCreateInfo vs_ci = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = v_type_wormhole_line_vert_spv_len,
+        .pCode = (const uint32_t*)v_type_wormhole_line_vert_spv
+    };
+    VkShaderModuleCreateInfo fs_ci = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = v_type_wormhole_line_frag_spv_len,
+        .pCode = (const uint32_t*)v_type_wormhole_line_frag_spv
+    };
+    VkShaderModule vs = VK_NULL_HANDLE;
+    VkShaderModule fs = VK_NULL_HANDLE;
+    if (!check_vk(vkCreateShaderModule(a->device, &vs_ci, NULL, &vs), "vkCreateShaderModule(wormhole line vs)")) {
+        return 0;
+    }
+    if (!check_vk(vkCreateShaderModule(a->device, &fs_ci, NULL, &fs), "vkCreateShaderModule(wormhole line fs)")) {
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+    VkPipelineShaderStageCreateInfo stages[2] = {
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vs, .pName = "main"},
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = fs, .pName = "main"}
+    };
+    VkVertexInputBindingDescription binding = {
+        .binding = 0,
+        .stride = sizeof(wormhole_line_vertex),
+        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX
+    };
+    VkVertexInputAttributeDescription attr[2];
+    memset(attr, 0, sizeof(attr));
+    attr[0].location = 0;
+    attr[0].binding = 0;
+    attr[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attr[0].offset = 0;
+    attr[1].location = 1;
+    attr[1].binding = 0;
+    attr[1].format = VK_FORMAT_R32_SFLOAT;
+    attr[1].offset = sizeof(float) * 3;
+    VkPipelineVertexInputStateCreateInfo vi = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .vertexBindingDescriptionCount = 1,
+        .pVertexBindingDescriptions = &binding,
+        .vertexAttributeDescriptionCount = 2,
+        .pVertexAttributeDescriptions = attr
+    };
+    VkPipelineInputAssemblyStateCreateInfo ia = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST
+    };
+    VkPipelineViewportStateCreateInfo vp = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .scissorCount = 1};
+    const float dpi_scale = drawable_scale_y(a);
+    VkPipelineRasterizationStateCreateInfo rs = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .lineWidth = 2.2f * dpi_scale,
+        .cullMode = VK_CULL_MODE_NONE,
+        .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE
+    };
+    VkPipelineMultisampleStateCreateInfo ms = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .rasterizationSamples = scene_samples(a)};
+    VkPipelineColorBlendAttachmentState cb_att = {
+        .blendEnable = VK_TRUE,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .colorBlendOp = VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .alphaBlendOp = VK_BLEND_OP_ADD,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
+    };
+    VkPipelineColorBlendStateCreateInfo cb = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1, .pAttachments = &cb_att};
+    VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo ds = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .dynamicStateCount = 2, .pDynamicStates = dyn};
+    VkPipelineDepthStencilStateCreateInfo depth = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .depthTestEnable = VK_FALSE,
+        .depthWriteEnable = VK_FALSE,
+        .depthCompareOp = VK_COMPARE_OP_ALWAYS
+    };
+    VkGraphicsPipelineCreateInfo gp = {
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .stageCount = 2,
+        .pStages = stages,
+        .pVertexInputState = &vi,
+        .pInputAssemblyState = &ia,
+        .pViewportState = &vp,
+        .pRasterizationState = &rs,
+        .pMultisampleState = &ms,
+        .pDepthStencilState = &depth,
+        .pColorBlendState = &cb,
+        .pDynamicState = &ds,
+        .layout = a->wormhole_line_layout,
+        .renderPass = a->scene_render_pass,
+        .subpass = 0
+    };
+    if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->wormhole_line_pipeline), "vkCreateGraphicsPipelines(wormhole line)")) {
+        vkDestroyShaderModule(a->device, fs, NULL);
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+
     vkDestroyShaderModule(a->device, fs, NULL);
     vkDestroyShaderModule(a->device, vs, NULL);
     return 1;
@@ -4469,6 +4686,76 @@ static void record_gpu_particles_bloom(app* a, VkCommandBuffer cmd) {
 #endif
 }
 
+static void record_gpu_wormhole(app* a, VkCommandBuffer cmd) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    (void)cmd;
+#else
+    if (!a || !cmd || !a->use_gpu_wormhole ||
+        a->game.level_style != LEVEL_STYLE_EVENT_HORIZON ||
+        !a->wormhole_line_pipeline || !a->wormhole_line_vertex_buffer) {
+        return;
+    }
+    update_gpu_wormhole_vertices(a);
+    if (a->wormhole_line_vertex_count < 2u) {
+        return;
+    }
+    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    VkDeviceSize off = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &a->wormhole_line_vertex_buffer, &off);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->wormhole_line_pipeline);
+
+    wormhole_line_pc pc;
+    memset(&pc, 0, sizeof(pc));
+    pc.params[0] = (float)a->swapchain_extent.width;
+    pc.params[1] = (float)a->swapchain_extent.height;
+    float primary[3];
+    float primary_dim[3];
+    if (a->palette_mode == 1) {
+        primary[0] = 1.00f; primary[1] = 0.68f; primary[2] = 0.24f;
+        primary_dim[0] = 0.85f; primary_dim[1] = 0.52f; primary_dim[2] = 0.16f;
+    } else if (a->palette_mode == 2) {
+        primary[0] = 0.40f; primary[1] = 0.95f; primary[2] = 1.00f;
+        primary_dim[0] = 0.26f; primary_dim[1] = 0.72f; primary_dim[2] = 0.92f;
+    } else {
+        primary[0] = 0.08f; primary[1] = 0.66f; primary[2] = 0.18f;
+        primary_dim[0] = 0.03f; primary_dim[1] = 0.52f; primary_dim[2] = 0.12f;
+    }
+
+    const float dpi_scale = drawable_scale_y(a);
+    const float px = 0.55f * dpi_scale;
+    static const float taps[5][2] = {
+        {0.0f, 0.0f},
+        {1.0f, 0.0f},
+        {-1.0f, 0.0f},
+        {0.0f, 1.0f},
+        {0.0f, -1.0f}
+    };
+
+    pc.color[0] = primary_dim[0];
+    pc.color[1] = primary_dim[1];
+    pc.color[2] = primary_dim[2];
+    pc.params[2] = 0.72f;
+    pc.color[3] = 0.26f;
+    for (int i = 0; i < 5; ++i) {
+        pc.offset[0] = taps[i][0] * px;
+        pc.offset[1] = taps[i][1] * px;
+        vkCmdPushConstants(cmd, a->wormhole_line_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+        vkCmdDraw(cmd, a->wormhole_line_vertex_count, 1, 0, 0);
+    }
+
+    pc.color[0] = primary[0];
+    pc.color[1] = primary[1];
+    pc.color[2] = primary[2];
+    pc.params[2] = 0.90f;
+    pc.color[3] = 0.74f;
+    pc.offset[0] = 0.0f;
+    pc.offset[1] = 0.0f;
+    vkCmdPushConstants(cmd, a->wormhole_line_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cmd, a->wormhole_line_vertex_count, 1, 0, 0);
+#endif
+}
+
 static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd) {
     const int enable_gpu_terrain = 1;
     if (!enable_gpu_terrain) {
@@ -4609,6 +4896,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
                 ? a->terrain_tuning_text : NULL),
         .use_gpu_particles = 0,
         .use_gpu_terrain = 0,
+        .use_gpu_wormhole = 0,
         .scene_phase = 0
     };
     {
@@ -4664,9 +4952,13 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         const int use_gpu_terrain =
             (a->game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2 ||
              a->game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER);
+        const int use_gpu_wormhole =
+            a->use_gpu_wormhole &&
+            (a->game.level_style == LEVEL_STYLE_EVENT_HORIZON);
         if (split_scene) {
             metrics.use_gpu_particles = 1;
             metrics.use_gpu_terrain = use_gpu_terrain ? 1 : 0;
+            metrics.use_gpu_wormhole = use_gpu_wormhole ? 1 : 0;
 
             metrics.scene_phase = 1; /* background-only */
             vr = render_frame(a->vg, &a->game, &metrics);
@@ -4677,6 +4969,9 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             if (use_gpu_terrain) {
                 record_gpu_high_plains_terrain(a, cmd);
                 clear_scene_depth(cmd, a->swapchain_extent);
+            }
+            if (use_gpu_wormhole) {
+                record_gpu_wormhole(a, cmd);
             }
             record_gpu_particles(a, cmd);
 
@@ -4809,6 +5104,7 @@ int main(void) {
     a.particle_tuning_enabled = env_flag_enabled("VTYPE_PARTICLE_TRACE");
     a.particle_tuning_show = 1;
     a.particle_bloom_enabled = 1;
+    a.use_gpu_wormhole = 1;
     reset_terrain_tuning(&a);
     sync_terrain_tuning_text(&a);
     reset_particle_tuning(&a);
@@ -4885,6 +5181,7 @@ int main(void) {
         !create_post_resources(&a) ||
         !create_terrain_resources(&a) ||
         !create_particle_resources(&a) ||
+        !create_wormhole_resources(&a) ||
         !create_vg_context(&a)) {
         cleanup(&a);
         return 1;

@@ -4,6 +4,7 @@
 #include "game.h"
 #include "planetarium/planetarium_types.h"
 #include "vg.h"
+#include <stddef.h>
 #include <stdint.h>
 
 #define ACOUSTICS_SLIDER_COUNT 14
@@ -12,6 +13,7 @@
 #define ACOUSTICS_SLOT_COUNT 5
 #define VIDEO_MENU_RES_COUNT 6
 #define VIDEO_MENU_DIAL_COUNT 12
+#define WORMHOLE_GPU_MAX_VERTS 5136u
 
 #define CRT_RANGE_BLOOM_STRENGTH_MIN 0.0f
 #define CRT_RANGE_BLOOM_STRENGTH_MAX 1.8f
@@ -85,8 +87,18 @@ typedef struct render_metrics {
     const char* terrain_tuning_text;
     int use_gpu_terrain;
     int use_gpu_particles;
+    int use_gpu_wormhole;
     int scene_phase; /* 0=full, 1=background-only, 2=foreground-only, 3=overlay-no-clear */
 } render_metrics;
+
+typedef struct wormhole_line_vertex {
+    float x;
+    float y;
+    float z;
+    float fade;
+} wormhole_line_vertex;
+
+size_t render_build_event_horizon_gpu_lines(const game_state* g, wormhole_line_vertex* out, size_t out_cap);
 
 vg_result render_frame(vg_context* ctx, const game_state* g, const render_metrics* metrics);
 

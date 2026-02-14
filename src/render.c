@@ -40,6 +40,12 @@ typedef struct wormhole_cache {
     float row_fade[WORMHOLE_ROWS];
 } wormhole_cache;
 
+static float repeatf(float v, float period);
+static int wrapi(int i, int n);
+static float lerpf(float a, float b, float t);
+static float cylinder_period(const game_state* g);
+static vg_vec2 project_cylinder_point(const game_state* g, float x, float y, float* depth01);
+
 static vg_stroke_style make_stroke(float width, float intensity, vg_color color, vg_blend_mode blend) {
     vg_stroke_style s;
     s.width_px = width;
@@ -291,6 +297,84 @@ static void wormhole_cache_ensure(wormhole_cache* c, float world_w, float world_
     if (!c->valid || fabsf(c->world_w - world_w) > 1e-3f || fabsf(c->world_h - world_h) > 1e-3f) {
         wormhole_cache_build(c, world_w, world_h);
     }
+}
+
+static size_t wormhole_emit_segment(
+    wormhole_line_vertex* out,
+    size_t out_cap,
+    size_t count,
+    float ax,
+    float ay,
+    float bx,
+    float by,
+    float fade
+) {
+    if (!out || count + 2u > out_cap) {
+        return count;
+    }
+    out[count + 0u] = (wormhole_line_vertex){ax, ay, 0.0f, fade};
+    out[count + 1u] = (wormhole_line_vertex){bx, by, 0.0f, fade};
+    return count + 2u;
+}
+
+size_t render_build_event_horizon_gpu_lines(const game_state* g, wormhole_line_vertex* out, size_t out_cap) {
+    if (!g || !out || out_cap == 0u) {
+        return 0u;
+    }
+    if (g->level_style != LEVEL_STYLE_EVENT_HORIZON) {
+        return 0u;
+    }
+
+    static wormhole_cache wh;
+    wormhole_cache_ensure(&wh, g->world_w, g->world_h);
+
+    const float period = cylinder_period(g);
+    const vg_vec2 vc = project_cylinder_point(g, g->camera_x, g->world_h * 0.50f, NULL);
+    const float cx = vc.x;
+    const float cy = vc.y;
+    const float phase_turns = repeatf((-1.0f) * g->player.b.x / fmaxf(period * 0.85f, 1.0f), 1.0f);
+    const float loop_shift_modern = phase_turns * (float)WORMHOLE_VN;
+    const float rail_shift = phase_turns * (float)WORMHOLE_COLS;
+
+    size_t count = 0u;
+    for (int j = 0; j < WORMHOLE_ROWS; ++j) {
+        const float fade = wh.row_fade[j];
+        vg_vec2 loop[WORMHOLE_VN];
+        for (int i = 0; i < WORMHOLE_VN; ++i) {
+            const float u = (float)i + loop_shift_modern;
+            const int i0 = wrapi((int)floorf(u), WORMHOLE_VN);
+            const int i1 = wrapi(i0 + 1, WORMHOLE_VN);
+            const float t = u - floorf(u);
+            loop[i].x = cx + lerpf(wh.loop_rel_modern[j][i0].x, wh.loop_rel_modern[j][i1].x, t);
+            loop[i].y = cy + lerpf(wh.loop_rel_modern[j][i0].y, wh.loop_rel_modern[j][i1].y, t);
+        }
+        for (int i = 0; i < WORMHOLE_VN; ++i) {
+            const int i1 = wrapi(i + 1, WORMHOLE_VN);
+            count = wormhole_emit_segment(out, out_cap, count, loop[i].x, loop[i].y, loop[i1].x, loop[i1].y, fade);
+            if (count + 1u >= out_cap) {
+                return count;
+            }
+        }
+    }
+
+    for (int c = 0; c < WORMHOLE_COLS; ++c) {
+        const float cu = (float)c + rail_shift;
+        const int c0 = wrapi((int)floorf(cu), WORMHOLE_COLS);
+        const int c1 = wrapi(c0 + 1, WORMHOLE_COLS);
+        const float ct = cu - floorf(cu);
+        vg_vec2 rail[WORMHOLE_ROWS];
+        for (int j = 0; j < WORMHOLE_ROWS; ++j) {
+            rail[j].x = cx + lerpf(wh.rail_rel_modern[c0][j].x, wh.rail_rel_modern[c1][j].x, ct);
+            rail[j].y = cy + lerpf(wh.rail_rel_modern[c0][j].y, wh.rail_rel_modern[c1][j].y, ct);
+        }
+        for (int j = 0; j + 1 < WORMHOLE_ROWS; ++j) {
+            count = wormhole_emit_segment(out, out_cap, count, rail[j].x, rail[j].y, rail[j + 1].x, rail[j + 1].y, 0.90f);
+            if (count + 1u >= out_cap) {
+                return count;
+            }
+        }
+    }
+    return count;
 }
 
 static float repeatf(float v, float period) {
@@ -3194,9 +3278,11 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             vg_stroke_style cyl_main = land_main;
             cyl_halo.intensity *= 1.15f;
             cyl_main.intensity *= 1.20f;
-            r = draw_cylinder_wire(ctx, g, &cyl_halo, &cyl_main, g->level_style);
-            if (r != VG_OK) {
-                return r;
+            if (!(metrics->use_gpu_wormhole && g->level_style == LEVEL_STYLE_EVENT_HORIZON)) {
+                r = draw_cylinder_wire(ctx, g, &cyl_halo, &cyl_main, g->level_style);
+                if (r != VG_OK) {
+                    return r;
+                }
             }
 
             for (size_t i = 0; i < MAX_STARS; ++i) {
