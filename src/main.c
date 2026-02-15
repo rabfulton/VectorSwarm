@@ -270,6 +270,8 @@ typedef struct app {
     void* wormhole_line_vertex_map;
     uint32_t wormhole_line_vertex_count;
     int use_gpu_wormhole;
+    int use_gpu_particles;
+    int disable_scene_split;
     VkBuffer particle_instance_buffer;
     VkDeviceMemory particle_instance_memory;
     void* particle_instance_map;
@@ -5044,7 +5046,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         metrics.acoustics_scope[i] = a->scope_window[i];
     }
     {
-        const int split_scene =
+        const int in_gameplay_scene =
             !a->show_acoustics &&
             !a->show_video_menu &&
             !a->show_planetarium;
@@ -5054,8 +5056,34 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         const int use_gpu_wormhole =
             a->use_gpu_wormhole &&
             (a->game.level_style == LEVEL_STYLE_EVENT_HORIZON);
-        if (split_scene) {
-            metrics.use_gpu_particles = 1;
+        const int use_gpu_particles = a->use_gpu_particles;
+        const int need_mid_scene_gpu = (use_gpu_terrain || use_gpu_wormhole);
+        const int split_scene =
+            in_gameplay_scene &&
+            (need_mid_scene_gpu || (use_gpu_particles && !a->disable_scene_split));
+        if (in_gameplay_scene && use_gpu_terrain) {
+            /* IMPORTANT: high-plains terrain flickers with split scene phases
+               (background-only + foreground-only). Keep this known-stable order:
+               clear -> terrain -> clear depth -> overlay-no-clear scene.
+               If changing this path, re-validate HIGH_PLAINS_DRIFTER and
+               HIGH_PLAINS_DRIFTER_2 for frame-to-frame brightness flicker. */
+            metrics.use_gpu_particles = use_gpu_particles ? 1 : 0;
+            metrics.use_gpu_terrain = 1;
+            metrics.use_gpu_wormhole = 0;
+            clear_scene_color_depth(cmd, a->swapchain_extent);
+            record_gpu_high_plains_terrain(a, cmd);
+            clear_scene_depth(cmd, a->swapchain_extent);
+            metrics.scene_phase = 3; /* overlay-no-clear */
+            vr = render_frame(a->vg, &a->game, &metrics);
+            if (vr != VG_OK) {
+                fprintf(stderr, "VG failure: render_frame(overlay) -> %s (%d)\n", vg_result_string(vr), (int)vr);
+                return 0;
+            }
+            if (use_gpu_particles) {
+                record_gpu_particles(a, cmd);
+            }
+        } else if (split_scene) {
+            metrics.use_gpu_particles = use_gpu_particles ? 1 : 0;
             metrics.use_gpu_terrain = use_gpu_terrain ? 1 : 0;
             metrics.use_gpu_wormhole = use_gpu_wormhole ? 1 : 0;
 
@@ -5072,7 +5100,6 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             if (use_gpu_wormhole) {
                 record_gpu_wormhole(a, cmd);
             }
-            record_gpu_particles(a, cmd);
 
             metrics.scene_phase = 2; /* foreground-only */
             vr = render_frame(a->vg, &a->game, &metrics);
@@ -5080,12 +5107,21 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
                 fprintf(stderr, "VG failure: render_frame(foreground) -> %s (%d)\n", vg_result_string(vr), (int)vr);
                 return 0;
             }
+            if (use_gpu_particles) {
+                record_gpu_particles(a, cmd);
+            }
         } else {
+            metrics.use_gpu_particles = use_gpu_particles ? 1 : 0;
+            metrics.use_gpu_terrain = 0;
+            metrics.use_gpu_wormhole = 0;
             metrics.scene_phase = 0;
             vr = render_frame(a->vg, &a->game, &metrics);
             if (vr != VG_OK) {
                 fprintf(stderr, "VG failure: render_frame -> %s (%d)\n", vg_result_string(vr), (int)vr);
                 return 0;
+            }
+            if (use_gpu_particles) {
+                record_gpu_particles(a, cmd);
             }
         }
     }
@@ -5204,6 +5240,8 @@ int main(void) {
     a.particle_tuning_show = 1;
     a.particle_bloom_enabled = 1;
     a.use_gpu_wormhole = 1;
+    a.use_gpu_particles = !env_flag_enabled("VTYPE_DISABLE_GPU_PARTICLES");
+    a.disable_scene_split = env_flag_enabled("VTYPE_DISABLE_SCENE_SPLIT");
     reset_terrain_tuning(&a);
     sync_terrain_tuning_text(&a);
     reset_particle_tuning(&a);
