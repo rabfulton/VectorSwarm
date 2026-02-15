@@ -9,6 +9,7 @@
 #define MAX_ENEMIES 64
 #define MAX_PARTICLES 1024
 #define MAX_AUDIO_EVENTS 64
+#define MAX_SEARCHLIGHTS 4
 
 enum level_style_id {
     LEVEL_STYLE_DEFENDER = 0,
@@ -83,6 +84,24 @@ typedef struct enemy_bullet {
     float radius;
 } enemy_bullet;
 
+typedef struct searchlight {
+    int active;
+    float origin_x;
+    float origin_y;
+    float length;
+    float half_angle_rad;
+    float sweep_center_rad;
+    float sweep_amplitude_rad;
+    float sweep_speed;
+    float sweep_phase;
+    float pendulum_bias;
+    float clear_grace_s;
+    float damage_interval_s;
+    float damage_timer_s;
+    float alert_timer_s;
+    float current_angle_rad;
+} searchlight;
+
 typedef enum game_audio_event_type {
     GAME_AUDIO_EVENT_ENEMY_FIRE = 1,
     GAME_AUDIO_EVENT_EXPLOSION = 2
@@ -156,9 +175,12 @@ typedef struct game_state {
     enemy enemies[MAX_ENEMIES];
     particle particles[MAX_PARTICLES];
     game_audio_event audio_events[MAX_AUDIO_EVENTS];
+    searchlight searchlights[MAX_SEARCHLIGHTS];
+    int searchlight_count;
 } game_state;
 
 void game_init(game_state* g, float world_w, float world_h);
+void game_set_world_size(game_state* g, float world_w, float world_h);
 void game_update(game_state* g, float dt, const game_input* in);
 void game_cycle_level(game_state* g);
 int game_enemy_count(const game_state* g);

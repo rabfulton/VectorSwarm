@@ -3286,8 +3286,7 @@ static int recreate_render_runtime(app* a) {
     if (have_crt) {
         vg_set_crt_profile(a->vg, &saved_crt);
     }
-    a->game.world_w = (float)a->swapchain_extent.width;
-    a->game.world_h = (float)a->swapchain_extent.height;
+    game_set_world_size(&a->game, (float)a->swapchain_extent.width, (float)a->swapchain_extent.height);
     a->force_clear_frames = 2;
     return 1;
 }

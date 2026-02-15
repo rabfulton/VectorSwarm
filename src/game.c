@@ -69,6 +69,10 @@ typedef struct enemy_combat_config {
     float spread_scale_end;
 } enemy_combat_config;
 
+typedef struct searchlight_combat_config {
+    float severe_damage_interval_s;
+} searchlight_combat_config;
+
 static float frand01(void) {
     return (float)rand() / (float)RAND_MAX;
 }
@@ -152,10 +156,136 @@ static const enemy_combat_config k_enemy_combat_config = {
     .spread_scale_end = 0.70f
 };
 
+static const searchlight_combat_config k_searchlight_combat_config = {
+    .severe_damage_interval_s = 0.58f
+};
+
+static float gameplay_ui_scale(const game_state* g);
+static void apply_player_hit(game_state* g, float impact_x, float impact_y, float impact_vx, float impact_vy);
+
 static float dist_sq(float ax, float ay, float bx, float by) {
     const float dx = ax - bx;
     const float dy = ay - by;
     return dx * dx + dy * dy;
+}
+
+static float cross2(float ax, float ay, float bx, float by, float px, float py) {
+    return (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+}
+
+static int point_in_triangle(float px, float py, float ax, float ay, float bx, float by, float cx, float cy) {
+    const float c0 = cross2(ax, ay, bx, by, px, py);
+    const float c1 = cross2(bx, by, cx, cy, px, py);
+    const float c2 = cross2(cx, cy, ax, ay, px, py);
+    const int has_neg = (c0 < 0.0f) || (c1 < 0.0f) || (c2 < 0.0f);
+    const int has_pos = (c0 > 0.0f) || (c1 > 0.0f) || (c2 > 0.0f);
+    return !(has_neg && has_pos);
+}
+
+static float searchlight_angle(const game_state* g, const searchlight* sl) {
+    if (!g || !sl) {
+        return 0.0f;
+    }
+    /* Smooth sinusoid gives pendulum-like sweep without center kinks/jerk. */
+    const float q = sinf(g->t * sl->sweep_speed + sl->sweep_phase);
+    return sl->sweep_center_rad + sl->sweep_amplitude_rad * q;
+}
+
+static void searchlight_build_triangle(
+    const searchlight* sl,
+    float* ax,
+    float* ay,
+    float* bx,
+    float* by,
+    float* cx,
+    float* cy
+) {
+    const float a0 = sl->current_angle_rad - sl->half_angle_rad;
+    const float a1 = sl->current_angle_rad + sl->half_angle_rad;
+    const float d0x = cosf(a0);
+    const float d0y = sinf(a0);
+    const float d1x = cosf(a1);
+    const float d1y = sinf(a1);
+    *ax = sl->origin_x;
+    *ay = sl->origin_y;
+    *bx = sl->origin_x + d0x * sl->length;
+    *by = sl->origin_y + d0y * sl->length;
+    *cx = sl->origin_x + d1x * sl->length;
+    *cy = sl->origin_y + d1y * sl->length;
+}
+
+static void configure_searchlights_for_level(game_state* g) {
+    if (!g) {
+        return;
+    }
+    memset(g->searchlights, 0, sizeof(g->searchlights));
+    g->searchlight_count = 0;
+    if (g->level_style != LEVEL_STYLE_DEFENDER) {
+        return;
+    }
+    const float su = gameplay_ui_scale(g);
+    searchlight* sl = &g->searchlights[0];
+    sl->active = 1;
+    /* Fixed world anchor for level placement (does not track camera/player). */
+    sl->origin_x = g->world_w * 0.82f;
+    /* DEFENDER ground baseline sits near bottom screen edge (low Y in this world). */
+    sl->origin_y = 20.0f * su;
+    sl->length = g->world_h * 0.72f;
+    sl->half_angle_rad = 0.18f;
+    sl->sweep_center_rad = 1.5707963f;   /* straight up */
+    sl->sweep_amplitude_rad = 1.2217305f; /* 70 deg each side (140 total) */
+    sl->sweep_speed = 1.25f;
+    sl->sweep_phase = 0.30f;
+    sl->pendulum_bias = 0.70f;
+    sl->clear_grace_s = 2.60f;
+    sl->damage_interval_s = k_searchlight_combat_config.severe_damage_interval_s;
+    sl->damage_timer_s = sl->damage_interval_s;
+    sl->alert_timer_s = 0.0f;
+    sl->current_angle_rad = sl->sweep_center_rad;
+    g->searchlight_count = 1;
+}
+
+static void update_searchlights(game_state* g, float dt, int* player_hit_this_frame) {
+    if (!g || g->searchlight_count <= 0) {
+        return;
+    }
+    for (int i = 0; i < g->searchlight_count && i < MAX_SEARCHLIGHTS; ++i) {
+        searchlight* sl = &g->searchlights[i];
+        if (!sl->active) {
+            continue;
+        }
+        sl->current_angle_rad = searchlight_angle(g, sl);
+        float ax = 0.0f, ay = 0.0f, bx = 0.0f, by = 0.0f, cx = 0.0f, cy = 0.0f;
+        searchlight_build_triangle(sl, &ax, &ay, &bx, &by, &cx, &cy);
+        const int inside = point_in_triangle(g->player.b.x, g->player.b.y, ax, ay, bx, by, cx, cy);
+        if (inside) {
+            sl->alert_timer_s = sl->clear_grace_s;
+        } else if (sl->alert_timer_s > 0.0f) {
+            sl->alert_timer_s -= dt;
+            if (sl->alert_timer_s < 0.0f) {
+                sl->alert_timer_s = 0.0f;
+            }
+        }
+        if (g->lives <= 0) {
+            continue;
+        }
+        if (sl->alert_timer_s <= 0.0f) {
+            sl->damage_timer_s = sl->damage_interval_s;
+            continue;
+        }
+        sl->damage_timer_s -= dt;
+        if (sl->damage_timer_s > 0.0f) {
+            continue;
+        }
+        sl->damage_timer_s += sl->damage_interval_s;
+        if (player_hit_this_frame && *player_hit_this_frame) {
+            continue;
+        }
+        apply_player_hit(g, g->player.b.x, g->player.b.y, 0.0f, 0.0f);
+        if (player_hit_this_frame) {
+            *player_hit_this_frame = 1;
+        }
+    }
 }
 
 static float cylinder_period(const game_state* g) {
@@ -858,6 +988,7 @@ void game_init(game_state* g, float world_w, float world_h) {
     g->wave_cooldown_s = 0.65f;
     g->wave_index = 0;
     g->wave_id_alloc = 0;
+    configure_searchlights_for_level(g);
 
     for (size_t i = 0; i < MAX_STARS; ++i) {
         g->stars[i].x = frand01() * world_w;
@@ -867,6 +998,22 @@ void game_init(game_state* g, float world_w, float world_h) {
         g->stars[i].speed = 50.0f + frand01() * 190.0f;
         g->stars[i].size = 0.9f + frand01() * 1.5f;
     }
+}
+
+void game_set_world_size(game_state* g, float world_w, float world_h) {
+    if (!g || world_w <= 0.0f || world_h <= 0.0f) {
+        return;
+    }
+    g->world_w = world_w;
+    g->world_h = world_h;
+    if (g->player.b.y < 0.0f) {
+        g->player.b.y = 0.0f;
+    }
+    if (g->player.b.y > g->world_h) {
+        g->player.b.y = g->world_h;
+    }
+    g->camera_y = g->world_h * 0.5f;
+    configure_searchlights_for_level(g);
 }
 
 void game_cycle_level(game_state* g) {
@@ -882,6 +1029,7 @@ void game_cycle_level(game_state* g) {
     g->wave_cooldown_s = 0.6f;
     g->camera_vx = 0.0f;
     g->camera_x = g->player.b.x;
+    configure_searchlights_for_level(g);
 }
 
 void game_update(game_state* g, float dt, const game_input* in) {
@@ -892,6 +1040,7 @@ void game_update(game_state* g, float dt, const game_input* in) {
         const int level_style = g->level_style;
         game_init(g, g->world_w, g->world_h);
         g->level_style = level_style;
+        configure_searchlights_for_level(g);
     }
 
     for (size_t i = 0; i < MAX_STARS; ++i) {
@@ -1007,6 +1156,9 @@ void game_update(game_state* g, float dt, const game_input* in) {
         }
     }
     int player_hit_this_frame = 0;
+    if (g->level_style == LEVEL_STYLE_DEFENDER) {
+        update_searchlights(g, dt, &player_hit_this_frame);
+    }
 
     for (size_t i = 0; i < MAX_ENEMIES; ++i) {
         if (!g->enemies[i].active) {

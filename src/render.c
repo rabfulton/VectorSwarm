@@ -22,6 +22,7 @@ typedef struct v3 {
     float z;
 } v3;
 
+
 /* Event Horizon wormhole mesh is static; cache it to avoid per-frame recompute. */
 #define WORMHOLE_VN 84
 #define WORMHOLE_ROWS 33
@@ -629,6 +630,144 @@ static palette_theme get_palette_theme(int mode) {
             break;
     }
     return p;
+}
+
+static vg_result draw_searchlights(
+    vg_context* ctx,
+    const game_state* g,
+    const palette_theme* pal,
+    float intensity_scale,
+    const vg_stroke_style* land_halo,
+    const vg_stroke_style* land_main
+) {
+    if (!ctx || !g || !pal || g->searchlight_count <= 0) {
+        return VG_OK;
+    }
+    const int tip_slices = 28;
+    for (int i = 0; i < g->searchlight_count && i < MAX_SEARCHLIGHTS; ++i) {
+        const searchlight* sl = &g->searchlights[i];
+        if (!sl->active || sl->length <= 1.0f) {
+            continue;
+        }
+        const float a0 = sl->current_angle_rad - sl->half_angle_rad;
+        const float a1 = sl->current_angle_rad + sl->half_angle_rad;
+        const vg_vec2 origin = {sl->origin_x, sl->origin_y};
+        const vg_vec2 dir0 = {cosf(a0), sinf(a0)};
+        const vg_vec2 dir1 = {cosf(a1), sinf(a1)};
+        const float body_len = sl->length * 0.80f;
+        const vg_color beam_col = pal->primary_dim;
+        const vg_fill_style body_fill = make_fill(
+            0.14f + 0.06f * intensity_scale,
+            (vg_color){beam_col.r, beam_col.g, beam_col.b, 0.06f},
+            VG_BLEND_ADDITIVE
+        );
+        const vg_vec2 body_tri[3] = {
+            origin,
+            {origin.x + dir0.x * body_len, origin.y + dir0.y * body_len},
+            {origin.x + dir1.x * body_len, origin.y + dir1.y * body_len}
+        };
+        vg_result r = vg_fill_convex(ctx, body_tri, 3, &body_fill);
+        if (r != VG_OK) {
+            return r;
+        }
+        for (int s = 0; s < tip_slices; ++s) {
+            const float u0 = (float)s / (float)tip_slices;
+            const float u1 = (float)(s + 1) / (float)tip_slices;
+            const float t0 = 0.80f + 0.20f * u0;
+            const float t1 = 0.80f + 0.20f * u1;
+            const float l0 = sl->length * t0;
+            const float l1 = sl->length * t1;
+            float fade = 1.0f - u1;
+            fade = fade * fade * (3.0f - 2.0f * fade);
+            const vg_fill_style tip_fill = make_fill(
+                (0.14f + 0.06f * intensity_scale) * fade,
+                (vg_color){beam_col.r, beam_col.g, beam_col.b, 0.06f * fade},
+                VG_BLEND_ADDITIVE
+            );
+            const vg_vec2 a = {origin.x + dir0.x * l0, origin.y + dir0.y * l0};
+            const vg_vec2 b = {origin.x + dir1.x * l0, origin.y + dir1.y * l0};
+            const vg_vec2 c = {origin.x + dir1.x * l1, origin.y + dir1.y * l1};
+            const vg_vec2 d = {origin.x + dir0.x * l1, origin.y + dir0.y * l1};
+            const vg_vec2 tip_tri0[3] = {a, b, c};
+            const vg_vec2 tip_tri1[3] = {a, c, d};
+            r = vg_fill_convex(ctx, tip_tri0, 3, &tip_fill);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_fill_convex(ctx, tip_tri1, 3, &tip_fill);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+        vg_stroke_style rail_halo = *land_halo;
+        vg_stroke_style rail_main = *land_main;
+        rail_halo.width_px *= 1.18f;
+        rail_main.width_px *= 1.06f;
+        rail_halo.intensity *= 0.78f;
+        rail_main.intensity *= 0.86f;
+        const vg_vec2 left_body[2] = {
+            origin,
+            {origin.x + dir0.x * body_len, origin.y + dir0.y * body_len}
+        };
+        const vg_vec2 right_body[2] = {
+            origin,
+            {origin.x + dir1.x * body_len, origin.y + dir1.y * body_len}
+        };
+        r = vg_draw_polyline(ctx, left_body, 2, &rail_halo, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_draw_polyline(ctx, left_body, 2, &rail_main, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_draw_polyline(ctx, right_body, 2, &rail_halo, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_draw_polyline(ctx, right_body, 2, &rail_main, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        for (int s = 0; s < tip_slices; ++s) {
+            const float u0 = (float)s / (float)tip_slices;
+            const float u1 = (float)(s + 1) / (float)tip_slices;
+            const float t0 = 0.80f + 0.20f * u0;
+            const float t1 = 0.80f + 0.20f * u1;
+            const float fade = 1.0f - u1;
+            vg_stroke_style lh = rail_halo;
+            vg_stroke_style lm = rail_main;
+            lh.intensity *= fade;
+            lm.intensity *= fade;
+            lh.color.a *= fade;
+            lm.color.a *= fade;
+            const vg_vec2 left_tip[2] = {
+                {origin.x + dir0.x * (sl->length * t0), origin.y + dir0.y * (sl->length * t0)},
+                {origin.x + dir0.x * (sl->length * t1), origin.y + dir0.y * (sl->length * t1)}
+            };
+            const vg_vec2 right_tip[2] = {
+                {origin.x + dir1.x * (sl->length * t0), origin.y + dir1.y * (sl->length * t0)},
+                {origin.x + dir1.x * (sl->length * t1), origin.y + dir1.y * (sl->length * t1)}
+            };
+            r = vg_draw_polyline(ctx, left_tip, 2, &lh, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_draw_polyline(ctx, left_tip, 2, &lm, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_draw_polyline(ctx, right_tip, 2, &lh, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_draw_polyline(ctx, right_tip, 2, &lm, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+    }
+    return VG_OK;
 }
 
 static vg_result draw_text_vector_glow(
@@ -3750,6 +3889,14 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         return r;
     }
     vg_transform_translate(ctx, g->world_w * 0.5f - g->camera_x, g->world_h * 0.5f - g->camera_y);
+
+    if (g->level_style == LEVEL_STYLE_DEFENDER) {
+        r = draw_searchlights(ctx, g, &pal, intensity_scale, &land_halo, &land_main);
+        if (r != VG_OK) {
+            (void)vg_transform_pop(ctx);
+            return r;
+        }
+    }
 
     if (!metrics->use_gpu_particles) {
     for (size_t i = 0; i < MAX_PARTICLES; ++i) {
