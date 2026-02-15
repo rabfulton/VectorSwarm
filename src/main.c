@@ -142,10 +142,11 @@ typedef struct wormhole_line_pc {
 } wormhole_line_pc;
 
 typedef struct fog_pc {
-    float p0[4];      /* x=viewport_w, y=viewport_h, z=time_s, w=intensity */
+    float p0[4];      /* x=viewport_w, y=viewport_h, z=time_s, w=alpha_scale */
     float p1[4];      /* rgb=primary_dim, w=density_scale */
     float p2[4];      /* rgb=secondary, w=emitter_count */
-    float emit[4][4]; /* x=sx, y=sy, z=radius_px, w=power */
+    float p3[4];      /* x=world_origin_x, y=world_origin_y, z=noise_scale, w=flow_scale */
+    float emit[4][4]; /* x=sx, y=sy, z=radius_px, w=power*light_gain */
 } fog_pc;
 
 typedef struct terrain_tuning {
@@ -309,6 +310,14 @@ typedef struct app {
     float particle_trail_gain;
     float particle_heat_cooling;
     char particle_tuning_text[192];
+    int fog_tuning_enabled; /* VTYPE_FOG_TUNING */
+    int fog_tuning_show;
+    float fog_density_scale;
+    float fog_noise_scale;
+    float fog_flow_scale;
+    float fog_light_gain;
+    float fog_alpha_scale;
+    char fog_tuning_text[224];
 
     VkCommandPool command_pool;
     VkCommandBuffer command_buffers[APP_MAX_SWAPCHAIN_IMAGES];
@@ -510,6 +519,92 @@ static void sync_particle_tuning_text(app* a) {
         a->particle_trail_gain,
         a->particle_heat_cooling
     );
+}
+
+static void reset_fog_tuning(app* a) {
+    if (!a) {
+        return;
+    }
+    a->fog_density_scale = 1.00f;
+    a->fog_noise_scale = 1.00f;
+    a->fog_flow_scale = 1.00f;
+    a->fog_light_gain = 1.00f;
+    a->fog_alpha_scale = 1.00f;
+}
+
+static void sync_fog_tuning_text(app* a) {
+    if (!a) {
+        return;
+    }
+    snprintf(
+        a->fog_tuning_text,
+        sizeof(a->fog_tuning_text),
+        "FOG TUNE dens %.3f noise %.3f flow %.3f light %.3f alpha %.3f (KP Enter dump, KP . reset)",
+        a->fog_density_scale,
+        a->fog_noise_scale,
+        a->fog_flow_scale,
+        a->fog_light_gain,
+        a->fog_alpha_scale
+    );
+}
+
+static void print_fog_tuning(const app* a) {
+    if (!a) {
+        return;
+    }
+    printf(
+        "[fog_tune] density=%.6ff noise=%.6ff flow=%.6ff light=%.6ff alpha=%.6ff\n",
+        a->fog_density_scale,
+        a->fog_noise_scale,
+        a->fog_flow_scale,
+        a->fog_light_gain,
+        a->fog_alpha_scale
+    );
+    fflush(stdout);
+}
+
+static int handle_fog_tuning_key(app* a, SDL_Keycode key) {
+    if (!a || !a->fog_tuning_enabled || a->game.level_style != LEVEL_STYLE_FOG_OF_WAR) {
+        return 0;
+    }
+    int handled = 1;
+    switch (key) {
+        case SDLK_KP_7: a->fog_density_scale += 0.05f; break;
+        case SDLK_KP_4: a->fog_density_scale -= 0.05f; break;
+        case SDLK_KP_8: a->fog_noise_scale += 0.05f; break;
+        case SDLK_KP_5: a->fog_noise_scale -= 0.05f; break;
+        case SDLK_KP_9: a->fog_flow_scale += 0.05f; break;
+        case SDLK_KP_6: a->fog_flow_scale -= 0.05f; break;
+        case SDLK_KP_1: a->fog_light_gain -= 0.05f; break;
+        case SDLK_KP_2: a->fog_light_gain += 0.05f; break;
+        case SDLK_KP_3: a->fog_alpha_scale += 0.05f; break;
+        case SDLK_KP_0: a->fog_alpha_scale -= 0.05f; break;
+        case SDLK_KP_MULTIPLY:
+            a->fog_tuning_show = !a->fog_tuning_show;
+            set_tty_message(a, a->fog_tuning_show ? "fog tune hud: on" : "fog tune hud: off");
+            break;
+        case SDLK_KP_PERIOD:
+            reset_fog_tuning(a);
+            set_tty_message(a, "fog tuning reset");
+            break;
+        case SDLK_KP_ENTER:
+            print_fog_tuning(a);
+            set_tty_message(a, "fog tuning dumped to stdout");
+            break;
+        default:
+            handled = 0;
+            break;
+    }
+    if (!handled) {
+        return 0;
+    }
+    a->fog_density_scale = clampf(a->fog_density_scale, 0.25f, 2.50f);
+    a->fog_noise_scale = clampf(a->fog_noise_scale, 0.25f, 3.00f);
+    a->fog_flow_scale = clampf(a->fog_flow_scale, 0.20f, 3.50f);
+    a->fog_light_gain = clampf(a->fog_light_gain, 0.10f, 3.00f);
+    a->fog_alpha_scale = clampf(a->fog_alpha_scale, 0.10f, 2.50f);
+    sync_fog_tuning_text(a);
+    return 1;
 }
 
 static void print_particle_tuning(const app* a) {
@@ -5005,10 +5100,14 @@ static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t) {
 
     fog_pc pc;
     memset(&pc, 0, sizeof(pc));
+    const float world_w = a->game.world_w;
+    const float world_h = a->game.world_h;
+    const float cx = a->game.camera_x;
+    const float cy = a->game.camera_y;
     pc.p0[0] = (float)a->swapchain_extent.width;
     pc.p0[1] = (float)a->swapchain_extent.height;
     pc.p0[2] = t;
-    pc.p0[3] = 1.0f;
+    pc.p0[3] = a->fog_alpha_scale;
 
     float primary_dim[3];
     float secondary[3];
@@ -5025,22 +5124,22 @@ static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t) {
     pc.p1[0] = primary_dim[0];
     pc.p1[1] = primary_dim[1];
     pc.p1[2] = primary_dim[2];
-    pc.p1[3] = 1.0f;
+    pc.p1[3] = a->fog_density_scale;
     pc.p2[0] = secondary[0];
     pc.p2[1] = secondary[1];
     pc.p2[2] = secondary[2];
     pc.p2[3] = 0.0f;
+    pc.p3[0] = cx - world_w * 0.5f;
+    pc.p3[1] = cy - world_h * 0.5f;
+    pc.p3[2] = a->fog_noise_scale;
+    pc.p3[3] = a->fog_flow_scale;
 
     int emit_n = 0;
-    const float world_w = a->game.world_w;
-    const float world_h = a->game.world_h;
-    const float cx = a->game.camera_x;
-    const float cy = a->game.camera_y;
     if (a->game.lives > 0 && emit_n < 4) {
         pc.emit[emit_n][0] = a->game.player.b.x + world_w * 0.5f - cx;
         pc.emit[emit_n][1] = a->game.player.b.y + world_h * 0.5f - cy;
         pc.emit[emit_n][2] = 180.0f;
-        pc.emit[emit_n][3] = 1.0f;
+        pc.emit[emit_n][3] = 1.0f * a->fog_light_gain;
         emit_n++;
     }
     for (size_t i = 0; i < MAX_ENEMIES && emit_n < 4; ++i) {
@@ -5050,7 +5149,7 @@ static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t) {
         pc.emit[emit_n][0] = a->game.enemies[i].b.x + world_w * 0.5f - cx;
         pc.emit[emit_n][1] = a->game.enemies[i].b.y + world_h * 0.5f - cy;
         pc.emit[emit_n][2] = 135.0f;
-        pc.emit[emit_n][3] = 0.58f;
+        pc.emit[emit_n][3] = 0.58f * a->fog_light_gain;
         emit_n++;
     }
     for (size_t i = 0; i < MAX_BULLETS && emit_n < 4; ++i) {
@@ -5060,7 +5159,7 @@ static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t) {
         pc.emit[emit_n][0] = a->game.bullets[i].b.x + world_w * 0.5f - cx;
         pc.emit[emit_n][1] = a->game.bullets[i].b.y + world_h * 0.5f - cy;
         pc.emit[emit_n][2] = 92.0f;
-        pc.emit[emit_n][3] = 0.36f;
+        pc.emit[emit_n][3] = 0.36f * a->fog_light_gain;
         emit_n++;
     }
     for (size_t i = 0; i < MAX_ENEMY_BULLETS && emit_n < 4; ++i) {
@@ -5070,7 +5169,7 @@ static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t) {
         pc.emit[emit_n][0] = a->game.enemy_bullets[i].b.x + world_w * 0.5f - cx;
         pc.emit[emit_n][1] = a->game.enemy_bullets[i].b.y + world_h * 0.5f - cy;
         pc.emit[emit_n][2] = 80.0f;
-        pc.emit[emit_n][3] = 0.28f;
+        pc.emit[emit_n][3] = 0.28f * a->fog_light_gain;
         emit_n++;
     }
     pc.p2[3] = (float)emit_n;
@@ -5212,14 +5311,19 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .nick_h = a->nick_h,
         .nick_stride = a->nick_stride,
         .surveillance_svg_asset = a->surveillance_svg_asset,
-        .terrain_tuning_text = (a->particle_tuning_enabled &&
-                                a->particle_tuning_show &&
+        .terrain_tuning_text = (a->fog_tuning_enabled &&
+                                a->fog_tuning_show &&
+                                a->game.level_style == LEVEL_STYLE_FOG_OF_WAR &&
                                 !a->show_acoustics && !a->show_video_menu && !a->show_planetarium)
-            ? a->particle_tuning_text
-            : ((a->terrain_tuning_enabled &&
-                a->terrain_tuning_show &&
-                a->game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2)
-                ? a->terrain_tuning_text : NULL),
+            ? a->fog_tuning_text
+            : ((a->particle_tuning_enabled &&
+                a->particle_tuning_show &&
+                !a->show_acoustics && !a->show_video_menu && !a->show_planetarium)
+                ? a->particle_tuning_text
+                : ((a->terrain_tuning_enabled &&
+                    a->terrain_tuning_show &&
+                    a->game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2)
+                    ? a->terrain_tuning_text : NULL)),
         .use_gpu_particles = 0,
         .use_gpu_terrain = 0,
         .use_gpu_wormhole = 0,
@@ -5465,6 +5569,8 @@ int main(void) {
     a.terrain_wire_enabled = 1;
     a.terrain_tuning_enabled = env_flag_enabled("VTYPE_TERRAIN_TUNING");
     a.terrain_tuning_show = 1;
+    a.fog_tuning_enabled = env_flag_enabled("VTYPE_FOG_TUNING");
+    a.fog_tuning_show = 1;
     a.particle_tuning_enabled = env_flag_enabled("VTYPE_PARTICLE_TRACE");
     a.particle_tuning_show = 1;
     a.particle_bloom_enabled = 1;
@@ -5473,6 +5579,8 @@ int main(void) {
     a.disable_scene_split = env_flag_enabled("VTYPE_DISABLE_SCENE_SPLIT");
     reset_terrain_tuning(&a);
     sync_terrain_tuning_text(&a);
+    reset_fog_tuning(&a);
+    sync_fog_tuning_text(&a);
     reset_particle_tuning(&a);
     sync_particle_tuning_text(&a);
     a.video_menu_selected = 1;
@@ -5736,6 +5844,10 @@ int main(void) {
                     a.show_crt_ui = !a.show_crt_ui;
                 } else if (ev.key.keysym.sym == SDLK_r) {
                     restart_pressed = 1;
+                } else if (a.fog_tuning_enabled &&
+                           !a.show_acoustics && !a.show_video_menu && !a.show_planetarium &&
+                           handle_fog_tuning_key(&a, ev.key.keysym.sym)) {
+                    /* handled by fog tuning controls */
                 } else if (a.particle_tuning_enabled &&
                            !a.show_acoustics && !a.show_video_menu && !a.show_planetarium &&
                            handle_particle_tuning_key(&a, ev.key.keysym.sym)) {

@@ -36,6 +36,38 @@ When enabled, controls are active only on `HIGH_PLAINS_DRIFTER_2`, and only when
 - The HUD line shows live values while tuning is enabled.
 - `KP Enter` prints both human-readable values and a hardcode-ready line for `pc.params[3]` / `pc.tune[]`.
 
+## Fog Tuning (Fog of War)
+
+Fog tuning controls are disabled by default.
+
+Enable them by setting:
+
+`VTYPE_FOG_TUNING=1`
+
+Example:
+
+```bash
+VTYPE_FOG_TUNING=1 ./build/VectorSwarm
+```
+
+When enabled, controls are active only on `FOG_OF_WAR`, and only when no menu overlay is open.
+
+### Numpad Controls
+
+- `KP7 / KP4`: density up/down
+- `KP8 / KP5`: noise scale up/down
+- `KP9 / KP6`: flow scale up/down
+- `KP2 / KP1`: light gain up/down
+- `KP3 / KP0`: alpha up/down
+- `KP*`: toggle fog tuning HUD
+- `KP.`: reset fog tuning values to defaults
+- `KP Enter`: print current values to stdout
+
+### Notes
+
+- Fog noise is world-anchored (camera movement flies through fog instead of dragging it with the screen).
+- Fog tuning keys are checked before particle and terrain tuning keys.
+
 ## Particle Tuning / Trace
 
 Particle trace and live explosion-particle tuning are disabled by default.
@@ -63,5 +95,4 @@ When enabled, the game prints periodic particle stats to stdout and numpad tunin
 
 ### Notes
 
-- Particle tuning keys are checked before terrain tuning keys.
-- If both `VTYPE_PARTICLE_TRACE=1` and `VTYPE_TERRAIN_TUNING=1` are set, overlapping numpad keys control particle tuning first.
+- Priority order for overlapping numpad keys is: fog tuning, then particle tuning, then terrain tuning.
