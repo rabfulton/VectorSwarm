@@ -213,6 +213,66 @@ static const searchlight_def k_searchlight_defs[] = {
         .projectile_ttl_s = 2.3f,
         .projectile_radius = 3.4f,
         .aim_jitter_deg = 1.10f
+    },
+    {
+        .level_style = LEVEL_STYLE_FOG_OF_WAR,
+        .anchor_x01 = 3.30f,
+        .anchor_y01 = 0.50f,
+        .length_h01 = 0.74f,
+        .half_angle_deg = 8.2f,
+        .sweep_center_deg = 0.0f,
+        .sweep_amplitude_deg = 180.0f,
+        .sweep_speed = 1.70f,
+        .sweep_phase_deg = 0.0f,
+        .sweep_motion = SEARCHLIGHT_MOTION_SPIN,
+        .source_type = SEARCHLIGHT_SOURCE_ORB,
+        .source_radius = 14.5f,
+        .clear_grace_s = 1.60f,
+        .fire_interval_s = 0.030f,
+        .projectile_speed = 980.0f,
+        .projectile_ttl_s = 2.2f,
+        .projectile_radius = 3.2f,
+        .aim_jitter_deg = 1.35f
+    },
+    {
+        .level_style = LEVEL_STYLE_FOG_OF_WAR,
+        .anchor_x01 = 3.80f,
+        .anchor_y01 = 0.50f,
+        .length_h01 = 0.72f,
+        .half_angle_deg = 8.2f,
+        .sweep_center_deg = 0.0f,
+        .sweep_amplitude_deg = 180.0f,
+        .sweep_speed = 1.55f,
+        .sweep_phase_deg = 120.0f,
+        .sweep_motion = SEARCHLIGHT_MOTION_SPIN,
+        .source_type = SEARCHLIGHT_SOURCE_ORB,
+        .source_radius = 14.5f,
+        .clear_grace_s = 1.65f,
+        .fire_interval_s = 0.032f,
+        .projectile_speed = 980.0f,
+        .projectile_ttl_s = 2.2f,
+        .projectile_radius = 3.2f,
+        .aim_jitter_deg = 1.35f
+    },
+    {
+        .level_style = LEVEL_STYLE_FOG_OF_WAR,
+        .anchor_x01 = 4.30f,
+        .anchor_y01 = 0.50f,
+        .length_h01 = 0.74f,
+        .half_angle_deg = 8.2f,
+        .sweep_center_deg = 0.0f,
+        .sweep_amplitude_deg = 180.0f,
+        .sweep_speed = 1.85f,
+        .sweep_phase_deg = 230.0f,
+        .sweep_motion = SEARCHLIGHT_MOTION_SPIN,
+        .source_type = SEARCHLIGHT_SOURCE_ORB,
+        .source_radius = 14.5f,
+        .clear_grace_s = 1.60f,
+        .fire_interval_s = 0.030f,
+        .projectile_speed = 980.0f,
+        .projectile_ttl_s = 2.2f,
+        .projectile_radius = 3.2f,
+        .aim_jitter_deg = 1.35f
     }
 };
 
@@ -344,17 +404,21 @@ static void update_searchlights(game_state* g, float dt) {
         if (!sl->active) {
             continue;
         }
-        sl->current_angle_rad = searchlight_angle(g, sl);
+        const float sweep_angle = searchlight_angle(g, sl);
+        sl->current_angle_rad = sweep_angle;
         float ax = 0.0f, ay = 0.0f, bx = 0.0f, by = 0.0f, cx = 0.0f, cy = 0.0f;
         searchlight_build_triangle(sl, &ax, &ay, &bx, &by, &cx, &cy);
-        const int inside = point_in_triangle(g->player.b.x, g->player.b.y, ax, ay, bx, by, cx, cy);
-        if (inside) {
+        const int spotted_by_sweep = point_in_triangle(g->player.b.x, g->player.b.y, ax, ay, bx, by, cx, cy);
+        if (spotted_by_sweep) {
             sl->alert_timer_s = sl->clear_grace_s;
         } else if (sl->alert_timer_s > 0.0f) {
             sl->alert_timer_s -= dt;
             if (sl->alert_timer_s < 0.0f) {
                 sl->alert_timer_s = 0.0f;
             }
+        }
+        if (sl->alert_timer_s > 0.0f) {
+            sl->current_angle_rad = atan2f(g->player.b.y - sl->origin_y, g->player.b.x - sl->origin_x);
         }
         if (g->lives <= 0) {
             continue;
@@ -1288,7 +1352,7 @@ void game_update(game_state* g, float dt, const game_input* in) {
         }
     }
     int player_hit_this_frame = 0;
-    if (g->level_style == LEVEL_STYLE_DEFENDER) {
+    if (g->searchlight_count > 0) {
         update_searchlights(g, dt);
     }
 

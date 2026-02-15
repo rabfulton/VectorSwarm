@@ -4022,7 +4022,7 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
     }
     vg_transform_translate(ctx, g->world_w * 0.5f - g->camera_x, g->world_h * 0.5f - g->camera_y);
 
-    if (g->level_style == LEVEL_STYLE_DEFENDER) {
+    if (g->searchlight_count > 0) {
         r = draw_searchlights(ctx, g, &pal, intensity_scale, &land_halo, &land_main);
         if (r != VG_OK) {
             (void)vg_transform_pop(ctx);
