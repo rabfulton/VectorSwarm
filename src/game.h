@@ -84,6 +84,17 @@ typedef struct enemy_bullet {
     float radius;
 } enemy_bullet;
 
+typedef enum searchlight_motion_type {
+    SEARCHLIGHT_MOTION_LINEAR = 0,
+    SEARCHLIGHT_MOTION_PENDULUM = 1,
+    SEARCHLIGHT_MOTION_SPIN = 2
+} searchlight_motion_type;
+
+typedef enum searchlight_source_type {
+    SEARCHLIGHT_SOURCE_DOME = 0,
+    SEARCHLIGHT_SOURCE_ORB = 1
+} searchlight_source_type;
+
 typedef struct searchlight {
     int active;
     float origin_x;
@@ -94,9 +105,15 @@ typedef struct searchlight {
     float sweep_amplitude_rad;
     float sweep_speed;
     float sweep_phase;
-    float pendulum_bias;
+    int sweep_motion; /* enum searchlight_motion_type */
+    int source_type; /* enum searchlight_source_type */
+    float source_radius;
     float clear_grace_s;
     float damage_interval_s;
+    float projectile_speed;
+    float projectile_ttl_s;
+    float projectile_radius;
+    float aim_jitter_rad;
     float damage_timer_s;
     float alert_timer_s;
     float current_angle_rad;

@@ -649,6 +649,55 @@ static vg_result draw_searchlights(
         if (!sl->active || sl->length <= 1.0f) {
             continue;
         }
+        {
+            const float rr = fmaxf(sl->source_radius, 2.0f);
+            const vg_color src_red = {1.0f, 0.22f, 0.22f, 0.95f};
+            const vg_fill_style src_fill = make_fill(0.72f * intensity_scale, src_red, VG_BLEND_ALPHA);
+            const vg_stroke_style src_stroke = make_stroke(1.6f, 0.90f * intensity_scale, src_red, VG_BLEND_ALPHA);
+            if (sl->source_type == SEARCHLIGHT_SOURCE_ORB) {
+                enum { ORB_SEG = 20 };
+                vg_vec2 orb[ORB_SEG + 1];
+                for (int k = 0; k <= ORB_SEG; ++k) {
+                    const float u = (float)k / (float)ORB_SEG;
+                    const float a = u * 6.28318530718f;
+                    orb[k] = (vg_vec2){
+                        sl->origin_x + cosf(a) * rr,
+                        sl->origin_y + sinf(a) * rr
+                    };
+                }
+                vg_result r = vg_fill_circle(ctx, (vg_vec2){sl->origin_x, sl->origin_y}, rr, &src_fill, 18);
+                if (r != VG_OK) {
+                    return r;
+                }
+                r = vg_draw_polyline(ctx, orb, ORB_SEG + 1, &src_stroke, 1);
+                if (r != VG_OK) {
+                    return r;
+                }
+            } else {
+                enum { DOME_SEG = 18 };
+                vg_vec2 dome_fill[DOME_SEG + 2];
+                vg_vec2 dome_arc[DOME_SEG + 1];
+                dome_fill[0] = (vg_vec2){sl->origin_x, sl->origin_y};
+                for (int k = 0; k <= DOME_SEG; ++k) {
+                    const float u = (float)k / (float)DOME_SEG;
+                    const float a = u * 3.14159265359f;
+                    const vg_vec2 p = {
+                        sl->origin_x + cosf(a) * rr,
+                        sl->origin_y + sinf(a) * rr
+                    };
+                    dome_fill[k + 1] = p;
+                    dome_arc[k] = p;
+                }
+                vg_result r = vg_fill_convex(ctx, dome_fill, DOME_SEG + 2, &src_fill);
+                if (r != VG_OK) {
+                    return r;
+                }
+                r = vg_draw_polyline(ctx, dome_arc, DOME_SEG + 1, &src_stroke, 0);
+                if (r != VG_OK) {
+                    return r;
+                }
+            }
+        }
         const float a0 = sl->current_angle_rad - sl->half_angle_rad;
         const float a1 = sl->current_angle_rad + sl->half_angle_rad;
         const vg_vec2 origin = {sl->origin_x, sl->origin_y};

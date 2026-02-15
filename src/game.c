@@ -69,9 +69,26 @@ typedef struct enemy_combat_config {
     float spread_scale_end;
 } enemy_combat_config;
 
-typedef struct searchlight_combat_config {
-    float severe_damage_interval_s;
-} searchlight_combat_config;
+typedef struct searchlight_def {
+    int level_style; /* enum level_style_id */
+    float anchor_x01;
+    float anchor_y01;
+    float length_h01;
+    float half_angle_deg;
+    float sweep_center_deg;
+    float sweep_amplitude_deg;
+    float sweep_speed;
+    float sweep_phase_deg;
+    int sweep_motion; /* enum searchlight_motion_type */
+    int source_type; /* enum searchlight_source_type */
+    float source_radius;
+    float clear_grace_s;
+    float fire_interval_s;
+    float projectile_speed;
+    float projectile_ttl_s;
+    float projectile_radius;
+    float aim_jitter_deg;
+} searchlight_def;
 
 static float frand01(void) {
     return (float)rand() / (float)RAND_MAX;
@@ -156,17 +173,72 @@ static const enemy_combat_config k_enemy_combat_config = {
     .spread_scale_end = 0.70f
 };
 
-static const searchlight_combat_config k_searchlight_combat_config = {
-    .severe_damage_interval_s = 0.58f
+static const searchlight_def k_searchlight_defs[] = {
+    {
+        .level_style = LEVEL_STYLE_DEFENDER,
+        .anchor_x01 = 0.82f,
+        .anchor_y01 = 0.02f,
+        .length_h01 = 0.72f,
+        .half_angle_deg = 10.3f,
+        .sweep_center_deg = 90.0f,
+        .sweep_amplitude_deg = 70.0f,
+        .sweep_speed = 1.25f,
+        .sweep_phase_deg = 17.2f,
+        .sweep_motion = SEARCHLIGHT_MOTION_PENDULUM,
+        .source_type = SEARCHLIGHT_SOURCE_DOME,
+        .source_radius = 16.0f,
+        .clear_grace_s = 2.60f,
+        .fire_interval_s = 0.058f,
+        .projectile_speed = 820.0f,
+        .projectile_ttl_s = 2.5f,
+        .projectile_radius = 3.6f,
+        .aim_jitter_deg = 1.43f
+    },
+    {
+        .level_style = LEVEL_STYLE_DEFENDER,
+        .anchor_x01 = 1.30f,
+        .anchor_y01 = 0.50f,
+        .length_h01 = 0.68f,
+        .half_angle_deg = 9.0f,
+        .sweep_center_deg = 0.0f,
+        .sweep_amplitude_deg = 180.0f,
+        .sweep_speed = 3.20f,
+        .sweep_phase_deg = 0.0f,
+        .sweep_motion = SEARCHLIGHT_MOTION_SPIN,
+        .source_type = SEARCHLIGHT_SOURCE_ORB,
+        .source_radius = 15.0f,
+        .clear_grace_s = 2.10f,
+        .fire_interval_s = 0.16f,
+        .projectile_speed = 1220.0f,
+        .projectile_ttl_s = 2.3f,
+        .projectile_radius = 3.4f,
+        .aim_jitter_deg = 1.10f
+    }
 };
 
 static float gameplay_ui_scale(const game_state* g);
 static void apply_player_hit(game_state* g, float impact_x, float impact_y, float impact_vx, float impact_vy);
+static void normalize2(float* x, float* y);
+static void game_push_audio_event(game_state* g, game_audio_event_type type, float x, float y);
+static enemy_bullet* spawn_enemy_bullet_at(
+    game_state* g,
+    float ox,
+    float oy,
+    float dir_x,
+    float dir_y,
+    float speed,
+    float ttl_s,
+    float radius
+);
 
 static float dist_sq(float ax, float ay, float bx, float by) {
     const float dx = ax - bx;
     const float dy = ay - by;
     return dx * dx + dy * dy;
+}
+
+static float deg_to_rad(float d) {
+    return d * (3.14159265359f / 180.0f);
 }
 
 static float cross2(float ax, float ay, float bx, float by, float px, float py) {
@@ -186,8 +258,18 @@ static float searchlight_angle(const game_state* g, const searchlight* sl) {
     if (!g || !sl) {
         return 0.0f;
     }
-    /* Smooth sinusoid gives pendulum-like sweep without center kinks/jerk. */
-    const float q = sinf(g->t * sl->sweep_speed + sl->sweep_phase);
+    const float phase = g->t * sl->sweep_speed + sl->sweep_phase;
+    float q = 0.0f;
+    if (sl->sweep_motion == SEARCHLIGHT_MOTION_SPIN) {
+        return sl->sweep_center_rad + phase;
+    }
+    if (sl->sweep_motion == SEARCHLIGHT_MOTION_LINEAR) {
+        const float tri = (2.0f / 3.14159265359f) * asinf(sinf(phase));
+        q = clampf(tri, -1.0f, 1.0f);
+    } else {
+        /* Smooth pendulum-like sweep (sinusoid). */
+        q = sinf(phase);
+    }
     return sl->sweep_center_rad + sl->sweep_amplitude_rad * q;
 }
 
@@ -220,35 +302,43 @@ static void configure_searchlights_for_level(game_state* g) {
     }
     memset(g->searchlights, 0, sizeof(g->searchlights));
     g->searchlight_count = 0;
-    if (g->level_style != LEVEL_STYLE_DEFENDER) {
-        return;
+    const size_t def_count = sizeof(k_searchlight_defs) / sizeof(k_searchlight_defs[0]);
+    for (size_t i = 0; i < def_count && g->searchlight_count < MAX_SEARCHLIGHTS; ++i) {
+        const searchlight_def* d = &k_searchlight_defs[i];
+        if (d->level_style != g->level_style) {
+            continue;
+        }
+        searchlight* sl = &g->searchlights[g->searchlight_count++];
+        memset(sl, 0, sizeof(*sl));
+        sl->active = 1;
+        sl->origin_x = g->world_w * d->anchor_x01;
+        sl->origin_y = g->world_h * d->anchor_y01;
+        sl->length = g->world_h * d->length_h01;
+        sl->half_angle_rad = deg_to_rad(d->half_angle_deg);
+        sl->sweep_center_rad = deg_to_rad(d->sweep_center_deg);
+        sl->sweep_amplitude_rad = deg_to_rad(d->sweep_amplitude_deg);
+        sl->sweep_speed = d->sweep_speed;
+        sl->sweep_phase = deg_to_rad(d->sweep_phase_deg);
+        sl->sweep_motion = d->sweep_motion;
+        sl->source_type = d->source_type;
+        sl->source_radius = d->source_radius;
+        sl->clear_grace_s = d->clear_grace_s;
+        sl->damage_interval_s = fmaxf(d->fire_interval_s, 0.005f);
+        sl->projectile_speed = d->projectile_speed;
+        sl->projectile_ttl_s = d->projectile_ttl_s;
+        sl->projectile_radius = d->projectile_radius;
+        sl->aim_jitter_rad = deg_to_rad(d->aim_jitter_deg);
+        sl->damage_timer_s = sl->damage_interval_s;
+        sl->alert_timer_s = 0.0f;
+        sl->current_angle_rad = sl->sweep_center_rad;
     }
-    const float su = gameplay_ui_scale(g);
-    searchlight* sl = &g->searchlights[0];
-    sl->active = 1;
-    /* Fixed world anchor for level placement (does not track camera/player). */
-    sl->origin_x = g->world_w * 0.82f;
-    /* DEFENDER ground baseline sits near bottom screen edge (low Y in this world). */
-    sl->origin_y = 20.0f * su;
-    sl->length = g->world_h * 0.72f;
-    sl->half_angle_rad = 0.18f;
-    sl->sweep_center_rad = 1.5707963f;   /* straight up */
-    sl->sweep_amplitude_rad = 1.2217305f; /* 70 deg each side (140 total) */
-    sl->sweep_speed = 1.25f;
-    sl->sweep_phase = 0.30f;
-    sl->pendulum_bias = 0.70f;
-    sl->clear_grace_s = 2.60f;
-    sl->damage_interval_s = k_searchlight_combat_config.severe_damage_interval_s;
-    sl->damage_timer_s = sl->damage_interval_s;
-    sl->alert_timer_s = 0.0f;
-    sl->current_angle_rad = sl->sweep_center_rad;
-    g->searchlight_count = 1;
 }
 
-static void update_searchlights(game_state* g, float dt, int* player_hit_this_frame) {
+static void update_searchlights(game_state* g, float dt) {
     if (!g || g->searchlight_count <= 0) {
         return;
     }
+    const float su = gameplay_ui_scale(g);
     for (int i = 0; i < g->searchlight_count && i < MAX_SEARCHLIGHTS; ++i) {
         searchlight* sl = &g->searchlights[i];
         if (!sl->active) {
@@ -274,16 +364,29 @@ static void update_searchlights(game_state* g, float dt, int* player_hit_this_fr
             continue;
         }
         sl->damage_timer_s -= dt;
-        if (sl->damage_timer_s > 0.0f) {
-            continue;
-        }
-        sl->damage_timer_s += sl->damage_interval_s;
-        if (player_hit_this_frame && *player_hit_this_frame) {
-            continue;
-        }
-        apply_player_hit(g, g->player.b.x, g->player.b.y, 0.0f, 0.0f);
-        if (player_hit_this_frame) {
-            *player_hit_this_frame = 1;
+        while (sl->damage_timer_s <= 0.0f) {
+            sl->damage_timer_s += sl->damage_interval_s;
+            float dx = g->player.b.x - sl->origin_x;
+            float dy = g->player.b.y - sl->origin_y;
+            normalize2(&dx, &dy);
+            /* Slight spread so beam-fire feels synthetic but still targeted. */
+            const float err = frands1() * sl->aim_jitter_rad;
+            const float c = cosf(err);
+            const float s = sinf(err);
+            float dir_x = dx * c - dy * s;
+            float dir_y = dx * s + dy * c;
+            normalize2(&dir_x, &dir_y);
+            if (spawn_enemy_bullet_at(
+                    g,
+                    sl->origin_x,
+                    sl->origin_y,
+                    dir_x,
+                    dir_y,
+                    sl->projectile_speed * su,
+                    sl->projectile_ttl_s,
+                    sl->projectile_radius)) {
+                game_push_audio_event(g, GAME_AUDIO_EVENT_ENEMY_FIRE, sl->origin_x, sl->origin_y);
+            }
         }
     }
 }
@@ -574,6 +677,35 @@ static enemy_bullet* spawn_enemy_bullet(
         b->b.y = e->b.y + dir_y * (e->radius + 8.0f);
         b->b.vx = dir_x * speed + e->b.vx * 0.22f;
         b->b.vy = dir_y * speed + e->b.vy * 0.22f;
+        b->b.ax = 0.0f;
+        b->b.ay = 0.0f;
+        return b;
+    }
+    return NULL;
+}
+
+static enemy_bullet* spawn_enemy_bullet_at(
+    game_state* g,
+    float ox,
+    float oy,
+    float dir_x,
+    float dir_y,
+    float speed,
+    float ttl_s,
+    float radius
+) {
+    for (size_t i = 0; i < MAX_ENEMY_BULLETS; ++i) {
+        if (g->enemy_bullets[i].active) {
+            continue;
+        }
+        enemy_bullet* b = &g->enemy_bullets[i];
+        b->active = 1;
+        b->ttl_s = ttl_s;
+        b->radius = radius;
+        b->b.x = ox + dir_x * (radius + 8.0f);
+        b->b.y = oy + dir_y * (radius + 8.0f);
+        b->b.vx = dir_x * speed;
+        b->b.vy = dir_y * speed;
         b->b.ax = 0.0f;
         b->b.ay = 0.0f;
         return b;
@@ -1157,7 +1289,7 @@ void game_update(game_state* g, float dt, const game_input* in) {
     }
     int player_hit_this_frame = 0;
     if (g->level_style == LEVEL_STYLE_DEFENDER) {
-        update_searchlights(g, dt, &player_hit_this_frame);
+        update_searchlights(g, dt);
     }
 
     for (size_t i = 0; i < MAX_ENEMIES; ++i) {
