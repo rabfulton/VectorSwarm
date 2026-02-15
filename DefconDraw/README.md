@@ -27,6 +27,7 @@ Defcon Draw is a C vector graphics library for Linux with a Vulkan backend and a
 - Retro CRT profile system with tunable bloom, persistence, jitter, flicker, scanlines, vignette, and barrel distortion
 - Stroke text + boxed text + wrapped text helpers
 - Stroke and fill primitives (`polyline`, `path`, `rect`, `convex fill`, `circle fill`)
+- Per-draw stencil control (`vg_stencil_state`) with `vg_stencil_clear`
 - Reusable immediate-style debug UI (`vg_ui`)
 - Extended widgets (`vg_ui_ext`): meters, line graphs, bar graphs, histogram, pie/donut charts, history buffers
 - Multi-scene Vulkan demo with teletype effect, profile save/load, and live parameter tuning
@@ -57,7 +58,7 @@ Run demos:
 Vulkan demo controls:
 
 - `TAB`: show/hide debug UI
-- `1..8`: switch scene
+- `1..9`: switch scene
 - `UP/DOWN`: select UI row
 - `LEFT/RIGHT`: adjust selected value (key-hold repeat supported)
 - `R`: replay teletype message
@@ -65,3 +66,4 @@ Vulkan demo controls:
 - `F9`: load profile
 
 Scene `8` uses a dedicated image debug panel (shown with `TAB`) for image parameter adjustment.
+Scene `9` is a stencil lab demo (replace/equal/not-equal/increment examples).

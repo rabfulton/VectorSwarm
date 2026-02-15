@@ -32,6 +32,7 @@ typedef struct vg_backend_ops {
     vg_result (*draw_path_stroke)(struct vg_context* ctx, const struct vg_path* path, const vg_stroke_style* style);
     vg_result (*draw_polyline)(struct vg_context* ctx, const vg_vec2* points, size_t count, const vg_stroke_style* style, int closed);
     vg_result (*fill_convex)(struct vg_context* ctx, const vg_vec2* points, size_t count, const vg_fill_style* style);
+    vg_result (*stencil_clear)(struct vg_context* ctx, uint32_t value);
     vg_result (*debug_rasterize_rgba8)(struct vg_context* ctx, uint8_t* pixels, uint32_t width, uint32_t height, uint32_t stride_bytes);
 } vg_backend_ops;
 

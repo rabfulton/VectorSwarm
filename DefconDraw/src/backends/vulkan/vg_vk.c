@@ -25,6 +25,7 @@ typedef struct vg_vk_draw_cmd {
     uint32_t first_vertex;
     uint32_t vertex_count;
     vg_stroke_style style;
+    vg_stencil_state stencil;
     vg_rect clip_rect;
     int has_clip;
 } vg_vk_draw_cmd;
@@ -40,6 +41,20 @@ typedef struct vg_vk_push_constants {
     float color[4];
     float params[4];
 } vg_vk_push_constants;
+
+typedef struct vg_vk_pipeline_key {
+    vg_blend_mode blend;
+    int stencil_enabled;
+    vg_compare_op compare_op;
+    vg_stencil_op fail_op;
+    vg_stencil_op pass_op;
+    vg_stencil_op depth_fail_op;
+} vg_vk_pipeline_key;
+
+typedef struct vg_vk_pipeline_entry {
+    vg_vk_pipeline_key key;
+    VkPipeline pipeline;
+} vg_vk_pipeline_entry;
 #endif
 
 typedef struct vg_vk_backend {
@@ -49,6 +64,9 @@ typedef struct vg_vk_backend {
     vg_crt_profile crt;
     uint64_t frame_index;
     uint32_t raster_samples;
+    int has_stencil_attachment;
+    int stencil_clear_requested;
+    uint32_t stencil_clear_value;
 
     vg_vec2* stroke_vertices;
     uint32_t stroke_vertex_count;
@@ -69,8 +87,8 @@ typedef struct vg_vk_backend {
     vg_vk_gpu_buffer vertex_buffer;
 #if VG_HAS_VK_INTERNAL_PIPELINE
     VkPipelineLayout pipeline_layout;
-    VkPipeline pipeline_alpha;
-    VkPipeline pipeline_additive;
+    vg_vk_pipeline_entry pipeline_cache[32];
+    uint32_t pipeline_cache_count;
 #endif
 #endif
 } vg_vk_backend;
@@ -151,6 +169,17 @@ static int vg_vk_style_equal(const vg_stroke_style* a, const vg_stroke_style* b)
            a->blend == b->blend;
 }
 
+static int vg_vk_stencil_equal(const vg_stencil_state* a, const vg_stencil_state* b) {
+    return a->enabled == b->enabled &&
+           a->compare_op == b->compare_op &&
+           a->fail_op == b->fail_op &&
+           a->pass_op == b->pass_op &&
+           a->depth_fail_op == b->depth_fail_op &&
+           a->reference == b->reference &&
+           a->compare_mask == b->compare_mask &&
+           a->write_mask == b->write_mask;
+}
+
 static int vg_vk_clip_equal(int has_a, vg_rect a, int has_b, vg_rect b) {
     if (has_a != has_b) {
         return 0;
@@ -162,6 +191,50 @@ static int vg_vk_clip_equal(int has_a, vg_rect a, int has_b, vg_rect b) {
 }
 
 #if VG_HAS_VULKAN
+static VkCompareOp vg_vk_compare_op(vg_compare_op op) {
+    switch (op) {
+        case VG_COMPARE_NEVER:
+            return VK_COMPARE_OP_NEVER;
+        case VG_COMPARE_LESS:
+            return VK_COMPARE_OP_LESS;
+        case VG_COMPARE_EQUAL:
+            return VK_COMPARE_OP_EQUAL;
+        case VG_COMPARE_LESS_OR_EQUAL:
+            return VK_COMPARE_OP_LESS_OR_EQUAL;
+        case VG_COMPARE_GREATER:
+            return VK_COMPARE_OP_GREATER;
+        case VG_COMPARE_NOT_EQUAL:
+            return VK_COMPARE_OP_NOT_EQUAL;
+        case VG_COMPARE_GREATER_OR_EQUAL:
+            return VK_COMPARE_OP_GREATER_OR_EQUAL;
+        case VG_COMPARE_ALWAYS:
+        default:
+            return VK_COMPARE_OP_ALWAYS;
+    }
+}
+
+static VkStencilOp vg_vk_stencil_op(vg_stencil_op op) {
+    switch (op) {
+        case VG_STENCIL_OP_KEEP:
+            return VK_STENCIL_OP_KEEP;
+        case VG_STENCIL_OP_ZERO:
+            return VK_STENCIL_OP_ZERO;
+        case VG_STENCIL_OP_REPLACE:
+            return VK_STENCIL_OP_REPLACE;
+        case VG_STENCIL_OP_INCREMENT_AND_CLAMP:
+            return VK_STENCIL_OP_INCREMENT_AND_CLAMP;
+        case VG_STENCIL_OP_DECREMENT_AND_CLAMP:
+            return VK_STENCIL_OP_DECREMENT_AND_CLAMP;
+        case VG_STENCIL_OP_INVERT:
+            return VK_STENCIL_OP_INVERT;
+        case VG_STENCIL_OP_INCREMENT_AND_WRAP:
+            return VK_STENCIL_OP_INCREMENT_AND_WRAP;
+        case VG_STENCIL_OP_DECREMENT_AND_WRAP:
+        default:
+            return VK_STENCIL_OP_DECREMENT_AND_WRAP;
+    }
+}
+
 static uint32_t vg_vk_find_memory_type(
     const VkPhysicalDeviceMemoryProperties* props,
     uint32_t type_bits,
@@ -282,51 +355,28 @@ static void vg_vk_destroy_pipelines(vg_vk_backend* backend) {
     if (!backend || !backend->device) {
         return;
     }
-    if (backend->pipeline_alpha != VK_NULL_HANDLE) {
-        vkDestroyPipeline(backend->device, backend->pipeline_alpha, NULL);
-        backend->pipeline_alpha = VK_NULL_HANDLE;
+    for (uint32_t i = 0; i < backend->pipeline_cache_count; ++i) {
+        if (backend->pipeline_cache[i].pipeline != VK_NULL_HANDLE) {
+            vkDestroyPipeline(backend->device, backend->pipeline_cache[i].pipeline, NULL);
+            backend->pipeline_cache[i].pipeline = VK_NULL_HANDLE;
+        }
     }
-    if (backend->pipeline_additive != VK_NULL_HANDLE) {
-        vkDestroyPipeline(backend->device, backend->pipeline_additive, NULL);
-        backend->pipeline_additive = VK_NULL_HANDLE;
-    }
+    backend->pipeline_cache_count = 0;
     if (backend->pipeline_layout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(backend->device, backend->pipeline_layout, NULL);
         backend->pipeline_layout = VK_NULL_HANDLE;
     }
 }
 
-static vg_result vg_vk_create_pipelines(vg_vk_backend* backend) {
+static vg_result vg_vk_create_pipeline(
+    vg_vk_backend* backend,
+    VkShaderModule vert,
+    VkShaderModule frag,
+    const vg_vk_pipeline_key* key,
+    VkPipeline* out_pipeline
+) {
     if (!backend || !backend->device || backend->render_pass == VK_NULL_HANDLE) {
         return VG_ERROR_INVALID_ARGUMENT;
-    }
-
-    VkShaderModule vert = vg_vk_create_shader_module(backend, vg_line_vert_spv, vg_line_vert_spv_len);
-    VkShaderModule frag = vg_vk_create_shader_module(backend, vg_line_frag_spv, vg_line_frag_spv_len);
-    if (vert == VK_NULL_HANDLE || frag == VK_NULL_HANDLE) {
-        if (vert != VK_NULL_HANDLE) {
-            vkDestroyShaderModule(backend->device, vert, NULL);
-        }
-        if (frag != VK_NULL_HANDLE) {
-            vkDestroyShaderModule(backend->device, frag, NULL);
-        }
-        return VG_ERROR_BACKEND;
-    }
-
-    VkPushConstantRange push_range = {
-        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-        .offset = 0,
-        .size = sizeof(vg_vk_push_constants)
-    };
-    VkPipelineLayoutCreateInfo layout_info = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-        .pushConstantRangeCount = 1,
-        .pPushConstantRanges = &push_range
-    };
-    if (vkCreatePipelineLayout(backend->device, &layout_info, NULL, &backend->pipeline_layout) != VK_SUCCESS) {
-        vkDestroyShaderModule(backend->device, vert, NULL);
-        vkDestroyShaderModule(backend->device, frag, NULL);
-        return VG_ERROR_BACKEND;
     }
 
     VkPipelineShaderStageCreateInfo stages[2] = {
@@ -382,6 +432,25 @@ static vg_result vg_vk_create_pipelines(vg_vk_backend* backend) {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
         .rasterizationSamples = (VkSampleCountFlagBits)backend->raster_samples
     };
+    VkStencilOpState stencil = {
+        .failOp = vg_vk_stencil_op(key->fail_op),
+        .passOp = vg_vk_stencil_op(key->pass_op),
+        .depthFailOp = vg_vk_stencil_op(key->depth_fail_op),
+        .compareOp = vg_vk_compare_op(key->compare_op),
+        .compareMask = 0xffu,
+        .writeMask = 0xffu,
+        .reference = 0u
+    };
+    VkPipelineDepthStencilStateCreateInfo depth_stencil = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .depthTestEnable = VK_FALSE,
+        .depthWriteEnable = VK_FALSE,
+        .depthCompareOp = VK_COMPARE_OP_ALWAYS,
+        .depthBoundsTestEnable = VK_FALSE,
+        .stencilTestEnable = key->stencil_enabled ? VK_TRUE : VK_FALSE,
+        .front = stencil,
+        .back = stencil
+    };
 
     VkPipelineColorBlendAttachmentState blend_attachment = {
         .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
@@ -392,10 +461,16 @@ static vg_result vg_vk_create_pipelines(vg_vk_backend* backend) {
         .attachmentCount = 1,
         .pAttachments = &blend_attachment
     };
-    VkDynamicState dyn_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkDynamicState dyn_states[] = {
+        VK_DYNAMIC_STATE_VIEWPORT,
+        VK_DYNAMIC_STATE_SCISSOR,
+        VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
+        VK_DYNAMIC_STATE_STENCIL_WRITE_MASK,
+        VK_DYNAMIC_STATE_STENCIL_REFERENCE
+    };
     VkPipelineDynamicStateCreateInfo dynamic_state = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-        .dynamicStateCount = 2,
+        .dynamicStateCount = 5,
         .pDynamicStates = dyn_states
     };
 
@@ -408,6 +483,7 @@ static vg_result vg_vk_create_pipelines(vg_vk_backend* backend) {
         .pViewportState = &viewport_state,
         .pRasterizationState = &raster,
         .pMultisampleState = &msaa,
+        .pDepthStencilState = &depth_stencil,
         .pColorBlendState = &blend_state,
         .pDynamicState = &dynamic_state,
         .layout = backend->pipeline_layout,
@@ -415,34 +491,113 @@ static vg_result vg_vk_create_pipelines(vg_vk_backend* backend) {
         .subpass = 0
     };
 
-    blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-    blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
-    blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-    blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
-    if (vkCreateGraphicsPipelines(backend->device, VK_NULL_HANDLE, 1, &pipeline_info, NULL, &backend->pipeline_alpha) != VK_SUCCESS) {
-        vkDestroyShaderModule(backend->device, vert, NULL);
-        vkDestroyShaderModule(backend->device, frag, NULL);
-        vg_vk_destroy_pipelines(backend);
+    if (key->blend == VG_BLEND_ADDITIVE) {
+        blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
+        blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
+    } else {
+        blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
+        blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
+    }
+
+    if (vkCreateGraphicsPipelines(backend->device, VK_NULL_HANDLE, 1, &pipeline_info, NULL, out_pipeline) != VK_SUCCESS) {
+        return VG_ERROR_BACKEND;
+    }
+    return VG_OK;
+}
+
+static vg_result vg_vk_create_pipelines(vg_vk_backend* backend) {
+    if (!backend || !backend->device || backend->render_pass == VK_NULL_HANDLE) {
+        return VG_ERROR_INVALID_ARGUMENT;
+    }
+
+    VkShaderModule vert = vg_vk_create_shader_module(backend, vg_line_vert_spv, vg_line_vert_spv_len);
+    VkShaderModule frag = vg_vk_create_shader_module(backend, vg_line_frag_spv, vg_line_frag_spv_len);
+    if (vert == VK_NULL_HANDLE || frag == VK_NULL_HANDLE) {
+        if (vert != VK_NULL_HANDLE) {
+            vkDestroyShaderModule(backend->device, vert, NULL);
+        }
+        if (frag != VK_NULL_HANDLE) {
+            vkDestroyShaderModule(backend->device, frag, NULL);
+        }
         return VG_ERROR_BACKEND;
     }
 
-    blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
-    blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
-    blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
-    blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-    blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-    blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
-    if (vkCreateGraphicsPipelines(backend->device, VK_NULL_HANDLE, 1, &pipeline_info, NULL, &backend->pipeline_additive) != VK_SUCCESS) {
+    VkPushConstantRange push_range = {
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        .offset = 0,
+        .size = sizeof(vg_vk_push_constants)
+    };
+    VkPipelineLayoutCreateInfo layout_info = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &push_range
+    };
+    if (vkCreatePipelineLayout(backend->device, &layout_info, NULL, &backend->pipeline_layout) != VK_SUCCESS) {
         vkDestroyShaderModule(backend->device, vert, NULL);
         vkDestroyShaderModule(backend->device, frag, NULL);
-        vg_vk_destroy_pipelines(backend);
         return VG_ERROR_BACKEND;
     }
 
     vkDestroyShaderModule(backend->device, vert, NULL);
     vkDestroyShaderModule(backend->device, frag, NULL);
+    return VG_OK;
+}
+
+static int vg_vk_pipeline_key_equal(const vg_vk_pipeline_key* a, const vg_vk_pipeline_key* b) {
+    return a->blend == b->blend &&
+           a->stencil_enabled == b->stencil_enabled &&
+           a->compare_op == b->compare_op &&
+           a->fail_op == b->fail_op &&
+           a->pass_op == b->pass_op &&
+           a->depth_fail_op == b->depth_fail_op;
+}
+
+static vg_result vg_vk_get_pipeline(vg_vk_backend* backend, const vg_vk_pipeline_key* key, VkPipeline* out_pipeline) {
+    if (!backend || !key || !out_pipeline || backend->pipeline_layout == VK_NULL_HANDLE) {
+        return VG_ERROR_INVALID_ARGUMENT;
+    }
+    for (uint32_t i = 0; i < backend->pipeline_cache_count; ++i) {
+        if (vg_vk_pipeline_key_equal(&backend->pipeline_cache[i].key, key)) {
+            *out_pipeline = backend->pipeline_cache[i].pipeline;
+            return VG_OK;
+        }
+    }
+    if (backend->pipeline_cache_count >= (uint32_t)(sizeof(backend->pipeline_cache) / sizeof(backend->pipeline_cache[0]))) {
+        return VG_ERROR_BACKEND;
+    }
+
+    VkShaderModule vert = vg_vk_create_shader_module(backend, vg_line_vert_spv, vg_line_vert_spv_len);
+    VkShaderModule frag = vg_vk_create_shader_module(backend, vg_line_frag_spv, vg_line_frag_spv_len);
+    if (vert == VK_NULL_HANDLE || frag == VK_NULL_HANDLE) {
+        if (vert != VK_NULL_HANDLE) {
+            vkDestroyShaderModule(backend->device, vert, NULL);
+        }
+        if (frag != VK_NULL_HANDLE) {
+            vkDestroyShaderModule(backend->device, frag, NULL);
+        }
+        return VG_ERROR_BACKEND;
+    }
+
+    VkPipeline pipe = VK_NULL_HANDLE;
+    vg_result r = vg_vk_create_pipeline(backend, vert, frag, key, &pipe);
+    vkDestroyShaderModule(backend->device, vert, NULL);
+    vkDestroyShaderModule(backend->device, frag, NULL);
+    if (r != VG_OK) {
+        return r;
+    }
+
+    backend->pipeline_cache[backend->pipeline_cache_count].key = *key;
+    backend->pipeline_cache[backend->pipeline_cache_count].pipeline = pipe;
+    backend->pipeline_cache_count++;
+    *out_pipeline = pipe;
     return VG_OK;
 }
 #endif
@@ -545,9 +700,28 @@ static int vg_vk_emit_round_cap(vg_vk_backend* backend, vg_vec2 center, vg_vec2 
     return 1;
 }
 
-static vg_result vg_vk_push_draw(vg_context* ctx, vg_vk_backend* backend, uint32_t first_vertex, uint32_t vertex_count, const vg_stroke_style* style) {
+static vg_result vg_vk_push_draw(
+    vg_context* ctx,
+    vg_vk_backend* backend,
+    uint32_t first_vertex,
+    uint32_t vertex_count,
+    const vg_stroke_style* style,
+    const vg_stencil_state* stencil
+) {
+    vg_stencil_state effective_stencil = {0};
+    if (stencil) {
+        effective_stencil = *stencil;
+    }
     if (!vg_vk_reserve_draws(backend, 1u)) {
         return VG_ERROR_OUT_OF_MEMORY;
+    }
+    if (effective_stencil.enabled) {
+        if (!backend->has_stencil_attachment) {
+            return VG_ERROR_UNSUPPORTED;
+        }
+#if !VG_HAS_VK_INTERNAL_PIPELINE
+        return VG_ERROR_UNSUPPORTED;
+#endif
     }
     vg_rect clip_rect = {0};
     int has_clip = vg_context_get_clip(ctx, &clip_rect);
@@ -555,6 +729,7 @@ static vg_result vg_vk_push_draw(vg_context* ctx, vg_vk_backend* backend, uint32
         vg_vk_draw_cmd* prev = &backend->draws[backend->draw_count - 1u];
         if (prev->first_vertex + prev->vertex_count == first_vertex &&
             vg_vk_style_equal(&prev->style, style) &&
+            vg_vk_stencil_equal(&prev->stencil, &effective_stencil) &&
             vg_vk_clip_equal(prev->has_clip, prev->clip_rect, has_clip, clip_rect)) {
             prev->vertex_count += vertex_count;
             return VG_OK;
@@ -563,6 +738,7 @@ static vg_result vg_vk_push_draw(vg_context* ctx, vg_vk_backend* backend, uint32
     backend->draws[backend->draw_count].first_vertex = first_vertex;
     backend->draws[backend->draw_count].vertex_count = vertex_count;
     backend->draws[backend->draw_count].style = *style;
+    backend->draws[backend->draw_count].stencil = effective_stencil;
     backend->draws[backend->draw_count].clip_rect = clip_rect;
     backend->draws[backend->draw_count].has_clip = has_clip;
     backend->draw_count++;
@@ -617,7 +793,7 @@ static vg_result vg_vk_draw_polyline_impl(
         }
     }
 
-    return vg_vk_push_draw(ctx, backend, first_vertex, backend->stroke_vertex_count - first_vertex, style);
+    return vg_vk_push_draw(ctx, backend, first_vertex, backend->stroke_vertex_count - first_vertex, style, &style->stencil);
 }
 
 static int vg_vk_append_point(vg_vec2** points, size_t* count, size_t* cap, vg_vec2 p) {
@@ -727,6 +903,8 @@ static vg_result vg_vk_submit_recorded_draws(vg_vk_backend* backend) {
 
 #if VG_HAS_VK_INTERNAL_PIPELINE
             VkPipeline current_pipeline = VK_NULL_HANDLE;
+            vg_stencil_state current_stencil = {0};
+            int have_stencil_state = 0;
 #endif
             VkRect2D current_scissor = scissor;
             for (int pass = 0; pass < 2; ++pass) {
@@ -773,10 +951,37 @@ static vg_result vg_vk_submit_recorded_draws(vg_vk_backend* backend) {
 
 #if VG_HAS_VK_INTERNAL_PIPELINE
                     if (backend->pipeline_layout != VK_NULL_HANDLE) {
-                        VkPipeline needed = cmd->style.blend == VG_BLEND_ADDITIVE ? backend->pipeline_additive : backend->pipeline_alpha;
+                        vg_vk_pipeline_key key = {
+                            .blend = cmd->style.blend,
+                            .stencil_enabled = cmd->stencil.enabled ? 1 : 0,
+                            .compare_op = cmd->stencil.enabled ? cmd->stencil.compare_op : VG_COMPARE_ALWAYS,
+                            .fail_op = cmd->stencil.enabled ? cmd->stencil.fail_op : VG_STENCIL_OP_KEEP,
+                            .pass_op = cmd->stencil.enabled ? cmd->stencil.pass_op : VG_STENCIL_OP_KEEP,
+                            .depth_fail_op = cmd->stencil.enabled ? cmd->stencil.depth_fail_op : VG_STENCIL_OP_KEEP
+                        };
+                        VkPipeline needed = VK_NULL_HANDLE;
+                        vg_result pipe_res = vg_vk_get_pipeline(backend, &key, &needed);
+                        if (pipe_res != VG_OK) {
+                            return pipe_res;
+                        }
                         if (needed != VK_NULL_HANDLE && needed != current_pipeline) {
                             vkCmdBindPipeline(backend->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, needed);
                             current_pipeline = needed;
+                        }
+                        if (!have_stencil_state || !vg_vk_stencil_equal(&current_stencil, &cmd->stencil)) {
+                            uint32_t compare_mask = cmd->stencil.compare_mask;
+                            uint32_t write_mask = cmd->stencil.write_mask;
+                            uint32_t reference = cmd->stencil.reference;
+                            if (!cmd->stencil.enabled) {
+                                compare_mask = 0xffu;
+                                write_mask = 0xffu;
+                                reference = 0u;
+                            }
+                            vkCmdSetStencilCompareMask(backend->command_buffer, VK_STENCIL_FACE_FRONT_AND_BACK, compare_mask);
+                            vkCmdSetStencilWriteMask(backend->command_buffer, VK_STENCIL_FACE_FRONT_AND_BACK, write_mask);
+                            vkCmdSetStencilReference(backend->command_buffer, VK_STENCIL_FACE_FRONT_AND_BACK, reference);
+                            current_stencil = cmd->stencil;
+                            have_stencil_state = 1;
                         }
 
                         vg_vk_push_constants pc = {0};
@@ -884,8 +1089,55 @@ static void vg_vk_blend_pixel(
     px[3] = (uint8_t)(out_a * 255.0f + 0.5f);
 }
 
+static int vg_vk_stencil_compare(vg_compare_op op, uint8_t current, uint8_t reference, uint8_t compare_mask) {
+    uint32_t a = (uint32_t)current & compare_mask;
+    uint32_t b = (uint32_t)reference & compare_mask;
+    switch (op) {
+        case VG_COMPARE_NEVER:
+            return 0;
+        case VG_COMPARE_LESS:
+            return a < b;
+        case VG_COMPARE_EQUAL:
+            return a == b;
+        case VG_COMPARE_LESS_OR_EQUAL:
+            return a <= b;
+        case VG_COMPARE_GREATER:
+            return a > b;
+        case VG_COMPARE_NOT_EQUAL:
+            return a != b;
+        case VG_COMPARE_GREATER_OR_EQUAL:
+            return a >= b;
+        case VG_COMPARE_ALWAYS:
+        default:
+            return 1;
+    }
+}
+
+static uint8_t vg_vk_stencil_apply_op(vg_stencil_op op, uint8_t current, uint8_t reference) {
+    switch (op) {
+        case VG_STENCIL_OP_KEEP:
+            return current;
+        case VG_STENCIL_OP_ZERO:
+            return 0u;
+        case VG_STENCIL_OP_REPLACE:
+            return reference;
+        case VG_STENCIL_OP_INCREMENT_AND_CLAMP:
+            return current == 0xffu ? 0xffu : (uint8_t)(current + 1u);
+        case VG_STENCIL_OP_DECREMENT_AND_CLAMP:
+            return current == 0u ? 0u : (uint8_t)(current - 1u);
+        case VG_STENCIL_OP_INVERT:
+            return (uint8_t)~current;
+        case VG_STENCIL_OP_INCREMENT_AND_WRAP:
+            return (uint8_t)(current + 1u);
+        case VG_STENCIL_OP_DECREMENT_AND_WRAP:
+        default:
+            return (uint8_t)(current - 1u);
+    }
+}
+
 static void vg_vk_raster_triangle(
     uint8_t* pixels,
+    uint8_t* stencil,
     uint32_t width,
     uint32_t height,
     uint32_t stride,
@@ -895,6 +1147,7 @@ static void vg_vk_raster_triangle(
     vg_color color,
     float intensity,
     vg_blend_mode blend,
+    const vg_stencil_state* stencil_state,
     int has_clip,
     vg_rect clip_rect
 ) {
@@ -974,6 +1227,20 @@ static void vg_vk_raster_triangle(
             float e1 = sign * vg_vk_edge(b, c, p);
             float e2 = sign * vg_vk_edge(c, a, p);
             if (e0 >= 0.0f && e1 >= 0.0f && e2 >= 0.0f) {
+                if (stencil && stencil_state && stencil_state->enabled) {
+                    size_t si = (size_t)y * (size_t)width + (size_t)x;
+                    uint8_t old = stencil[si];
+                    uint8_t ref = (uint8_t)(stencil_state->reference & 0xffu);
+                    uint8_t compare_mask = (uint8_t)(stencil_state->compare_mask & 0xffu);
+                    uint8_t write_mask = (uint8_t)(stencil_state->write_mask & 0xffu);
+                    int pass = vg_vk_stencil_compare(stencil_state->compare_op, old, ref, compare_mask);
+                    vg_stencil_op op = pass ? stencil_state->pass_op : stencil_state->fail_op;
+                    uint8_t next = vg_vk_stencil_apply_op(op, old, ref);
+                    stencil[si] = (uint8_t)((old & (uint8_t)(~write_mask)) | (next & write_mask));
+                    if (!pass) {
+                        continue;
+                    }
+                }
                 uint8_t* px = pixels + (size_t)y * stride + (size_t)x * 4u;
                 vg_vk_blend_pixel(px, color, intensity, blend);
             }
@@ -1095,6 +1362,22 @@ static vg_result vg_vk_debug_rasterize_rgba8(
     if (!backend || !pixels || width == 0u || height == 0u || stride_bytes < width * 4u) {
         return VG_ERROR_INVALID_ARGUMENT;
     }
+    uint8_t* stencil = NULL;
+    int need_stencil = 0;
+    for (uint32_t i = 0; i < backend->draw_count; ++i) {
+        if (backend->draws[i].stencil.enabled) {
+            need_stencil = 1;
+            break;
+        }
+    }
+    if (need_stencil) {
+        size_t stencil_count = (size_t)width * (size_t)height;
+        stencil = (uint8_t*)malloc(stencil_count);
+        if (!stencil) {
+            return VG_ERROR_OUT_OF_MEMORY;
+        }
+        memset(stencil, (int)(backend->stencil_clear_requested ? (backend->stencil_clear_value & 0xffu) : 0u), stencil_count);
+    }
 
     for (uint32_t i = 0; i < backend->draw_count; ++i) {
         const vg_vk_draw_cmd* cmd = &backend->draws[i];
@@ -1128,6 +1411,7 @@ static vg_result vg_vk_debug_rasterize_rgba8(
             c.y += jy;
             vg_vk_raster_triangle(
                 pixels,
+                stencil,
                 width,
                 height,
                 stride_bytes,
@@ -1137,6 +1421,7 @@ static vg_result vg_vk_debug_rasterize_rgba8(
                 cmd->style.color,
                 cmd_intensity,
                 cmd->style.blend,
+                &cmd->stencil,
                 cmd->has_clip,
                 cmd->clip_rect
             );
@@ -1144,6 +1429,7 @@ static vg_result vg_vk_debug_rasterize_rgba8(
     }
 
     vg_vk_apply_bloom_rgba8(backend, pixels, width, height, stride_bytes);
+    free(stencil);
     return VG_OK;
 }
 
@@ -1174,12 +1460,48 @@ static vg_result vg_vk_begin_frame(vg_context* ctx, const vg_frame_desc* frame) 
     backend->frame_index++;
     backend->stroke_vertex_count = 0;
     backend->draw_count = 0;
+    backend->stencil_clear_requested = 0;
+    backend->stencil_clear_value = 0u;
     return VG_OK;
 }
 
 static vg_result vg_vk_end_frame(vg_context* ctx) {
     vg_vk_backend* backend = vg_vk_backend_from(ctx);
     return vg_vk_submit_recorded_draws(backend);
+}
+
+static vg_result vg_vk_stencil_clear(vg_context* ctx, uint32_t value) {
+    vg_vk_backend* backend = vg_vk_backend_from(ctx);
+    if (!backend) {
+        return VG_ERROR_INVALID_ARGUMENT;
+    }
+    if (!backend->has_stencil_attachment) {
+        return VG_ERROR_UNSUPPORTED;
+    }
+    backend->stencil_clear_requested = 1;
+    backend->stencil_clear_value = value & 0xffu;
+#if VG_HAS_VULKAN
+    if (!backend->gpu_ready || !backend->frame.command_buffer) {
+        return VG_OK;
+    }
+    VkCommandBuffer cmd = (VkCommandBuffer)backend->frame.command_buffer;
+    VkClearAttachment clear = {
+        .aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT,
+        .clearValue = {.depthStencil = {.depth = 1.0f, .stencil = value & 0xffu}}
+    };
+    VkClearRect rect = {
+        .rect = {
+            .offset = {0, 0},
+            .extent = {backend->frame.width, backend->frame.height}
+        },
+        .baseArrayLayer = 0,
+        .layerCount = 1
+    };
+    vkCmdClearAttachments(cmd, 1, &clear, 1, &rect);
+    return VG_OK;
+#else
+    return VG_OK;
+#endif
 }
 
 static void vg_vk_set_retro_params(vg_context* ctx, const vg_retro_params* params) {
@@ -1295,9 +1617,10 @@ static vg_result vg_vk_fill_convex(vg_context* ctx, const vg_vec2* points, size_
         .cap = VG_LINE_CAP_BUTT,
         .join = VG_LINE_JOIN_BEVEL,
         .miter_limit = 1.0f,
-        .blend = style->blend
+        .blend = style->blend,
+        .stencil = style->stencil
     };
-    return vg_vk_push_draw(ctx, backend, first_vertex, backend->stroke_vertex_count - first_vertex, &draw_style);
+    return vg_vk_push_draw(ctx, backend, first_vertex, backend->stroke_vertex_count - first_vertex, &draw_style, &style->stencil);
 }
 
 vg_result vg_vk_backend_create(vg_context* ctx) {
@@ -1310,6 +1633,7 @@ vg_result vg_vk_backend_create(vg_context* ctx) {
         .draw_path_stroke = vg_vk_draw_path_stroke,
         .draw_polyline = vg_vk_draw_polyline,
         .fill_convex = vg_vk_fill_convex,
+        .stencil_clear = vg_vk_stencil_clear,
         .debug_rasterize_rgba8 = vg_vk_debug_rasterize_rgba8
     };
 
@@ -1333,6 +1657,7 @@ vg_result vg_vk_backend_create(vg_context* ctx) {
     backend->retro = ctx->retro;
     backend->crt = ctx->crt;
     backend->raster_samples = backend->desc.raster_samples;
+    backend->has_stencil_attachment = backend->desc.has_stencil_attachment ? 1 : 0;
 
 #if VG_HAS_VULKAN
     backend->physical_device = (VkPhysicalDevice)backend->desc.physical_device;

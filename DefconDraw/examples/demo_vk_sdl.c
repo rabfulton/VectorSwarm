@@ -93,6 +93,10 @@ typedef struct app {
     VkImage scene_image;
     VkDeviceMemory scene_memory;
     VkImageView scene_view;
+    VkImage scene_depth_stencil_image;
+    VkDeviceMemory scene_depth_stencil_memory;
+    VkImageView scene_depth_stencil_view;
+    VkFormat scene_depth_stencil_format;
     VkFramebuffer scene_fb;
     VkRenderPass scene_render_pass;
     int scene_initialized;
@@ -234,7 +238,8 @@ enum {
     SCENE_FILL_PRIMS = 5,
     SCENE_TITLE_CRAWL = 6,
     SCENE_IMAGE_FX = 7,
-    SCENE_COUNT = 8
+    SCENE_STENCIL_LAB = 8,
+    SCENE_COUNT = 9
 };
 
 static int check_vk(VkResult res, const char* what) {
@@ -342,7 +347,8 @@ static void set_scene(app* a, int mode) {
         "STATUS READY\nMODE 5 SVG IMPORTER\nVECTOR ASSET PREVIEW",
         "STATUS READY\nMODE 6 SOLAR INFOGRAPHIC\nFILLS + ORBITS + CALLOUTS",
         "STATUS READY\nMODE 7 TITLE CRAWL\nBOXED FONT + ROTARY TEST",
-        "STATUS READY\nMODE 8 IMAGE FX TEST\nMONO + BLOCK + SVG"
+        "STATUS READY\nMODE 8 IMAGE FX TEST\nMONO + BLOCK + SVG",
+        "STATUS READY\nMODE 9 STENCIL LAB\nREPLACE + EQUAL + NOT-EQUAL + CHAINED WRITE"
     };
     if (mode < 0 || mode >= SCENE_COUNT) {
         return;
@@ -650,12 +656,28 @@ static uint32_t find_memory_type(app* a, uint32_t type_bits, VkMemoryPropertyFla
     return UINT32_MAX;
 }
 
+static VkFormat find_depth_stencil_format(app* a) {
+    const VkFormat candidates[] = {
+        VK_FORMAT_D32_SFLOAT_S8_UINT,
+        VK_FORMAT_D24_UNORM_S8_UINT
+    };
+    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); ++i) {
+        VkFormatProperties props = {0};
+        vkGetPhysicalDeviceFormatProperties(a->physical_device, candidates[i], &props);
+        if (props.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) {
+            return candidates[i];
+        }
+    }
+    return VK_FORMAT_UNDEFINED;
+}
+
 static int create_image_2d(
     app* a,
     uint32_t w,
     uint32_t h,
     VkFormat format,
     VkImageUsageFlags usage,
+    VkImageAspectFlags aspect_mask,
     VkImage* out_image,
     VkDeviceMemory* out_mem,
     VkImageView* out_view
@@ -705,7 +727,7 @@ static int create_image_2d(
         .viewType = VK_IMAGE_VIEW_TYPE_2D,
         .format = format,
         .subresourceRange = {
-            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .aspectMask = aspect_mask,
             .baseMipLevel = 0,
             .levelCount = 1,
             .baseArrayLayer = 0,
@@ -1049,16 +1071,34 @@ static int create_render_passes(app* a) {
         .initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         .finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
     };
+    a->scene_depth_stencil_format = find_depth_stencil_format(a);
+    if (a->scene_depth_stencil_format == VK_FORMAT_UNDEFINED) {
+        fprintf(stderr, "No depth/stencil attachment format found\n");
+        return 0;
+    }
+    VkAttachmentDescription scene_ds_att = {
+        .format = a->scene_depth_stencil_format,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+    };
     VkAttachmentReference scene_ref = {.attachment = 0, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkAttachmentReference scene_ds_ref = {.attachment = 1, .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
     VkSubpassDescription scene_sub = {
         .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
         .colorAttachmentCount = 1,
-        .pColorAttachments = &scene_ref
+        .pColorAttachments = &scene_ref,
+        .pDepthStencilAttachment = &scene_ds_ref
     };
+    VkAttachmentDescription scene_attachments[] = {scene_att, scene_ds_att};
     VkRenderPassCreateInfo scene_rp = {
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-        .attachmentCount = 1,
-        .pAttachments = &scene_att,
+        .attachmentCount = 2,
+        .pAttachments = scene_attachments,
         .subpassCount = 1,
         .pSubpasses = &scene_sub
     };
@@ -1128,18 +1168,35 @@ static int create_offscreen_targets(app* a) {
     uint32_t h = a->swapchain_extent.height;
     VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
-    if (!create_image_2d(a, w, h, a->swapchain_format, usage, &a->scene_image, &a->scene_memory, &a->scene_view)) {
+    if (!create_image_2d(a, w, h, a->swapchain_format, usage, VK_IMAGE_ASPECT_COLOR_BIT, &a->scene_image, &a->scene_memory, &a->scene_view)) {
         return 0;
     }
-    if (!create_image_2d(a, w, h, a->swapchain_format, usage, &a->bloom_image, &a->bloom_memory, &a->bloom_view)) {
+    if (!create_image_2d(a, w, h, a->swapchain_format, usage, VK_IMAGE_ASPECT_COLOR_BIT, &a->bloom_image, &a->bloom_memory, &a->bloom_view)) {
+        return 0;
+    }
+    a->scene_depth_stencil_format = find_depth_stencil_format(a);
+    if (a->scene_depth_stencil_format == VK_FORMAT_UNDEFINED) {
+        fprintf(stderr, "No depth/stencil attachment format found\n");
+        return 0;
+    }
+    if (!create_image_2d(
+            a,
+            w,
+            h,
+            a->scene_depth_stencil_format,
+            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+            VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT,
+            &a->scene_depth_stencil_image,
+            &a->scene_depth_stencil_memory,
+            &a->scene_depth_stencil_view)) {
         return 0;
     }
 
-    VkImageView scene_att[] = {a->scene_view};
+    VkImageView scene_att[] = {a->scene_view, a->scene_depth_stencil_view};
     VkFramebufferCreateInfo scene_fb = {
         .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
         .renderPass = a->scene_render_pass,
-        .attachmentCount = 1,
+        .attachmentCount = 2,
         .pAttachments = scene_att,
         .width = w,
         .height = h,
@@ -1578,6 +1635,7 @@ static int create_vg_context(app* a) {
     desc.api.vulkan.vertex_binding = 0;
     desc.api.vulkan.max_frames_in_flight = 2;
     desc.api.vulkan.raster_samples = 1;
+    desc.api.vulkan.has_stencil_attachment = 1;
 
     vg_result r = vg_context_create(&desc, &a->vg);
     if (r != VG_OK) {
@@ -1676,6 +1734,10 @@ static void destroy_swapchain_resources(app* a) {
         vkDestroyImageView(a->device, a->scene_view, NULL);
         a->scene_view = VK_NULL_HANDLE;
     }
+    if (a->scene_depth_stencil_view != VK_NULL_HANDLE) {
+        vkDestroyImageView(a->device, a->scene_depth_stencil_view, NULL);
+        a->scene_depth_stencil_view = VK_NULL_HANDLE;
+    }
     if (a->bloom_view != VK_NULL_HANDLE) {
         vkDestroyImageView(a->device, a->bloom_view, NULL);
         a->bloom_view = VK_NULL_HANDLE;
@@ -1684,6 +1746,10 @@ static void destroy_swapchain_resources(app* a) {
         vkDestroyImage(a->device, a->scene_image, NULL);
         a->scene_image = VK_NULL_HANDLE;
     }
+    if (a->scene_depth_stencil_image != VK_NULL_HANDLE) {
+        vkDestroyImage(a->device, a->scene_depth_stencil_image, NULL);
+        a->scene_depth_stencil_image = VK_NULL_HANDLE;
+    }
     if (a->bloom_image != VK_NULL_HANDLE) {
         vkDestroyImage(a->device, a->bloom_image, NULL);
         a->bloom_image = VK_NULL_HANDLE;
@@ -1691,6 +1757,10 @@ static void destroy_swapchain_resources(app* a) {
     if (a->scene_memory != VK_NULL_HANDLE) {
         vkFreeMemory(a->device, a->scene_memory, NULL);
         a->scene_memory = VK_NULL_HANDLE;
+    }
+    if (a->scene_depth_stencil_memory != VK_NULL_HANDLE) {
+        vkFreeMemory(a->device, a->scene_depth_stencil_memory, NULL);
+        a->scene_depth_stencil_memory = VK_NULL_HANDLE;
     }
     if (a->bloom_memory != VK_NULL_HANDLE) {
         vkFreeMemory(a->device, a->bloom_memory, NULL);
@@ -2201,7 +2271,7 @@ static vg_result draw_debug_ui(app* a, const vg_crt_profile* crt, float fps) {
     vg_ui_slider_panel_desc ui = {
         .rect = {k_ui_x, k_ui_y, k_ui_w, k_ui_h},
         .title_line_0 = "TAB UI  UP DOWN SELECT  LEFT RIGHT ADJUST",
-        .title_line_1 = "1..8 SCENE  R REPLAY TTY  F5 SAVE  F9 LOAD",
+        .title_line_1 = "1..9 SCENE  R REPLAY TTY  F5 SAVE  F9 LOAD",
         .footer_line = footer,
         .items = items,
         .item_count = UI_PARAM_COUNT,
@@ -3082,6 +3152,101 @@ static vg_result draw_scene_image_fx(app* a, const vg_stroke_style* main_s, floa
     return vr;
 }
 
+static vg_result draw_scene_stencil_lab(app* a, const vg_stroke_style* main_s, float t, float w, float h) {
+    vg_stroke_style line = *main_s;
+    line.blend = VG_BLEND_ALPHA;
+    line.width_px = 1.2f;
+    line.intensity = 1.0f;
+
+    vg_fill_style panel_fill = {.intensity = 1.0f, .color = {0.03f, 0.11f, 0.07f, 0.72f}, .blend = VG_BLEND_ALPHA};
+    vg_fill_style glow_fill = {.intensity = 1.0f, .color = {0.25f, 1.0f, 0.52f, 0.42f}, .blend = VG_BLEND_ALPHA};
+    vg_fill_style hot_fill = {.intensity = 1.0f, .color = {1.00f, 0.88f, 0.32f, 0.72f}, .blend = VG_BLEND_ALPHA};
+    vg_fill_style cool_fill = {.intensity = 1.0f, .color = {0.35f, 0.90f, 1.00f, 0.48f}, .blend = VG_BLEND_ALPHA};
+    vg_fill_style mask_only = {.intensity = 1.0f, .color = {0.0f, 0.0f, 0.0f, 0.0f}, .blend = VG_BLEND_ALPHA};
+
+    vg_rect left = {w * 0.05f, h * 0.13f, w * 0.28f, h * 0.70f};
+    vg_rect mid = {w * 0.36f, h * 0.13f, w * 0.28f, h * 0.70f};
+    vg_rect right = {w * 0.67f, h * 0.13f, w * 0.28f, h * 0.70f};
+
+    vg_result vr = vg_fill_rect(a->vg, left, &panel_fill);
+    if (vr != VG_OK) return vr;
+    vr = vg_fill_rect(a->vg, mid, &panel_fill);
+    if (vr != VG_OK) return vr;
+    vr = vg_fill_rect(a->vg, right, &panel_fill);
+    if (vr != VG_OK) return vr;
+    vr = vg_draw_rect(a->vg, left, &line);
+    if (vr != VG_OK) return vr;
+    vr = vg_draw_rect(a->vg, mid, &line);
+    if (vr != VG_OK) return vr;
+    vr = vg_draw_rect(a->vg, right, &line);
+    if (vr != VG_OK) return vr;
+
+    mask_only.stencil = vg_stencil_state_make_write_replace(1u, 0xffu);
+    vr = vg_fill_circle(a->vg, (vg_vec2){left.x + left.w * 0.5f, left.y + left.h * 0.53f}, left.w * 0.36f, &mask_only, 48);
+    if (vr != VG_OK) return vr;
+    glow_fill.stencil = vg_stencil_state_make_test_equal(1u, 0xffu);
+    for (int i = 0; i < 26; ++i) {
+        float y = left.y + 8.0f + (float)i * ((left.h - 16.0f) / 26.0f);
+        vg_rect bar = {left.x + 14.0f, y, left.w - 28.0f, 3.2f};
+        vr = vg_fill_rect(a->vg, bar, &glow_fill);
+        if (vr != VG_OK) return vr;
+    }
+    {
+        float sweep_u = 0.5f + 0.5f * sinf(t * 2.1f);
+        vg_fill_style sweep_fill = glow_fill;
+        sweep_fill.color = (vg_color){0.95f, 1.0f, 0.90f, 0.55f};
+        vg_rect sweep = {
+            left.x + left.w * sweep_u - 7.0f,
+            left.y + 8.0f,
+            14.0f,
+            left.h - 16.0f
+        };
+        vr = vg_fill_rect(a->vg, sweep, &sweep_fill);
+        if (vr != VG_OK) return vr;
+    }
+
+    mask_only.stencil = vg_stencil_state_make_write_replace(1u, 0xffu);
+    vr = vg_fill_circle(a->vg, (vg_vec2){mid.x + mid.w * 0.43f, mid.y + mid.h * 0.53f}, mid.w * 0.26f, &mask_only, 48);
+    if (vr != VG_OK) return vr;
+    mask_only.stencil.enabled = 1;
+    mask_only.stencil.compare_op = VG_COMPARE_EQUAL;
+    mask_only.stencil.fail_op = VG_STENCIL_OP_KEEP;
+    mask_only.stencil.pass_op = VG_STENCIL_OP_INCREMENT_AND_CLAMP;
+    mask_only.stencil.depth_fail_op = VG_STENCIL_OP_KEEP;
+    mask_only.stencil.reference = 1u;
+    mask_only.stencil.compare_mask = 0xffu;
+    mask_only.stencil.write_mask = 0xffu;
+    vr = vg_fill_circle(a->vg, (vg_vec2){mid.x + mid.w * 0.61f, mid.y + mid.h * 0.53f}, mid.w * 0.26f, &mask_only, 48);
+    if (vr != VG_OK) return vr;
+    hot_fill.stencil = vg_stencil_state_make_test_equal(2u, 0xffu);
+    vr = vg_fill_rect(a->vg, (vg_rect){mid.x + 6.0f, mid.y + 6.0f, mid.w - 12.0f, mid.h - 12.0f}, &hot_fill);
+    if (vr != VG_OK) return vr;
+
+    mask_only.stencil = vg_stencil_state_make_write_replace(4u, 0xffu);
+    vr = vg_fill_rect(a->vg, (vg_rect){right.x + right.w * 0.22f, right.y + right.h * 0.22f, right.w * 0.56f, right.h * 0.56f}, &mask_only);
+    if (vr != VG_OK) return vr;
+    cool_fill.stencil.enabled = 1;
+    cool_fill.stencil.compare_op = VG_COMPARE_NOT_EQUAL;
+    cool_fill.stencil.fail_op = VG_STENCIL_OP_KEEP;
+    cool_fill.stencil.pass_op = VG_STENCIL_OP_KEEP;
+    cool_fill.stencil.depth_fail_op = VG_STENCIL_OP_KEEP;
+    cool_fill.stencil.reference = 4u;
+    cool_fill.stencil.compare_mask = 0xffu;
+    cool_fill.stencil.write_mask = 0u;
+    vr = vg_fill_circle(a->vg, (vg_vec2){right.x + right.w * 0.5f, right.y + right.h * 0.5f}, right.w * 0.46f, &cool_fill, 64);
+    if (vr != VG_OK) return vr;
+
+    vr = vg_draw_text(a->vg, "REPLACE + EQUAL", (vg_vec2){left.x + 8.0f, left.y + left.h + 12.0f}, 11.0f, 0.65f, &line, NULL);
+    if (vr != VG_OK) return vr;
+    vr = vg_draw_text(a->vg, "CHAINED WRITE", (vg_vec2){mid.x + 8.0f, mid.y + mid.h + 12.0f}, 11.0f, 0.65f, &line, NULL);
+    if (vr != VG_OK) return vr;
+    vr = vg_draw_text(a->vg, "NOT_EQUAL MASK", (vg_vec2){right.x + 8.0f, right.y + right.h + 12.0f}, 11.0f, 0.65f, &line, NULL);
+    if (vr != VG_OK) return vr;
+    vr = vg_draw_text(a->vg, "MODE 9 STENCIL LAB", (vg_vec2){w * 0.05f, h * 0.06f}, 17.0f, 1.1f, &line, NULL);
+    if (vr != VG_OK) return vr;
+    return vg_draw_text(a->vg, "WRITE + TEST CHAINS IN ONE FRAME", (vg_vec2){w * 0.05f, h * 0.03f}, 12.0f, 0.8f, &line, NULL);
+}
+
 static vg_result draw_scene_mode(app* a, const vg_stroke_style* halo_s, const vg_stroke_style* main_s, float t, float dt, float w, float h, float cx, float cy, float jx, float jy) {
     switch (a->scene_mode) {
         case SCENE_WIREFRAME_CUBE:
@@ -3098,6 +3263,8 @@ static vg_result draw_scene_mode(app* a, const vg_stroke_style* halo_s, const vg
             return draw_scene_title_crawl(a, halo_s, main_s, t, w, h);
         case SCENE_IMAGE_FX:
             return draw_scene_image_fx(a, main_s, w, h);
+        case SCENE_STENCIL_LAB:
+            return draw_scene_stencil_lab(a, main_s, t, w, h);
         case SCENE_CLASSIC:
         default:
             return draw_scene_classic(a, halo_s, main_s, t, cx, cy, jx, jy);
@@ -3223,6 +3390,11 @@ static frame_result record_and_submit(app* a, uint32_t image_index, float t, flo
     vg_result vr = vg_begin_frame(a->vg, &frame);
     if (vr != VG_OK) {
         fprintf(stderr, "vg_begin_frame failed: %s\n", vg_result_string(vr));
+        return FRAME_FAIL;
+    }
+    vr = vg_stencil_clear(a->vg, 0u);
+    if (vr != VG_OK) {
+        fprintf(stderr, "vg_stencil_clear failed: %s\n", vg_result_string(vr));
         return FRAME_FAIL;
     }
 
@@ -3624,6 +3796,8 @@ int main(void) {
                     set_scene(&a, SCENE_TITLE_CRAWL);
                 } else if (ev.key.keysym.sym == SDLK_8) {
                     set_scene(&a, SCENE_IMAGE_FX);
+                } else if (ev.key.keysym.sym == SDLK_9) {
+                    set_scene(&a, SCENE_STENCIL_LAB);
                 } else if (ev.key.keysym.sym == SDLK_SPACE) {
                     cycle_svg_asset(&a, +1);
                 } else if (ev.key.keysym.sym == SDLK_p) {

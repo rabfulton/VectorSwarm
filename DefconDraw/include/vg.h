@@ -37,6 +37,39 @@ typedef enum vg_blend_mode {
     VG_BLEND_ADDITIVE = 1
 } vg_blend_mode;
 
+typedef enum vg_compare_op {
+    VG_COMPARE_NEVER = 0,
+    VG_COMPARE_LESS = 1,
+    VG_COMPARE_EQUAL = 2,
+    VG_COMPARE_LESS_OR_EQUAL = 3,
+    VG_COMPARE_GREATER = 4,
+    VG_COMPARE_NOT_EQUAL = 5,
+    VG_COMPARE_GREATER_OR_EQUAL = 6,
+    VG_COMPARE_ALWAYS = 7
+} vg_compare_op;
+
+typedef enum vg_stencil_op {
+    VG_STENCIL_OP_KEEP = 0,
+    VG_STENCIL_OP_ZERO = 1,
+    VG_STENCIL_OP_REPLACE = 2,
+    VG_STENCIL_OP_INCREMENT_AND_CLAMP = 3,
+    VG_STENCIL_OP_DECREMENT_AND_CLAMP = 4,
+    VG_STENCIL_OP_INVERT = 5,
+    VG_STENCIL_OP_INCREMENT_AND_WRAP = 6,
+    VG_STENCIL_OP_DECREMENT_AND_WRAP = 7
+} vg_stencil_op;
+
+typedef struct vg_stencil_state {
+    int enabled;
+    vg_compare_op compare_op;
+    vg_stencil_op fail_op;
+    vg_stencil_op pass_op;
+    vg_stencil_op depth_fail_op;
+    uint32_t reference;
+    uint32_t compare_mask;
+    uint32_t write_mask;
+} vg_stencil_state;
+
 typedef struct vg_context vg_context;
 typedef struct vg_path vg_path;
 
@@ -82,12 +115,14 @@ typedef struct vg_stroke_style {
     vg_line_join join;
     float miter_limit;
     vg_blend_mode blend;
+    vg_stencil_state stencil;
 } vg_stroke_style;
 
 typedef struct vg_fill_style {
     float intensity;
     vg_color color;
     vg_blend_mode blend;
+    vg_stencil_state stencil;
 } vg_fill_style;
 
 typedef struct vg_frame_desc {
@@ -136,6 +171,7 @@ typedef struct vg_backend_vulkan_desc {
     uint32_t vertex_binding;
     uint32_t max_frames_in_flight;
     uint32_t raster_samples;
+    uint32_t has_stencil_attachment;
 } vg_backend_vulkan_desc;
 
 typedef enum vg_backend_type {
@@ -154,6 +190,11 @@ void vg_context_destroy(vg_context* ctx);
 
 vg_result vg_begin_frame(vg_context* ctx, const vg_frame_desc* frame);
 vg_result vg_end_frame(vg_context* ctx);
+vg_result vg_stencil_clear(vg_context* ctx, uint32_t value);
+void vg_stencil_state_init(vg_stencil_state* out_state);
+vg_stencil_state vg_stencil_state_disabled(void);
+vg_stencil_state vg_stencil_state_make_write_replace(uint32_t reference, uint32_t write_mask);
+vg_stencil_state vg_stencil_state_make_test_equal(uint32_t reference, uint32_t compare_mask);
 
 void vg_set_retro_params(vg_context* ctx, const vg_retro_params* params);
 void vg_get_retro_params(vg_context* ctx, vg_retro_params* out_params);

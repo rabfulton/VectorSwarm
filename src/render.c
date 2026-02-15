@@ -56,6 +56,7 @@ static vg_stroke_style make_stroke(float width, float intensity, vg_color color,
     s.join = VG_LINE_JOIN_ROUND;
     s.miter_limit = 4.0f;
     s.blend = blend;
+    s.stencil = vg_stencil_state_disabled();
     return s;
 }
 
@@ -64,6 +65,7 @@ static vg_fill_style make_fill(float intensity, vg_color color, vg_blend_mode bl
     f.intensity = intensity;
     f.color = color;
     f.blend = blend;
+    f.stencil = vg_stencil_state_disabled();
     return f;
 }
 
@@ -643,11 +645,56 @@ static vg_result draw_searchlights(
     if (!ctx || !g || !pal || g->searchlight_count <= 0) {
         return VG_OK;
     }
+    const int can_stencil = (vg_stencil_clear(ctx, 0u) == VG_OK);
     const int tip_slices = 28;
     for (int i = 0; i < g->searchlight_count && i < MAX_SEARCHLIGHTS; ++i) {
         const searchlight* sl = &g->searchlights[i];
         if (!sl->active || sl->length <= 1.0f) {
             continue;
+        }
+        if (can_stencil) {
+            vg_result sr = vg_stencil_clear(ctx, 0u);
+            if (sr != VG_OK) {
+                return sr;
+            }
+            /* Mark emitter footprint in stencil so beam pixels can be rejected there. */
+            const float rr = fmaxf(sl->source_radius, 2.0f);
+            vg_fill_style src_mask = make_fill(0.0f, (vg_color){0.0f, 0.0f, 0.0f, 0.0f}, VG_BLEND_ALPHA);
+            src_mask.stencil = vg_stencil_state_make_write_replace(1u, 0xffu);
+            if (sl->source_type == SEARCHLIGHT_SOURCE_ORB) {
+                vg_result sr2 = vg_fill_circle(ctx, (vg_vec2){sl->origin_x, sl->origin_y}, rr, &src_mask, 18);
+                if (sr2 != VG_OK) {
+                    return sr2;
+                }
+            } else {
+                enum { DOME_SEG = 18 };
+                vg_vec2 dome_fill[DOME_SEG + 2];
+                const float mask_rr = rr + 2.0f; /* Slight overscan to suppress seam glow at emitter origin. */
+                dome_fill[0] = (vg_vec2){sl->origin_x, sl->origin_y};
+                for (int k = 0; k <= DOME_SEG; ++k) {
+                    const float u = (float)k / (float)DOME_SEG;
+                    const float a = u * 3.14159265359f;
+                    dome_fill[k + 1] = (vg_vec2){
+                        sl->origin_x + cosf(a) * mask_rr,
+                        sl->origin_y + sinf(a) * mask_rr
+                    };
+                }
+                vg_result sr2 = vg_fill_convex(ctx, dome_fill, DOME_SEG + 2, &src_mask);
+                if (sr2 != VG_OK) {
+                    return sr2;
+                }
+                /* Seal the dome base edge and emitter point against AA/bloom leakage. */
+                const vg_vec2 base_cap[4] = {
+                    {sl->origin_x - mask_rr - 2.0f, sl->origin_y - 2.5f},
+                    {sl->origin_x + mask_rr + 2.0f, sl->origin_y - 2.5f},
+                    {sl->origin_x + mask_rr + 2.0f, sl->origin_y + 2.0f},
+                    {sl->origin_x - mask_rr - 2.0f, sl->origin_y + 2.0f}
+                };
+                sr2 = vg_fill_convex(ctx, base_cap, 4, &src_mask);
+                if (sr2 != VG_OK) {
+                    return sr2;
+                }
+            }
         }
         {
             const float rr = fmaxf(sl->source_radius, 2.0f);
@@ -705,11 +752,15 @@ static vg_result draw_searchlights(
         const vg_vec2 dir1 = {cosf(a1), sinf(a1)};
         const float body_len = sl->length * 0.80f;
         const vg_color beam_col = pal->primary_dim;
-        const vg_fill_style body_fill = make_fill(
+        vg_fill_style body_fill = make_fill(
             0.14f + 0.06f * intensity_scale,
             (vg_color){beam_col.r, beam_col.g, beam_col.b, 0.06f},
             VG_BLEND_ADDITIVE
         );
+        if (can_stencil) {
+            body_fill.stencil = vg_stencil_state_make_test_equal(1u, 0xffu);
+            body_fill.stencil.compare_op = VG_COMPARE_NOT_EQUAL;
+        }
         const vg_vec2 body_tri[3] = {
             origin,
             {origin.x + dir0.x * body_len, origin.y + dir0.y * body_len},
@@ -728,11 +779,15 @@ static vg_result draw_searchlights(
             const float l1 = sl->length * t1;
             float fade = 1.0f - u1;
             fade = fade * fade * (3.0f - 2.0f * fade);
-            const vg_fill_style tip_fill = make_fill(
+            vg_fill_style tip_fill = make_fill(
                 (0.14f + 0.06f * intensity_scale) * fade,
                 (vg_color){beam_col.r, beam_col.g, beam_col.b, 0.06f * fade},
                 VG_BLEND_ADDITIVE
             );
+            if (can_stencil) {
+                tip_fill.stencil = vg_stencil_state_make_test_equal(1u, 0xffu);
+                tip_fill.stencil.compare_op = VG_COMPARE_NOT_EQUAL;
+            }
             const vg_vec2 a = {origin.x + dir0.x * l0, origin.y + dir0.y * l0};
             const vg_vec2 b = {origin.x + dir1.x * l0, origin.y + dir1.y * l0};
             const vg_vec2 c = {origin.x + dir1.x * l1, origin.y + dir1.y * l1};
@@ -750,6 +805,12 @@ static vg_result draw_searchlights(
         }
         vg_stroke_style rail_halo = *land_halo;
         vg_stroke_style rail_main = *land_main;
+        if (can_stencil) {
+            rail_halo.stencil = vg_stencil_state_make_test_equal(1u, 0xffu);
+            rail_halo.stencil.compare_op = VG_COMPARE_NOT_EQUAL;
+            rail_main.stencil = vg_stencil_state_make_test_equal(1u, 0xffu);
+            rail_main.stencil.compare_op = VG_COMPARE_NOT_EQUAL;
+        }
         rail_halo.width_px *= 1.18f;
         rail_main.width_px *= 1.06f;
         rail_halo.intensity *= 0.78f;

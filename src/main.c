@@ -2843,8 +2843,9 @@ static int create_buffer(
 
 static VkFormat find_depth_format(app* a) {
     const VkFormat candidates[] = {
-        VK_FORMAT_D32_SFLOAT,
+        VK_FORMAT_D32_SFLOAT_S8_UINT,
         VK_FORMAT_D24_UNORM_S8_UINT,
+        VK_FORMAT_D32_SFLOAT,
         VK_FORMAT_D16_UNORM
     };
     for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); ++i) {
@@ -2855,6 +2856,10 @@ static VkFormat find_depth_format(app* a) {
         }
     }
     return VK_FORMAT_UNDEFINED;
+}
+
+static int format_has_stencil(VkFormat fmt) {
+    return fmt == VK_FORMAT_D32_SFLOAT_S8_UINT || fmt == VK_FORMAT_D24_UNORM_S8_UINT || fmt == VK_FORMAT_D16_UNORM_S8_UINT;
 }
 
 static void set_viewport_scissor(VkCommandBuffer cmd, uint32_t w, uint32_t h) {
@@ -3574,6 +3579,7 @@ static int create_render_passes(app* a) {
         return 0;
     }
     VkSampleCountFlagBits samples = scene_samples(a);
+    const int has_stencil = format_has_stencil(a->scene_depth_format);
     if (samples == VK_SAMPLE_COUNT_1_BIT) {
         VkAttachmentDescription atts[2];
         atts[0] = (VkAttachmentDescription){
@@ -3591,8 +3597,8 @@ static int create_render_passes(app* a) {
             .samples = VK_SAMPLE_COUNT_1_BIT,
             .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
             .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .stencilLoadOp = has_stencil ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = has_stencil ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE,
             .initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
             .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
         };
@@ -3639,8 +3645,8 @@ static int create_render_passes(app* a) {
             .samples = samples,
             .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
             .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .stencilLoadOp = has_stencil ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = has_stencil ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE,
             .initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
             .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
         };
@@ -4487,6 +4493,7 @@ static int create_vg_context(app* a) {
     desc.api.vulkan.vertex_binding = 0;
     desc.api.vulkan.max_frames_in_flight = 1;
     desc.api.vulkan.raster_samples = (uint32_t)scene_samples(a);
+    desc.api.vulkan.has_stencil_attachment = format_has_stencil(a->scene_depth_format) ? 1u : 0u;
     vg_result vr = vg_context_create(&desc, &a->vg);
     if (vr != VG_OK) {
         fprintf(stderr, "vg_context_create failed: %s\n", vg_result_string(vr));

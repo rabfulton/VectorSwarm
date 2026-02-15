@@ -29,11 +29,12 @@ static float vg_ui_ext_resolved_scale(float s) {
 }
 
 static vg_fill_style vg_ui_ext_fill_from_stroke(const vg_stroke_style* s, float alpha_scale) {
-    vg_fill_style f;
+    vg_fill_style f = {0};
     f.intensity = s->intensity;
     f.color = s->color;
     f.color.a *= alpha_scale;
     f.blend = s->blend;
+    f.stencil = s->stencil;
     return f;
 }
 
@@ -669,7 +670,7 @@ vg_result vg_ui_pie_chart(vg_context* ctx, const vg_ui_pie_desc* desc, const vg_
             poly[s + 1].x = desc->center.x + cosf(ang) * desc->radius_px;
             poly[s + 1].y = desc->center.y + sinf(ang) * desc->radius_px;
         }
-        vg_fill_style fs;
+        vg_fill_style fs = {0};
         fs.intensity = outline_style->intensity;
         if (desc->colors && i < desc->value_count) {
             fs.color = desc->colors[i];
@@ -678,6 +679,7 @@ vg_result vg_ui_pie_chart(vg_context* ctx, const vg_ui_pie_desc* desc, const vg_
             fs.color = (vg_color){0.25f + 0.75f * hue, 0.9f - 0.5f * hue, 0.35f + 0.4f * (1.0f - hue), 0.65f};
         }
         fs.blend = VG_BLEND_ALPHA;
+        fs.stencil = outline_style->stencil;
         vg_result r = vg_fill_convex(ctx, poly, (size_t)(segs + 2), &fs);
         if (r != VG_OK) {
             free(poly);

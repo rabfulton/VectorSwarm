@@ -67,6 +67,16 @@ Point transform:
 - `join`: `VG_LINE_JOIN_MITER | VG_LINE_JOIN_ROUND | VG_LINE_JOIN_BEVEL`.
 - `miter_limit`: must be `> 0`.
 - `blend`: `VG_BLEND_ALPHA | VG_BLEND_ADDITIVE`.
+- `stencil`: optional per-draw stencil state (`enabled == 0` disables stencil).
+
+### `vg_stencil_state`
+
+- `enabled`: non-zero enables stencil test/write for the draw.
+- `compare_op`: `VG_COMPARE_*` compare function.
+- `fail_op`, `pass_op`, `depth_fail_op`: `VG_STENCIL_OP_*` operations.
+- `reference`: compare reference value.
+- `compare_mask`: compare mask.
+- `write_mask`: stencil write mask.
 
 ### `vg_frame_desc`
 
@@ -171,6 +181,7 @@ All Vulkan handles are passed as opaque `void*` in the public header and interpr
 - `vertex_binding`: vertex binding index for internally bound vertex buffer.
 - `max_frames_in_flight`: currently stored and defaulted; future frame resource sizing hook.
 - `raster_samples`: Vulkan sample count for internal pipeline rasterization (`1/2/4/8/16/32/64`). Defaults to `1` if unset/invalid.
+- `has_stencil_attachment`: non-zero when the active subpass has a stencil-capable depth/stencil attachment.
 
 ## Context API
 
@@ -219,6 +230,21 @@ For Vulkan backend:
   - sets viewport/scissor
   - records `vkCmdDraw` for each recorded draw
   - uses internal pipeline path when available
+
+### `vg_stencil_clear(vg_context* ctx, uint32_t value)`
+
+Clears stencil to `value` in the active frame.
+
+Requirements:
+- active frame
+- backend stencil support enabled
+
+### Stencil Helper Functions
+
+- `vg_stencil_state_init(vg_stencil_state* out_state)`: initialize to disabled/default-safe state.
+- `vg_stencil_state_disabled(void)`: returns disabled/default-safe stencil state.
+- `vg_stencil_state_make_write_replace(uint32_t reference, uint32_t write_mask)`: helper for writing a stencil mask.
+- `vg_stencil_state_make_test_equal(uint32_t reference, uint32_t compare_mask)`: helper for masked draw reads.
 
 ### `vg_clip_push_rect(vg_context* ctx, vg_rect rect)`
 
@@ -350,6 +376,7 @@ Fill style for solid geometry:
 - `intensity`
 - `color`
 - `blend`
+- `stencil`
 
 ### `vg_fill_convex(vg_context* ctx, const vg_vec2* points, size_t count, const vg_fill_style* style)`
 
@@ -879,6 +906,7 @@ desc.api.vulkan.graphics_queue_family = graphics_qf;
 desc.api.vulkan.render_pass = (void*)render_pass;
 desc.api.vulkan.vertex_binding = 0;
 desc.api.vulkan.raster_samples = 1; /* use 4 for 4x MSAA render pass */
+desc.api.vulkan.has_stencil_attachment = 1; /* set only if render pass subpass has stencil attachment */
 vg_context_create(&desc, &ctx);
 
 vg_frame_desc frame = {

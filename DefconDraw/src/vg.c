@@ -49,6 +49,20 @@ static int vg_style_is_valid(const vg_stroke_style* style) {
     if (style->blend < VG_BLEND_ALPHA || style->blend > VG_BLEND_ADDITIVE) {
         return 0;
     }
+    if (style->stencil.enabled) {
+        if (style->stencil.compare_op < VG_COMPARE_NEVER || style->stencil.compare_op > VG_COMPARE_ALWAYS) {
+            return 0;
+        }
+        if (style->stencil.fail_op < VG_STENCIL_OP_KEEP || style->stencil.fail_op > VG_STENCIL_OP_DECREMENT_AND_WRAP) {
+            return 0;
+        }
+        if (style->stencil.pass_op < VG_STENCIL_OP_KEEP || style->stencil.pass_op > VG_STENCIL_OP_DECREMENT_AND_WRAP) {
+            return 0;
+        }
+        if (style->stencil.depth_fail_op < VG_STENCIL_OP_KEEP || style->stencil.depth_fail_op > VG_STENCIL_OP_DECREMENT_AND_WRAP) {
+            return 0;
+        }
+    }
     return 1;
 }
 
@@ -61,6 +75,20 @@ static int vg_fill_style_is_valid(const vg_fill_style* style) {
     }
     if (style->blend < VG_BLEND_ALPHA || style->blend > VG_BLEND_ADDITIVE) {
         return 0;
+    }
+    if (style->stencil.enabled) {
+        if (style->stencil.compare_op < VG_COMPARE_NEVER || style->stencil.compare_op > VG_COMPARE_ALWAYS) {
+            return 0;
+        }
+        if (style->stencil.fail_op < VG_STENCIL_OP_KEEP || style->stencil.fail_op > VG_STENCIL_OP_DECREMENT_AND_WRAP) {
+            return 0;
+        }
+        if (style->stencil.pass_op < VG_STENCIL_OP_KEEP || style->stencil.pass_op > VG_STENCIL_OP_DECREMENT_AND_WRAP) {
+            return 0;
+        }
+        if (style->stencil.depth_fail_op < VG_STENCIL_OP_KEEP || style->stencil.depth_fail_op > VG_STENCIL_OP_DECREMENT_AND_WRAP) {
+            return 0;
+        }
     }
     return 1;
 }
@@ -516,6 +544,62 @@ vg_result vg_end_frame(vg_context* ctx) {
 
     ctx->in_frame = 0;
     return VG_OK;
+}
+
+vg_result vg_stencil_clear(vg_context* ctx, uint32_t value) {
+    if (!ctx || !ctx->in_frame) {
+        return VG_ERROR_INVALID_ARGUMENT;
+    }
+    if (!ctx->backend.ops || !ctx->backend.ops->stencil_clear) {
+        return VG_ERROR_UNSUPPORTED;
+    }
+    return ctx->backend.ops->stencil_clear(ctx, value);
+}
+
+void vg_stencil_state_init(vg_stencil_state* out_state) {
+    if (!out_state) {
+        return;
+    }
+    out_state->enabled = 0;
+    out_state->compare_op = VG_COMPARE_ALWAYS;
+    out_state->fail_op = VG_STENCIL_OP_KEEP;
+    out_state->pass_op = VG_STENCIL_OP_KEEP;
+    out_state->depth_fail_op = VG_STENCIL_OP_KEEP;
+    out_state->reference = 0u;
+    out_state->compare_mask = 0xffu;
+    out_state->write_mask = 0xffu;
+}
+
+vg_stencil_state vg_stencil_state_disabled(void) {
+    vg_stencil_state out;
+    vg_stencil_state_init(&out);
+    return out;
+}
+
+vg_stencil_state vg_stencil_state_make_write_replace(uint32_t reference, uint32_t write_mask) {
+    vg_stencil_state out = vg_stencil_state_disabled();
+    out.enabled = 1;
+    out.compare_op = VG_COMPARE_ALWAYS;
+    out.fail_op = VG_STENCIL_OP_KEEP;
+    out.pass_op = VG_STENCIL_OP_REPLACE;
+    out.depth_fail_op = VG_STENCIL_OP_KEEP;
+    out.reference = reference;
+    out.compare_mask = 0xffu;
+    out.write_mask = write_mask;
+    return out;
+}
+
+vg_stencil_state vg_stencil_state_make_test_equal(uint32_t reference, uint32_t compare_mask) {
+    vg_stencil_state out = vg_stencil_state_disabled();
+    out.enabled = 1;
+    out.compare_op = VG_COMPARE_EQUAL;
+    out.fail_op = VG_STENCIL_OP_KEEP;
+    out.pass_op = VG_STENCIL_OP_KEEP;
+    out.depth_fail_op = VG_STENCIL_OP_KEEP;
+    out.reference = reference;
+    out.compare_mask = compare_mask;
+    out.write_mask = 0u;
+    return out;
 }
 
 void vg_set_retro_params(vg_context* ctx, const vg_retro_params* params) {
