@@ -3981,7 +3981,8 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
                     return r;
                 }
             }
-        } else if (g->level_style != LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2) {
+        } else if (g->level_style != LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2 &&
+                   g->level_style != LEVEL_STYLE_FOG_OF_WAR) {
             /* Foreground vector landscape layers for depth/parallax. */
             vg_stroke_style land1_halo = land_halo;
             vg_stroke_style land1_main = land_main;

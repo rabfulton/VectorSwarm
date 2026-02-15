@@ -5104,6 +5104,8 @@ static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t) {
     const float world_h = a->game.world_h;
     const float cx = a->game.camera_x;
     const float cy = a->game.camera_y;
+    const float viewport_h = (float)a->swapchain_extent.height;
+    const float to_shader_y = viewport_h; /* helper for top-left world -> shader frag space */
     pc.p0[0] = (float)a->swapchain_extent.width;
     pc.p0[1] = (float)a->swapchain_extent.height;
     pc.p0[2] = t;
@@ -5137,7 +5139,7 @@ static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t) {
     int emit_n = 0;
     if (a->game.lives > 0 && emit_n < 4) {
         pc.emit[emit_n][0] = a->game.player.b.x + world_w * 0.5f - cx;
-        pc.emit[emit_n][1] = a->game.player.b.y + world_h * 0.5f - cy;
+        pc.emit[emit_n][1] = to_shader_y - (a->game.player.b.y + world_h * 0.5f - cy);
         pc.emit[emit_n][2] = 180.0f;
         pc.emit[emit_n][3] = 1.0f * a->fog_light_gain;
         emit_n++;
@@ -5147,7 +5149,7 @@ static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t) {
             continue;
         }
         pc.emit[emit_n][0] = a->game.enemies[i].b.x + world_w * 0.5f - cx;
-        pc.emit[emit_n][1] = a->game.enemies[i].b.y + world_h * 0.5f - cy;
+        pc.emit[emit_n][1] = to_shader_y - (a->game.enemies[i].b.y + world_h * 0.5f - cy);
         pc.emit[emit_n][2] = 135.0f;
         pc.emit[emit_n][3] = 0.58f * a->fog_light_gain;
         emit_n++;
@@ -5157,7 +5159,7 @@ static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t) {
             continue;
         }
         pc.emit[emit_n][0] = a->game.bullets[i].b.x + world_w * 0.5f - cx;
-        pc.emit[emit_n][1] = a->game.bullets[i].b.y + world_h * 0.5f - cy;
+        pc.emit[emit_n][1] = to_shader_y - (a->game.bullets[i].b.y + world_h * 0.5f - cy);
         pc.emit[emit_n][2] = 92.0f;
         pc.emit[emit_n][3] = 0.36f * a->fog_light_gain;
         emit_n++;
@@ -5167,7 +5169,7 @@ static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t) {
             continue;
         }
         pc.emit[emit_n][0] = a->game.enemy_bullets[i].b.x + world_w * 0.5f - cx;
-        pc.emit[emit_n][1] = a->game.enemy_bullets[i].b.y + world_h * 0.5f - cy;
+        pc.emit[emit_n][1] = to_shader_y - (a->game.enemy_bullets[i].b.y + world_h * 0.5f - cy);
         pc.emit[emit_n][2] = 80.0f;
         pc.emit[emit_n][3] = 0.28f * a->fog_light_gain;
         emit_n++;

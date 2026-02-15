@@ -67,8 +67,10 @@ void main() {
     }
     light = clamp(light, 0.0, 1.6);
 
-    float tint = clamp(dens * 0.7 + light * 0.5, 0.0, 1.0);
+    float fog_mask = smoothstep(0.02, 0.14, dens);
+    float light_in_fog = light * fog_mask;
+    float tint = clamp(dens * 0.7 + light_in_fog * 0.5, 0.0, 1.0);
     vec3 col = mix(pc.p1.rgb, pc.p2.rgb, tint);
-    float alpha = clamp((dens * 0.24 + light * 0.10) * pc.p0.w, 0.0, 0.36);
+    float alpha = clamp((dens * 0.24 + light_in_fog * 0.10) * pc.p0.w, 0.0, 0.36);
     out_color = vec4(col, alpha);
 }
