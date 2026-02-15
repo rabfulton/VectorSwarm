@@ -34,6 +34,8 @@ Run:
 ./build/VectorSwarm
 ```
 
+This game is still in development. You can use the arrow keys and spacebar to control the ship. `n` will load the next level. the number keys 1-3 will access various settings screens. Expect new releases often.
+
 ## AMA with Commander Nick
 ### What are the green squiggly lines at the bottom of the screen?
 Space hills. Anymore dumb questions...

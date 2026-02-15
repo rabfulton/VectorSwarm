@@ -67,6 +67,10 @@ typedef struct enemy_combat_config {
     float projectile_speed_scale_end;
     float spread_scale_start;
     float spread_scale_end;
+    float swarm_armed_prob_start;
+    float swarm_armed_prob_end;
+    float swarm_spread_prob_start; /* when armed: chance to use spread (triple), else pulse (single) */
+    float swarm_spread_prob_end;
 } enemy_combat_config;
 
 typedef struct searchlight_def {
@@ -89,6 +93,28 @@ typedef struct searchlight_def {
     float projectile_radius;
     float aim_jitter_deg;
 } searchlight_def;
+
+typedef struct boid_swarm_profile_def {
+    const char* wave_name;
+    int count;
+    float sep_w;
+    float ali_w;
+    float coh_w;
+    float avoid_w;
+    float goal_w;
+    float sep_r;
+    float ali_r;
+    float coh_r;
+    float goal_amp;
+    float goal_freq;
+    float wander_w;
+    float wander_freq;
+    float steer_drag;
+    float max_speed;
+    float accel;
+    float radius_min;
+    float radius_max;
+} boid_swarm_profile_def;
 
 static float frand01(void) {
     return (float)rand() / (float)RAND_MAX;
@@ -170,7 +196,11 @@ static const enemy_combat_config k_enemy_combat_config = {
     .projectile_speed_scale_start = 1.0f,
     .projectile_speed_scale_end = 1.28f,
     .spread_scale_start = 1.0f,
-    .spread_scale_end = 0.70f
+    .spread_scale_end = 0.70f,
+    .swarm_armed_prob_start = 0.16f,
+    .swarm_armed_prob_end = 0.72f,
+    .swarm_spread_prob_start = 0.12f,
+    .swarm_spread_prob_end = 0.86f
 };
 
 static const searchlight_def k_searchlight_defs[] = {
@@ -273,6 +303,79 @@ static const searchlight_def k_searchlight_defs[] = {
         .projectile_ttl_s = 2.2f,
         .projectile_radius = 3.2f,
         .aim_jitter_deg = 1.35f
+    }
+};
+
+enum {
+    BOID_PROFILE_FIREFLY = 0,
+    BOID_PROFILE_FISH = 1,
+    BOID_PROFILE_BIRD = 2,
+    BOID_PROFILE_COUNT = 3
+};
+
+static const boid_swarm_profile_def k_boid_profiles[BOID_PROFILE_COUNT] = {
+    {
+        .wave_name = "boid swarm: firefly scatter",
+        .count = 18,
+        .sep_w = 2.40f,
+        .ali_w = 0.25f,
+        .coh_w = 0.20f,
+        .avoid_w = 2.90f,
+        .goal_w = 0.55f,
+        .sep_r = 84.0f,
+        .ali_r = 168.0f,
+        .coh_r = 205.0f,
+        .goal_amp = 140.0f,
+        .goal_freq = 1.40f,
+        .wander_w = 1.30f,
+        .wander_freq = 2.10f,
+        .steer_drag = 1.55f,
+        .max_speed = 210.0f,
+        .accel = 6.2f,
+        .radius_min = 8.0f,
+        .radius_max = 12.0f
+    },
+    {
+        .wave_name = "boid swarm: fish school",
+        .count = 16,
+        .sep_w = 1.60f,
+        .ali_w = 1.10f,
+        .coh_w = 1.00f,
+        .avoid_w = 2.40f,
+        .goal_w = 1.00f,
+        .sep_r = 104.0f,
+        .ali_r = 290.0f,
+        .coh_r = 345.0f,
+        .goal_amp = 52.0f,
+        .goal_freq = 0.45f,
+        .wander_w = 0.22f,
+        .wander_freq = 0.80f,
+        .steer_drag = 1.25f,
+        .max_speed = 245.0f,
+        .accel = 7.8f,
+        .radius_min = 10.0f,
+        .radius_max = 14.0f
+    },
+    {
+        .wave_name = "boid swarm: bird flock",
+        .count = 12,
+        .sep_w = 1.40f,
+        .ali_w = 1.55f,
+        .coh_w = 0.85f,
+        .avoid_w = 2.20f,
+        .goal_w = 1.35f,
+        .sep_r = 126.0f,
+        .ali_r = 336.0f,
+        .coh_r = 392.0f,
+        .goal_amp = 34.0f,
+        .goal_freq = 0.28f,
+        .wander_w = 0.08f,
+        .wander_freq = 0.45f,
+        .steer_drag = 1.08f,
+        .max_speed = 300.0f,
+        .accel = 9.0f,
+        .radius_min = 11.0f,
+        .radius_max = 16.0f
     }
 };
 
@@ -490,6 +593,17 @@ static float dist_sq_level(const game_state* g, float ax, float ay, float bx, fl
     return dx * dx + dy * dy;
 }
 
+static float enemy_progression01(const game_state* g) {
+    const enemy_combat_config* c = &k_enemy_combat_config;
+    if (!g) {
+        return 0.0f;
+    }
+    float progression = (float)g->wave_index * c->progression_wave_weight +
+                        (float)g->score * c->progression_score_weight;
+    progression += (float)g->level_style * c->progression_level_weight;
+    return clampf(progression, 0.0f, 1.0f);
+}
+
 static enemy_fire_tuning enemy_fire_tuning_for(const game_state* g) {
     const enemy_combat_config* c = &k_enemy_combat_config;
     enemy_fire_tuning t = {
@@ -508,10 +622,7 @@ static enemy_fire_tuning enemy_fire_tuning_for(const game_state* g) {
     if (!g) {
         return t;
     }
-    float progression = (float)g->wave_index * c->progression_wave_weight +
-                        (float)g->score * c->progression_score_weight;
-    progression += (float)g->level_style * c->progression_level_weight;
-    progression = clampf(progression, 0.0f, 1.0f);
+    const float progression = enemy_progression01(g);
     t.armed_probability[0] = clampf(t.armed_probability[0] + progression * c->armed_probability_progression_bonus[0], 0.0f, 1.0f);
     t.armed_probability[1] = clampf(t.armed_probability[1] + progression * c->armed_probability_progression_bonus[1], 0.0f, 1.0f);
     t.armed_probability[2] = clampf(t.armed_probability[2] + progression * c->armed_probability_progression_bonus[2], 0.0f, 1.0f);
@@ -794,12 +905,23 @@ static void enemy_assign_combat_loadout(game_state* g, enemy* e) {
     if (arch < 0 || arch > 2) {
         arch = 0;
     }
-    e->armed = (frand01() < t.armed_probability[arch]) ? 1 : 0;
     if (e->archetype == ENEMY_ARCH_SWARM) {
-        e->weapon_id = ENEMY_WEAPON_SPREAD;
+        const float progression = enemy_progression01(g);
+        const float armed_p = clampf(
+            lerpf(k_enemy_combat_config.swarm_armed_prob_start, k_enemy_combat_config.swarm_armed_prob_end, progression),
+            0.0f, 1.0f
+        );
+        const float spread_p = clampf(
+            lerpf(k_enemy_combat_config.swarm_spread_prob_start, k_enemy_combat_config.swarm_spread_prob_end, progression),
+            0.0f, 1.0f
+        );
+        e->armed = (frand01() < armed_p) ? 1 : 0;
+        e->weapon_id = (frand01() < spread_p) ? ENEMY_WEAPON_SPREAD : ENEMY_WEAPON_PULSE;
     } else if (e->archetype == ENEMY_ARCH_KAMIKAZE) {
+        e->armed = (frand01() < t.armed_probability[arch]) ? 1 : 0;
         e->weapon_id = ENEMY_WEAPON_BURST;
     } else {
+        e->armed = (frand01() < t.armed_probability[arch]) ? 1 : 0;
         e->weapon_id = ENEMY_WEAPON_PULSE;
     }
     e->burst_shots_left = 0;
@@ -963,9 +1085,13 @@ static void spawn_wave_v_formation(game_state* g, int wave_id) {
     }
 }
 
-static void spawn_wave_swarm(game_state* g, int wave_id) {
+static void spawn_wave_swarm_profile(game_state* g, int wave_id, int profile_id) {
     const float su = gameplay_ui_scale(g);
-    const int count = 15;
+    if (profile_id < 0 || profile_id >= BOID_PROFILE_COUNT) {
+        profile_id = BOID_PROFILE_FISH;
+    }
+    const boid_swarm_profile_def* p = &k_boid_profiles[profile_id];
+    const int count = p->count;
     for (int i = 0; i < count; ++i) {
         enemy* e = spawn_enemy_common(g);
         if (!e) {
@@ -979,9 +1105,22 @@ static void spawn_wave_swarm(game_state* g, int wave_id) {
         e->b.x = g->camera_x + g->world_w * 0.62f + frand01() * 260.0f * su;
         e->b.y = g->world_h * 0.50f + frands1() * 140.0f * su;
         e->home_y = g->world_h * 0.50f;
-        e->max_speed = 255.0f * su;
-        e->accel = 7.8f;
-        e->radius = (10.0f + frand01() * 6.0f) * su;
+        e->max_speed = p->max_speed * su;
+        e->accel = p->accel;
+        e->radius = (p->radius_min + frand01() * (p->radius_max - p->radius_min)) * su;
+        e->swarm_sep_w = p->sep_w;
+        e->swarm_ali_w = p->ali_w;
+        e->swarm_coh_w = p->coh_w;
+        e->swarm_avoid_w = p->avoid_w;
+        e->swarm_goal_w = p->goal_w;
+        e->swarm_sep_r = p->sep_r * su;
+        e->swarm_ali_r = p->ali_r * su;
+        e->swarm_coh_r = p->coh_r * su;
+        e->swarm_goal_amp = p->goal_amp * su;
+        e->swarm_goal_freq = p->goal_freq;
+        e->swarm_wander_w = p->wander_w;
+        e->swarm_wander_freq = p->wander_freq;
+        e->swarm_drag = p->steer_drag;
     }
 }
 
@@ -1008,6 +1147,15 @@ static void spawn_wave_kamikaze(game_state* g, int wave_id) {
 
 static void spawn_next_wave(game_state* g) {
     const int wave_id = ++g->wave_id_alloc;
+    if (g->level_style == LEVEL_STYLE_FOG_OF_WAR) {
+        const int profile_id = g->wave_index % BOID_PROFILE_COUNT;
+        const boid_swarm_profile_def* p = &k_boid_profiles[profile_id];
+        announce_wave(g, p->wave_name);
+        spawn_wave_swarm_profile(g, wave_id, profile_id);
+        g->wave_index += 1;
+        g->wave_cooldown_s = 2.0f;
+        return;
+    }
     const int pattern = g->wave_index % 4;
     if (pattern == 0) {
         announce_wave(g, "sine snake formation");
@@ -1017,7 +1165,7 @@ static void spawn_next_wave(game_state* g) {
         spawn_wave_v_formation(g, wave_id);
     } else if (pattern == 2) {
         announce_wave(g, "boid swarm cluster");
-        spawn_wave_swarm(g, wave_id);
+        spawn_wave_swarm_profile(g, wave_id, BOID_PROFILE_FISH);
     } else {
         announce_wave(g, "kamikaze crash wing");
         spawn_wave_kamikaze(g, wave_id);
@@ -1085,6 +1233,12 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt) {
     int ali_n = 0;
     int coh_n = 0;
 
+    const float sep_r = (e->swarm_sep_r > 1.0f) ? e->swarm_sep_r : (70.0f * su);
+    const float ali_r = (e->swarm_ali_r > 1.0f) ? e->swarm_ali_r : (180.0f * su);
+    const float coh_r = (e->swarm_coh_r > 1.0f) ? e->swarm_coh_r : (220.0f * su);
+    const float sep_r2 = sep_r * sep_r;
+    const float ali_r2 = ali_r * ali_r;
+    const float coh_r2 = coh_r * coh_r;
     for (size_t i = 0; i < MAX_ENEMIES; ++i) {
         const enemy* o = &g->enemies[i];
         if (!o->active || o == e || o->archetype != ENEMY_ARCH_SWARM) {
@@ -1096,16 +1250,16 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt) {
         if (d2 < 1e-4f) {
             continue;
         }
-        if (d2 < (70.0f * su) * (70.0f * su)) {
+        if (d2 < sep_r2) {
             sep_x -= dx / d2;
             sep_y -= dy / d2;
         }
-        if (d2 < (180.0f * su) * (180.0f * su)) {
+        if (d2 < ali_r2) {
             ali_x += o->b.vx;
             ali_y += o->b.vy;
             ali_n += 1;
         }
-        if (d2 < (220.0f * su) * (220.0f * su)) {
+        if (d2 < coh_r2) {
             coh_x += o->b.x;
             coh_y += o->b.y;
             coh_n += 1;
@@ -1135,34 +1289,90 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt) {
             avoid_y += dy / d2;
         }
     }
+    if (g->searchlight_count > 0) {
+        for (int i = 0; i < g->searchlight_count && i < MAX_SEARCHLIGHTS; ++i) {
+            const searchlight* sl = &g->searchlights[i];
+            if (!sl->active) {
+                continue;
+            }
+            float dx = level_uses_cylinder(g->level_style) ?
+                wrap_delta(e->b.x, sl->origin_x, cylinder_period(g)) :
+                (e->b.x - sl->origin_x);
+            float dy = e->b.y - sl->origin_y;
+            float d2 = dx * dx + dy * dy;
+            const float avoid_r = fmaxf(sl->source_radius + 64.0f * su, 28.0f * su);
+            const float avoid_r2 = avoid_r * avoid_r;
+            if (d2 >= avoid_r2) {
+                continue;
+            }
+            if (d2 < 1e-4f) {
+                d2 = 1e-4f;
+            }
+            /* Repel from the source entity itself (not the beam). */
+            const float falloff = 1.0f - (d2 / avoid_r2);
+            avoid_x += (dx / d2) * falloff;
+            avoid_y += (dy / d2) * falloff;
+        }
+    }
 
     float goal_x = (g->player.b.x + 280.0f * su) - e->b.x;
     if (level_uses_cylinder(g->level_style)) {
         goal_x = wrap_delta(g->player.b.x + 280.0f * su, e->b.x, cylinder_period(g));
     }
-    float goal_y = (g->player.b.y + sinf(g->t * 0.7f + (float)e->slot_index * 0.35f) * 80.0f * su) - e->b.y;
+    const float goal_amp = (e->swarm_goal_amp > 1.0f) ? e->swarm_goal_amp : (80.0f * su);
+    const float goal_freq = (e->swarm_goal_freq > 0.01f) ? e->swarm_goal_freq : 0.70f;
+    float goal_y = (g->player.b.y + sinf(g->t * goal_freq + (float)e->slot_index * 0.35f) * goal_amp) - e->b.y;
+    float wander_x = 0.0f;
+    float wander_y = 0.0f;
+
+    float sep_w = (e->swarm_sep_w > 0.01f) ? e->swarm_sep_w : 1.85f;
+    float ali_w = (e->swarm_ali_w > 0.01f) ? e->swarm_ali_w : 0.60f;
+    float coh_w = (e->swarm_coh_w > 0.01f) ? e->swarm_coh_w : 0.55f;
+    const float avoid_w = (e->swarm_avoid_w > 0.01f) ? e->swarm_avoid_w : 2.70f;
+    float goal_w = (e->swarm_goal_w > 0.01f) ? e->swarm_goal_w : 0.95f;
+    const float wander_w = (e->swarm_wander_w > 0.01f) ? e->swarm_wander_w : 0.0f;
+    const float wander_freq = (e->swarm_wander_freq > 0.01f) ? e->swarm_wander_freq : 0.9f;
+    const float steer_drag = (e->swarm_drag > 0.01f) ? e->swarm_drag : 1.3f;
+    /* Flock-level "breathing": periodically loosen/tighten spacing for more organic motion. */
+    const float phase = (float)(e->wave_id & 31) * 0.61f;
+    const float breathe = 0.5f + 0.5f * sinf(g->t * 0.85f + phase);
+    const float tightness = 0.80f + 0.40f * breathe; /* 0.8..1.2 */
+    sep_w *= (1.20f - 0.28f * tightness); /* tighter -> less separation */
+    ali_w *= (0.90f + 0.25f * tightness); /* tighter -> stronger alignment */
+    coh_w *= tightness;                    /* tighter -> stronger cohesion */
+    goal_w *= (0.92f + 0.18f * tightness);
+    {
+        const float wp = g->t * wander_freq +
+                         (float)e->slot_index * 0.73f +
+                         (float)(e->wave_id & 31) * 0.29f;
+        wander_x = cosf(wp) + 0.35f * sinf(wp * 0.57f + 1.3f);
+        wander_y = sinf(wp * 1.11f + 0.8f) + 0.28f * cosf(wp * 0.49f + 0.4f);
+    }
 
     normalize2(&sep_x, &sep_y);
     normalize2(&ali_x, &ali_y);
     normalize2(&coh_x, &coh_y);
     normalize2(&avoid_x, &avoid_y);
     normalize2(&goal_x, &goal_y);
+    normalize2(&wander_x, &wander_y);
 
     const float fx =
-        sep_x * 1.85f +
-        ali_x * 0.60f +
-        coh_x * 0.55f +
-        avoid_x * 2.30f +
-        goal_x * 0.95f;
+        sep_x * sep_w +
+        ali_x * ali_w +
+        coh_x * coh_w +
+        avoid_x * avoid_w +
+        goal_x * goal_w +
+        wander_x * wander_w;
     const float fy =
-        sep_y * 1.85f +
-        ali_y * 0.60f +
-        coh_y * 0.55f +
-        avoid_y * 2.30f +
-        goal_y * 0.95f;
+        sep_y * sep_w +
+        ali_y * ali_w +
+        coh_y * coh_w +
+        avoid_y * avoid_w +
+        goal_y * goal_w +
+        wander_y * wander_w;
 
-    e->b.ax = fx * (e->accel * 135.0f) - e->b.vx * 1.3f;
-    e->b.ay = fy * (e->accel * 135.0f) - e->b.vy * 1.3f;
+    e->b.ax = fx * (e->accel * 135.0f) - e->b.vx * steer_drag;
+    e->b.ay = fy * (e->accel * 135.0f) - e->b.vy * steer_drag;
 }
 
 void game_init(game_state* g, float world_w, float world_h) {
