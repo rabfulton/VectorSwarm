@@ -53,6 +53,8 @@
 #include "particle_bloom_frag_spv.h"
 #include "wormhole_line_vert_spv.h"
 #include "wormhole_line_frag_spv.h"
+#include "fog_vert_spv.h"
+#include "fog_frag_spv.h"
 #endif
 
 #define APP_WIDTH 1280
@@ -138,6 +140,13 @@ typedef struct wormhole_line_pc {
     float color[4];
     float offset[4]; /* x=offset_px_x, y=offset_px_y */
 } wormhole_line_pc;
+
+typedef struct fog_pc {
+    float p0[4];      /* x=viewport_w, y=viewport_h, z=time_s, w=intensity */
+    float p1[4];      /* rgb=primary_dim, w=density_scale */
+    float p2[4];      /* rgb=secondary, w=emitter_count */
+    float emit[4][4]; /* x=sx, y=sy, z=radius_px, w=power */
+} fog_pc;
 
 typedef struct terrain_tuning {
     float hue_shift;
@@ -261,6 +270,8 @@ typedef struct app {
     VkPipelineLayout wormhole_line_layout;
     VkPipeline wormhole_depth_pipeline;
     VkPipeline wormhole_line_pipeline;
+    VkPipelineLayout fog_layout;
+    VkPipeline fog_pipeline;
     VkBuffer wormhole_tri_vertex_buffer;
     VkDeviceMemory wormhole_tri_vertex_memory;
     void* wormhole_tri_vertex_map;
@@ -1182,6 +1193,7 @@ static int create_post_resources(app* a);
 static int create_terrain_resources(app* a);
 static int create_particle_resources(app* a);
 static int create_wormhole_resources(app* a);
+static int create_fog_resources(app* a);
 static int create_vg_context(app* a);
 static void set_tty_message(app* a, const char* msg);
 static void update_gpu_high_plains_vertices(app* a);
@@ -1190,6 +1202,7 @@ static void update_gpu_particle_instances(app* a);
 static void record_gpu_particles(app* a, VkCommandBuffer cmd);
 static void record_gpu_particles_bloom(app* a, VkCommandBuffer cmd);
 static void record_gpu_wormhole(app* a, VkCommandBuffer cmd);
+static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t);
 static void reset_terrain_tuning(app* a);
 static void sync_terrain_tuning_text(app* a);
 static int handle_terrain_tuning_key(app* a, SDL_Keycode key);
@@ -2938,10 +2951,12 @@ static void cleanup(app* a) {
     if (a->particle_bloom_pipeline) vkDestroyPipeline(a->device, a->particle_bloom_pipeline, NULL);
     if (a->wormhole_depth_pipeline) vkDestroyPipeline(a->device, a->wormhole_depth_pipeline, NULL);
     if (a->wormhole_line_pipeline) vkDestroyPipeline(a->device, a->wormhole_line_pipeline, NULL);
+    if (a->fog_pipeline) vkDestroyPipeline(a->device, a->fog_pipeline, NULL);
     if (a->post_layout) vkDestroyPipelineLayout(a->device, a->post_layout, NULL);
     if (a->terrain_layout) vkDestroyPipelineLayout(a->device, a->terrain_layout, NULL);
     if (a->particle_layout) vkDestroyPipelineLayout(a->device, a->particle_layout, NULL);
     if (a->wormhole_line_layout) vkDestroyPipelineLayout(a->device, a->wormhole_line_layout, NULL);
+    if (a->fog_layout) vkDestroyPipelineLayout(a->device, a->fog_layout, NULL);
     if (a->post_desc_pool) vkDestroyDescriptorPool(a->device, a->post_desc_pool, NULL);
     if (a->post_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->post_desc_layout, NULL);
     if (a->post_sampler) vkDestroySampler(a->device, a->post_sampler, NULL);
@@ -3067,6 +3082,10 @@ static void destroy_render_runtime(app* a) {
         vkDestroyPipeline(a->device, a->wormhole_line_pipeline, NULL);
         a->wormhole_line_pipeline = VK_NULL_HANDLE;
     }
+    if (a->fog_pipeline) {
+        vkDestroyPipeline(a->device, a->fog_pipeline, NULL);
+        a->fog_pipeline = VK_NULL_HANDLE;
+    }
     if (a->post_layout) {
         vkDestroyPipelineLayout(a->device, a->post_layout, NULL);
         a->post_layout = VK_NULL_HANDLE;
@@ -3082,6 +3101,10 @@ static void destroy_render_runtime(app* a) {
     if (a->wormhole_line_layout) {
         vkDestroyPipelineLayout(a->device, a->wormhole_line_layout, NULL);
         a->wormhole_line_layout = VK_NULL_HANDLE;
+    }
+    if (a->fog_layout) {
+        vkDestroyPipelineLayout(a->device, a->fog_layout, NULL);
+        a->fog_layout = VK_NULL_HANDLE;
     }
     if (a->post_desc_pool) {
         vkDestroyDescriptorPool(a->device, a->post_desc_pool, NULL);
@@ -3287,6 +3310,7 @@ static int recreate_render_runtime(app* a) {
         !create_terrain_resources(a) ||
         !create_particle_resources(a) ||
         !create_wormhole_resources(a) ||
+        !create_fog_resources(a) ||
         !create_vg_context(a)) {
         return 0;
     }
@@ -4482,6 +4506,115 @@ static int create_wormhole_resources(app* a) {
 #endif
 }
 
+static int create_fog_resources(app* a) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    return 1;
+#else
+    if (!a) {
+        return 0;
+    }
+
+    VkPushConstantRange pc = {
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .offset = 0,
+        .size = sizeof(fog_pc)
+    };
+    VkPipelineLayoutCreateInfo pli = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &pc
+    };
+    if (!check_vk(vkCreatePipelineLayout(a->device, &pli, NULL, &a->fog_layout), "vkCreatePipelineLayout(fog)")) {
+        return 0;
+    }
+
+    VkShaderModuleCreateInfo vs_ci = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = v_type_fog_vert_spv_len,
+        .pCode = (const uint32_t*)v_type_fog_vert_spv
+    };
+    VkShaderModuleCreateInfo fs_ci = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = v_type_fog_frag_spv_len,
+        .pCode = (const uint32_t*)v_type_fog_frag_spv
+    };
+    VkShaderModule vs = VK_NULL_HANDLE;
+    VkShaderModule fs = VK_NULL_HANDLE;
+    if (!check_vk(vkCreateShaderModule(a->device, &vs_ci, NULL, &vs), "vkCreateShaderModule(fog vs)")) {
+        return 0;
+    }
+    if (!check_vk(vkCreateShaderModule(a->device, &fs_ci, NULL, &fs), "vkCreateShaderModule(fog fs)")) {
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+
+    VkPipelineShaderStageCreateInfo stages[2] = {
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vs, .pName = "main"},
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = fs, .pName = "main"}
+    };
+    VkPipelineVertexInputStateCreateInfo vi = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    VkPipelineInputAssemblyStateCreateInfo ia = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
+    };
+    VkPipelineViewportStateCreateInfo vp = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .scissorCount = 1};
+    VkPipelineRasterizationStateCreateInfo rs = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .lineWidth = 1.0f,
+        .cullMode = VK_CULL_MODE_NONE,
+        .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE
+    };
+    VkPipelineMultisampleStateCreateInfo ms = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .rasterizationSamples = scene_samples(a)};
+    VkPipelineColorBlendAttachmentState cb_att = {
+        .blendEnable = VK_TRUE,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .colorBlendOp = VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .alphaBlendOp = VK_BLEND_OP_ADD,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
+    };
+    VkPipelineColorBlendStateCreateInfo cb = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1, .pAttachments = &cb_att};
+    VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo ds = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .dynamicStateCount = 2, .pDynamicStates = dyn};
+    VkPipelineDepthStencilStateCreateInfo depth = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .depthTestEnable = VK_FALSE,
+        .depthWriteEnable = VK_FALSE,
+        .depthCompareOp = VK_COMPARE_OP_ALWAYS
+    };
+    VkGraphicsPipelineCreateInfo gp = {
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .stageCount = 2,
+        .pStages = stages,
+        .pVertexInputState = &vi,
+        .pInputAssemblyState = &ia,
+        .pViewportState = &vp,
+        .pRasterizationState = &rs,
+        .pMultisampleState = &ms,
+        .pDepthStencilState = &depth,
+        .pColorBlendState = &cb,
+        .pDynamicState = &ds,
+        .layout = a->fog_layout,
+        .renderPass = a->scene_render_pass,
+        .subpass = 0
+    };
+    if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->fog_pipeline), "vkCreateGraphicsPipelines(fog)")) {
+        vkDestroyShaderModule(a->device, fs, NULL);
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+
+    vkDestroyShaderModule(a->device, fs, NULL);
+    vkDestroyShaderModule(a->device, vs, NULL);
+    return 1;
+#endif
+}
+
 static int create_vg_context(app* a) {
     vg_context_desc desc;
     memset(&desc, 0, sizeof(desc));
@@ -4857,6 +4990,98 @@ static void record_gpu_wormhole(app* a, VkCommandBuffer cmd) {
 #endif
 }
 
+static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    (void)cmd;
+    (void)t;
+#else
+    if (!a || !cmd || !a->fog_pipeline || !a->fog_layout) {
+        return;
+    }
+    if (a->game.level_style != LEVEL_STYLE_FOG_OF_WAR) {
+        return;
+    }
+
+    fog_pc pc;
+    memset(&pc, 0, sizeof(pc));
+    pc.p0[0] = (float)a->swapchain_extent.width;
+    pc.p0[1] = (float)a->swapchain_extent.height;
+    pc.p0[2] = t;
+    pc.p0[3] = 1.0f;
+
+    float primary_dim[3];
+    float secondary[3];
+    if (a->palette_mode == 1) {
+        primary_dim[0] = 0.85f; primary_dim[1] = 0.52f; primary_dim[2] = 0.16f;
+        secondary[0] = 1.00f; secondary[1] = 0.82f; secondary[2] = 0.48f;
+    } else if (a->palette_mode == 2) {
+        primary_dim[0] = 0.26f; primary_dim[1] = 0.72f; primary_dim[2] = 0.92f;
+        secondary[0] = 0.72f; secondary[1] = 0.98f; secondary[2] = 1.00f;
+    } else {
+        primary_dim[0] = 0.03f; primary_dim[1] = 0.52f; primary_dim[2] = 0.12f;
+        secondary[0] = 0.13f; secondary[1] = 0.66f; secondary[2] = 0.25f;
+    }
+    pc.p1[0] = primary_dim[0];
+    pc.p1[1] = primary_dim[1];
+    pc.p1[2] = primary_dim[2];
+    pc.p1[3] = 1.0f;
+    pc.p2[0] = secondary[0];
+    pc.p2[1] = secondary[1];
+    pc.p2[2] = secondary[2];
+    pc.p2[3] = 0.0f;
+
+    int emit_n = 0;
+    const float world_w = a->game.world_w;
+    const float world_h = a->game.world_h;
+    const float cx = a->game.camera_x;
+    const float cy = a->game.camera_y;
+    if (a->game.lives > 0 && emit_n < 4) {
+        pc.emit[emit_n][0] = a->game.player.b.x + world_w * 0.5f - cx;
+        pc.emit[emit_n][1] = a->game.player.b.y + world_h * 0.5f - cy;
+        pc.emit[emit_n][2] = 180.0f;
+        pc.emit[emit_n][3] = 1.0f;
+        emit_n++;
+    }
+    for (size_t i = 0; i < MAX_ENEMIES && emit_n < 4; ++i) {
+        if (!a->game.enemies[i].active) {
+            continue;
+        }
+        pc.emit[emit_n][0] = a->game.enemies[i].b.x + world_w * 0.5f - cx;
+        pc.emit[emit_n][1] = a->game.enemies[i].b.y + world_h * 0.5f - cy;
+        pc.emit[emit_n][2] = 135.0f;
+        pc.emit[emit_n][3] = 0.58f;
+        emit_n++;
+    }
+    for (size_t i = 0; i < MAX_BULLETS && emit_n < 4; ++i) {
+        if (!a->game.bullets[i].active) {
+            continue;
+        }
+        pc.emit[emit_n][0] = a->game.bullets[i].b.x + world_w * 0.5f - cx;
+        pc.emit[emit_n][1] = a->game.bullets[i].b.y + world_h * 0.5f - cy;
+        pc.emit[emit_n][2] = 92.0f;
+        pc.emit[emit_n][3] = 0.36f;
+        emit_n++;
+    }
+    for (size_t i = 0; i < MAX_ENEMY_BULLETS && emit_n < 4; ++i) {
+        if (!a->game.enemy_bullets[i].active) {
+            continue;
+        }
+        pc.emit[emit_n][0] = a->game.enemy_bullets[i].b.x + world_w * 0.5f - cx;
+        pc.emit[emit_n][1] = a->game.enemy_bullets[i].b.y + world_h * 0.5f - cy;
+        pc.emit[emit_n][2] = 80.0f;
+        pc.emit[emit_n][3] = 0.28f;
+        emit_n++;
+    }
+    pc.p2[3] = (float)emit_n;
+
+    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->fog_pipeline);
+    vkCmdPushConstants(cmd, a->fog_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+#endif
+}
+
 static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd) {
     const int enable_gpu_terrain = 1;
     if (!enable_gpu_terrain) {
@@ -5057,10 +5282,11 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             a->use_gpu_wormhole &&
             (a->game.level_style == LEVEL_STYLE_EVENT_HORIZON);
         const int use_gpu_particles = a->use_gpu_particles;
+        const int use_gpu_fog = (a->game.level_style == LEVEL_STYLE_FOG_OF_WAR) ? 1 : 0;
         const int need_mid_scene_gpu = (use_gpu_terrain || use_gpu_wormhole);
         const int split_scene =
             in_gameplay_scene &&
-            (need_mid_scene_gpu || (use_gpu_particles && !a->disable_scene_split));
+            (need_mid_scene_gpu || use_gpu_fog || (use_gpu_particles && !a->disable_scene_split));
         if (in_gameplay_scene && use_gpu_terrain) {
             /* IMPORTANT: high-plains terrain flickers with split scene phases
                (background-only + foreground-only). Keep this known-stable order:
@@ -5099,6 +5325,9 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             }
             if (use_gpu_wormhole) {
                 record_gpu_wormhole(a, cmd);
+            }
+            if (use_gpu_fog) {
+                record_gpu_fog(a, cmd, t);
             }
 
             metrics.scene_phase = 2; /* foreground-only */
@@ -5319,6 +5548,7 @@ int main(void) {
         !create_terrain_resources(&a) ||
         !create_particle_resources(&a) ||
         !create_wormhole_resources(&a) ||
+        !create_fog_resources(&a) ||
         !create_vg_context(&a)) {
         cleanup(&a);
         return 1;
@@ -5371,6 +5601,8 @@ int main(void) {
                         set_tty_message(&a, "level mode: high plains drifter");
                     } else if (a.game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2) {
                         set_tty_message(&a, "level mode: high plains drifter 2");
+                    } else if (a.game.level_style == LEVEL_STYLE_FOG_OF_WAR) {
+                        set_tty_message(&a, "level mode: fog of war");
                     } else {
                         set_tty_message(&a, "level mode: defender");
                     }

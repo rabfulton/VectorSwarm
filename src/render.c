@@ -2583,6 +2583,21 @@ static vg_result draw_parallax_landscape(
     return vg_draw_polyline(ctx, line, N, main, 0);
 }
 
+static vg_result draw_fog_of_war_nebula(
+    vg_context* ctx,
+    const game_state* g,
+    const palette_theme* pal,
+    float intensity_scale
+) {
+    (void)ctx;
+    (void)g;
+    (void)pal;
+    (void)intensity_scale;
+    /* Fog-of-war rendering now uses the dedicated GPU shader path in main.c.
+       Keep this stub to avoid accidental image-API fallback. */
+    return VG_OK;
+}
+
 static int horizon_bin_index(float x, float w, int bins) {
     if (bins <= 1 || w <= 1e-6f) {
         return 0;
@@ -3941,6 +3956,12 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
                 if (r != VG_OK) {
                     return r;
                 }
+            }
+        }
+        if (g->level_style == LEVEL_STYLE_FOG_OF_WAR) {
+            r = draw_fog_of_war_nebula(ctx, g, &pal, intensity_scale);
+            if (r != VG_OK) {
+                return r;
             }
         }
     }
