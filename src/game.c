@@ -80,10 +80,38 @@ static leveldef_db g_leveldef;
 static int g_leveldef_ready = 0;
 
 static void ensure_leveldef_loaded(void) {
+    static const char* level_dirs[] = {
+        "../data/levels",
+        "data/levels"
+    };
+    const char* chosen_dir = NULL;
     if (g_leveldef_ready) {
         return;
     }
-    (void)leveldef_load_project_layout(&g_leveldef, "data/levels", stderr);
+    for (int i = 0; i < (int)(sizeof(level_dirs) / sizeof(level_dirs[0])); ++i) {
+        char probe[256];
+        FILE* f = NULL;
+        if (snprintf(probe, sizeof(probe), "%s/combat.cfg", level_dirs[i]) >= (int)sizeof(probe)) {
+            continue;
+        }
+        f = fopen(probe, "r");
+        if (f) {
+            fclose(f);
+            chosen_dir = level_dirs[i];
+            break;
+        }
+    }
+    if (!chosen_dir) {
+        fprintf(
+            stderr,
+            "FATAL: could not locate level config directory. Expected ../data/levels or data/levels from cwd.\n"
+        );
+        exit(1);
+    }
+    if (!leveldef_load_project_layout(&g_leveldef, chosen_dir, stderr)) {
+        fprintf(stderr, "FATAL: failed to load LevelDef config from %s\n", chosen_dir);
+        exit(1);
+    }
     g_leveldef_ready = 1;
 }
 
@@ -276,6 +304,56 @@ static int level_uses_cylinder(int level_style) {
     return level_style == LEVEL_STYLE_ENEMY_RADAR ||
            level_style == LEVEL_STYLE_EVENT_HORIZON ||
            level_style == LEVEL_STYLE_EVENT_HORIZON_LEGACY;
+}
+
+static void configure_exit_portal_for_level(game_state* g) {
+    const leveldef_level* lvl;
+    const float su = gameplay_ui_scale(g);
+    if (!g) {
+        return;
+    }
+    g->exit_portal_active = 0;
+    g->exit_portal_x = 0.0f;
+    g->exit_portal_y = 0.0f;
+    g->exit_portal_radius = 26.0f * su;
+    if (level_uses_cylinder(g->level_style)) {
+        fprintf(
+            stderr,
+            "[exit_portal] level=%d cylinder=1 active=0 world_w=%.2f world_h=%.2f\n",
+            g->level_style,
+            g->world_w,
+            g->world_h
+        );
+        return;
+    }
+    ensure_leveldef_loaded();
+    lvl = leveldef_get_level(&g_leveldef, g->level_style);
+    if (!lvl || !lvl->exit_enabled) {
+        fprintf(
+            stderr,
+            "[exit_portal] level=%d cylinder=0 active=0 lvl=%p exit_enabled=%d\n",
+            g->level_style,
+            (void*)lvl,
+            lvl ? lvl->exit_enabled : 0
+        );
+        return;
+    }
+    g->exit_portal_active = 1;
+    g->exit_portal_x = g->world_w * lvl->exit_x01;
+    g->exit_portal_y = g->world_h * lvl->exit_y01;
+    g->exit_portal_radius = 28.0f * su;
+    fprintf(
+        stderr,
+        "[exit_portal] level=%d active=1 x01=%.3f y01=%.3f x=%.2f y=%.2f r=%.2f cam_x=%.2f player_x=%.2f\n",
+        g->level_style,
+        lvl->exit_x01,
+        lvl->exit_y01,
+        g->exit_portal_x,
+        g->exit_portal_y,
+        g->exit_portal_radius,
+        g->camera_x,
+        g->player.b.x
+    );
 }
 
 static float gameplay_ui_scale(const game_state* g) {
@@ -1196,6 +1274,7 @@ void game_init(game_state* g, float world_w, float world_h) {
     g->wave_index = 0;
     g->wave_id_alloc = 0;
     configure_searchlights_for_level(g);
+    configure_exit_portal_for_level(g);
 
     for (size_t i = 0; i < MAX_STARS; ++i) {
         g->stars[i].x = frand01() * world_w;
@@ -1226,6 +1305,7 @@ void game_set_world_size(game_state* g, float world_w, float world_h) {
         g->wave_cooldown_s = lvl ? lvl->wave_cooldown_initial_s : 0.65f;
     }
     configure_searchlights_for_level(g);
+    configure_exit_portal_for_level(g);
 }
 
 void game_cycle_level(game_state* g) {
@@ -1233,6 +1313,7 @@ void game_cycle_level(game_state* g) {
         return;
     }
     g->level_style = (g->level_style + 1) % LEVEL_STYLE_COUNT;
+    const float su = gameplay_ui_scale(g);
     memset(g->bullets, 0, sizeof(g->bullets));
     memset(g->enemy_bullets, 0, sizeof(g->enemy_bullets));
     memset(g->enemies, 0, sizeof(g->enemies));
@@ -1243,9 +1324,15 @@ void game_cycle_level(game_state* g) {
         const leveldef_level* lvl = leveldef_get_level(&g_leveldef, g->level_style);
         g->wave_cooldown_s = lvl ? lvl->wave_cooldown_initial_s : 0.65f;
     }
+    g->player.b.x = 170.0f * su;
+    g->player.b.y = g->world_h * 0.5f;
+    g->player.b.vx = 0.0f;
+    g->player.b.vy = 0.0f;
     g->camera_vx = 0.0f;
     g->camera_x = g->player.b.x;
+    g->camera_y = g->world_h * 0.5f;
     configure_searchlights_for_level(g);
+    configure_exit_portal_for_level(g);
 }
 
 void game_update(game_state* g, float dt, const game_input* in) {
@@ -1256,7 +1343,13 @@ void game_update(game_state* g, float dt, const game_input* in) {
         const int level_style = g->level_style;
         game_init(g, g->world_w, g->world_h);
         g->level_style = level_style;
+        ensure_leveldef_loaded();
+        {
+            const leveldef_level* lvl = leveldef_get_level(&g_leveldef, g->level_style);
+            g->wave_cooldown_s = lvl ? lvl->wave_cooldown_initial_s : 0.65f;
+        }
         configure_searchlights_for_level(g);
+        configure_exit_portal_for_level(g);
     }
 
     for (size_t i = 0; i < MAX_STARS; ++i) {
@@ -1322,6 +1415,12 @@ void game_update(game_state* g, float dt, const game_input* in) {
             if (g->player.b.vy > 0.0f) {
                 g->player.b.vy = 0.0f;
             }
+        }
+        if (g->exit_portal_active &&
+            dist_sq(g->player.b.x, g->player.b.y, g->exit_portal_x, g->exit_portal_y) <=
+                g->exit_portal_radius * g->exit_portal_radius) {
+            game_cycle_level(g);
+            return;
         }
     }
 

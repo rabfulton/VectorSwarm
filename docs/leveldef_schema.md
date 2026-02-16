@@ -95,6 +95,9 @@
 - `default_boid_profile` profile name
 - `wave_cooldown_initial_s` float
 - `wave_cooldown_between_s` float
+- `exit_enabled` int (`0`/`1`) for side-scrolling level portal
+- `exit_x01` float (portal x in world-width units; `1.0` = one screen width)
+- `exit_y01` float (portal y normalized by world height)
 - `boid_cycle` comma-separated profile names (used for `boid_only` wave cycling)
 - `wave_cycle` comma-separated wave pattern tokens (used for `normal` mode):
 - `sine_snake`

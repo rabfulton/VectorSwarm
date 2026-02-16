@@ -880,6 +880,128 @@ static vg_result draw_searchlights(
     return VG_OK;
 }
 
+static vg_result draw_exit_portal(
+    vg_context* ctx,
+    const game_state* g,
+    const palette_theme* pal,
+    float intensity_scale,
+    const vg_stroke_style* land_halo,
+    const vg_stroke_style* land_main
+) {
+    if (!ctx || !g || !pal || !land_halo || !land_main || !g->exit_portal_active) {
+        return VG_OK;
+    }
+    const float cx = g->exit_portal_x;
+    const float cy = g->exit_portal_y;
+    const float max_half = fmaxf(g->exit_portal_radius * 2.30f, 42.0f);
+    const float min_half = fmaxf(g->exit_portal_radius * 0.42f, 10.0f);
+    const float spawn_rate = 0.66f;
+    const float flash = 0.5f + 0.5f * sinf(g->t * 7.0f);
+
+    {
+        const float box_half_x = fmaxf(g->exit_portal_radius * 4.8f, 180.0f);
+        const float box_half_y = fmaxf(g->exit_portal_radius * 8.0f, g->world_h * 0.44f);
+        const vg_vec2 box[4] = {
+            {cx - box_half_x, cy - box_half_y},
+            {cx + box_half_x, cy - box_half_y},
+            {cx + box_half_x, cy + box_half_y},
+            {cx - box_half_x, cy + box_half_y}
+        };
+        const vg_fill_style marker_fill = make_fill(
+            1.0f,
+            (vg_color){
+                0.95f,
+                0.12f + 0.30f * flash,
+                0.12f + 0.10f * flash,
+                0.85f
+            },
+            VG_BLEND_ALPHA
+        );
+        vg_result r = vg_fill_convex(ctx, box, 4, &marker_fill);
+        if (r != VG_OK) {
+            return r;
+        }
+        {
+            const vg_vec2 edge[5] = {
+                box[0], box[1], box[2], box[3], box[0]
+            };
+            vg_stroke_style border = *land_main;
+            border.color = (vg_color){1.0f, 1.0f, 0.85f, 1.0f};
+            border.intensity *= 1.65f;
+            border.width_px *= 2.20f;
+            r = vg_draw_polyline(ctx, edge, 5, &border, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+        {
+            const vg_vec2 cross_h[2] = {
+                {cx - box_half_x, cy},
+                {cx + box_half_x, cy}
+            };
+            const vg_vec2 cross_v[2] = {
+                {cx, cy - box_half_y},
+                {cx, cy + box_half_y}
+            };
+            vg_stroke_style cross = *land_halo;
+            cross.color = (vg_color){1.0f, 1.0f, 0.90f, 1.0f};
+            cross.width_px *= 2.8f;
+            cross.intensity *= 2.0f;
+            r = vg_draw_polyline(ctx, cross_h, 2, &cross, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_draw_polyline(ctx, cross_v, 2, &cross, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+    }
+
+    for (int i = 0; i < 4; ++i) {
+        float phase = fmodf(g->t * spawn_rate + (float)i * 0.25f, 1.0f);
+        if (phase < 0.0f) {
+            phase += 1.0f;
+        }
+        const float life = 1.0f - phase;
+        const float half = min_half + (max_half - min_half) * life;
+        const float alpha = 0.26f + life * 0.64f;
+        const vg_vec2 square[5] = {
+            {cx - half, cy - half},
+            {cx + half, cy - half},
+            {cx + half, cy + half},
+            {cx - half, cy + half},
+            {cx - half, cy - half}
+        };
+        vg_stroke_style sh = *land_halo;
+        vg_stroke_style sm = *land_main;
+        sh.color = (vg_color){pal->primary.r, pal->primary.g, pal->primary.b, alpha * 0.95f};
+        sm.color = (vg_color){pal->secondary.r, pal->secondary.g, pal->secondary.b, alpha};
+        sh.intensity *= (0.95f + life * 1.15f) * intensity_scale;
+        sm.intensity *= (1.00f + life * 1.25f) * intensity_scale;
+        sh.width_px *= 1.24f;
+        sm.width_px *= 1.18f;
+        vg_result r = vg_draw_polyline(ctx, square, 5, &sh, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_draw_polyline(ctx, square, 5, &sm, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+    }
+
+    {
+        const float core_r = fmaxf(g->exit_portal_radius * 0.30f, 5.0f);
+        const vg_fill_style core_fill = make_fill(
+            0.90f * intensity_scale,
+            (vg_color){pal->secondary.r, pal->secondary.g, pal->secondary.b, 0.48f},
+            VG_BLEND_ADDITIVE
+        );
+        return vg_fill_circle(ctx, (vg_vec2){cx, cy}, core_r, &core_fill, 14);
+    }
+}
+
 static vg_result draw_text_vector_glow(
     vg_context* ctx,
     const char* text,
@@ -4024,6 +4146,13 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
 
     if (g->searchlight_count > 0) {
         r = draw_searchlights(ctx, g, &pal, intensity_scale, &land_halo, &land_main);
+        if (r != VG_OK) {
+            (void)vg_transform_pop(ctx);
+            return r;
+        }
+    }
+    if (g->exit_portal_active) {
+        r = draw_exit_portal(ctx, g, &pal, intensity_scale, &land_halo, &land_main);
         if (r != VG_OK) {
             (void)vg_transform_pop(ctx);
             return r;

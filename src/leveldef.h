@@ -148,6 +148,9 @@ typedef struct leveldef_level {
     int default_boid_profile;
     float wave_cooldown_initial_s;
     float wave_cooldown_between_s;
+    int exit_enabled;
+    float exit_x01;
+    float exit_y01;
     int boid_cycle_count;
     int boid_cycle[LEVELDEF_MAX_BOID_CYCLE];
     int wave_cycle_count;

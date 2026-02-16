@@ -208,6 +208,10 @@ typedef struct game_state {
     game_audio_event audio_events[MAX_AUDIO_EVENTS];
     searchlight searchlights[MAX_SEARCHLIGHTS];
     int searchlight_count;
+    int exit_portal_active;
+    float exit_portal_x;
+    float exit_portal_y;
+    float exit_portal_radius;
 } game_state;
 
 void game_init(game_state* g, float world_w, float world_h);
