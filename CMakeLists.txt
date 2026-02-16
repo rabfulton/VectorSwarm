@@ -15,6 +15,7 @@ find_package(Vulkan REQUIRED)
 add_executable(v_type
     src/acoustics_ui_layout.c
     src/game.c
+    src/leveldef.c
     src/main.c
     src/planetarium/planetarium_registry.c
     src/planetarium/planetarium_validate.c

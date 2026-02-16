@@ -1,4 +1,5 @@
 #include "game.h"
+#include "leveldef.h"
 
 #include <math.h>
 #include <stddef.h>
@@ -49,73 +50,6 @@ typedef struct enemy_fire_tuning {
     float spread_scale;
 } enemy_fire_tuning;
 
-typedef struct enemy_combat_config {
-    enemy_weapon_def weapon_defs[ENEMY_WEAPON_COUNT];
-    float progression_wave_weight;
-    float progression_score_weight;
-    float progression_level_weight;
-    float armed_probability_base[3];
-    float armed_probability_progression_bonus[3];
-    float fire_range_min;
-    float fire_range_max_base;
-    float fire_range_max_progression_bonus;
-    float aim_error_deg_start;
-    float aim_error_deg_end;
-    float cooldown_scale_start;
-    float cooldown_scale_end;
-    float projectile_speed_scale_start;
-    float projectile_speed_scale_end;
-    float spread_scale_start;
-    float spread_scale_end;
-    float swarm_armed_prob_start;
-    float swarm_armed_prob_end;
-    float swarm_spread_prob_start; /* when armed: chance to use spread (triple), else pulse (single) */
-    float swarm_spread_prob_end;
-} enemy_combat_config;
-
-typedef struct searchlight_def {
-    int level_style; /* enum level_style_id */
-    float anchor_x01;
-    float anchor_y01;
-    float length_h01;
-    float half_angle_deg;
-    float sweep_center_deg;
-    float sweep_amplitude_deg;
-    float sweep_speed;
-    float sweep_phase_deg;
-    int sweep_motion; /* enum searchlight_motion_type */
-    int source_type; /* enum searchlight_source_type */
-    float source_radius;
-    float clear_grace_s;
-    float fire_interval_s;
-    float projectile_speed;
-    float projectile_ttl_s;
-    float projectile_radius;
-    float aim_jitter_deg;
-} searchlight_def;
-
-typedef struct boid_swarm_profile_def {
-    const char* wave_name;
-    int count;
-    float sep_w;
-    float ali_w;
-    float coh_w;
-    float avoid_w;
-    float goal_w;
-    float sep_r;
-    float ali_r;
-    float coh_r;
-    float goal_amp;
-    float goal_freq;
-    float wander_w;
-    float wander_freq;
-    float steer_drag;
-    float max_speed;
-    float accel;
-    float radius_min;
-    float radius_max;
-} boid_swarm_profile_def;
-
 static float frand01(void) {
     return (float)rand() / (float)RAND_MAX;
 }
@@ -142,242 +76,16 @@ static float lerpf(float a, float b, float t) {
     return a + (b - a) * t;
 }
 
-static const enemy_combat_config k_enemy_combat_config = {
-    .weapon_defs = {
-        [ENEMY_WEAPON_PULSE] = {
-            .cooldown_min_s = 1.10f,
-            .cooldown_max_s = 1.90f,
-            .burst_count = 1,
-            .burst_gap_s = 0.0f,
-            .projectiles_per_shot = 1,
-            .spread_deg = 0.0f,
-            .projectile_speed = 500.0f,
-            .projectile_ttl_s = 2.35f,
-            .projectile_radius = 4.0f,
-            .aim_lead_s = 0.20f
-        },
-        [ENEMY_WEAPON_SPREAD] = {
-            .cooldown_min_s = 1.30f,
-            .cooldown_max_s = 2.20f,
-            .burst_count = 1,
-            .burst_gap_s = 0.0f,
-            .projectiles_per_shot = 3,
-            .spread_deg = 11.0f,
-            .projectile_speed = 440.0f,
-            .projectile_ttl_s = 2.15f,
-            .projectile_radius = 3.6f,
-            .aim_lead_s = 0.17f
-        },
-        [ENEMY_WEAPON_BURST] = {
-            .cooldown_min_s = 1.90f,
-            .cooldown_max_s = 2.70f,
-            .burst_count = 3,
-            .burst_gap_s = 0.085f,
-            .projectiles_per_shot = 1,
-            .spread_deg = 0.0f,
-            .projectile_speed = 560.0f,
-            .projectile_ttl_s = 2.00f,
-            .projectile_radius = 3.4f,
-            .aim_lead_s = 0.14f
-        }
-    },
-    .progression_wave_weight = 0.045f,
-    .progression_score_weight = (1.0f / 22000.0f),
-    .progression_level_weight = 0.0f,
-    .armed_probability_base = {0.32f, 0.48f, 0.24f},
-    .armed_probability_progression_bonus = {0.40f, 0.35f, 0.45f},
-    .fire_range_min = 110.0f,
-    .fire_range_max_base = 560.0f,
-    .fire_range_max_progression_bonus = 180.0f,
-    .aim_error_deg_start = 8.0f,
-    .aim_error_deg_end = 2.2f,
-    .cooldown_scale_start = 1.0f,
-    .cooldown_scale_end = 0.62f,
-    .projectile_speed_scale_start = 1.0f,
-    .projectile_speed_scale_end = 1.28f,
-    .spread_scale_start = 1.0f,
-    .spread_scale_end = 0.70f,
-    .swarm_armed_prob_start = 0.16f,
-    .swarm_armed_prob_end = 0.72f,
-    .swarm_spread_prob_start = 0.12f,
-    .swarm_spread_prob_end = 0.86f
-};
+static leveldef_db g_leveldef;
+static int g_leveldef_ready = 0;
 
-static const searchlight_def k_searchlight_defs[] = {
-    {
-        .level_style = LEVEL_STYLE_DEFENDER,
-        .anchor_x01 = 0.82f,
-        .anchor_y01 = 0.02f,
-        .length_h01 = 0.72f,
-        .half_angle_deg = 10.3f,
-        .sweep_center_deg = 90.0f,
-        .sweep_amplitude_deg = 70.0f,
-        .sweep_speed = 1.25f,
-        .sweep_phase_deg = 17.2f,
-        .sweep_motion = SEARCHLIGHT_MOTION_PENDULUM,
-        .source_type = SEARCHLIGHT_SOURCE_DOME,
-        .source_radius = 16.0f,
-        .clear_grace_s = 2.60f,
-        .fire_interval_s = 0.058f,
-        .projectile_speed = 820.0f,
-        .projectile_ttl_s = 2.5f,
-        .projectile_radius = 3.6f,
-        .aim_jitter_deg = 1.43f
-    },
-    {
-        .level_style = LEVEL_STYLE_DEFENDER,
-        .anchor_x01 = 1.30f,
-        .anchor_y01 = 0.50f,
-        .length_h01 = 0.68f,
-        .half_angle_deg = 9.0f,
-        .sweep_center_deg = 0.0f,
-        .sweep_amplitude_deg = 180.0f,
-        .sweep_speed = 3.20f,
-        .sweep_phase_deg = 0.0f,
-        .sweep_motion = SEARCHLIGHT_MOTION_SPIN,
-        .source_type = SEARCHLIGHT_SOURCE_ORB,
-        .source_radius = 15.0f,
-        .clear_grace_s = 2.10f,
-        .fire_interval_s = 0.16f,
-        .projectile_speed = 1220.0f,
-        .projectile_ttl_s = 2.3f,
-        .projectile_radius = 3.4f,
-        .aim_jitter_deg = 1.10f
-    },
-    {
-        .level_style = LEVEL_STYLE_FOG_OF_WAR,
-        .anchor_x01 = 3.30f,
-        .anchor_y01 = 0.50f,
-        .length_h01 = 0.74f,
-        .half_angle_deg = 8.2f,
-        .sweep_center_deg = 0.0f,
-        .sweep_amplitude_deg = 180.0f,
-        .sweep_speed = 1.70f,
-        .sweep_phase_deg = 0.0f,
-        .sweep_motion = SEARCHLIGHT_MOTION_SPIN,
-        .source_type = SEARCHLIGHT_SOURCE_ORB,
-        .source_radius = 14.5f,
-        .clear_grace_s = 1.60f,
-        .fire_interval_s = 0.030f,
-        .projectile_speed = 980.0f,
-        .projectile_ttl_s = 2.2f,
-        .projectile_radius = 3.2f,
-        .aim_jitter_deg = 1.35f
-    },
-    {
-        .level_style = LEVEL_STYLE_FOG_OF_WAR,
-        .anchor_x01 = 3.80f,
-        .anchor_y01 = 0.50f,
-        .length_h01 = 0.72f,
-        .half_angle_deg = 8.2f,
-        .sweep_center_deg = 0.0f,
-        .sweep_amplitude_deg = 180.0f,
-        .sweep_speed = 1.55f,
-        .sweep_phase_deg = 120.0f,
-        .sweep_motion = SEARCHLIGHT_MOTION_SPIN,
-        .source_type = SEARCHLIGHT_SOURCE_ORB,
-        .source_radius = 14.5f,
-        .clear_grace_s = 1.65f,
-        .fire_interval_s = 0.032f,
-        .projectile_speed = 980.0f,
-        .projectile_ttl_s = 2.2f,
-        .projectile_radius = 3.2f,
-        .aim_jitter_deg = 1.35f
-    },
-    {
-        .level_style = LEVEL_STYLE_FOG_OF_WAR,
-        .anchor_x01 = 4.30f,
-        .anchor_y01 = 0.50f,
-        .length_h01 = 0.74f,
-        .half_angle_deg = 8.2f,
-        .sweep_center_deg = 0.0f,
-        .sweep_amplitude_deg = 180.0f,
-        .sweep_speed = 1.85f,
-        .sweep_phase_deg = 230.0f,
-        .sweep_motion = SEARCHLIGHT_MOTION_SPIN,
-        .source_type = SEARCHLIGHT_SOURCE_ORB,
-        .source_radius = 14.5f,
-        .clear_grace_s = 1.60f,
-        .fire_interval_s = 0.030f,
-        .projectile_speed = 980.0f,
-        .projectile_ttl_s = 2.2f,
-        .projectile_radius = 3.2f,
-        .aim_jitter_deg = 1.35f
+static void ensure_leveldef_loaded(void) {
+    if (g_leveldef_ready) {
+        return;
     }
-};
-
-enum {
-    BOID_PROFILE_FIREFLY = 0,
-    BOID_PROFILE_FISH = 1,
-    BOID_PROFILE_BIRD = 2,
-    BOID_PROFILE_COUNT = 3
-};
-
-static const boid_swarm_profile_def k_boid_profiles[BOID_PROFILE_COUNT] = {
-    {
-        .wave_name = "boid swarm: firefly scatter",
-        .count = 18,
-        .sep_w = 2.40f,
-        .ali_w = 0.25f,
-        .coh_w = 0.20f,
-        .avoid_w = 2.90f,
-        .goal_w = 0.55f,
-        .sep_r = 84.0f,
-        .ali_r = 168.0f,
-        .coh_r = 205.0f,
-        .goal_amp = 140.0f,
-        .goal_freq = 1.40f,
-        .wander_w = 1.30f,
-        .wander_freq = 2.10f,
-        .steer_drag = 1.55f,
-        .max_speed = 210.0f,
-        .accel = 6.2f,
-        .radius_min = 8.0f,
-        .radius_max = 12.0f
-    },
-    {
-        .wave_name = "boid swarm: fish school",
-        .count = 16,
-        .sep_w = 1.60f,
-        .ali_w = 1.10f,
-        .coh_w = 1.00f,
-        .avoid_w = 2.40f,
-        .goal_w = 1.00f,
-        .sep_r = 104.0f,
-        .ali_r = 290.0f,
-        .coh_r = 345.0f,
-        .goal_amp = 52.0f,
-        .goal_freq = 0.45f,
-        .wander_w = 0.22f,
-        .wander_freq = 0.80f,
-        .steer_drag = 1.25f,
-        .max_speed = 245.0f,
-        .accel = 7.8f,
-        .radius_min = 10.0f,
-        .radius_max = 14.0f
-    },
-    {
-        .wave_name = "boid swarm: bird flock",
-        .count = 12,
-        .sep_w = 1.40f,
-        .ali_w = 1.55f,
-        .coh_w = 0.85f,
-        .avoid_w = 2.20f,
-        .goal_w = 1.35f,
-        .sep_r = 126.0f,
-        .ali_r = 336.0f,
-        .coh_r = 392.0f,
-        .goal_amp = 34.0f,
-        .goal_freq = 0.28f,
-        .wander_w = 0.08f,
-        .wander_freq = 0.45f,
-        .steer_drag = 1.08f,
-        .max_speed = 300.0f,
-        .accel = 9.0f,
-        .radius_min = 11.0f,
-        .radius_max = 16.0f
-    }
-};
+    (void)leveldef_load_project_layout(&g_leveldef, "data/levels", stderr);
+    g_leveldef_ready = 1;
+}
 
 static float gameplay_ui_scale(const game_state* g);
 static void apply_player_hit(game_state* g, float impact_x, float impact_y, float impact_vx, float impact_vy);
@@ -460,17 +168,19 @@ static void searchlight_build_triangle(
 }
 
 static void configure_searchlights_for_level(game_state* g) {
+    const leveldef_level* lvl;
     if (!g) {
         return;
     }
+    ensure_leveldef_loaded();
     memset(g->searchlights, 0, sizeof(g->searchlights));
     g->searchlight_count = 0;
-    const size_t def_count = sizeof(k_searchlight_defs) / sizeof(k_searchlight_defs[0]);
-    for (size_t i = 0; i < def_count && g->searchlight_count < MAX_SEARCHLIGHTS; ++i) {
-        const searchlight_def* d = &k_searchlight_defs[i];
-        if (d->level_style != g->level_style) {
-            continue;
-        }
+    lvl = leveldef_get_level(&g_leveldef, g->level_style);
+    if (!lvl) {
+        return;
+    }
+    for (int i = 0; i < lvl->searchlight_count && g->searchlight_count < MAX_SEARCHLIGHTS; ++i) {
+        const leveldef_searchlight* d = &lvl->searchlights[i];
         searchlight* sl = &g->searchlights[g->searchlight_count++];
         memset(sl, 0, sizeof(*sl));
         sl->active = 1;
@@ -594,10 +304,12 @@ static float dist_sq_level(const game_state* g, float ax, float ay, float bx, fl
 }
 
 static float enemy_progression01(const game_state* g) {
-    const enemy_combat_config* c = &k_enemy_combat_config;
+    const leveldef_combat_tuning* c;
     if (!g) {
         return 0.0f;
     }
+    ensure_leveldef_loaded();
+    c = &g_leveldef.combat;
     float progression = (float)g->wave_index * c->progression_wave_weight +
                         (float)g->score * c->progression_score_weight;
     progression += (float)g->level_style * c->progression_level_weight;
@@ -605,7 +317,9 @@ static float enemy_progression01(const game_state* g) {
 }
 
 static enemy_fire_tuning enemy_fire_tuning_for(const game_state* g) {
-    const enemy_combat_config* c = &k_enemy_combat_config;
+    const leveldef_combat_tuning* c;
+    ensure_leveldef_loaded();
+    c = &g_leveldef.combat;
     enemy_fire_tuning t = {
         .armed_probability = {
             c->armed_probability_base[0],
@@ -901,6 +615,9 @@ static void enemy_assign_combat_loadout(game_state* g, enemy* e) {
         return;
     }
     const enemy_fire_tuning t = enemy_fire_tuning_for(g);
+    const leveldef_combat_tuning* combat;
+    ensure_leveldef_loaded();
+    combat = &g_leveldef.combat;
     int arch = e->archetype;
     if (arch < 0 || arch > 2) {
         arch = 0;
@@ -908,11 +625,11 @@ static void enemy_assign_combat_loadout(game_state* g, enemy* e) {
     if (e->archetype == ENEMY_ARCH_SWARM) {
         const float progression = enemy_progression01(g);
         const float armed_p = clampf(
-            lerpf(k_enemy_combat_config.swarm_armed_prob_start, k_enemy_combat_config.swarm_armed_prob_end, progression),
+            lerpf(combat->swarm_armed_prob_start, combat->swarm_armed_prob_end, progression),
             0.0f, 1.0f
         );
         const float spread_p = clampf(
-            lerpf(k_enemy_combat_config.swarm_spread_prob_start, k_enemy_combat_config.swarm_spread_prob_end, progression),
+            lerpf(combat->swarm_spread_prob_start, combat->swarm_spread_prob_end, progression),
             0.0f, 1.0f
         );
         e->armed = (frand01() < armed_p) ? 1 : 0;
@@ -926,7 +643,21 @@ static void enemy_assign_combat_loadout(game_state* g, enemy* e) {
     }
     e->burst_shots_left = 0;
     e->burst_gap_timer_s = 0.0f;
-    enemy_reset_fire_cooldown(g, e, &k_enemy_combat_config.weapon_defs[e->weapon_id], &t);
+    {
+        enemy_weapon_def w = {
+            .cooldown_min_s = combat->weapon[e->weapon_id].cooldown_min_s,
+            .cooldown_max_s = combat->weapon[e->weapon_id].cooldown_max_s,
+            .burst_count = combat->weapon[e->weapon_id].burst_count,
+            .burst_gap_s = combat->weapon[e->weapon_id].burst_gap_s,
+            .projectiles_per_shot = combat->weapon[e->weapon_id].projectiles_per_shot,
+            .spread_deg = combat->weapon[e->weapon_id].spread_deg,
+            .projectile_speed = combat->weapon[e->weapon_id].projectile_speed,
+            .projectile_ttl_s = combat->weapon[e->weapon_id].projectile_ttl_s,
+            .projectile_radius = combat->weapon[e->weapon_id].projectile_radius,
+            .aim_lead_s = combat->weapon[e->weapon_id].aim_lead_s
+        };
+        enemy_reset_fire_cooldown(g, e, &w, &t);
+    }
 }
 
 static void enemy_fire_projectiles(game_state* g, const enemy* e, const enemy_weapon_def* w, const enemy_fire_tuning* t) {
@@ -973,7 +704,23 @@ static void enemy_try_fire(game_state* g, enemy* e, float dt) {
     if (e->weapon_id < 0 || e->weapon_id >= ENEMY_WEAPON_COUNT) {
         e->weapon_id = ENEMY_WEAPON_PULSE;
     }
-    const enemy_weapon_def* w = &k_enemy_combat_config.weapon_defs[e->weapon_id];
+    enemy_weapon_def w_local;
+    const leveldef_combat_tuning* combat;
+    ensure_leveldef_loaded();
+    combat = &g_leveldef.combat;
+    w_local = (enemy_weapon_def){
+        .cooldown_min_s = combat->weapon[e->weapon_id].cooldown_min_s,
+        .cooldown_max_s = combat->weapon[e->weapon_id].cooldown_max_s,
+        .burst_count = combat->weapon[e->weapon_id].burst_count,
+        .burst_gap_s = combat->weapon[e->weapon_id].burst_gap_s,
+        .projectiles_per_shot = combat->weapon[e->weapon_id].projectiles_per_shot,
+        .spread_deg = combat->weapon[e->weapon_id].spread_deg,
+        .projectile_speed = combat->weapon[e->weapon_id].projectile_speed,
+        .projectile_ttl_s = combat->weapon[e->weapon_id].projectile_ttl_s,
+        .projectile_radius = combat->weapon[e->weapon_id].projectile_radius,
+        .aim_lead_s = combat->weapon[e->weapon_id].aim_lead_s
+    };
+    const enemy_weapon_def* w = &w_local;
     const enemy_fire_tuning t = enemy_fire_tuning_for(g);
 
     if (e->burst_gap_timer_s > 0.0f) {
@@ -1034,8 +781,13 @@ static void announce_wave(game_state* g, const char* wave_name) {
 }
 
 static void spawn_wave_sine_snake(game_state* g, int wave_id) {
+    const leveldef_level* lvl;
+    const leveldef_wave_sine_tuning* w;
     const float su = gameplay_ui_scale(g);
-    const int count = 10;
+    ensure_leveldef_loaded();
+    lvl = leveldef_get_level(&g_leveldef, g->level_style);
+    w = lvl ? &lvl->sine : NULL;
+    const int count = (w && w->count > 0) ? w->count : 10;
     for (int i = 0; i < count; ++i) {
         enemy* e = spawn_enemy_common(g);
         if (!e) {
@@ -1046,21 +798,26 @@ static void spawn_wave_sine_snake(game_state* g, int wave_id) {
         enemy_assign_combat_loadout(g, e);
         e->wave_id = wave_id;
         e->slot_index = i;
-        e->b.x = g->camera_x + g->world_w * 0.70f + (float)i * 44.0f * su;
-        e->home_y = g->world_h * 0.52f;
+        e->b.x = g->camera_x + g->world_w * (w ? w->start_x01 : 0.70f) + (float)i * (w ? w->spacing_x : 44.0f) * su;
+        e->home_y = g->world_h * (w ? w->home_y01 : 0.52f);
         e->b.y = e->home_y;
-        e->form_phase = (float)i * 0.55f;
-        e->form_amp = 92.0f * su;
-        e->form_freq = 1.8f;
-        e->break_delay_s = 1.1f + 0.16f * (float)i;
-        e->max_speed = 285.0f * su;
-        e->accel = 6.8f;
+        e->form_phase = (float)i * (w ? w->phase_step : 0.55f);
+        e->form_amp = (w ? w->form_amp : 92.0f) * su;
+        e->form_freq = w ? w->form_freq : 1.8f;
+        e->break_delay_s = (w ? w->break_delay_base : 1.1f) + (w ? w->break_delay_step : 0.16f) * (float)i;
+        e->max_speed = (w ? w->max_speed : 285.0f) * su;
+        e->accel = w ? w->accel : 6.8f;
     }
 }
 
 static void spawn_wave_v_formation(game_state* g, int wave_id) {
+    const leveldef_level* lvl;
+    const leveldef_wave_v_tuning* w;
     const float su = gameplay_ui_scale(g);
-    const int count = 11;
+    ensure_leveldef_loaded();
+    lvl = leveldef_get_level(&g_leveldef, g->level_style);
+    w = lvl ? &lvl->v : NULL;
+    const int count = (w && w->count > 0) ? w->count : 11;
     const int mid = count / 2;
     for (int i = 0; i < count; ++i) {
         enemy* e = spawn_enemy_common(g);
@@ -1073,24 +830,35 @@ static void spawn_wave_v_formation(game_state* g, int wave_id) {
         enemy_assign_combat_loadout(g, e);
         e->wave_id = wave_id;
         e->slot_index = i;
-        e->b.x = g->camera_x + g->world_w * 0.74f + (float)(abs(off)) * 32.0f * su;
-        e->home_y = g->world_h * 0.55f + (float)off * 18.0f * su;
+        e->b.x = g->camera_x + g->world_w * (w ? w->start_x01 : 0.74f) + (float)(abs(off)) * (w ? w->spacing_x : 32.0f) * su;
+        e->home_y = g->world_h * (w ? w->home_y01 : 0.55f) + (float)off * (w ? w->home_y_step : 18.0f) * su;
         e->b.y = e->home_y;
-        e->form_phase = (float)i * 0.35f;
-        e->form_amp = 10.0f * su;
-        e->form_freq = 1.2f;
-        e->break_delay_s = 0.9f + frand01() * 1.8f;
-        e->max_speed = 295.0f * su;
-        e->accel = 7.5f;
+        e->form_phase = (float)i * (w ? w->phase_step : 0.35f);
+        e->form_amp = (w ? w->form_amp : 10.0f) * su;
+        e->form_freq = w ? w->form_freq : 1.2f;
+        e->break_delay_s = (w ? w->break_delay_min : 0.9f) + frand01() * (w ? w->break_delay_rand : 1.8f);
+        e->max_speed = (w ? w->max_speed : 295.0f) * su;
+        e->accel = w ? w->accel : 7.5f;
     }
 }
 
 static void spawn_wave_swarm_profile(game_state* g, int wave_id, int profile_id) {
     const float su = gameplay_ui_scale(g);
-    if (profile_id < 0 || profile_id >= BOID_PROFILE_COUNT) {
-        profile_id = BOID_PROFILE_FISH;
+    const leveldef_boid_profile* p;
+    ensure_leveldef_loaded();
+    p = leveldef_get_boid_profile(&g_leveldef, profile_id);
+    if (!p) {
+        const leveldef_level* lvl = leveldef_get_level(&g_leveldef, g->level_style);
+        if (lvl) {
+            p = leveldef_get_boid_profile(&g_leveldef, lvl->default_boid_profile);
+        }
     }
-    const boid_swarm_profile_def* p = &k_boid_profiles[profile_id];
+    if (!p) {
+        p = leveldef_get_boid_profile(&g_leveldef, 0);
+    }
+    if (!p) {
+        return;
+    }
     const int count = p->count;
     for (int i = 0; i < count; ++i) {
         enemy* e = spawn_enemy_common(g);
@@ -1102,9 +870,9 @@ static void spawn_wave_swarm_profile(game_state* g, int wave_id, int profile_id)
         enemy_assign_combat_loadout(g, e);
         e->wave_id = wave_id;
         e->slot_index = i;
-        e->b.x = g->camera_x + g->world_w * 0.62f + frand01() * 260.0f * su;
-        e->b.y = g->world_h * 0.50f + frands1() * 140.0f * su;
-        e->home_y = g->world_h * 0.50f;
+        e->b.x = g->camera_x + g->world_w * p->spawn_x01 + frand01() * p->spawn_x_span * su;
+        e->b.y = g->world_h * p->spawn_y01 + frands1() * p->spawn_y_span * su;
+        e->home_y = g->world_h * p->spawn_y01;
         e->max_speed = p->max_speed * su;
         e->accel = p->accel;
         e->radius = (p->radius_min + frand01() * (p->radius_max - p->radius_min)) * su;
@@ -1125,8 +893,13 @@ static void spawn_wave_swarm_profile(game_state* g, int wave_id, int profile_id)
 }
 
 static void spawn_wave_kamikaze(game_state* g, int wave_id) {
+    const leveldef_level* lvl;
+    const leveldef_wave_kamikaze_tuning* w;
     const float su = gameplay_ui_scale(g);
-    const int count = 9;
+    ensure_leveldef_loaded();
+    lvl = leveldef_get_level(&g_leveldef, g->level_style);
+    w = lvl ? &lvl->kamikaze : NULL;
+    const int count = (w && w->count > 0) ? w->count : 9;
     for (int i = 0; i < count; ++i) {
         enemy* e = spawn_enemy_common(g);
         if (!e) {
@@ -1137,41 +910,65 @@ static void spawn_wave_kamikaze(game_state* g, int wave_id) {
         enemy_assign_combat_loadout(g, e);
         e->wave_id = wave_id;
         e->slot_index = i;
-        e->b.x = g->camera_x + g->world_w * 0.65f + (float)i * 34.0f * su;
-        e->b.y = 64.0f * su + frand01() * (g->world_h - 128.0f * su);
-        e->max_speed = 360.0f * su;
-        e->accel = 9.0f;
-        e->radius = (11.0f + frand01() * 6.0f) * su;
+        e->b.x = g->camera_x + g->world_w * (w ? w->start_x01 : 0.65f) + (float)i * (w ? w->spacing_x : 34.0f) * su;
+        {
+            const float margin = (w ? w->y_margin : 64.0f) * su;
+            e->b.y = margin + frand01() * fmaxf(g->world_h - 2.0f * margin, 1.0f);
+        }
+        e->max_speed = (w ? w->max_speed : 360.0f) * su;
+        e->accel = w ? w->accel : 9.0f;
+        {
+            const float rmin = (w ? w->radius_min : 11.0f);
+            const float rmax = (w ? w->radius_max : 17.0f);
+            e->radius = (rmin + frand01() * fmaxf(rmax - rmin, 0.0f)) * su;
+        }
     }
 }
 
 static void spawn_next_wave(game_state* g) {
     const int wave_id = ++g->wave_id_alloc;
-    if (g->level_style == LEVEL_STYLE_FOG_OF_WAR) {
-        const int profile_id = g->wave_index % BOID_PROFILE_COUNT;
-        const boid_swarm_profile_def* p = &k_boid_profiles[profile_id];
-        announce_wave(g, p->wave_name);
+    const leveldef_level* lvl;
+    ensure_leveldef_loaded();
+    lvl = leveldef_get_level(&g_leveldef, g->level_style);
+    if (lvl && lvl->wave_mode == LEVELDEF_WAVES_BOID_ONLY) {
+        int profile_id = lvl->default_boid_profile;
+        if (lvl->boid_cycle_count > 0) {
+            profile_id = lvl->boid_cycle[g->wave_index % lvl->boid_cycle_count];
+        }
+        {
+            const leveldef_boid_profile* p = leveldef_get_boid_profile(&g_leveldef, profile_id);
+            announce_wave(g, (p && p->wave_name[0] != '\0') ? p->wave_name : "boid swarm");
+        }
         spawn_wave_swarm_profile(g, wave_id, profile_id);
         g->wave_index += 1;
-        g->wave_cooldown_s = 2.0f;
+        g->wave_cooldown_s = lvl->wave_cooldown_between_s;
         return;
     }
-    const int pattern = g->wave_index % 4;
-    if (pattern == 0) {
+    int pattern = LEVELDEF_WAVE_SINE_SNAKE;
+    if (lvl && lvl->wave_cycle_count > 0) {
+        pattern = lvl->wave_cycle[g->wave_index % lvl->wave_cycle_count];
+    } else {
+        pattern = g->wave_index % 4;
+    }
+    if (pattern == LEVELDEF_WAVE_SINE_SNAKE) {
         announce_wave(g, "sine snake formation");
         spawn_wave_sine_snake(g, wave_id);
-    } else if (pattern == 1) {
+    } else if (pattern == LEVELDEF_WAVE_V_FORMATION) {
         announce_wave(g, "galaxian break v formation");
         spawn_wave_v_formation(g, wave_id);
-    } else if (pattern == 2) {
+    } else if (pattern == LEVELDEF_WAVE_SWARM) {
+        int profile_id = 0;
+        if (lvl) {
+            profile_id = lvl->default_boid_profile;
+        }
         announce_wave(g, "boid swarm cluster");
-        spawn_wave_swarm_profile(g, wave_id, BOID_PROFILE_FISH);
+        spawn_wave_swarm_profile(g, wave_id, profile_id);
     } else {
         announce_wave(g, "kamikaze crash wing");
         spawn_wave_kamikaze(g, wave_id);
     }
     g->wave_index += 1;
-    g->wave_cooldown_s = 2.0f;
+    g->wave_cooldown_s = lvl ? lvl->wave_cooldown_between_s : 2.0f;
 }
 
 static void update_enemy_formation(game_state* g, enemy* e, float dt) {
@@ -1391,7 +1188,11 @@ void game_init(game_state* g, float world_w, float world_h) {
     g->camera_x = g->player.b.x;
     g->camera_y = world_h * 0.5f;
     g->level_style = LEVEL_STYLE_DEFENDER;
-    g->wave_cooldown_s = 0.65f;
+    ensure_leveldef_loaded();
+    {
+        const leveldef_level* lvl = leveldef_get_level(&g_leveldef, g->level_style);
+        g->wave_cooldown_s = lvl ? lvl->wave_cooldown_initial_s : 0.65f;
+    }
     g->wave_index = 0;
     g->wave_id_alloc = 0;
     configure_searchlights_for_level(g);
@@ -1419,6 +1220,11 @@ void game_set_world_size(game_state* g, float world_w, float world_h) {
         g->player.b.y = g->world_h;
     }
     g->camera_y = g->world_h * 0.5f;
+    ensure_leveldef_loaded();
+    {
+        const leveldef_level* lvl = leveldef_get_level(&g_leveldef, g->level_style);
+        g->wave_cooldown_s = lvl ? lvl->wave_cooldown_initial_s : 0.65f;
+    }
     configure_searchlights_for_level(g);
 }
 
@@ -1432,7 +1238,11 @@ void game_cycle_level(game_state* g) {
     memset(g->enemies, 0, sizeof(g->enemies));
     memset(g->particles, 0, sizeof(g->particles));
     g->active_particles = 0;
-    g->wave_cooldown_s = 0.6f;
+    ensure_leveldef_loaded();
+    {
+        const leveldef_level* lvl = leveldef_get_level(&g_leveldef, g->level_style);
+        g->wave_cooldown_s = lvl ? lvl->wave_cooldown_initial_s : 0.65f;
+    }
     g->camera_vx = 0.0f;
     g->camera_x = g->player.b.x;
     configure_searchlights_for_level(g);
