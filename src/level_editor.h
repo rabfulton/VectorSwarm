@@ -34,9 +34,11 @@ typedef struct level_editor_layout {
     vg_rect entities;
     vg_rect timeline;
     vg_rect timeline_track;
+    vg_rect timeline_enemy_track;
     vg_rect timeline_window;
     vg_rect load_button;
     vg_rect save_button;
+    vg_rect new_button;
     vg_rect save_new_button;
     vg_rect name_box;
     vg_rect prev_button;
@@ -67,6 +69,13 @@ typedef struct level_editor_state {
     char source_text[16384];
     int marker_count;
     level_editor_marker markers[LEVEL_EDITOR_MAX_MARKERS];
+    int snapshot_valid;
+    float snapshot_level_length_screens;
+    int snapshot_level_render_style;
+    int snapshot_level_wave_mode;
+    char snapshot_level_name[LEVEL_EDITOR_NAME_CAP];
+    int snapshot_marker_count;
+    level_editor_marker snapshot_markers[LEVEL_EDITOR_MAX_MARKERS];
 } level_editor_state;
 
 void level_editor_init(level_editor_state* s);
@@ -83,5 +92,7 @@ const char* level_editor_selected_property_name(const level_editor_state* s);
 int level_editor_cycle_level(level_editor_state* s, const leveldef_db* db, int delta);
 int level_editor_save_current(level_editor_state* s, const leveldef_db* db, char* out_path, size_t out_path_cap);
 int level_editor_save_new(level_editor_state* s, const leveldef_db* db, char* out_path, size_t out_path_cap);
+int level_editor_revert(level_editor_state* s);
+void level_editor_new_blank(level_editor_state* s);
 
 #endif

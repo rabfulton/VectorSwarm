@@ -126,6 +126,40 @@ static int is_wave_kind(int kind) {
             kind == LEVEL_EDITOR_MARKER_BOID);
 }
 
+static int is_enemy_marker_kind(int kind) {
+    return is_wave_kind(kind);
+}
+
+static int level_editor_enemy_spatial(const level_editor_state* s) {
+    if (!s) {
+        return 1;
+    }
+    return (s->level_wave_mode == LEVELDEF_WAVES_CURATED &&
+            s->level_render_style == LEVEL_RENDER_DEFENDER);
+}
+
+static void level_editor_save_snapshot(level_editor_state* s) {
+    if (!s) {
+        return;
+    }
+    s->snapshot_valid = 1;
+    s->snapshot_level_length_screens = s->level_length_screens;
+    s->snapshot_level_render_style = s->level_render_style;
+    s->snapshot_level_wave_mode = s->level_wave_mode;
+    snprintf(s->snapshot_level_name, sizeof(s->snapshot_level_name), "%s", s->level_name);
+    s->snapshot_marker_count = s->marker_count;
+    if (s->snapshot_marker_count > LEVEL_EDITOR_MAX_MARKERS) {
+        s->snapshot_marker_count = LEVEL_EDITOR_MAX_MARKERS;
+    }
+    if (s->snapshot_marker_count > 0) {
+        memcpy(
+            s->snapshot_markers,
+            s->markers,
+            (size_t)s->snapshot_marker_count * sizeof(level_editor_marker)
+        );
+    }
+}
+
 static float marker_pick_radius01(int kind) {
     if (kind == LEVEL_EDITOR_MARKER_BOID ||
         kind == LEVEL_EDITOR_MARKER_WAVE_SINE ||
@@ -241,6 +275,16 @@ static const char* render_style_file_base(int render_style) {
         case LEVEL_RENDER_DRIFTER_SHADED: return "level_high_plains_drifter_2";
         case LEVEL_RENDER_FOG: return "level_fog_of_war";
         default: return "level_defender";
+    }
+}
+
+static int level_style_from_render_style(int render_style) {
+    switch (render_style) {
+        case LEVEL_RENDER_CYLINDER: return LEVEL_STYLE_ENEMY_RADAR;
+        case LEVEL_RENDER_DRIFTER: return LEVEL_STYLE_HIGH_PLAINS_DRIFTER;
+        case LEVEL_RENDER_DRIFTER_SHADED: return LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2;
+        case LEVEL_RENDER_FOG: return LEVEL_STYLE_FOG_OF_WAR;
+        default: return LEVEL_STYLE_DEFENDER;
     }
 }
 
@@ -714,10 +758,18 @@ void level_editor_compute_layout(float w, float h, level_editor_layout* out) {
     out->timeline = (vg_rect){m, m, left_w, timeline_h};
     out->timeline_track = (vg_rect){
         out->timeline.x + 14.0f * ui,
-        out->timeline.y + out->timeline.h * 0.32f,
+        out->timeline.y + out->timeline.h * 0.36f + 8.0f * ui,
         out->timeline.w - 28.0f * ui,
         out->timeline.h * 0.40f
     };
+    {
+        out->timeline_enemy_track = (vg_rect){
+            out->timeline_track.x,
+            out->timeline_track.y - out->timeline_track.h + 3.0f * ui,
+            out->timeline_track.w,
+            out->timeline_track.h * 0.60f
+        };
+    }
     out->properties = (vg_rect){m + left_w + gap, m + timeline_h + gap, props_w, top_h};
     out->entities = (vg_rect){out->properties.x + out->properties.w + side_gap, out->properties.y, entities_w, top_h};
 
@@ -747,6 +799,12 @@ void level_editor_compute_layout(float w, float h, level_editor_layout* out) {
     out->load_button = (vg_rect){
         controls_x,
         m,
+        controls_w * 0.48f,
+        row_h
+    };
+    out->new_button = (vg_rect){
+        controls_x,
+        m + row_h + 8.0f * ui,
         controls_w * 0.48f,
         row_h
     };
@@ -887,7 +945,7 @@ void level_editor_init(level_editor_state* s) {
     s->level_wave_mode = LEVELDEF_WAVES_NORMAL;
     snprintf(s->level_name, sizeof(s->level_name), "%s", level_style_name(s->level_style));
     snprintf(s->status_text, sizeof(s->status_text), "ready");
-    s->entry_active = 1;
+    s->entry_active = 0;
     s->timeline_01 = 0.0f;
     s->level_length_screens = 12.0f;
     s->timeline_drag = 0;
@@ -901,6 +959,7 @@ void level_editor_init(level_editor_state* s) {
     s->dirty = 0;
     s->source_path[0] = '\0';
     s->source_text[0] = '\0';
+    s->snapshot_valid = 0;
 }
 
 int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, const char* name) {
@@ -936,6 +995,7 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
     if (resolve_level_file_path(s->level_name, s->source_path, sizeof(s->source_path))) {
         (void)read_file_text(s->source_path, s->source_text, sizeof(s->source_text));
     }
+    level_editor_save_snapshot(s);
     snprintf(s->status_text, sizeof(s->status_text), "loaded %s (%d objects)", s->level_name, s->marker_count);
     return 1;
 }
@@ -995,6 +1055,27 @@ static void add_marker_at_view(
     s->dirty = 1;
 }
 
+static void add_marker_at_timeline(level_editor_state* s, int kind, float x01) {
+    if (!s || s->marker_count >= LEVEL_EDITOR_MAX_MARKERS) {
+        return;
+    }
+    const float cx = clampf(x01, 0.0f, 1.0f);
+    if (kind == LEVEL_EDITOR_MARKER_BOID) {
+        push_marker(s, LEVEL_EDITOR_MARKER_BOID, cx, 0.50f, 12.0f, 190.0f, 90.0f, 0.0f);
+    } else if (kind == LEVEL_EDITOR_MARKER_WAVE_SINE) {
+        push_marker(s, LEVEL_EDITOR_MARKER_WAVE_SINE, cx, 0.50f, 10.0f, 92.0f, 285.0f, 0.0f);
+    } else if (kind == LEVEL_EDITOR_MARKER_WAVE_V) {
+        push_marker(s, LEVEL_EDITOR_MARKER_WAVE_V, cx, 0.55f, 11.0f, 10.0f, 295.0f, 0.0f);
+    } else if (kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
+        push_marker(s, LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE, cx, 0.50f, 9.0f, 360.0f, 9.0f, 0.0f);
+    } else {
+        return;
+    }
+    s->selected_marker = s->marker_count - 1;
+    s->selected_property = 0;
+    s->dirty = 1;
+}
+
 int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_y, float w, float h, int mouse_down, int mouse_pressed) {
     if (!s) {
         return 0;
@@ -1015,6 +1096,10 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
         if (point_in_rect(mouse_x, mouse_y, l.load_button)) {
             s->entry_active = 0;
             return 2;
+        }
+        if (point_in_rect(mouse_x, mouse_y, l.new_button)) {
+            s->entry_active = 0;
+            return 7;
         }
         if (point_in_rect(mouse_x, mouse_y, l.save_button)) {
             s->entry_active = 0;
@@ -1051,6 +1136,30 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
         if (point_in_rect(mouse_x, mouse_y, l.timeline_window) || point_in_rect(mouse_x, mouse_y, l.timeline_track)) {
             s->timeline_drag = 1;
         }
+        if (!level_editor_enemy_spatial(s) && point_in_rect(mouse_x, mouse_y, l.timeline_enemy_track)) {
+            const float tx01 = clampf((mouse_x - l.timeline_enemy_track.x) / fmaxf(l.timeline_enemy_track.w, 1.0f), 0.0f, 1.0f);
+            int best = -1;
+            float best_dx = 1.0e9f;
+            for (int i = 0; i < s->marker_count; ++i) {
+                if (!is_enemy_marker_kind(s->markers[i].kind)) {
+                    continue;
+                }
+                const float dx = fabsf(s->markers[i].x01 - tx01);
+                if (dx < best_dx) {
+                    best_dx = dx;
+                    best = i;
+                }
+            }
+            if (best >= 0 && best_dx < 0.03f) {
+                s->selected_marker = best;
+                s->selected_property = 0;
+                return 1;
+            }
+            if (s->entity_tool_selected == LEVEL_EDITOR_MARKER_BOID) {
+                add_marker_at_timeline(s, LEVEL_EDITOR_MARKER_BOID, tx01);
+                return 1;
+            }
+        }
 
         if (point_in_rect(mouse_x, mouse_y, l.viewport)) {
             const float level_screens = fmaxf(s->level_length_screens, 1.0f);
@@ -1063,6 +1172,9 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
             float best_d2 = 1.0e9f;
             for (int i = 0; i < s->marker_count; ++i) {
                 const level_editor_marker* m = &s->markers[i];
+                if (!level_editor_enemy_spatial(s) && is_enemy_marker_kind(m->kind)) {
+                    continue;
+                }
                 if (m->x01 < view_min || m->x01 > view_max) {
                     continue;
                 }
@@ -1084,7 +1196,9 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
             if (best >= 0 && best_d2 < pick_d2) {
                 s->selected_marker = best;
             } else {
-                if (s->entity_tool_selected == LEVEL_EDITOR_MARKER_BOID || s->entity_tool_selected == LEVEL_EDITOR_MARKER_SEARCHLIGHT) {
+                if (!level_editor_enemy_spatial(s) && s->entity_tool_selected == LEVEL_EDITOR_MARKER_BOID) {
+                    s->selected_marker = -1;
+                } else if (s->entity_tool_selected == LEVEL_EDITOR_MARKER_BOID || s->entity_tool_selected == LEVEL_EDITOR_MARKER_SEARCHLIGHT) {
                     add_marker_at_view(s, s->entity_tool_selected, mx01, my01);
                 } else {
                     s->selected_marker = -1;
@@ -1199,6 +1313,7 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
                     r = LEVEL_RENDER_DEFENDER;
                 }
                 s->level_render_style = (r + dir + n) % n;
+                s->level_style = level_style_from_render_style(s->level_render_style);
             } break;
             case 2:
                 s->level_length_screens = clampf(
@@ -1305,6 +1420,7 @@ int level_editor_save_current(level_editor_state* s, const leveldef_db* db, char
         }
         snprintf(s->source_text, sizeof(s->source_text), "%s", serialized);
         s->dirty = 0;
+        level_editor_save_snapshot(s);
     } else if (!write_file_text(s->source_path, s->source_text)) {
         snprintf(s->status_text, sizeof(s->status_text), "save failed: write");
         return 0;
@@ -1364,9 +1480,54 @@ int level_editor_save_new(level_editor_state* s, const leveldef_db* db, char* ou
     snprintf(s->source_path, sizeof(s->source_path), "%s", path);
     snprintf(s->source_text, sizeof(s->source_text), "%s", serialized);
     s->dirty = 0;
+    level_editor_save_snapshot(s);
     if (out_path && out_path_cap > 0) {
         snprintf(out_path, out_path_cap, "%s", path);
     }
     snprintf(s->status_text, sizeof(s->status_text), "saved new %s", level_name);
     return 1;
+}
+
+int level_editor_revert(level_editor_state* s) {
+    if (!s || !s->snapshot_valid) {
+        if (s) {
+            snprintf(s->status_text, sizeof(s->status_text), "revert failed: no snapshot");
+        }
+        return 0;
+    }
+    s->level_length_screens = s->snapshot_level_length_screens;
+    s->level_render_style = s->snapshot_level_render_style;
+    s->level_wave_mode = s->snapshot_level_wave_mode;
+    s->level_style = level_style_from_render_style(s->level_render_style);
+    snprintf(s->level_name, sizeof(s->level_name), "%s", s->snapshot_level_name);
+    s->marker_count = s->snapshot_marker_count;
+    if (s->marker_count > 0) {
+        memcpy(
+            s->markers,
+            s->snapshot_markers,
+            (size_t)s->marker_count * sizeof(level_editor_marker)
+        );
+    }
+    s->selected_marker = (s->marker_count > 0) ? 0 : -1;
+    s->selected_property = 0;
+    s->dirty = 0;
+    snprintf(s->status_text, sizeof(s->status_text), "reverted %s", s->level_name);
+    return 1;
+}
+
+void level_editor_new_blank(level_editor_state* s) {
+    if (!s) {
+        return;
+    }
+    clear_markers(s);
+    s->timeline_01 = 0.0f;
+    s->selected_property = 0;
+    s->entry_active = 1;
+    s->source_path[0] = '\0';
+    s->source_text[0] = '\0';
+    s->snapshot_valid = 0;
+    s->dirty = 1;
+    s->level_style = level_style_from_render_style(s->level_render_style);
+    snprintf(s->level_name, sizeof(s->level_name), "untitled");
+    snprintf(s->status_text, sizeof(s->status_text), "new level");
 }

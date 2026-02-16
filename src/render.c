@@ -2032,9 +2032,15 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     const vg_rect timeline = {m, m, left_w, timeline_h};
     const vg_rect timeline_track = {
         timeline.x + 14.0f * ui,
-        timeline.y + timeline.h * 0.32f,
+        timeline.y + timeline.h * 0.36f + 8.0f * ui,
         timeline.w - 28.0f * ui,
         timeline.h * 0.40f
+    };
+    const vg_rect timeline_enemy_track = {
+        timeline_track.x,
+        timeline_track.y - timeline_track.h + 3.0f * ui,
+        timeline_track.w,
+        timeline_track.h * 0.60f
     };
     const vg_rect props = {m + left_w + gap, m + timeline_h + gap, props_w, top_h};
     const vg_rect entities = {props.x + props.w + side_gap, props.y, entities_w, top_h};
@@ -2047,11 +2053,15 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     const vg_rect prev_btn = {controls_x, m + timeline_h - row_h, nav_w, row_h};
     const vg_rect next_btn = {name_box.x + name_box.w + name_gap, name_box.y, nav_w, row_h};
     const vg_rect load_btn = {controls_x, m, controls_w * 0.48f, row_h};
+    const vg_rect new_btn = {controls_x, m + row_h + 8.0f * ui, controls_w * 0.48f, row_h};
     const vg_rect save_new_btn = {controls_x + controls_w * 0.52f, m + row_h + 8.0f * ui, controls_w * 0.48f, row_h};
     const vg_rect save_btn = {controls_x + controls_w * 0.52f, m, controls_w * 0.48f, row_h};
     const vg_rect swarm_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 54.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
     const vg_rect watcher_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 106.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
     char level_name_disp[96];
+    const int enemy_spatial =
+        (metrics->level_editor_wave_mode == LEVELDEF_WAVES_CURATED &&
+         metrics->level_editor_render_style == LEVEL_RENDER_DEFENDER);
     editor_sanitize_label(metrics->level_editor_level_name ? metrics->level_editor_level_name : "level_defender", level_name_disp, sizeof(level_name_disp));
 
     vg_stroke_style frame = {
@@ -2093,7 +2103,9 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     r = draw_text_vector_glow(ctx, "TIMELINE", (vg_vec2){timeline.x + 10.0f * ui, timeline.y + timeline.h - 14.0f * ui}, 11.6f * ui, 0.82f * ui, &frame, &text);
     if (r != VG_OK) return r;
 
-    r = vg_draw_button(ctx, load_btn, "LOAD", 11.0f * ui, &frame, &text, 0);
+    r = vg_draw_button(ctx, load_btn, "REVERT", 10.6f * ui, &frame, &text, 0);
+    if (r != VG_OK) return r;
+    r = vg_draw_button(ctx, new_btn, "NEW", 11.0f * ui, &frame, &text, 0);
     if (r != VG_OK) return r;
     r = vg_draw_button(ctx, save_btn, "SAVE", 11.0f * ui, &frame, &text, 0);
     if (r != VG_OK) return r;
@@ -2159,6 +2171,18 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
         if (r != VG_OK) return r;
         r = vg_draw_rect(ctx, timeline_track, &frame);
         if (r != VG_OK) return r;
+        if (!enemy_spatial) {
+            r = vg_fill_rect(ctx, timeline_enemy_track, &track_fill);
+            if (r != VG_OK) return r;
+            r = vg_draw_rect(ctx, timeline_enemy_track, &frame);
+            if (r != VG_OK) return r;
+            r = draw_text_vector_glow(
+                ctx, "ENEMY EVENTS",
+                (vg_vec2){timeline_enemy_track.x + 8.0f * ui, timeline_enemy_track.y + timeline_enemy_track.h - 10.0f * ui},
+                8.4f * ui, 0.50f * ui, &frame, &text
+            );
+            if (r != VG_OK) return r;
+        }
         r = vg_fill_rect(ctx, timeline_window, &win_fill);
         if (r != VG_OK) return r;
         r = vg_draw_rect(ctx, timeline_window, &frame);
@@ -2188,10 +2212,22 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 {tx, timeline_track.y + 2.0f * ui},
                 {tx, timeline_track.y + timeline_track.h - 2.0f * ui}
             };
-            r = vg_draw_polyline(ctx, tick, 2, &mk, 0);
-            if (r != VG_OK) return r;
+            if (enemy_spatial || kind == 0 || kind == 1) {
+                r = vg_draw_polyline(ctx, tick, 2, &mk, 0);
+                if (r != VG_OK) return r;
+            } else {
+                const vg_vec2 etick[2] = {
+                    {tx, timeline_enemy_track.y + 2.0f * ui},
+                    {tx, timeline_enemy_track.y + timeline_enemy_track.h - 2.0f * ui}
+                };
+                r = vg_draw_polyline(ctx, etick, 2, &mk, 0);
+                if (r != VG_OK) return r;
+            }
 
             if (mx01 < view_min || mx01 > view_max) {
+                continue;
+            }
+            if (!enemy_spatial && (kind == 2 || kind == 3 || kind == 4 || kind == 5)) {
                 continue;
             }
             const float vx = viewport.x + ((mx01 - view_min) / fmaxf(view_max - view_min, 1.0e-5f)) * viewport.w;

@@ -2,6 +2,7 @@
 #define V_TYPE_GAME_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #define MAX_STARS 64
 #define MAX_BULLETS 128
@@ -10,6 +11,7 @@
 #define MAX_PARTICLES 1024
 #define MAX_AUDIO_EVENTS 64
 #define MAX_SEARCHLIGHTS 4
+#define MAX_CURATED_RUNTIME 128
 
 struct leveldef_db;
 
@@ -197,6 +199,8 @@ typedef struct game_state {
     float wave_cooldown_s;
     int wave_index;
     int wave_id_alloc;
+    int curated_spawned_count;
+    uint8_t curated_spawned[MAX_CURATED_RUNTIME];
     int wave_announce_pending;
     int fire_sfx_pending;
     char wave_announce_text[160];

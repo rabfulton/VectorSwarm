@@ -2780,11 +2780,10 @@ static int handle_level_editor_mouse(app* a, int mouse_x, int mouse_y, int mouse
         mouse_pressed
     );
     if (action == 2) {
-        const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
-        if (level_editor_load_by_name(&a->level_editor, db, a->level_editor.level_name)) {
-            set_tty_message(a, "level editor: loaded");
+        if (level_editor_revert(&a->level_editor)) {
+            set_tty_message(a, "level editor: reverted");
         } else {
-            set_tty_message(a, "level editor: load failed");
+            set_tty_message(a, "level editor: revert failed");
         }
     } else if (action == 3) {
         const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
@@ -2802,6 +2801,9 @@ static int handle_level_editor_mouse(app* a, int mouse_x, int mouse_y, int mouse
         } else {
             set_tty_message(a, a->level_editor.status_text[0] ? a->level_editor.status_text : "level editor: save new failed");
         }
+    } else if (action == 7) {
+        level_editor_new_blank(&a->level_editor);
+        set_tty_message(a, "level editor: new");
     } else if (action == 4) {
         const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
         if (level_editor_cycle_level(&a->level_editor, db, -1)) {

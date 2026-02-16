@@ -341,6 +341,8 @@ static void apply_level_runtime_config(game_state* g) {
     }
     g->render_style = lvl->render_style;
     g->wave_cooldown_s = lvl->wave_cooldown_initial_s;
+    g->curated_spawned_count = 0;
+    memset(g->curated_spawned, 0, sizeof(g->curated_spawned));
     configure_searchlights_for_level(g);
     configure_exit_portal_for_level(g);
 }
@@ -1554,21 +1556,39 @@ void game_update(game_state* g, float dt, const game_input* in) {
 
     if (g->lives > 0) {
         const leveldef_level* lvl = leveldef_get_level(&g_leveldef, g->level_style);
-        g->wave_cooldown_s -= dt;
         if (lvl) {
-            if (lvl->spawn_mode == LEVELDEF_SPAWN_SEQUENCED_CLEAR) {
-                if (game_enemy_count(g) <= 0 && g->wave_cooldown_s <= 0.0f) {
-                    spawn_next_wave(g);
+            if (lvl->wave_mode == LEVELDEF_WAVES_CURATED &&
+                lvl->render_style == LEVEL_RENDER_DEFENDER) {
+                const float activate_x = g->camera_x + g->world_w * 1.18f;
+                for (int i = 0; i < lvl->curated_count && i < MAX_CURATED_RUNTIME; ++i) {
+                    const leveldef_curated_enemy* ce = &lvl->curated[i];
+                    const float world_x = ce->x01 * g->world_w;
+                    if (g->curated_spawned[i]) {
+                        continue;
+                    }
+                    if (world_x <= activate_x) {
+                        const int wave_id = ++g->wave_id_alloc;
+                        spawn_curated_enemy(g, wave_id, ce);
+                        g->curated_spawned[i] = 1u;
+                        g->curated_spawned_count += 1;
+                    }
                 }
-            } else if (lvl->spawn_mode == LEVELDEF_SPAWN_TIMED) {
-                if (g->wave_cooldown_s <= 0.0f) {
-                    spawn_next_wave(g);
-                    g->wave_cooldown_s = lvl->spawn_interval_s;
-                }
-            } else if (lvl->spawn_mode == LEVELDEF_SPAWN_TIMED_SEQUENCED) {
-                if (g->wave_cooldown_s <= 0.0f && game_enemy_count(g) <= 0) {
-                    spawn_next_wave(g);
-                    g->wave_cooldown_s = lvl->spawn_interval_s;
+            } else {
+                g->wave_cooldown_s -= dt;
+                if (lvl->spawn_mode == LEVELDEF_SPAWN_SEQUENCED_CLEAR) {
+                    if (game_enemy_count(g) <= 0 && g->wave_cooldown_s <= 0.0f) {
+                        spawn_next_wave(g);
+                    }
+                } else if (lvl->spawn_mode == LEVELDEF_SPAWN_TIMED) {
+                    if (g->wave_cooldown_s <= 0.0f) {
+                        spawn_next_wave(g);
+                        g->wave_cooldown_s = lvl->spawn_interval_s;
+                    }
+                } else if (lvl->spawn_mode == LEVELDEF_SPAWN_TIMED_SEQUENCED) {
+                    if (g->wave_cooldown_s <= 0.0f && game_enemy_count(g) <= 0) {
+                        spawn_next_wave(g);
+                        g->wave_cooldown_s = lvl->spawn_interval_s;
+                    }
                 }
             }
         }
