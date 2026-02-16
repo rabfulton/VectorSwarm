@@ -91,7 +91,18 @@
 
 ## `level` Keys
 
+- `render_style` enum:
+- `defender`
+- `cylinder`
+- `drifter`
+- `drifter_shaded`
+- `fog`
 - `wave_mode` enum: `normal` or `boid_only`
+- `spawn_mode` enum:
+- `sequenced_clear` (spawn next wave only when clear + cooldown elapsed)
+- `timed` (spawn on interval regardless of clear state)
+- `timed_sequenced` (spawn on interval when clear)
+- `spawn_interval_s` float (required for `timed` and `timed_sequenced`)
 - `default_boid_profile` profile name
 - `wave_cooldown_initial_s` float
 - `wave_cooldown_between_s` float
@@ -144,27 +155,8 @@
 - `sweep_motion`: `pendulum`, `linear`, `spin`
 - `source_type`: `dome`, `orb`
 
-## Migration Status
-
-Currently migrated from hardcoded data:
-
-- boid swarm profile library
-- per-level wave policy (`normal` vs `boid_only`)
-- boid cycle order for fog-of-war
-- normal-mode wave cycle ordering per level
-- per-level searchlight definitions
-- swarm weapon probability progression controls
-- non-boid wave internals (counts/speeds/amplitudes/delays) for sine, V, kamikaze
-- global enemy weapon/progression tuning
-- boid spawn layout internals
-
-Still hardcoded (next migration steps):
-
-- terrain generator parameters
-- shader/post settings per level
-- exact spawn position randomness functions (only parameterized spans are data-driven)
-
 ## Notes
 
 - Each level file should contain only one `[level ...]` section.
 - Keep profile names in level files aligned with names defined in `boids.cfg`.
+- The loader is strict: missing level files or missing required keys fail leveldef validation.

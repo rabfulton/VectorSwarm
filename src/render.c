@@ -530,10 +530,8 @@ static float lerpf(float a, float b, float t) {
     return a + (b - a) * t;
 }
 
-static int level_uses_cylinder_render(int level_style) {
-    return level_style == LEVEL_STYLE_ENEMY_RADAR ||
-           level_style == LEVEL_STYLE_EVENT_HORIZON ||
-           level_style == LEVEL_STYLE_EVENT_HORIZON_LEGACY;
+static int level_uses_cylinder_render(const game_state* g) {
+    return g && g->render_style == LEVEL_RENDER_CYLINDER;
 }
 
 static float perlin_fade(float t) {
@@ -895,90 +893,35 @@ static vg_result draw_exit_portal(
     const float cy = g->exit_portal_y;
     const float max_half = fmaxf(g->exit_portal_radius * 2.30f, 42.0f);
     const float min_half = fmaxf(g->exit_portal_radius * 0.42f, 10.0f);
-    const float spawn_rate = 0.66f;
-    const float flash = 0.5f + 0.5f * sinf(g->t * 7.0f);
+    const float cycle_s = 6.20f;
+    const int ring_count = 6;
+    const float c45 = 0.70710678f;
+    const float s45 = 0.70710678f;
 
-    {
-        const float box_half_x = fmaxf(g->exit_portal_radius * 4.8f, 180.0f);
-        const float box_half_y = fmaxf(g->exit_portal_radius * 8.0f, g->world_h * 0.44f);
-        const vg_vec2 box[4] = {
-            {cx - box_half_x, cy - box_half_y},
-            {cx + box_half_x, cy - box_half_y},
-            {cx + box_half_x, cy + box_half_y},
-            {cx - box_half_x, cy + box_half_y}
-        };
-        const vg_fill_style marker_fill = make_fill(
-            1.0f,
-            (vg_color){
-                0.95f,
-                0.12f + 0.30f * flash,
-                0.12f + 0.10f * flash,
-                0.85f
-            },
-            VG_BLEND_ALPHA
-        );
-        vg_result r = vg_fill_convex(ctx, box, 4, &marker_fill);
-        if (r != VG_OK) {
-            return r;
-        }
-        {
-            const vg_vec2 edge[5] = {
-                box[0], box[1], box[2], box[3], box[0]
-            };
-            vg_stroke_style border = *land_main;
-            border.color = (vg_color){1.0f, 1.0f, 0.85f, 1.0f};
-            border.intensity *= 1.65f;
-            border.width_px *= 2.20f;
-            r = vg_draw_polyline(ctx, edge, 5, &border, 0);
-            if (r != VG_OK) {
-                return r;
-            }
-        }
-        {
-            const vg_vec2 cross_h[2] = {
-                {cx - box_half_x, cy},
-                {cx + box_half_x, cy}
-            };
-            const vg_vec2 cross_v[2] = {
-                {cx, cy - box_half_y},
-                {cx, cy + box_half_y}
-            };
-            vg_stroke_style cross = *land_halo;
-            cross.color = (vg_color){1.0f, 1.0f, 0.90f, 1.0f};
-            cross.width_px *= 2.8f;
-            cross.intensity *= 2.0f;
-            r = vg_draw_polyline(ctx, cross_h, 2, &cross, 0);
-            if (r != VG_OK) {
-                return r;
-            }
-            r = vg_draw_polyline(ctx, cross_v, 2, &cross, 0);
-            if (r != VG_OK) {
-                return r;
-            }
-        }
-    }
-
-    for (int i = 0; i < 4; ++i) {
-        float phase = fmodf(g->t * spawn_rate + (float)i * 0.25f, 1.0f);
+    for (int i = 0; i < ring_count; ++i) {
+        float phase = fmodf(g->t / cycle_s + (float)i / (float)ring_count, 1.0f);
         if (phase < 0.0f) {
             phase += 1.0f;
         }
-        const float life = 1.0f - phase;
-        const float half = min_half + (max_half - min_half) * life;
-        const float alpha = 0.26f + life * 0.64f;
+        /* Ping-pong phase (0->1->0) yields expand/shrink ring motion. */
+        const float tri = 1.0f - fabsf(phase * 2.0f - 1.0f);
+        const float ease = tri * tri * (3.0f - 2.0f * tri);
+        const float half = min_half + (max_half - min_half) * ease;
+        const float edge_fade = 1.0f - fabsf(phase * 2.0f - 1.0f);
+        const float alpha = 0.16f + edge_fade * 0.56f;
         const vg_vec2 square[5] = {
-            {cx - half, cy - half},
-            {cx + half, cy - half},
-            {cx + half, cy + half},
-            {cx - half, cy + half},
-            {cx - half, cy - half}
+            {cx + ((-half) * c45 - (-half) * s45), cy + ((-half) * s45 + (-half) * c45)},
+            {cx + (( half) * c45 - (-half) * s45), cy + (( half) * s45 + (-half) * c45)},
+            {cx + (( half) * c45 - ( half) * s45), cy + (( half) * s45 + ( half) * c45)},
+            {cx + ((-half) * c45 - ( half) * s45), cy + ((-half) * s45 + ( half) * c45)},
+            {cx + ((-half) * c45 - (-half) * s45), cy + ((-half) * s45 + (-half) * c45)}
         };
         vg_stroke_style sh = *land_halo;
         vg_stroke_style sm = *land_main;
         sh.color = (vg_color){pal->primary.r, pal->primary.g, pal->primary.b, alpha * 0.95f};
         sm.color = (vg_color){pal->secondary.r, pal->secondary.g, pal->secondary.b, alpha};
-        sh.intensity *= (0.95f + life * 1.15f) * intensity_scale;
-        sm.intensity *= (1.00f + life * 1.25f) * intensity_scale;
+        sh.intensity *= (0.90f + edge_fade * 1.10f) * intensity_scale;
+        sm.intensity *= (0.96f + edge_fade * 1.18f) * intensity_scale;
         sh.width_px *= 1.24f;
         sm.width_px *= 1.18f;
         vg_result r = vg_draw_polyline(ctx, square, 5, &sh, 0);
@@ -991,15 +934,7 @@ static vg_result draw_exit_portal(
         }
     }
 
-    {
-        const float core_r = fmaxf(g->exit_portal_radius * 0.30f, 5.0f);
-        const vg_fill_style core_fill = make_fill(
-            0.90f * intensity_scale,
-            (vg_color){pal->secondary.r, pal->secondary.g, pal->secondary.b, 0.48f},
-            VG_BLEND_ADDITIVE
-        );
-        return vg_fill_circle(ctx, (vg_vec2){cx, cy}, core_r, &core_fill, 14);
-    }
+    return VG_OK;
 }
 
 static vg_result draw_text_vector_glow(
@@ -1926,6 +1861,479 @@ static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render
     return VG_OK;
 }
 
+static const char* level_editor_marker_name(int kind) {
+    switch (kind) {
+        case 0: return "EXIT";
+        case 1: return "SEARCHLIGHT";
+        case 2: return "SINE WAVE";
+        case 3: return "V WAVE";
+        case 4: return "KAMIKAZE";
+        case 5: return "BOID";
+        default: return "MARKER";
+    }
+}
+
+static vg_color level_editor_marker_color(const palette_theme* pal, int kind) {
+    if (kind == 0) {
+        return (vg_color){0.95f, 0.4f, 0.95f, 1.0f};
+    }
+    if (kind == 1) {
+        return (vg_color){0.95f, 0.36f, 0.36f, 1.0f};
+    }
+    if (kind == 5) {
+        return (vg_color){0.52f, 0.95f, 1.0f, 1.0f};
+    }
+    return pal->secondary;
+}
+
+static vg_result draw_editor_diamond(vg_context* ctx, vg_vec2 c, float half, const vg_stroke_style* s) {
+    const vg_vec2 p[5] = {
+        {c.x, c.y + half},
+        {c.x + half, c.y},
+        {c.x, c.y - half},
+        {c.x - half, c.y},
+        {c.x, c.y + half}
+    };
+    return vg_draw_polyline(ctx, p, 5, s, 0);
+}
+
+static vg_result draw_editor_ship(vg_context* ctx, vg_vec2 c, float scale, const vg_stroke_style* s) {
+    const float x = c.x;
+    const float y = c.y;
+    const float sx = scale;
+    const vg_vec2 hull[5] = {
+        {x - 16.0f * sx, y},
+        {x - 4.0f * sx, y + 7.0f * sx},
+        {x + 12.0f * sx, y},
+        {x - 4.0f * sx, y - 7.0f * sx},
+        {x - 16.0f * sx, y}
+    };
+    vg_result r = vg_draw_polyline(ctx, hull, 5, s, 0);
+    if (r != VG_OK) {
+        return r;
+    }
+    const vg_vec2 spine[2] = {{x - 13.0f * sx, y}, {x + 8.0f * sx, y}};
+    return vg_draw_polyline(ctx, spine, 2, s, 0);
+}
+
+static void editor_sanitize_label(const char* in, char* out, size_t out_cap) {
+    if (!out || out_cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (!in) {
+        return;
+    }
+    size_t n = 0;
+    for (const char* p = in; *p && n + 1 < out_cap; ++p) {
+        char c = *p;
+        if (c == '_') {
+            c = ' ';
+        }
+        out[n++] = c;
+    }
+    out[n] = '\0';
+}
+
+static const char* editor_wave_type_name(int kind) {
+    switch (kind) {
+        case 2: return "SINE";
+        case 3: return "V";
+        case 4: return "KAMIKAZE";
+        case 5: return "BOID";
+        default: return "UNKNOWN";
+    }
+}
+
+static int editor_marker_properties_text(
+    int kind,
+    const render_metrics* metrics,
+    int sel,
+    const char** out_labels,
+    char out_values[][32],
+    int cap
+) {
+    if (!metrics || sel < 0 || cap <= 0) {
+        return 0;
+    }
+    int n = 0;
+    if (kind == 1) {
+        if (n < cap) { out_labels[n] = "POS X01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "POS Y01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "LENGTH H01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_a[sel]); n++; }
+        if (n < cap) { out_labels[n] = "HALF ANGLE DEG"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_b[sel]); n++; }
+        if (n < cap) { out_labels[n] = "SWEEP SPEED"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_c[sel]); n++; }
+        if (n < cap) { out_labels[n] = "SWEEP AMP DEG"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_d[sel]); n++; }
+        return n;
+    }
+    if (kind == 0) {
+        if (n < cap) { out_labels[n] = "POS X01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "POS Y01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
+        return n;
+    }
+    if (kind == 2 || kind == 3 || kind == 4 || kind == 5) {
+        if (n < cap) { out_labels[n] = "TYPE"; snprintf(out_values[n], 32, "%s", editor_wave_type_name(kind)); n++; }
+        if (n < cap) { out_labels[n] = "POS X01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "POS Y01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "COUNT"; snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_a[sel]); n++; }
+        if (n < cap) {
+            out_labels[n] = (kind == 2 || kind == 3) ? "FORMATION AMP" : "MAX SPEED";
+            snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_b[sel]);
+            n++;
+        }
+        if (n < cap) {
+            out_labels[n] = (kind == 2 || kind == 3) ? "MAX SPEED" : "ACCEL";
+            snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_c[sel]);
+            n++;
+        }
+        return n;
+    }
+
+    if (n < cap) { out_labels[n] = "POS X01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
+    if (n < cap) { out_labels[n] = "POS Y01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
+    if (kind == 1) {
+        if (n < cap) { out_labels[n] = "LENGTH H01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_a[sel]); n++; }
+        if (n < cap) { out_labels[n] = "HALF ANGLE DEG"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_b[sel]); n++; }
+        if (n < cap) { out_labels[n] = "SWEEP SPEED"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_c[sel]); n++; }
+        if (n < cap) { out_labels[n] = "SWEEP AMP DEG"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_d[sel]); n++; }
+    }
+    return n;
+}
+
+static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const render_metrics* metrics, float t_s) {
+    (void)t_s;
+    const float ui = ui_reference_scale(w, h);
+    const palette_theme pal = get_palette_theme(metrics->palette_mode);
+    const float m = 22.0f * ui;
+    const float gap = 16.0f * ui;
+    const float right_total_w = w * 0.30f;
+    const float left_w = w - right_total_w - m * 2.0f - gap;
+    const float timeline_h = h * 0.18f;
+    const float top_h = h - m * 2.0f - timeline_h - gap;
+    const float side_gap = 10.0f * ui;
+    const float props_w = right_total_w * 0.72f;
+    const float entities_w = right_total_w - props_w - side_gap;
+    const vg_rect viewport = {m, m + timeline_h + gap, left_w, top_h};
+    const vg_rect timeline = {m, m, left_w, timeline_h};
+    const vg_rect timeline_track = {
+        timeline.x + 14.0f * ui,
+        timeline.y + timeline.h * 0.32f,
+        timeline.w - 28.0f * ui,
+        timeline.h * 0.40f
+    };
+    const vg_rect props = {m + left_w + gap, m + timeline_h + gap, props_w, top_h};
+    const vg_rect entities = {props.x + props.w + side_gap, props.y, entities_w, top_h};
+    const float row_h = 42.0f * ui;
+    const float nav_w = row_h * 0.92f;
+    const float name_gap = 8.0f * ui;
+    const float controls_w = right_total_w;
+    const float controls_x = props.x;
+    const vg_rect name_box = {controls_x + nav_w + name_gap, m + timeline_h - row_h, controls_w - (nav_w * 2.0f + name_gap * 2.0f), row_h};
+    const vg_rect prev_btn = {controls_x, m + timeline_h - row_h, nav_w, row_h};
+    const vg_rect next_btn = {name_box.x + name_box.w + name_gap, name_box.y, nav_w, row_h};
+    const vg_rect load_btn = {controls_x, m, controls_w * 0.48f, row_h};
+    const vg_rect save_btn = {controls_x + controls_w * 0.52f, m, controls_w * 0.48f, row_h};
+    const vg_rect swarm_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 54.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
+    const vg_rect watcher_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 106.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
+    char level_name_disp[96];
+    editor_sanitize_label(metrics->level_editor_level_name ? metrics->level_editor_level_name : "level_defender", level_name_disp, sizeof(level_name_disp));
+
+    vg_stroke_style frame = {
+        .width_px = 1.8f * ui,
+        .intensity = 0.95f,
+        .color = pal.primary,
+        .cap = VG_LINE_CAP_ROUND,
+        .join = VG_LINE_JOIN_ROUND,
+        .miter_limit = 4.0f,
+        .blend = VG_BLEND_ALPHA
+    };
+    vg_stroke_style text = frame;
+    text.width_px = 1.25f * ui;
+    text.intensity = 1.12f;
+    text.color = pal.secondary;
+    vg_fill_style haze = {
+        .intensity = 0.25f,
+        .color = pal.haze,
+        .blend = VG_BLEND_ALPHA
+    };
+
+    vg_result r = vg_fill_rect(ctx, viewport, &haze);
+    if (r != VG_OK) return r;
+    r = vg_draw_rect(ctx, viewport, &frame);
+    if (r != VG_OK) return r;
+    r = vg_fill_rect(ctx, props, &haze);
+    if (r != VG_OK) return r;
+    r = vg_draw_rect(ctx, props, &frame);
+    if (r != VG_OK) return r;
+    r = vg_fill_rect(ctx, entities, &haze);
+    if (r != VG_OK) return r;
+    r = vg_draw_rect(ctx, entities, &frame);
+    if (r != VG_OK) return r;
+    r = vg_fill_rect(ctx, timeline, &haze);
+    if (r != VG_OK) return r;
+    r = vg_draw_rect(ctx, timeline, &frame);
+    if (r != VG_OK) return r;
+
+    r = draw_text_vector_glow(ctx, "TIMELINE", (vg_vec2){timeline.x + 10.0f * ui, timeline.y + timeline.h - 14.0f * ui}, 11.6f * ui, 0.82f * ui, &frame, &text);
+    if (r != VG_OK) return r;
+
+    r = vg_draw_button(ctx, load_btn, "LOAD", 11.0f * ui, &frame, &text, 0);
+    if (r != VG_OK) return r;
+    r = vg_draw_button(ctx, save_btn, "SAVE", 11.0f * ui, &frame, &text, 0);
+    if (r != VG_OK) return r;
+    r = vg_draw_button(ctx, prev_btn, "", 12.6f * ui, &frame, &text, 0);
+    if (r != VG_OK) return r;
+    r = vg_draw_button(ctx, name_box, level_name_disp, 11.4f * ui, &frame, &text, 0);
+    if (r != VG_OK) return r;
+    r = vg_draw_button(ctx, next_btn, "", 12.6f * ui, &frame, &text, 0);
+    if (r != VG_OK) return r;
+    r = vg_draw_button(ctx, swarm_btn, "SWARM", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 5 ? 1 : 0);
+    if (r != VG_OK) return r;
+    r = vg_draw_button(ctx, watcher_btn, "WATCHER", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 1 ? 1 : 0);
+    if (r != VG_OK) return r;
+    {
+        vg_stroke_style icon = frame;
+        icon.width_px = 1.2f * ui;
+        icon.intensity = 1.10f;
+        icon.color = pal.secondary;
+        {
+            const vg_vec2 ltri[3] = {
+                {prev_btn.x + prev_btn.w * 0.62f, prev_btn.y + prev_btn.h * 0.25f},
+                {prev_btn.x + prev_btn.w * 0.38f, prev_btn.y + prev_btn.h * 0.50f},
+                {prev_btn.x + prev_btn.w * 0.62f, prev_btn.y + prev_btn.h * 0.75f}
+            };
+            r = vg_draw_polyline(ctx, ltri, 3, &icon, 0);
+            if (r != VG_OK) return r;
+            const vg_vec2 rtri[3] = {
+                {next_btn.x + next_btn.w * 0.38f, next_btn.y + next_btn.h * 0.25f},
+                {next_btn.x + next_btn.w * 0.62f, next_btn.y + next_btn.h * 0.50f},
+                {next_btn.x + next_btn.w * 0.38f, next_btn.y + next_btn.h * 0.75f}
+            };
+            r = vg_draw_polyline(ctx, rtri, 3, &icon, 0);
+            if (r != VG_OK) return r;
+        }
+        r = draw_editor_diamond(ctx, (vg_vec2){swarm_btn.x + 14.0f * ui, swarm_btn.y + swarm_btn.h * 0.52f}, 4.2f * ui, &icon);
+        if (r != VG_OK) return r;
+        r = draw_editor_diamond(ctx, (vg_vec2){swarm_btn.x + 24.0f * ui, swarm_btn.y + swarm_btn.h * 0.40f}, 3.5f * ui, &icon);
+        if (r != VG_OK) return r;
+        r = draw_editor_diamond(ctx, (vg_vec2){watcher_btn.x + 18.0f * ui, watcher_btn.y + watcher_btn.h * 0.50f}, 5.0f * ui, &icon);
+        if (r != VG_OK) return r;
+    }
+
+    {
+        const float len_screens = fmaxf(metrics->level_editor_level_length_screens, 1.0f);
+        const float span_screens = fmaxf(len_screens - 1.0f, 0.0f);
+        const float t01 = clampf(metrics->level_editor_timeline_01, 0.0f, 1.0f);
+        const float window_w = timeline_track.w / len_screens;
+        const float window_x = timeline_track.x + t01 * span_screens * window_w;
+        vg_rect timeline_window = {window_x, timeline_track.y, window_w, timeline_track.h};
+        vg_fill_style track_fill = {
+            .intensity = 0.22f,
+            .color = (vg_color){pal.primary_dim.r, pal.primary_dim.g, pal.primary_dim.b, 0.60f},
+            .blend = VG_BLEND_ALPHA
+        };
+        vg_fill_style win_fill = {
+            .intensity = 0.42f,
+            .color = (vg_color){pal.primary.r, pal.primary.g, pal.primary.b, 0.36f},
+            .blend = VG_BLEND_ALPHA
+        };
+        r = vg_fill_rect(ctx, timeline_track, &track_fill);
+        if (r != VG_OK) return r;
+        r = vg_draw_rect(ctx, timeline_track, &frame);
+        if (r != VG_OK) return r;
+        r = vg_fill_rect(ctx, timeline_window, &win_fill);
+        if (r != VG_OK) return r;
+        r = vg_draw_rect(ctx, timeline_window, &frame);
+        if (r != VG_OK) return r;
+    }
+
+    {
+        const float len_screens = fmaxf(metrics->level_editor_level_length_screens, 1.0f);
+        const float start_screen = clampf(metrics->level_editor_timeline_01, 0.0f, 1.0f) * fmaxf(len_screens - 1.0f, 0.0f);
+        const float view_min = start_screen / len_screens;
+        const float view_max = (start_screen + 1.0f) / len_screens;
+        const int marker_n = metrics->level_editor_marker_count;
+        const int selected = metrics->level_editor_selected_marker;
+        for (int i = 0; i < marker_n && i < LEVEL_EDITOR_MAX_MARKERS; ++i) {
+            const float mx01 = clampf(metrics->level_editor_marker_x01[i], 0.0f, 1.0f);
+            const float my01 = clampf(metrics->level_editor_marker_y01[i], 0.0f, 1.0f);
+            const int kind = metrics->level_editor_marker_kind[i];
+            const vg_color c = level_editor_marker_color(&pal, kind);
+
+            vg_stroke_style mk = frame;
+            mk.width_px = 1.4f * ui;
+            mk.color = c;
+            mk.intensity = (i == selected) ? 1.45f : 1.0f;
+
+            const float tx = timeline_track.x + mx01 * timeline_track.w;
+            const vg_vec2 tick[2] = {
+                {tx, timeline_track.y + 2.0f * ui},
+                {tx, timeline_track.y + timeline_track.h - 2.0f * ui}
+            };
+            r = vg_draw_polyline(ctx, tick, 2, &mk, 0);
+            if (r != VG_OK) return r;
+
+            if (mx01 < view_min || mx01 > view_max) {
+                continue;
+            }
+            const float vx = viewport.x + ((mx01 - view_min) / fmaxf(view_max - view_min, 1.0e-5f)) * viewport.w;
+            const float vy = viewport.y + my01 * viewport.h;
+            const float glyph_scale = (i == selected) ? 1.20f : 1.0f;
+            if (kind == 1) {
+                const float len = fmaxf(metrics->level_editor_marker_a[i] * viewport.h, 24.0f * ui);
+                const float half_deg = fmaxf(metrics->level_editor_marker_b[i], 2.0f);
+                const float sweep_speed = metrics->level_editor_marker_c[i];
+                const float sweep_amp = fmaxf(metrics->level_editor_marker_d[i], 1.0f);
+                const float base = 1.5707963f;
+                const float a_center = base + sinf(t_s * sweep_speed) * (sweep_amp * (3.14159265f / 180.0f));
+                const float half = half_deg * (3.14159265f / 180.0f);
+                const float a0 = a_center - half;
+                const float a1 = a_center + half;
+                const vg_vec2 tri[3] = {
+                    {vx, vy},
+                    {vx + cosf(a0) * len, vy + sinf(a0) * len},
+                    {vx + cosf(a1) * len, vy + sinf(a1) * len}
+                };
+                vg_fill_style cone = {
+                    .intensity = 0.20f,
+                    .color = (vg_color){pal.primary_dim.r, pal.primary_dim.g, pal.primary_dim.b, 0.20f},
+                    .blend = VG_BLEND_ADDITIVE
+                };
+                r = vg_fill_convex(ctx, tri, 3, &cone);
+                if (r != VG_OK) return r;
+                {
+                    const vg_vec2 left[2] = {{vx, vy}, tri[1]};
+                    const vg_vec2 right[2] = {{vx, vy}, tri[2]};
+                    r = vg_draw_polyline(ctx, left, 2, &mk, 0);
+                    if (r != VG_OK) return r;
+                    r = vg_draw_polyline(ctx, right, 2, &mk, 0);
+                    if (r != VG_OK) return r;
+                }
+                {
+                    vg_fill_style src = {
+                        .intensity = 0.90f,
+                        .color = (vg_color){1.0f, 0.30f, 0.30f, 0.95f},
+                        .blend = VG_BLEND_ALPHA
+                    };
+                    r = vg_fill_circle(ctx, (vg_vec2){vx, vy}, 6.2f * ui * glyph_scale, &src, 16);
+                }
+            } else if (kind == 0) {
+                r = draw_editor_diamond(ctx, (vg_vec2){vx, vy}, 10.0f * ui * glyph_scale, &mk);
+                if (r != VG_OK) return r;
+                {
+                    vg_stroke_style mk2 = mk;
+                    mk2.intensity *= 0.74f;
+                    r = draw_editor_diamond(ctx, (vg_vec2){vx, vy}, 6.0f * ui * glyph_scale, &mk2);
+                }
+            } else if (kind == 5) {
+                vg_stroke_style mk2 = mk;
+                mk2.intensity *= 0.78f;
+                r = draw_editor_diamond(ctx, (vg_vec2){vx, vy}, 7.0f * ui * glyph_scale, &mk);
+                if (r != VG_OK) return r;
+                r = draw_editor_diamond(ctx, (vg_vec2){vx + 12.0f * ui, vy + 5.0f * ui}, 5.4f * ui * glyph_scale, &mk2);
+                if (r != VG_OK) return r;
+                r = draw_editor_diamond(ctx, (vg_vec2){vx - 11.0f * ui, vy - 6.0f * ui}, 4.9f * ui * glyph_scale, &mk2);
+            } else {
+                r = draw_editor_diamond(ctx, (vg_vec2){vx, vy}, 6.5f * ui * glyph_scale, &mk);
+            }
+            if (r != VG_OK) return r;
+        }
+        {
+            /* Static player spawn representation (screen center-left baseline). */
+            const float px = viewport.x + viewport.w * 0.10f;
+            const float py = viewport.y + viewport.h * 0.50f;
+            vg_stroke_style ps = frame;
+            ps.width_px = 1.5f * ui;
+            ps.intensity = 1.08f;
+            ps.color = pal.ship;
+            r = draw_editor_ship(ctx, (vg_vec2){px, py}, 0.85f * ui, &ps);
+            if (r != VG_OK) return r;
+            r = draw_text_vector_glow(ctx, "PLAYER", (vg_vec2){px - 20.0f * ui, py - 18.0f * ui}, 7.6f * ui, 0.45f * ui, &frame, &text);
+            if (r != VG_OK) return r;
+        }
+    }
+
+    {
+        const int sel = metrics->level_editor_selected_marker;
+        char line0[96];
+        if (sel >= 0 && sel < metrics->level_editor_marker_count && sel < LEVEL_EDITOR_MAX_MARKERS) {
+            const int kind = metrics->level_editor_marker_kind[sel];
+            snprintf(line0, sizeof(line0), "SELECTED %s", level_editor_marker_name(kind));
+            const float tx = props.x + 12.0f * ui;
+            float ty = props.y + props.h - 42.0f * ui;
+            r = draw_text_vector_glow(ctx, line0, (vg_vec2){tx, ty}, 11.2f * ui, 0.72f * ui, &frame, &text);
+            if (r != VG_OK) return r;
+            ty -= 28.0f * ui;
+            {
+                const char* labels[8] = {0};
+                char values[8][32];
+                memset(values, 0, sizeof(values));
+                const int pn = editor_marker_properties_text(kind, metrics, sel, labels, values, 8);
+                int selected_prop = metrics->level_editor_selected_property;
+                if (selected_prop < 0) selected_prop = 0;
+                if (selected_prop >= pn) selected_prop = pn - 1;
+                for (int i = 0; i < pn; ++i) {
+                    char row[96];
+                    snprintf(row, sizeof(row), "%-14s %s", labels[i], values[i]);
+                    const vg_rect rb = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
+                    r = vg_draw_button(ctx, rb, row, 10.4f * ui, &frame, &text, (i == selected_prop) ? 1 : 0);
+                    if (r != VG_OK) return r;
+                    ty -= 32.0f * ui;
+                }
+                r = draw_text_vector_glow(ctx, "TAB FIELD  LEFT/RIGHT EDIT", (vg_vec2){tx, ty - 4.0f * ui}, 9.2f * ui, 0.52f * ui, &frame, &text);
+                if (r != VG_OK) return r;
+            }
+        } else {
+            char line1[96];
+            char line2[96];
+            char line3[96];
+            char status_disp[128];
+            editor_sanitize_label(metrics->level_editor_status_text ? metrics->level_editor_status_text : "ready", status_disp, sizeof(status_disp));
+            snprintf(line0, sizeof(line0), "LEVEL PROPERTIES");
+            snprintf(line1, sizeof(line1), "OBJECTS %d", metrics->level_editor_marker_count);
+            snprintf(line2, sizeof(line2), "LENGTH %.1f SCREENS", metrics->level_editor_level_length_screens);
+            snprintf(line3, sizeof(line3), "%s", status_disp);
+            const float tx = props.x + 12.0f * ui;
+            float ty = props.y + props.h - 42.0f * ui;
+            r = draw_text_vector_glow(ctx, line0, (vg_vec2){tx, ty}, 11.2f * ui, 0.72f * ui, &frame, &text);
+            if (r != VG_OK) return r;
+            ty -= 28.0f * ui;
+            r = draw_text_vector_glow(ctx, line1, (vg_vec2){tx, ty}, 10.8f * ui, 0.68f * ui, &frame, &text);
+            if (r != VG_OK) return r;
+            ty -= 26.0f * ui;
+            r = draw_text_vector_glow(ctx, line2, (vg_vec2){tx, ty}, 10.8f * ui, 0.68f * ui, &frame, &text);
+            if (r != VG_OK) return r;
+            ty -= 26.0f * ui;
+            r = draw_text_vector_glow(ctx, line3, (vg_vec2){tx, ty}, 10.8f * ui, 0.68f * ui, &frame, &text);
+            if (r != VG_OK) return r;
+        }
+    }
+
+    r = draw_text_vector_glow(
+        ctx,
+        "L EXIT  ENTER LOAD  DRAG TIMELINE  CLICK SELECT/PLACE  DRAG ENTITY TO PLACE  LEFT/RIGHT EDIT",
+        (vg_vec2){timeline.x, timeline.y - 14.0f * ui},
+        9.0f * ui,
+        0.55f * ui,
+        &frame,
+        &text
+    );
+    if (r != VG_OK) return r;
+    if (metrics->level_editor_drag_active &&
+        (metrics->level_editor_drag_kind == 5 || metrics->level_editor_drag_kind == 1)) {
+        vg_stroke_style gs = frame;
+        gs.intensity = 1.2f;
+        gs.color = level_editor_marker_color(&pal, metrics->level_editor_drag_kind == 1 ? 1 : 5);
+        if (metrics->level_editor_drag_kind == 1) {
+            r = draw_editor_diamond(ctx, (vg_vec2){metrics->level_editor_drag_x, metrics->level_editor_drag_y}, 10.0f * ui, &gs);
+        } else {
+            r = draw_editor_diamond(ctx, (vg_vec2){metrics->level_editor_drag_x, metrics->level_editor_drag_y}, 7.0f * ui, &gs);
+        }
+        if (r != VG_OK) return r;
+    }
+    return r;
+}
+
 static void planetarium_node_center(float w, float h, int system_count, int idx, float t_s, float* out_x, float* out_y) {
     static const int k_primes[PLANETARIUM_MAX_SYSTEMS] = {2, 3, 5, 7, 11, 13, 17, 19};
     const vg_rect panel = make_ui_safe_frame(w, h);
@@ -2783,7 +3191,7 @@ static vg_result draw_high_plains_drifter_terrain(
     const float y_near = h * 0.04f;
     const float y_far = h * 0.34f;
     const float cam = g->camera_x;
-    const int enable_horizon_cull = (g->level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2);
+    const int enable_horizon_cull = (g->render_style == LEVEL_RENDER_DRIFTER_SHADED);
     const float center_x = w * 0.50f;
     const float col_spacing = w * 0.050f;
     const float col_span = col_spacing * (float)(COLS - 1);
@@ -3764,6 +4172,17 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         }
         return draw_mouse_pointer(ctx, g->world_w, g->world_h, metrics, &txt_main);
     }
+    if (metrics->show_level_editor) {
+        vg_result r = vg_fill_rect(ctx, (vg_rect){0.0f, 0.0f, g->world_w, g->world_h}, &bg);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = draw_level_editor_ui(ctx, g->world_w, g->world_h, metrics, metrics->ui_time_s);
+        if (r != VG_OK) {
+            return r;
+        }
+        return draw_mouse_pointer(ctx, g->world_w, g->world_h, metrics, &txt_main);
+    }
 
     const float jx = sinf(g->t * 17.0f + 0.2f) * crt.jitter_amount * 0.75f;
     const float jy = cosf(g->t * 21.0f) * crt.jitter_amount * 0.75f;
@@ -3782,7 +4201,7 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         }
     }
 
-    if (level_uses_cylinder_render(g->level_style)) {
+    if (level_uses_cylinder_render(g)) {
         const float period = cylinder_period(g);
         if (!foreground_only) {
             vg_stroke_style cyl_halo = land_halo;
@@ -3992,8 +4411,8 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
 
     if (!foreground_only) {
         for (size_t i = 0; i < MAX_STARS; ++i) {
-            if (g->level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2 ||
-                g->level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER) {
+            if (g->render_style == LEVEL_RENDER_DRIFTER_SHADED ||
+                g->render_style == LEVEL_RENDER_DRIFTER) {
                 /* Keep stars behind terrain band in drifter levels, independent of depth state. */
                 if (g->stars[i].y < g->world_h * 0.40f) {
                     continue;
@@ -4080,7 +4499,7 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
                 }
             }
         }
-        if (g->level_style == LEVEL_STYLE_FOG_OF_WAR) {
+        if (g->render_style == LEVEL_RENDER_FOG) {
             r = draw_fog_of_war_nebula(ctx, g, &pal, intensity_scale);
             if (r != VG_OK) {
                 return r;
@@ -4089,7 +4508,7 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
     }
 
     if (!foreground_only) {
-        if (g->level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER) {
+        if (g->render_style == LEVEL_RENDER_DRIFTER) {
             if (!metrics->use_gpu_terrain) {
                 vg_stroke_style plains_halo = land_halo;
                 vg_stroke_style plains_main = land_main;
@@ -4103,12 +4522,12 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
                     return r;
                 }
             }
-        } else if (g->level_style != LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2 &&
-                   g->level_style != LEVEL_STYLE_FOG_OF_WAR) {
+        } else if (g->render_style != LEVEL_RENDER_DRIFTER_SHADED &&
+                   g->render_style != LEVEL_RENDER_FOG) {
             /* Foreground vector landscape layers for depth/parallax. */
             vg_stroke_style land1_halo = land_halo;
             vg_stroke_style land1_main = land_main;
-            if (g->level_style == LEVEL_STYLE_DEFENDER) {
+            if (g->render_style == LEVEL_RENDER_DEFENDER) {
                 land1_halo.width_px *= 1.16f;
                 land1_main.width_px *= 1.14f;
             }
@@ -4120,7 +4539,7 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             vg_stroke_style land2_main = land_main;
             land2_halo.width_px *= 1.15f;
             land2_main.width_px *= 1.10f;
-            if (g->level_style == LEVEL_STYLE_DEFENDER) {
+            if (g->render_style == LEVEL_RENDER_DEFENDER) {
                 land2_halo.width_px *= 1.12f;
                 land2_main.width_px *= 1.10f;
             }

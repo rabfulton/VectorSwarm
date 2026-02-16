@@ -20,30 +20,63 @@ static int level_style_from_name(const char* name) {
 
 static int searchlight_motion_from_name(const char* name) {
     if (!name) {
-        return SEARCHLIGHT_MOTION_PENDULUM;
+        return -1;
     }
     if (strcmp(name, "linear") == 0) return SEARCHLIGHT_MOTION_LINEAR;
     if (strcmp(name, "spin") == 0) return SEARCHLIGHT_MOTION_SPIN;
-    return SEARCHLIGHT_MOTION_PENDULUM;
+    if (strcmp(name, "pendulum") == 0) return SEARCHLIGHT_MOTION_PENDULUM;
+    return -1;
 }
 
 static int searchlight_source_from_name(const char* name) {
     if (!name) {
-        return SEARCHLIGHT_SOURCE_DOME;
+        return -1;
     }
     if (strcmp(name, "orb") == 0) return SEARCHLIGHT_SOURCE_ORB;
-    return SEARCHLIGHT_SOURCE_DOME;
+    if (strcmp(name, "dome") == 0) return SEARCHLIGHT_SOURCE_DOME;
+    return -1;
 }
 
 static int wave_pattern_from_name(const char* name) {
     if (!name) {
-        return LEVELDEF_WAVE_SINE_SNAKE;
+        return -1;
     }
     if (strcmp(name, "sine_snake") == 0) return LEVELDEF_WAVE_SINE_SNAKE;
     if (strcmp(name, "v_formation") == 0) return LEVELDEF_WAVE_V_FORMATION;
     if (strcmp(name, "swarm") == 0) return LEVELDEF_WAVE_SWARM;
     if (strcmp(name, "kamikaze") == 0) return LEVELDEF_WAVE_KAMIKAZE;
-    return LEVELDEF_WAVE_SINE_SNAKE;
+    return -1;
+}
+
+static int wave_mode_from_name(const char* name) {
+    if (!name) {
+        return -1;
+    }
+    if (strcmp(name, "normal") == 0) return LEVELDEF_WAVES_NORMAL;
+    if (strcmp(name, "boid_only") == 0) return LEVELDEF_WAVES_BOID_ONLY;
+    return -1;
+}
+
+static int render_style_from_name(const char* name) {
+    if (!name) {
+        return -1;
+    }
+    if (strcmp(name, "defender") == 0) return LEVEL_RENDER_DEFENDER;
+    if (strcmp(name, "cylinder") == 0) return LEVEL_RENDER_CYLINDER;
+    if (strcmp(name, "drifter") == 0) return LEVEL_RENDER_DRIFTER;
+    if (strcmp(name, "drifter_shaded") == 0) return LEVEL_RENDER_DRIFTER_SHADED;
+    if (strcmp(name, "fog") == 0) return LEVEL_RENDER_FOG;
+    return -1;
+}
+
+static int spawn_mode_from_name(const char* name) {
+    if (!name) {
+        return -1;
+    }
+    if (strcmp(name, "sequenced_clear") == 0) return LEVELDEF_SPAWN_SEQUENCED_CLEAR;
+    if (strcmp(name, "timed") == 0) return LEVELDEF_SPAWN_TIMED;
+    if (strcmp(name, "timed_sequenced") == 0) return LEVELDEF_SPAWN_TIMED_SEQUENCED;
+    return -1;
 }
 
 static char* trim(char* s) {
@@ -60,6 +93,8 @@ static char* trim(char* s) {
     }
     return s;
 }
+
+static int leveldef_validate(const leveldef_db* db, FILE* log_out);
 
 int leveldef_find_boid_profile(const leveldef_db* db, const char* name) {
     int i;
@@ -95,7 +130,9 @@ void leveldef_init_defaults(leveldef_db* db) {
     }
     memset(db, 0, sizeof(*db));
     for (i = 0; i < LEVEL_STYLE_COUNT; ++i) {
-        db->levels[i].wave_mode = LEVELDEF_WAVES_NORMAL; /* explicit enum default */
+        db->levels[i].wave_mode = -1;
+        db->levels[i].render_style = -1;
+        db->levels[i].spawn_mode = -1;
         db->levels[i].default_boid_profile = -1;
     }
 }
@@ -145,6 +182,12 @@ static int parse_searchlight(leveldef_level* lvl, const char* value, FILE* log_o
     sl.projectile_ttl_s = strtof(fields[14], NULL);
     sl.projectile_radius = strtof(fields[15], NULL);
     sl.aim_jitter_deg = strtof(fields[16], NULL);
+    if (sl.sweep_motion < 0 || sl.source_type < 0) {
+        if (log_out) {
+            fprintf(log_out, "leveldef: invalid searchlight enum token(s)\n");
+        }
+        return 0;
+    }
 
     lvl->searchlights[lvl->searchlight_count++] = sl;
     return 1;
@@ -166,7 +209,7 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
     f = fopen(path, "r");
     if (!f) {
         if (log_out) {
-            fprintf(log_out, "leveldef: using built-in defaults (could not open %s)\n", path);
+            fprintf(log_out, "leveldef: could not open %s\n", path);
         }
         return 0;
     }
@@ -211,6 +254,7 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_level = &db->levels[sid];
                         cur_level->searchlight_count = 0;
                         cur_level->boid_cycle_count = 0;
+                        cur_level->wave_cycle_count = 0;
                     } else if (log_out) {
                         fprintf(log_out, "leveldef: unknown level '%s'\n", name);
                     }
@@ -247,8 +291,14 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                 char* k = trim(s);
                 char* v = trim(eq + 1);
                 if (sec == SEC_LEVEL && cur_level) {
-                    if (strcmp(k, "wave_mode") == 0) {
-                        cur_level->wave_mode = (strcmp(v, "boid_only") == 0) ? LEVELDEF_WAVES_BOID_ONLY : LEVELDEF_WAVES_NORMAL;
+                    if (strcmp(k, "render_style") == 0) {
+                        cur_level->render_style = render_style_from_name(v);
+                    } else if (strcmp(k, "wave_mode") == 0) {
+                        cur_level->wave_mode = wave_mode_from_name(v);
+                    } else if (strcmp(k, "spawn_mode") == 0) {
+                        cur_level->spawn_mode = spawn_mode_from_name(v);
+                    } else if (strcmp(k, "spawn_interval_s") == 0) {
+                        cur_level->spawn_interval_s = strtof(v, NULL);
                     } else if (strcmp(k, "default_boid_profile") == 0) {
                         cur_level->default_boid_profile = leveldef_find_boid_profile(db, v);
                     } else if (strcmp(k, "wave_cooldown_initial_s") == 0) {
@@ -521,7 +571,90 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
 
 int leveldef_load_with_defaults(leveldef_db* db, const char* path, FILE* log_out) {
     leveldef_init_defaults(db);
-    return leveldef_apply_file(db, path, log_out);
+    if (!leveldef_apply_file(db, path, log_out)) {
+        return 0;
+    }
+    return leveldef_validate(db, log_out);
+}
+
+static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
+    int ok = 1;
+    int i;
+    if (!db) {
+        return 0;
+    }
+    if (db->profile_count <= 0) {
+        if (log_out) {
+            fprintf(log_out, "leveldef: no boid profiles loaded\n");
+        }
+        return 0;
+    }
+    for (i = 0; i < LEVEL_STYLE_COUNT; ++i) {
+        const leveldef_level* l = &db->levels[i];
+        if (l->render_style < 0) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d missing render_style\n", i);
+            }
+            ok = 0;
+        }
+        if (l->wave_mode < 0) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d missing wave_mode\n", i);
+            }
+            ok = 0;
+        }
+        if (l->spawn_mode < 0) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d missing spawn_mode\n", i);
+            }
+            ok = 0;
+        }
+        if ((l->spawn_mode == LEVELDEF_SPAWN_TIMED ||
+             l->spawn_mode == LEVELDEF_SPAWN_TIMED_SEQUENCED) &&
+            l->spawn_interval_s <= 0.0f) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid spawn_interval_s\n", i);
+            }
+            ok = 0;
+        }
+        if (l->wave_cooldown_initial_s <= 0.0f || l->wave_cooldown_between_s <= 0.0f) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid wave cooldowns\n", i);
+            }
+            ok = 0;
+        }
+        if (l->default_boid_profile < 0 || l->default_boid_profile >= db->profile_count) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid default_boid_profile\n", i);
+            }
+            ok = 0;
+        }
+        if (l->wave_mode == LEVELDEF_WAVES_BOID_ONLY) {
+            if (l->boid_cycle_count <= 0) {
+                if (log_out) {
+                    fprintf(log_out, "leveldef: level %d boid_only missing boid_cycle\n", i);
+                }
+                ok = 0;
+            }
+        } else if (l->wave_cycle_count <= 0) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d normal mode missing wave_cycle\n", i);
+            }
+            ok = 0;
+        } else {
+            int j;
+            for (j = 0; j < l->wave_cycle_count; ++j) {
+                if (l->wave_cycle[j] < 0) {
+                    if (log_out) {
+                        fprintf(log_out, "leveldef: level %d has invalid wave_cycle token\n", i);
+                    }
+                    ok = 0;
+                    break;
+                }
+            }
+        }
+    }
+    return ok;
 }
 
 int leveldef_load_project_layout(leveldef_db* db, const char* dir_path, FILE* log_out) {
@@ -559,6 +692,9 @@ int leveldef_load_project_layout(leveldef_db* db, const char* dir_path, FILE* lo
         if (!leveldef_apply_file(db, path, log_out)) {
             ok = 0;
         }
+    }
+    if (ok) {
+        ok = leveldef_validate(db, log_out);
     }
     return ok;
 }

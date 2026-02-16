@@ -290,7 +290,7 @@ static void update_searchlights(game_state* g, float dt) {
                     sl->projectile_speed * su,
                     sl->projectile_ttl_s,
                     sl->projectile_radius)) {
-                game_push_audio_event(g, GAME_AUDIO_EVENT_ENEMY_FIRE, sl->origin_x, sl->origin_y);
+                game_push_audio_event(g, GAME_AUDIO_EVENT_SEARCHLIGHT_FIRE, sl->origin_x, sl->origin_y);
             }
         }
     }
@@ -300,10 +300,8 @@ static float cylinder_period(const game_state* g) {
     return fmaxf(g->world_w * 2.4f, 1.0f);
 }
 
-static int level_uses_cylinder(int level_style) {
-    return level_style == LEVEL_STYLE_ENEMY_RADAR ||
-           level_style == LEVEL_STYLE_EVENT_HORIZON ||
-           level_style == LEVEL_STYLE_EVENT_HORIZON_LEGACY;
+static int level_uses_cylinder(const game_state* g) {
+    return g && g->render_style == LEVEL_RENDER_CYLINDER;
 }
 
 static void configure_exit_portal_for_level(game_state* g) {
@@ -316,44 +314,35 @@ static void configure_exit_portal_for_level(game_state* g) {
     g->exit_portal_x = 0.0f;
     g->exit_portal_y = 0.0f;
     g->exit_portal_radius = 26.0f * su;
-    if (level_uses_cylinder(g->level_style)) {
-        fprintf(
-            stderr,
-            "[exit_portal] level=%d cylinder=1 active=0 world_w=%.2f world_h=%.2f\n",
-            g->level_style,
-            g->world_w,
-            g->world_h
-        );
+    if (level_uses_cylinder(g)) {
         return;
     }
     ensure_leveldef_loaded();
     lvl = leveldef_get_level(&g_leveldef, g->level_style);
     if (!lvl || !lvl->exit_enabled) {
-        fprintf(
-            stderr,
-            "[exit_portal] level=%d cylinder=0 active=0 lvl=%p exit_enabled=%d\n",
-            g->level_style,
-            (void*)lvl,
-            lvl ? lvl->exit_enabled : 0
-        );
         return;
     }
     g->exit_portal_active = 1;
     g->exit_portal_x = g->world_w * lvl->exit_x01;
     g->exit_portal_y = g->world_h * lvl->exit_y01;
     g->exit_portal_radius = 28.0f * su;
-    fprintf(
-        stderr,
-        "[exit_portal] level=%d active=1 x01=%.3f y01=%.3f x=%.2f y=%.2f r=%.2f cam_x=%.2f player_x=%.2f\n",
-        g->level_style,
-        lvl->exit_x01,
-        lvl->exit_y01,
-        g->exit_portal_x,
-        g->exit_portal_y,
-        g->exit_portal_radius,
-        g->camera_x,
-        g->player.b.x
-    );
+}
+
+static void apply_level_runtime_config(game_state* g) {
+    const leveldef_level* lvl;
+    if (!g) {
+        return;
+    }
+    ensure_leveldef_loaded();
+    lvl = leveldef_get_level(&g_leveldef, g->level_style);
+    if (!lvl) {
+        fprintf(stderr, "FATAL: missing LevelDef for level style %d\n", g->level_style);
+        exit(1);
+    }
+    g->render_style = lvl->render_style;
+    g->wave_cooldown_s = lvl->wave_cooldown_initial_s;
+    configure_searchlights_for_level(g);
+    configure_exit_portal_for_level(g);
 }
 
 static float gameplay_ui_scale(const game_state* g) {
@@ -373,7 +362,7 @@ static float wrap_delta(float a, float b, float period) {
 }
 
 static float dist_sq_level(const game_state* g, float ax, float ay, float bx, float by) {
-    if (!g || !level_uses_cylinder(g->level_style)) {
+    if (!g || !level_uses_cylinder(g)) {
         return dist_sq(ax, ay, bx, by);
     }
     const float dx = wrap_delta(ax, bx, cylinder_period(g));
@@ -742,7 +731,7 @@ static void enemy_fire_projectiles(game_state* g, const enemy* e, const enemy_we
     const float aim_lead = w->aim_lead_s;
     const float tx = g->player.b.x + g->player.b.vx * aim_lead;
     const float ty = g->player.b.y + g->player.b.vy * aim_lead;
-    float dx = level_uses_cylinder(g->level_style) ? wrap_delta(tx, e->b.x, cylinder_period(g)) : (tx - e->b.x);
+    float dx = level_uses_cylinder(g) ? wrap_delta(tx, e->b.x, cylinder_period(g)) : (tx - e->b.x);
     float dy = ty - e->b.y;
     normalize2(&dx, &dy);
     const float err_deg = t->aim_error_deg;
@@ -820,7 +809,7 @@ static void enemy_try_fire(game_state* g, enemy* e, float dt) {
         return;
     }
 
-    const float dx = level_uses_cylinder(g->level_style) ? wrap_delta(g->player.b.x, e->b.x, cylinder_period(g)) : (g->player.b.x - e->b.x);
+    const float dx = level_uses_cylinder(g) ? wrap_delta(g->player.b.x, e->b.x, cylinder_period(g)) : (g->player.b.x - e->b.x);
     const float dy = g->player.b.y - e->b.y;
     const float d2 = dx * dx + dy * dy;
     const float rmin = t.fire_range_min;
@@ -864,8 +853,14 @@ static void spawn_wave_sine_snake(game_state* g, int wave_id) {
     const float su = gameplay_ui_scale(g);
     ensure_leveldef_loaded();
     lvl = leveldef_get_level(&g_leveldef, g->level_style);
-    w = lvl ? &lvl->sine : NULL;
-    const int count = (w && w->count > 0) ? w->count : 10;
+    if (!lvl) {
+        return;
+    }
+    w = &lvl->sine;
+    if (w->count <= 0) {
+        return;
+    }
+    const int count = w->count;
     for (int i = 0; i < count; ++i) {
         enemy* e = spawn_enemy_common(g);
         if (!e) {
@@ -876,15 +871,15 @@ static void spawn_wave_sine_snake(game_state* g, int wave_id) {
         enemy_assign_combat_loadout(g, e);
         e->wave_id = wave_id;
         e->slot_index = i;
-        e->b.x = g->camera_x + g->world_w * (w ? w->start_x01 : 0.70f) + (float)i * (w ? w->spacing_x : 44.0f) * su;
-        e->home_y = g->world_h * (w ? w->home_y01 : 0.52f);
+        e->b.x = g->camera_x + g->world_w * w->start_x01 + (float)i * w->spacing_x * su;
+        e->home_y = g->world_h * w->home_y01;
         e->b.y = e->home_y;
-        e->form_phase = (float)i * (w ? w->phase_step : 0.55f);
-        e->form_amp = (w ? w->form_amp : 92.0f) * su;
-        e->form_freq = w ? w->form_freq : 1.8f;
-        e->break_delay_s = (w ? w->break_delay_base : 1.1f) + (w ? w->break_delay_step : 0.16f) * (float)i;
-        e->max_speed = (w ? w->max_speed : 285.0f) * su;
-        e->accel = w ? w->accel : 6.8f;
+        e->form_phase = (float)i * w->phase_step;
+        e->form_amp = w->form_amp * su;
+        e->form_freq = w->form_freq;
+        e->break_delay_s = w->break_delay_base + w->break_delay_step * (float)i;
+        e->max_speed = w->max_speed * su;
+        e->accel = w->accel;
     }
 }
 
@@ -894,8 +889,14 @@ static void spawn_wave_v_formation(game_state* g, int wave_id) {
     const float su = gameplay_ui_scale(g);
     ensure_leveldef_loaded();
     lvl = leveldef_get_level(&g_leveldef, g->level_style);
-    w = lvl ? &lvl->v : NULL;
-    const int count = (w && w->count > 0) ? w->count : 11;
+    if (!lvl) {
+        return;
+    }
+    w = &lvl->v;
+    if (w->count <= 0) {
+        return;
+    }
+    const int count = w->count;
     const int mid = count / 2;
     for (int i = 0; i < count; ++i) {
         enemy* e = spawn_enemy_common(g);
@@ -908,15 +909,15 @@ static void spawn_wave_v_formation(game_state* g, int wave_id) {
         enemy_assign_combat_loadout(g, e);
         e->wave_id = wave_id;
         e->slot_index = i;
-        e->b.x = g->camera_x + g->world_w * (w ? w->start_x01 : 0.74f) + (float)(abs(off)) * (w ? w->spacing_x : 32.0f) * su;
-        e->home_y = g->world_h * (w ? w->home_y01 : 0.55f) + (float)off * (w ? w->home_y_step : 18.0f) * su;
+        e->b.x = g->camera_x + g->world_w * w->start_x01 + (float)(abs(off)) * w->spacing_x * su;
+        e->home_y = g->world_h * w->home_y01 + (float)off * w->home_y_step * su;
         e->b.y = e->home_y;
-        e->form_phase = (float)i * (w ? w->phase_step : 0.35f);
-        e->form_amp = (w ? w->form_amp : 10.0f) * su;
-        e->form_freq = w ? w->form_freq : 1.2f;
-        e->break_delay_s = (w ? w->break_delay_min : 0.9f) + frand01() * (w ? w->break_delay_rand : 1.8f);
-        e->max_speed = (w ? w->max_speed : 295.0f) * su;
-        e->accel = w ? w->accel : 7.5f;
+        e->form_phase = (float)i * w->phase_step;
+        e->form_amp = w->form_amp * su;
+        e->form_freq = w->form_freq;
+        e->break_delay_s = w->break_delay_min + frand01() * w->break_delay_rand;
+        e->max_speed = w->max_speed * su;
+        e->accel = w->accel;
     }
 }
 
@@ -925,15 +926,6 @@ static void spawn_wave_swarm_profile(game_state* g, int wave_id, int profile_id)
     const leveldef_boid_profile* p;
     ensure_leveldef_loaded();
     p = leveldef_get_boid_profile(&g_leveldef, profile_id);
-    if (!p) {
-        const leveldef_level* lvl = leveldef_get_level(&g_leveldef, g->level_style);
-        if (lvl) {
-            p = leveldef_get_boid_profile(&g_leveldef, lvl->default_boid_profile);
-        }
-    }
-    if (!p) {
-        p = leveldef_get_boid_profile(&g_leveldef, 0);
-    }
     if (!p) {
         return;
     }
@@ -976,8 +968,14 @@ static void spawn_wave_kamikaze(game_state* g, int wave_id) {
     const float su = gameplay_ui_scale(g);
     ensure_leveldef_loaded();
     lvl = leveldef_get_level(&g_leveldef, g->level_style);
-    w = lvl ? &lvl->kamikaze : NULL;
-    const int count = (w && w->count > 0) ? w->count : 9;
+    if (!lvl) {
+        return;
+    }
+    w = &lvl->kamikaze;
+    if (w->count <= 0) {
+        return;
+    }
+    const int count = w->count;
     for (int i = 0; i < count; ++i) {
         enemy* e = spawn_enemy_common(g);
         if (!e) {
@@ -988,16 +986,16 @@ static void spawn_wave_kamikaze(game_state* g, int wave_id) {
         enemy_assign_combat_loadout(g, e);
         e->wave_id = wave_id;
         e->slot_index = i;
-        e->b.x = g->camera_x + g->world_w * (w ? w->start_x01 : 0.65f) + (float)i * (w ? w->spacing_x : 34.0f) * su;
+        e->b.x = g->camera_x + g->world_w * w->start_x01 + (float)i * w->spacing_x * su;
         {
-            const float margin = (w ? w->y_margin : 64.0f) * su;
+            const float margin = w->y_margin * su;
             e->b.y = margin + frand01() * fmaxf(g->world_h - 2.0f * margin, 1.0f);
         }
-        e->max_speed = (w ? w->max_speed : 360.0f) * su;
-        e->accel = w ? w->accel : 9.0f;
+        e->max_speed = w->max_speed * su;
+        e->accel = w->accel;
         {
-            const float rmin = (w ? w->radius_min : 11.0f);
-            const float rmax = (w ? w->radius_max : 17.0f);
+            const float rmin = w->radius_min;
+            const float rmax = w->radius_max;
             e->radius = (rmin + frand01() * fmaxf(rmax - rmin, 0.0f)) * su;
         }
     }
@@ -1008,26 +1006,31 @@ static void spawn_next_wave(game_state* g) {
     const leveldef_level* lvl;
     ensure_leveldef_loaded();
     lvl = leveldef_get_level(&g_leveldef, g->level_style);
+    if (!lvl) {
+        return;
+    }
     if (lvl && lvl->wave_mode == LEVELDEF_WAVES_BOID_ONLY) {
-        int profile_id = lvl->default_boid_profile;
-        if (lvl->boid_cycle_count > 0) {
-            profile_id = lvl->boid_cycle[g->wave_index % lvl->boid_cycle_count];
+        int profile_id;
+        if (lvl->boid_cycle_count <= 0) {
+            return;
         }
+        profile_id = lvl->boid_cycle[g->wave_index % lvl->boid_cycle_count];
         {
             const leveldef_boid_profile* p = leveldef_get_boid_profile(&g_leveldef, profile_id);
-            announce_wave(g, (p && p->wave_name[0] != '\0') ? p->wave_name : "boid swarm");
+            if (!p) {
+                return;
+            }
+            announce_wave(g, p->wave_name);
         }
         spawn_wave_swarm_profile(g, wave_id, profile_id);
         g->wave_index += 1;
         g->wave_cooldown_s = lvl->wave_cooldown_between_s;
         return;
     }
-    int pattern = LEVELDEF_WAVE_SINE_SNAKE;
-    if (lvl && lvl->wave_cycle_count > 0) {
-        pattern = lvl->wave_cycle[g->wave_index % lvl->wave_cycle_count];
-    } else {
-        pattern = g->wave_index % 4;
+    if (lvl->wave_cycle_count <= 0) {
+        return;
     }
+    int pattern = lvl->wave_cycle[g->wave_index % lvl->wave_cycle_count];
     if (pattern == LEVELDEF_WAVE_SINE_SNAKE) {
         announce_wave(g, "sine snake formation");
         spawn_wave_sine_snake(g, wave_id);
@@ -1035,9 +1038,9 @@ static void spawn_next_wave(game_state* g) {
         announce_wave(g, "galaxian break v formation");
         spawn_wave_v_formation(g, wave_id);
     } else if (pattern == LEVELDEF_WAVE_SWARM) {
-        int profile_id = 0;
-        if (lvl) {
-            profile_id = lvl->default_boid_profile;
+        const int profile_id = lvl->default_boid_profile;
+        if (profile_id < 0) {
+            return;
         }
         announce_wave(g, "boid swarm cluster");
         spawn_wave_swarm_profile(g, wave_id, profile_id);
@@ -1046,7 +1049,7 @@ static void spawn_next_wave(game_state* g) {
         spawn_wave_kamikaze(g, wave_id);
     }
     g->wave_index += 1;
-    g->wave_cooldown_s = lvl ? lvl->wave_cooldown_between_s : 2.0f;
+    g->wave_cooldown_s = lvl->wave_cooldown_between_s;
 }
 
 static void update_enemy_formation(game_state* g, enemy* e, float dt) {
@@ -1073,7 +1076,7 @@ static void update_enemy_formation(game_state* g, enemy* e, float dt) {
         const float lead = 0.45f;
         const float tx = g->player.b.x + g->player.b.vx * lead;
         const float ty = g->player.b.y + g->player.b.vy * lead;
-        float dir_x = level_uses_cylinder(g->level_style) ? wrap_delta(tx, e->b.x, cylinder_period(g)) : (tx - e->b.x);
+        float dir_x = level_uses_cylinder(g) ? wrap_delta(tx, e->b.x, cylinder_period(g)) : (tx - e->b.x);
         float dir_y = ty - e->b.y;
         normalize2(&dir_x, &dir_y);
         steer_to_velocity(&e->b, dir_x * (e->max_speed * 1.18f), dir_y * (e->max_speed * 1.18f), e->accel * 1.25f, 1.0f);
@@ -1090,7 +1093,7 @@ static void update_enemy_kamikaze(game_state* g, enemy* e, float dt) {
     const float lead = 0.25f;
     const float tx = g->player.b.x + g->player.b.vx * lead;
     const float ty = g->player.b.y + g->player.b.vy * lead;
-    float dir_x = level_uses_cylinder(g->level_style) ? wrap_delta(tx, e->b.x, cylinder_period(g)) : (tx - e->b.x);
+    float dir_x = level_uses_cylinder(g) ? wrap_delta(tx, e->b.x, cylinder_period(g)) : (tx - e->b.x);
     float dir_y = ty - e->b.y;
     normalize2(&dir_x, &dir_y);
     steer_to_velocity(&e->b, dir_x * e->max_speed, dir_y * e->max_speed, e->accel * 1.35f, 0.8f);
@@ -1119,7 +1122,7 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt) {
         if (!o->active || o == e || o->archetype != ENEMY_ARCH_SWARM) {
             continue;
         }
-        const float dx = level_uses_cylinder(g->level_style) ? wrap_delta(o->b.x, e->b.x, cylinder_period(g)) : (o->b.x - e->b.x);
+        const float dx = level_uses_cylinder(g) ? wrap_delta(o->b.x, e->b.x, cylinder_period(g)) : (o->b.x - e->b.x);
         const float dy = o->b.y - e->b.y;
         const float d2 = dx * dx + dy * dy;
         if (d2 < 1e-4f) {
@@ -1153,7 +1156,7 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt) {
     float avoid_x = 0.0f;
     float avoid_y = 0.0f;
     {
-        float dx = level_uses_cylinder(g->level_style) ? wrap_delta(e->b.x, g->player.b.x, cylinder_period(g)) : (e->b.x - g->player.b.x);
+        float dx = level_uses_cylinder(g) ? wrap_delta(e->b.x, g->player.b.x, cylinder_period(g)) : (e->b.x - g->player.b.x);
         float dy = e->b.y - g->player.b.y;
         float d2 = dx * dx + dy * dy;
         if (d2 < (185.0f * su) * (185.0f * su)) {
@@ -1170,7 +1173,7 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt) {
             if (!sl->active) {
                 continue;
             }
-            float dx = level_uses_cylinder(g->level_style) ?
+            float dx = level_uses_cylinder(g) ?
                 wrap_delta(e->b.x, sl->origin_x, cylinder_period(g)) :
                 (e->b.x - sl->origin_x);
             float dy = e->b.y - sl->origin_y;
@@ -1191,7 +1194,7 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt) {
     }
 
     float goal_x = (g->player.b.x + 280.0f * su) - e->b.x;
-    if (level_uses_cylinder(g->level_style)) {
+    if (level_uses_cylinder(g)) {
         goal_x = wrap_delta(g->player.b.x + 280.0f * su, e->b.x, cylinder_period(g));
     }
     const float goal_amp = (e->swarm_goal_amp > 1.0f) ? e->swarm_goal_amp : (80.0f * su);
@@ -1266,15 +1269,9 @@ void game_init(game_state* g, float world_w, float world_h) {
     g->camera_x = g->player.b.x;
     g->camera_y = world_h * 0.5f;
     g->level_style = LEVEL_STYLE_DEFENDER;
-    ensure_leveldef_loaded();
-    {
-        const leveldef_level* lvl = leveldef_get_level(&g_leveldef, g->level_style);
-        g->wave_cooldown_s = lvl ? lvl->wave_cooldown_initial_s : 0.65f;
-    }
     g->wave_index = 0;
     g->wave_id_alloc = 0;
-    configure_searchlights_for_level(g);
-    configure_exit_portal_for_level(g);
+    apply_level_runtime_config(g);
 
     for (size_t i = 0; i < MAX_STARS; ++i) {
         g->stars[i].x = frand01() * world_w;
@@ -1299,13 +1296,7 @@ void game_set_world_size(game_state* g, float world_w, float world_h) {
         g->player.b.y = g->world_h;
     }
     g->camera_y = g->world_h * 0.5f;
-    ensure_leveldef_loaded();
-    {
-        const leveldef_level* lvl = leveldef_get_level(&g_leveldef, g->level_style);
-        g->wave_cooldown_s = lvl ? lvl->wave_cooldown_initial_s : 0.65f;
-    }
-    configure_searchlights_for_level(g);
-    configure_exit_portal_for_level(g);
+    apply_level_runtime_config(g);
 }
 
 void game_cycle_level(game_state* g) {
@@ -1319,11 +1310,6 @@ void game_cycle_level(game_state* g) {
     memset(g->enemies, 0, sizeof(g->enemies));
     memset(g->particles, 0, sizeof(g->particles));
     g->active_particles = 0;
-    ensure_leveldef_loaded();
-    {
-        const leveldef_level* lvl = leveldef_get_level(&g_leveldef, g->level_style);
-        g->wave_cooldown_s = lvl ? lvl->wave_cooldown_initial_s : 0.65f;
-    }
     g->player.b.x = 170.0f * su;
     g->player.b.y = g->world_h * 0.5f;
     g->player.b.vx = 0.0f;
@@ -1331,8 +1317,7 @@ void game_cycle_level(game_state* g) {
     g->camera_vx = 0.0f;
     g->camera_x = g->player.b.x;
     g->camera_y = g->world_h * 0.5f;
-    configure_searchlights_for_level(g);
-    configure_exit_portal_for_level(g);
+    apply_level_runtime_config(g);
 }
 
 void game_update(game_state* g, float dt, const game_input* in) {
@@ -1343,13 +1328,7 @@ void game_update(game_state* g, float dt, const game_input* in) {
         const int level_style = g->level_style;
         game_init(g, g->world_w, g->world_h);
         g->level_style = level_style;
-        ensure_leveldef_loaded();
-        {
-            const leveldef_level* lvl = leveldef_get_level(&g_leveldef, g->level_style);
-            g->wave_cooldown_s = lvl ? lvl->wave_cooldown_initial_s : 0.65f;
-        }
-        configure_searchlights_for_level(g);
-        configure_exit_portal_for_level(g);
+        apply_level_runtime_config(g);
     }
 
     for (size_t i = 0; i < MAX_STARS; ++i) {
@@ -1451,7 +1430,7 @@ void game_update(game_state* g, float dt, const game_input* in) {
         bullet* b = &g->bullets[i];
         integrate_body(&b->b, dt);
         b->ttl_s -= dt;
-        if (level_uses_cylinder(g->level_style)) {
+        if (level_uses_cylinder(g)) {
             const float period = cylinder_period(g);
             const float travel = fabsf(wrap_delta(b->b.x, b->spawn_x, period));
             if (b->ttl_s <= 0.0f || travel >= period * (1.0f / 3.0f)) {
@@ -1465,9 +1444,24 @@ void game_update(game_state* g, float dt, const game_input* in) {
     }
 
     if (g->lives > 0) {
+        const leveldef_level* lvl = leveldef_get_level(&g_leveldef, g->level_style);
         g->wave_cooldown_s -= dt;
-        if (game_enemy_count(g) <= 0 && g->wave_cooldown_s <= 0.0f) {
-            spawn_next_wave(g);
+        if (lvl) {
+            if (lvl->spawn_mode == LEVELDEF_SPAWN_SEQUENCED_CLEAR) {
+                if (game_enemy_count(g) <= 0 && g->wave_cooldown_s <= 0.0f) {
+                    spawn_next_wave(g);
+                }
+            } else if (lvl->spawn_mode == LEVELDEF_SPAWN_TIMED) {
+                if (g->wave_cooldown_s <= 0.0f) {
+                    spawn_next_wave(g);
+                    g->wave_cooldown_s = lvl->spawn_interval_s;
+                }
+            } else if (lvl->spawn_mode == LEVELDEF_SPAWN_TIMED_SEQUENCED) {
+                if (g->wave_cooldown_s <= 0.0f && game_enemy_count(g) <= 0) {
+                    spawn_next_wave(g);
+                    g->wave_cooldown_s = lvl->spawn_interval_s;
+                }
+            }
         }
     }
     int player_hit_this_frame = 0;
@@ -1497,7 +1491,7 @@ void game_update(game_state* g, float dt, const game_input* in) {
             e->b.vy *= s;
         }
 
-        if (!level_uses_cylinder(g->level_style) && e->b.x < g->camera_x - g->world_w * 0.72f) {
+        if (!level_uses_cylinder(g) && e->b.x < g->camera_x - g->world_w * 0.72f) {
             e->active = 0;
             continue;
         }
@@ -1537,7 +1531,7 @@ void game_update(game_state* g, float dt, const game_input* in) {
             b->active = 0;
             continue;
         }
-        if (level_uses_cylinder(g->level_style)) {
+        if (level_uses_cylinder(g)) {
             const float period = cylinder_period(g);
             if (fabsf(wrap_delta(b->b.x, g->player.b.x, period)) > period * 0.55f) {
                 b->active = 0;
@@ -1608,7 +1602,7 @@ void game_update(game_state* g, float dt, const game_input* in) {
         float rear_bias = 0.25f;
         float spring_k = 18.0f;
         float damping = 8.2f;
-        if (level_uses_cylinder(g->level_style)) {
+        if (level_uses_cylinder(g)) {
             rear_bias = 0.08f;
             spring_k = 26.0f;
             damping = 10.2f;
@@ -1679,4 +1673,9 @@ int game_pop_audio_events(game_state* g, game_audio_event* out, int out_cap) {
     }
     g->audio_event_count = 0;
     return n;
+}
+
+const struct leveldef_db* game_leveldef_get(void) {
+    ensure_leveldef_loaded();
+    return &g_leveldef;
 }

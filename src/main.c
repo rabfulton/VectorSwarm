@@ -1,5 +1,7 @@
 #include "game.h"
 #include "acoustics_ui_layout.h"
+#include "level_editor.h"
+#include "leveldef.h"
 #include "planetarium/planetarium_registry.h"
 #include "planetarium/planetarium_validate.h"
 #include "planetarium_propaganda.h"
@@ -370,6 +372,7 @@ typedef struct app {
     int show_acoustics;
     int show_video_menu;
     int show_planetarium;
+    int show_level_editor;
     int video_menu_selected;
     int video_menu_fullscreen;
     int palette_mode;
@@ -395,6 +398,7 @@ typedef struct app {
     float acoustics_thr_slots[ACOUSTICS_SLOT_COUNT][6];
     float acoustics_enemy_slots[ACOUSTICS_SLOT_COUNT][6];
     float acoustics_exp_slots[ACOUSTICS_SLOT_COUNT][8];
+    char acoustics_slots_path[PATH_MAX];
     int acoustics_mouse_drag;
     float acoustics_value_01[ACOUSTICS_SLIDER_COUNT];
     float acoustics_combat_value_01[ACOUST_COMBAT_SLIDER_COUNT];
@@ -407,6 +411,7 @@ typedef struct app {
     uint32_t nick_h;
     uint32_t nick_stride;
     vg_svg_asset* surveillance_svg_asset;
+    level_editor_state level_editor;
 } app;
 
 static VkSampleCountFlagBits pick_msaa_samples(app* a) {
@@ -564,7 +569,7 @@ static void print_fog_tuning(const app* a) {
 }
 
 static int handle_fog_tuning_key(app* a, SDL_Keycode key) {
-    if (!a || !a->fog_tuning_enabled || a->game.level_style != LEVEL_STYLE_FOG_OF_WAR) {
+    if (!a || !a->fog_tuning_enabled || a->game.render_style != LEVEL_RENDER_FOG) {
         return 0;
     }
     int handled = 1;
@@ -682,7 +687,7 @@ static void print_terrain_tuning(const app* a) {
 }
 
 static int handle_terrain_tuning_key(app* a, SDL_Keycode key) {
-    if (!a || !a->terrain_tuning_enabled || a->game.level_style != LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2) {
+    if (!a || !a->terrain_tuning_enabled || a->game.render_style != LEVEL_RENDER_DRIFTER_SHADED) {
         return 0;
     }
     int handled = 1;
@@ -1715,6 +1720,32 @@ static int load_acoustics_slots(app* a, const char* path) {
     return 1;
 }
 
+static int file_exists_readable(const char* path) {
+    if (!path || path[0] == '\0') {
+        return 0;
+    }
+    FILE* f = fopen(path, "r");
+    if (!f) {
+        return 0;
+    }
+    fclose(f);
+    return 1;
+}
+
+static const char* resolve_acoustics_slots_path(void) {
+    static const char* candidates[] = {
+        ACOUSTICS_SLOTS_PATH,
+        "build/" ACOUSTICS_SLOTS_PATH,
+        "../build/" ACOUSTICS_SLOTS_PATH
+    };
+    for (int i = 0; i < (int)(sizeof(candidates) / sizeof(candidates[0])); ++i) {
+        if (file_exists_readable(candidates[i])) {
+            return candidates[i];
+        }
+    }
+    return ACOUSTICS_SLOTS_PATH;
+}
+
 static void apply_acoustics_locked(app* a) {
     const int fire_wave_idx = (int)floorf(clampf(a->acoustics_value_01[ACOUST_FIRE_WAVE], 0.0f, 1.0f) * 4.0f + 0.5f);
     enum wtp_waveform_type fire_wave = (enum wtp_waveform_type)fire_wave_idx;
@@ -1877,7 +1908,7 @@ static int handle_acoustics_ui_mouse(app* a, int mouse_x, int mouse_y, int set_v
                     } else {
                         capture_current_to_selected_combat_slot(a, (p == 0) ? 1 : 0);
                     }
-                    (void)save_acoustics_slots(a, ACOUSTICS_SLOTS_PATH);
+                    (void)save_acoustics_slots(a, a->acoustics_slots_path);
                 }
                 return 1;
             }
@@ -1903,6 +1934,7 @@ static int handle_acoustics_ui_mouse(app* a, int mouse_x, int mouse_y, int set_v
                             load_combat_slot_to_current(a, 0, s, 1);
                         }
                     }
+                    (void)save_acoustics_slots(a, a->acoustics_slots_path);
                 }
                 return 1;
             }
@@ -2076,9 +2108,14 @@ static void spawn_combat_voice(app* a, const audio_spatial_event* ev) {
     const int type = (int)ev->type;
     const combat_sound_params* p = NULL;
     int limit = 0;
+    float pitch_scale = 1.0f;
     if (type == GAME_AUDIO_EVENT_ENEMY_FIRE) {
         p = &a->enemy_fire_sound;
         limit = 14;
+    } else if (type == GAME_AUDIO_EVENT_SEARCHLIGHT_FIRE) {
+        p = &a->enemy_fire_sound;
+        limit = 14;
+        pitch_scale = 0.5f; /* One octave below standard enemy gun. */
     } else if (type == GAME_AUDIO_EVENT_EXPLOSION) {
         p = &a->explosion_sound;
         limit = 10;
@@ -2128,7 +2165,7 @@ static void spawn_combat_voice(app* a, const audio_spatial_event* ev) {
     v->pan = clampf(ev->pan * p->pan_width, -1.0f, 1.0f);
     v->gain = clampf(p->level * ev->gain, 0.0f, 1.2f);
     v->phase = rand01_from_state(&a->audio_rng) * 6.28318530718f;
-    v->freq_hz = p->pitch_hz * (1.0f + jitter);
+    v->freq_hz = p->pitch_hz * pitch_scale * (1.0f + jitter);
     v->attack_s = fmaxf(0.0001f, p->attack_ms * 0.001f);
     v->decay_s = fmaxf(0.005f, p->decay_ms * 0.001f);
     v->noise_mix = clampf(p->noise_mix, 0.0f, 1.0f);
@@ -2724,6 +2761,45 @@ static int handle_planetarium_mouse(app* a, int mouse_x, int mouse_y, int set_va
         }
     }
     return 1;
+}
+
+static int handle_level_editor_mouse(app* a, int mouse_x, int mouse_y, int mouse_down, int mouse_pressed) {
+    if (!a) {
+        return 0;
+    }
+    float mx = 0.0f;
+    float my = 0.0f;
+    map_mouse_to_scene_coords(a, mouse_x, mouse_y, &mx, &my);
+    const int action = level_editor_handle_mouse(
+        &a->level_editor,
+        mx,
+        my,
+        (float)a->swapchain_extent.width,
+        (float)a->swapchain_extent.height,
+        mouse_down,
+        mouse_pressed
+    );
+    if (action == 2) {
+        const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
+        if (level_editor_load_by_name(&a->level_editor, db, a->level_editor.level_name)) {
+            set_tty_message(a, "level editor: loaded");
+        } else {
+            set_tty_message(a, "level editor: load failed");
+        }
+    } else if (action == 3) {
+        set_tty_message(a, "level editor: save not implemented");
+    } else if (action == 4) {
+        const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
+        if (level_editor_cycle_level(&a->level_editor, db, -1)) {
+            set_tty_message(a, "level editor: previous level");
+        }
+    } else if (action == 5) {
+        const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
+        if (level_editor_cycle_level(&a->level_editor, db, 1)) {
+            set_tty_message(a, "level editor: next level");
+        }
+    }
+    return action != 0;
 }
 
 static void init_planetarium_assets(app* a) {
@@ -4810,10 +4886,8 @@ static void update_gpu_high_plains_vertices(app* a) {
     }
 }
 
-static int level_uses_cylinder_gpu(int level_style) {
-    return level_style == LEVEL_STYLE_ENEMY_RADAR ||
-           level_style == LEVEL_STYLE_EVENT_HORIZON ||
-           level_style == LEVEL_STYLE_EVENT_HORIZON_LEGACY;
+static int level_uses_cylinder_gpu(const game_state* g) {
+    return g && g->render_style == LEVEL_RENDER_CYLINDER;
 }
 
 static float cylinder_period_gpu(const game_state* g) {
@@ -4846,7 +4920,7 @@ static void update_gpu_particle_instances(app* a) {
     particle_instance* out = (particle_instance*)a->particle_instance_map;
     uint32_t n = 0;
     const game_state* g = &a->game;
-    const int use_cyl = level_uses_cylinder_gpu(g->level_style);
+    const int use_cyl = level_uses_cylinder_gpu(g);
     float r_sum = 0.0f;
     float r_min = 1e9f;
     float r_max = 0.0f;
@@ -5094,7 +5168,7 @@ static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t) {
     if (!a || !cmd || !a->fog_pipeline || !a->fog_layout) {
         return;
     }
-    if (a->game.level_style != LEVEL_STYLE_FOG_OF_WAR) {
+    if (a->game.render_style != LEVEL_RENDER_FOG) {
         return;
     }
 
@@ -5189,8 +5263,8 @@ static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd) {
         return;
     }
     if (!a || !cmd ||
-        (a->game.level_style != LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2 &&
-         a->game.level_style != LEVEL_STYLE_HIGH_PLAINS_DRIFTER)) {
+        (a->game.render_style != LEVEL_RENDER_DRIFTER_SHADED &&
+         a->game.render_style != LEVEL_RENDER_DRIFTER)) {
         return;
     }
     if (!a->terrain_fill_pipeline || !a->terrain_line_pipeline || !a->terrain_vertex_buffer) {
@@ -5219,7 +5293,7 @@ static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd) {
     pc.tune[2] = a->terrain_tuning.normal_variation;
     pc.tune[3] = a->terrain_tuning.depth_fade;
 
-    const int draw_fill = (a->game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2);
+    const int draw_fill = (a->game.render_style == LEVEL_RENDER_DRIFTER_SHADED);
     if (draw_fill) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->terrain_fill_pipeline);
         vkCmdPushConstants(cmd, a->terrain_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
@@ -5227,7 +5301,7 @@ static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd) {
         vkCmdDrawIndexed(cmd, a->terrain_tri_index_count, 1, 0, 0, 0);
     }
 
-    const int draw_wire = (a->game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER) ? 1 : a->terrain_wire_enabled;
+    const int draw_wire = (a->game.render_style == LEVEL_RENDER_DRIFTER) ? 1 : a->terrain_wire_enabled;
     if (draw_wire) {
         const float wire_boost = 1.28f;
         pc.color[0] = clampf(pc.color[0] * wire_boost, 0.0f, 1.0f);
@@ -5296,6 +5370,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .show_acoustics = a->show_acoustics,
         .show_video_menu = a->show_video_menu,
         .show_planetarium = a->show_planetarium,
+        .show_level_editor = a->show_level_editor,
         .video_menu_selected = a->video_menu_selected,
         .video_menu_fullscreen = a->video_menu_fullscreen,
         .palette_mode = a->palette_mode,
@@ -5315,21 +5390,33 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .surveillance_svg_asset = a->surveillance_svg_asset,
         .terrain_tuning_text = (a->fog_tuning_enabled &&
                                 a->fog_tuning_show &&
-                                a->game.level_style == LEVEL_STYLE_FOG_OF_WAR &&
-                                !a->show_acoustics && !a->show_video_menu && !a->show_planetarium)
+                                a->game.render_style == LEVEL_RENDER_FOG &&
+                                !a->show_acoustics && !a->show_video_menu && !a->show_planetarium && !a->show_level_editor)
             ? a->fog_tuning_text
             : ((a->particle_tuning_enabled &&
                 a->particle_tuning_show &&
-                !a->show_acoustics && !a->show_video_menu && !a->show_planetarium)
+                !a->show_acoustics && !a->show_video_menu && !a->show_planetarium && !a->show_level_editor)
                 ? a->particle_tuning_text
                 : ((a->terrain_tuning_enabled &&
                     a->terrain_tuning_show &&
-                    a->game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2)
+                    a->game.render_style == LEVEL_RENDER_DRIFTER_SHADED)
                     ? a->terrain_tuning_text : NULL)),
         .use_gpu_particles = 0,
         .use_gpu_terrain = 0,
         .use_gpu_wormhole = 0,
-        .scene_phase = 0
+        .scene_phase = 0,
+        .level_editor_level_name = a->level_editor.level_name,
+        .level_editor_status_text = a->level_editor.status_text,
+        .level_editor_timeline_01 = a->level_editor.timeline_01,
+        .level_editor_level_length_screens = a->level_editor.level_length_screens,
+        .level_editor_selected_marker = a->level_editor.selected_marker,
+        .level_editor_selected_property = a->level_editor.selected_property,
+        .level_editor_tool_selected = a->level_editor.entity_tool_selected,
+        .level_editor_drag_active = a->level_editor.entity_drag_active,
+        .level_editor_drag_kind = a->level_editor.entity_drag_kind,
+        .level_editor_drag_x = a->level_editor.entity_drag_x,
+        .level_editor_drag_y = a->level_editor.entity_drag_y,
+        .level_editor_marker_count = a->level_editor.marker_count
     };
     {
         int mx = 0;
@@ -5376,19 +5463,29 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
     for (int i = 0; i < ACOUSTICS_SCOPE_SAMPLES; ++i) {
         metrics.acoustics_scope[i] = a->scope_window[i];
     }
+    for (int i = 0; i < a->level_editor.marker_count && i < LEVEL_EDITOR_MAX_MARKERS; ++i) {
+        metrics.level_editor_marker_x01[i] = a->level_editor.markers[i].x01;
+        metrics.level_editor_marker_y01[i] = a->level_editor.markers[i].y01;
+        metrics.level_editor_marker_kind[i] = a->level_editor.markers[i].kind;
+        metrics.level_editor_marker_a[i] = a->level_editor.markers[i].a;
+        metrics.level_editor_marker_b[i] = a->level_editor.markers[i].b;
+        metrics.level_editor_marker_c[i] = a->level_editor.markers[i].c;
+        metrics.level_editor_marker_d[i] = a->level_editor.markers[i].d;
+    }
     {
         const int in_gameplay_scene =
             !a->show_acoustics &&
             !a->show_video_menu &&
-            !a->show_planetarium;
+            !a->show_planetarium &&
+            !a->show_level_editor;
         const int use_gpu_terrain =
-            (a->game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2 ||
-             a->game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER);
+            (a->game.render_style == LEVEL_RENDER_DRIFTER_SHADED ||
+             a->game.render_style == LEVEL_RENDER_DRIFTER);
         const int use_gpu_wormhole =
             a->use_gpu_wormhole &&
             (a->game.level_style == LEVEL_STYLE_EVENT_HORIZON);
         const int use_gpu_particles = a->use_gpu_particles;
-        const int use_gpu_fog = (a->game.level_style == LEVEL_STYLE_FOG_OF_WAR) ? 1 : 0;
+        const int use_gpu_fog = (a->game.render_style == LEVEL_RENDER_FOG) ? 1 : 0;
         const int need_mid_scene_gpu = (use_gpu_terrain || use_gpu_wormhole);
         const int split_scene =
             in_gameplay_scene &&
@@ -5504,7 +5601,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
     vkCmdPushConstants(cmd, a->post_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     if (a->particle_bloom_enabled &&
-        !a->show_acoustics && !a->show_video_menu && !a->show_planetarium) {
+        !a->show_acoustics && !a->show_video_menu && !a->show_planetarium && !a->show_level_editor) {
         record_gpu_particles_bloom(a, cmd);
     }
     vkCmdEndRenderPass(cmd);
@@ -5568,6 +5665,7 @@ int main(void) {
     a.show_acoustics = 0;
 	    a.show_video_menu = 0;
     a.show_planetarium = 0;
+    a.show_level_editor = 0;
     a.terrain_wire_enabled = 1;
     a.terrain_tuning_enabled = env_flag_enabled("VTYPE_TERRAIN_TUNING");
     a.terrain_tuning_show = 1;
@@ -5613,6 +5711,11 @@ int main(void) {
     a.current_system_index = 0;
     a.planetarium_selected = 0;
     memset(a.planetarium_nodes_quelled, 0, sizeof(a.planetarium_nodes_quelled));
+    level_editor_init(&a.level_editor);
+    {
+        const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
+        (void)level_editor_load_by_name(&a.level_editor, db, "level_defender");
+    }
     acoustics_defaults(&a);
     acoustics_combat_defaults(&a);
     acoustics_slot_defaults(&a);
@@ -5623,7 +5726,8 @@ int main(void) {
     }
     srand((unsigned int)SDL_GetTicks());
     init_teletype_audio(&a);
-    (void)load_acoustics_slots(&a, ACOUSTICS_SLOTS_PATH);
+    snprintf(a.acoustics_slots_path, sizeof(a.acoustics_slots_path), "%s", resolve_acoustics_slots_path());
+    (void)load_acoustics_slots(&a, a.acoustics_slots_path);
     (void)load_settings(&a);
     apply_acoustics(&a);
 
@@ -5696,6 +5800,9 @@ int main(void) {
                     a.show_video_menu = 0;
                 } else if (ev.key.keysym.sym == SDLK_ESCAPE && a.show_planetarium) {
                     a.show_planetarium = 0;
+                } else if (ev.key.keysym.sym == SDLK_ESCAPE && a.show_level_editor) {
+                    a.show_level_editor = 0;
+                    SDL_StopTextInput();
                 } else if (ev.key.keysym.sym == SDLK_ESCAPE) {
                     running = 0;
                 } else if (ev.key.keysym.sym == SDLK_n) {
@@ -5721,6 +5828,8 @@ int main(void) {
                     if (a.show_video_menu) {
                         a.show_acoustics = 0;
                         a.show_planetarium = 0;
+                        a.show_level_editor = 0;
+                        SDL_StopTextInput();
                         a.show_crt_ui = 0;
                         a.video_menu_dial_drag = -1;
                         sync_video_dials_from_live_crt(&a);
@@ -5730,6 +5839,8 @@ int main(void) {
                     if (a.show_planetarium) {
                         a.show_video_menu = 0;
                         a.show_acoustics = 0;
+                        a.show_level_editor = 0;
+                        SDL_StopTextInput();
                         a.show_crt_ui = 0;
                         a.video_menu_dial_drag = -1;
                         sync_planetarium_marquee(&a);
@@ -5764,6 +5875,21 @@ int main(void) {
                     if (a.show_acoustics) {
                         a.show_planetarium = 0;
                         a.show_video_menu = 0;
+                        a.show_level_editor = 0;
+                        SDL_StopTextInput();
+                    }
+                } else if (ev.key.keysym.sym == SDLK_l) {
+                    a.show_level_editor = !a.show_level_editor;
+                    if (a.show_level_editor) {
+                        a.show_planetarium = 0;
+                        a.show_video_menu = 0;
+                        a.show_acoustics = 0;
+                        a.show_crt_ui = 0;
+                        a.video_menu_dial_drag = -1;
+                        a.level_editor.entry_active = 1;
+                        SDL_StartTextInput();
+                    } else {
+                        SDL_StopTextInput();
                     }
                 } else if (ev.key.keysym.sym == SDLK_4) {
                     a.terrain_wire_enabled = !a.terrain_wire_enabled;
@@ -5814,7 +5940,7 @@ int main(void) {
                     if (a.acoustics_page == ACOUSTICS_PAGE_SYNTH) {
                         capture_current_to_selected_slots(&a);
                     }
-                    if (save_acoustics_slots(&a, ACOUSTICS_SLOTS_PATH)) {
+                    if (save_acoustics_slots(&a, a.acoustics_slots_path)) {
                         set_tty_message(&a, "acoustics slots saved");
                     } else {
                         set_tty_message(&a, "acoustics slots save failed");
@@ -5842,20 +5968,47 @@ int main(void) {
                     } else {
                         a.acoustics_page = (a.acoustics_page + 1) % ACOUSTICS_PAGE_COUNT;
                     }
+                } else if (a.show_level_editor && ev.key.keysym.sym == SDLK_RETURN) {
+                    const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
+                    if (level_editor_load_by_name(&a.level_editor, db, a.level_editor.level_name)) {
+                        set_tty_message(&a, "level editor: loaded");
+                    } else {
+                        set_tty_message(&a, "level editor: load failed");
+                    }
+                } else if (a.show_level_editor && ev.key.keysym.sym == SDLK_BACKSPACE) {
+                    level_editor_backspace(&a.level_editor);
+                } else if (a.show_level_editor && ev.key.keysym.sym == SDLK_UP) {
+                    level_editor_select_marker(&a.level_editor, -1);
+                } else if (a.show_level_editor && ev.key.keysym.sym == SDLK_DOWN) {
+                    level_editor_select_marker(&a.level_editor, 1);
+                } else if (a.show_level_editor && ev.key.keysym.sym == SDLK_TAB) {
+                    level_editor_select_property(&a.level_editor, 1);
+                } else if (a.show_level_editor && ev.key.keysym.sym == SDLK_COMMA) {
+                    const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
+                    (void)level_editor_cycle_level(&a.level_editor, db, -1);
+                } else if (a.show_level_editor && ev.key.keysym.sym == SDLK_PERIOD) {
+                    const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
+                    (void)level_editor_cycle_level(&a.level_editor, db, 1);
+                } else if (a.show_level_editor && ev.key.keysym.sym == SDLK_LEFT) {
+                    const float step = (ev.key.keysym.mod & KMOD_SHIFT) ? 0.05f : 0.01f;
+                    level_editor_adjust_selected_property(&a.level_editor, -step);
+                } else if (a.show_level_editor && ev.key.keysym.sym == SDLK_RIGHT) {
+                    const float step = (ev.key.keysym.mod & KMOD_SHIFT) ? 0.05f : 0.01f;
+                    level_editor_adjust_selected_property(&a.level_editor, step);
                 } else if (ev.key.keysym.sym == SDLK_TAB) {
                     a.show_crt_ui = !a.show_crt_ui;
                 } else if (ev.key.keysym.sym == SDLK_r) {
                     restart_pressed = 1;
                 } else if (a.fog_tuning_enabled &&
-                           !a.show_acoustics && !a.show_video_menu && !a.show_planetarium &&
+                           !a.show_acoustics && !a.show_video_menu && !a.show_planetarium && !a.show_level_editor &&
                            handle_fog_tuning_key(&a, ev.key.keysym.sym)) {
                     /* handled by fog tuning controls */
                 } else if (a.particle_tuning_enabled &&
-                           !a.show_acoustics && !a.show_video_menu && !a.show_planetarium &&
+                           !a.show_acoustics && !a.show_video_menu && !a.show_planetarium && !a.show_level_editor &&
                            handle_particle_tuning_key(&a, ev.key.keysym.sym)) {
                     /* handled by particle tuning controls */
                 } else if (a.terrain_tuning_enabled &&
-                           !a.show_acoustics && !a.show_video_menu && !a.show_planetarium &&
+                           !a.show_acoustics && !a.show_video_menu && !a.show_planetarium && !a.show_level_editor &&
                            handle_terrain_tuning_key(&a, ev.key.keysym.sym)) {
                     /* handled by terrain tuning controls */
                 } else if (a.show_acoustics && ev.key.keysym.sym == SDLK_UP) {
@@ -5892,8 +6045,15 @@ int main(void) {
                 } else if (a.show_crt_ui && ev.key.keysym.sym == SDLK_RIGHT) {
                     adjust_crt_profile(&a, a.crt_ui_selected, +1);
                 }
+            } else if (ev.type == SDL_TEXTINPUT) {
+                if (a.show_level_editor && a.level_editor.entry_active) {
+                    level_editor_append_text(&a.level_editor, ev.text.text);
+                }
             } else if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT) {
                 if (a.show_video_menu && handle_video_menu_mouse(&a, ev.button.x, ev.button.y, 1)) {
+                    a.acoustics_mouse_drag = 0;
+                    a.crt_ui_mouse_drag = 0;
+                } else if (a.show_level_editor && handle_level_editor_mouse(&a, ev.button.x, ev.button.y, 1, 1)) {
                     a.acoustics_mouse_drag = 0;
                     a.crt_ui_mouse_drag = 0;
                 } else if (a.show_planetarium && handle_planetarium_mouse(&a, ev.button.x, ev.button.y, 1)) {
@@ -5905,6 +6065,18 @@ int main(void) {
                     a.crt_ui_mouse_drag = 1;
                 }
             } else if (ev.type == SDL_MOUSEBUTTONUP && ev.button.button == SDL_BUTTON_LEFT) {
+                if (a.show_level_editor) {
+                    float mx = 0.0f;
+                    float my = 0.0f;
+                    map_mouse_to_scene_coords(&a, ev.button.x, ev.button.y, &mx, &my);
+                    (void)level_editor_handle_mouse_release(
+                        &a.level_editor,
+                        mx,
+                        my,
+                        (float)a.swapchain_extent.width,
+                        (float)a.swapchain_extent.height
+                    );
+                }
                 if (a.show_video_menu) {
                     if (a.video_menu_dial_drag >= 0) {
                         (void)save_settings(&a);
@@ -5916,9 +6088,18 @@ int main(void) {
                 }
                 a.crt_ui_mouse_drag = 0;
                 a.acoustics_mouse_drag = 0;
+                a.level_editor.timeline_drag = 0;
             } else if (ev.type == SDL_MOUSEMOTION) {
                 if (a.show_video_menu && a.video_menu_dial_drag >= 0) {
                     (void)update_video_menu_dial_drag(&a, ev.motion.x, ev.motion.y);
+                } else if (a.show_level_editor) {
+                    (void)handle_level_editor_mouse(
+                        &a,
+                        ev.motion.x,
+                        ev.motion.y,
+                        (ev.motion.state & SDL_BUTTON_LMASK) ? 1 : 0,
+                        0
+                    );
                 } else if (a.show_acoustics && a.acoustics_mouse_drag) {
                     (void)handle_acoustics_ui_mouse(&a, ev.motion.x, ev.motion.y, 1);
                 } else if (a.show_crt_ui && a.crt_ui_mouse_drag) {
@@ -5930,7 +6111,7 @@ int main(void) {
         const uint8_t* keys = SDL_GetKeyboardState(NULL);
         game_input in;
         memset(&in, 0, sizeof(in));
-        if (!a.show_acoustics && !a.show_video_menu && !a.show_planetarium) {
+        if (!a.show_acoustics && !a.show_video_menu && !a.show_planetarium && !a.show_level_editor) {
             in.left = keys[SDL_SCANCODE_A] || keys[SDL_SCANCODE_LEFT];
             in.right = keys[SDL_SCANCODE_D] || keys[SDL_SCANCODE_RIGHT];
             in.up = keys[SDL_SCANCODE_W] || keys[SDL_SCANCODE_UP];
@@ -5945,11 +6126,11 @@ int main(void) {
         if (dt_raw <= 0.0f) dt_raw = 1.0f / 60.0f;
         float dt_sim = dt_raw;
         if (dt_sim > (1.0f / 15.0f)) dt_sim = 1.0f / 15.0f;
-        if (!a.show_acoustics && !a.show_video_menu && !a.show_planetarium) {
+        if (!a.show_acoustics && !a.show_video_menu && !a.show_planetarium && !a.show_level_editor) {
             game_update(&a.game, dt_sim, &in);
         }
         if (a.audio_ready) {
-            const int thrust_on = (!a.show_acoustics && !a.show_video_menu && !a.show_planetarium) &&
+            const int thrust_on = (!a.show_acoustics && !a.show_video_menu && !a.show_planetarium && !a.show_level_editor) &&
                                   (in.left || in.right || in.up || in.down) && (a.game.lives > 0);
             atomic_store_explicit(&a.thrust_gate, thrust_on ? 1 : 0, memory_order_release);
         }

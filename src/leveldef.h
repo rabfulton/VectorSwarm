@@ -14,6 +14,12 @@ enum leveldef_wave_mode {
     LEVELDEF_WAVES_BOID_ONLY = 1
 };
 
+enum leveldef_spawn_mode {
+    LEVELDEF_SPAWN_SEQUENCED_CLEAR = 0,
+    LEVELDEF_SPAWN_TIMED = 1,
+    LEVELDEF_SPAWN_TIMED_SEQUENCED = 2
+};
+
 enum leveldef_wave_pattern_id {
     LEVELDEF_WAVE_SINE_SNAKE = 0,
     LEVELDEF_WAVE_V_FORMATION = 1,
@@ -144,7 +150,10 @@ typedef struct leveldef_wave_kamikaze_tuning {
 } leveldef_wave_kamikaze_tuning;
 
 typedef struct leveldef_level {
+    int render_style; /* enum level_render_style_id */
     int wave_mode;
+    int spawn_mode; /* enum leveldef_spawn_mode */
+    float spawn_interval_s;
     int default_boid_profile;
     float wave_cooldown_initial_s;
     float wave_cooldown_between_s;

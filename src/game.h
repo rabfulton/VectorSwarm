@@ -11,6 +11,8 @@
 #define MAX_AUDIO_EVENTS 64
 #define MAX_SEARCHLIGHTS 4
 
+struct leveldef_db;
+
 enum level_style_id {
     LEVEL_STYLE_DEFENDER = 0,
     LEVEL_STYLE_ENEMY_RADAR = 1,
@@ -20,6 +22,14 @@ enum level_style_id {
     LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2 = 5,
     LEVEL_STYLE_FOG_OF_WAR = 6,
     LEVEL_STYLE_COUNT = 7
+};
+
+enum level_render_style_id {
+    LEVEL_RENDER_DEFENDER = 0,
+    LEVEL_RENDER_CYLINDER = 1,
+    LEVEL_RENDER_DRIFTER = 2,
+    LEVEL_RENDER_DRIFTER_SHADED = 3,
+    LEVEL_RENDER_FOG = 4
 };
 
 typedef struct star {
@@ -135,7 +145,8 @@ typedef struct searchlight {
 
 typedef enum game_audio_event_type {
     GAME_AUDIO_EVENT_ENEMY_FIRE = 1,
-    GAME_AUDIO_EVENT_EXPLOSION = 2
+    GAME_AUDIO_EVENT_EXPLOSION = 2,
+    GAME_AUDIO_EVENT_SEARCHLIGHT_FIRE = 3
 } game_audio_event_type;
 
 typedef struct game_audio_event {
@@ -199,6 +210,7 @@ typedef struct game_state {
     float camera_vx;
     float camera_vy;
     int level_style; /* enum level_style_id */
+    int render_style; /* enum level_render_style_id */
     player_state player;
     star stars[MAX_STARS];
     bullet bullets[MAX_BULLETS];
@@ -225,5 +237,6 @@ float game_threat01(const game_state* g);
 int game_pop_wave_announcement(game_state* g, char* out, size_t out_cap);
 int game_pop_fire_sfx_count(game_state* g);
 int game_pop_audio_events(game_state* g, game_audio_event* out, int out_cap);
+const struct leveldef_db* game_leveldef_get(void);
 
 #endif

@@ -13,6 +13,9 @@
 #define ACOUSTICS_SLOT_COUNT 5
 #define VIDEO_MENU_RES_COUNT 6
 #define VIDEO_MENU_DIAL_COUNT 12
+#ifndef LEVEL_EDITOR_MAX_MARKERS
+#define LEVEL_EDITOR_MAX_MARKERS 256
+#endif
 #define WORMHOLE_GPU_MAX_VERTS 8192u
 #define WORMHOLE_GPU_MAX_TRI_VERTS 6144u
 
@@ -54,6 +57,7 @@ typedef struct render_metrics {
     int show_acoustics;
     int show_video_menu;
     int show_planetarium;
+    int show_level_editor;
     int video_menu_selected;
     int video_menu_fullscreen;
     int palette_mode;
@@ -90,6 +94,25 @@ typedef struct render_metrics {
     int use_gpu_particles;
     int use_gpu_wormhole;
     int scene_phase; /* 0=full, 1=background-only, 2=foreground-only, 3=overlay-no-clear */
+    const char* level_editor_level_name;
+    const char* level_editor_status_text;
+    float level_editor_timeline_01;
+    float level_editor_level_length_screens;
+    int level_editor_selected_marker;
+    int level_editor_selected_property;
+    int level_editor_tool_selected;
+    int level_editor_drag_active;
+    int level_editor_drag_kind;
+    float level_editor_drag_x;
+    float level_editor_drag_y;
+    int level_editor_marker_count;
+    float level_editor_marker_x01[LEVEL_EDITOR_MAX_MARKERS];
+    float level_editor_marker_y01[LEVEL_EDITOR_MAX_MARKERS];
+    int level_editor_marker_kind[LEVEL_EDITOR_MAX_MARKERS];
+    float level_editor_marker_a[LEVEL_EDITOR_MAX_MARKERS];
+    float level_editor_marker_b[LEVEL_EDITOR_MAX_MARKERS];
+    float level_editor_marker_c[LEVEL_EDITOR_MAX_MARKERS];
+    float level_editor_marker_d[LEVEL_EDITOR_MAX_MARKERS];
 } render_metrics;
 
 typedef struct wormhole_line_vertex {
