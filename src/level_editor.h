@@ -7,6 +7,7 @@
 #define LEVEL_EDITOR_MAX_MARKERS 256
 #define LEVEL_EDITOR_NAME_CAP 64
 #define LEVEL_EDITOR_STATUS_CAP 128
+#define LEVEL_EDITOR_PATH_CAP 512
 
 enum level_editor_marker_kind {
     LEVEL_EDITOR_MARKER_EXIT = 0,
@@ -36,6 +37,7 @@ typedef struct level_editor_layout {
     vg_rect timeline_window;
     vg_rect load_button;
     vg_rect save_button;
+    vg_rect save_new_button;
     vg_rect name_box;
     vg_rect prev_button;
     vg_rect next_button;
@@ -45,6 +47,8 @@ typedef struct level_editor_layout {
 
 typedef struct level_editor_state {
     int level_style;
+    int level_render_style;
+    int level_wave_mode;
     char level_name[LEVEL_EDITOR_NAME_CAP];
     char status_text[LEVEL_EDITOR_STATUS_CAP];
     int entry_active;
@@ -58,6 +62,9 @@ typedef struct level_editor_state {
     int entity_drag_kind;
     float entity_drag_x;
     float entity_drag_y;
+    int dirty;
+    char source_path[LEVEL_EDITOR_PATH_CAP];
+    char source_text[16384];
     int marker_count;
     level_editor_marker markers[LEVEL_EDITOR_MAX_MARKERS];
 } level_editor_state;
@@ -74,5 +81,7 @@ void level_editor_select_property(level_editor_state* s, int delta);
 void level_editor_adjust_selected_property(level_editor_state* s, float delta);
 const char* level_editor_selected_property_name(const level_editor_state* s);
 int level_editor_cycle_level(level_editor_state* s, const leveldef_db* db, int delta);
+int level_editor_save_current(level_editor_state* s, const leveldef_db* db, char* out_path, size_t out_path_cap);
+int level_editor_save_new(level_editor_state* s, const leveldef_db* db, char* out_path, size_t out_path_cap);
 
 #endif

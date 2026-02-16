@@ -1001,6 +1001,95 @@ static void spawn_wave_kamikaze(game_state* g, int wave_id) {
     }
 }
 
+static void spawn_curated_enemy(game_state* g, int wave_id, const leveldef_curated_enemy* ce) {
+    const leveldef_level* lvl;
+    const float su = gameplay_ui_scale(g);
+    int count;
+    if (!g || !ce) {
+        return;
+    }
+    ensure_leveldef_loaded();
+    lvl = leveldef_get_level(&g_leveldef, g->level_style);
+    if (!lvl) {
+        return;
+    }
+
+    count = (int)lroundf(fmaxf(1.0f, ce->a));
+    if (count > 24) {
+        count = 24;
+    }
+
+    if (ce->kind == 5) {
+        const int profile_id = lvl->default_boid_profile;
+        const leveldef_boid_profile* p = leveldef_get_boid_profile(&g_leveldef, profile_id);
+        if (!p) {
+            return;
+        }
+        for (int i = 0; i < count; ++i) {
+            enemy* e = spawn_enemy_common(g);
+            if (!e) {
+                break;
+            }
+            e->archetype = ENEMY_ARCH_SWARM;
+            e->state = ENEMY_STATE_SWARM;
+            enemy_assign_combat_loadout(g, e);
+            e->wave_id = wave_id;
+            e->slot_index = i;
+            e->b.x = g->world_w * ce->x01 + frands1() * 14.0f * su;
+            e->b.y = g->world_h * ce->y01 + frands1() * 20.0f * su;
+            e->home_y = g->world_h * ce->y01;
+            e->max_speed = ((ce->b > 0.0f) ? ce->b : p->max_speed) * su;
+            e->accel = (ce->c > 0.0f) ? ce->c : p->accel;
+            e->radius = (p->radius_min + frand01() * fmaxf(p->radius_max - p->radius_min, 0.0f)) * su;
+            e->swarm_sep_w = p->sep_w;
+            e->swarm_ali_w = p->ali_w;
+            e->swarm_coh_w = p->coh_w;
+            e->swarm_avoid_w = p->avoid_w;
+            e->swarm_goal_w = p->goal_w;
+            e->swarm_sep_r = p->sep_r * su;
+            e->swarm_ali_r = p->ali_r * su;
+            e->swarm_coh_r = p->coh_r * su;
+            e->swarm_goal_amp = p->goal_amp * su;
+            e->swarm_goal_freq = p->goal_freq;
+            e->swarm_wander_w = p->wander_w;
+            e->swarm_wander_freq = p->wander_freq;
+            e->swarm_drag = p->steer_drag;
+        }
+        return;
+    }
+
+    for (int i = 0; i < count; ++i) {
+        enemy* e = spawn_enemy_common(g);
+        if (!e) {
+            break;
+        }
+        e->wave_id = wave_id;
+        e->slot_index = i;
+        e->b.x = g->world_w * ce->x01 + (float)i * 18.0f * su;
+        e->b.y = g->world_h * ce->y01 + frands1() * 10.0f * su;
+        enemy_assign_combat_loadout(g, e);
+
+        if (ce->kind == 4) {
+            e->archetype = ENEMY_ARCH_KAMIKAZE;
+            e->state = ENEMY_STATE_KAMIKAZE;
+            e->max_speed = ((ce->b > 0.0f) ? ce->b : lvl->kamikaze.max_speed) * su;
+            e->accel = (ce->c > 0.0f) ? ce->c : lvl->kamikaze.accel;
+            e->radius = (lvl->kamikaze.radius_min + frand01() * fmaxf(lvl->kamikaze.radius_max - lvl->kamikaze.radius_min, 0.0f)) * su;
+        } else {
+            e->archetype = ENEMY_ARCH_FORMATION;
+            e->state = ENEMY_STATE_FORMATION;
+            e->home_y = g->world_h * ce->y01;
+            e->b.y = e->home_y;
+            e->form_phase = (float)i * 0.4f;
+            e->form_amp = fmaxf(0.0f, ce->b) * su;
+            e->form_freq = (ce->kind == 3) ? lvl->v.form_freq : lvl->sine.form_freq;
+            e->break_delay_s = 0.8f + 0.14f * (float)i;
+            e->max_speed = ((ce->c > 0.0f) ? ce->c : ((ce->kind == 3) ? lvl->v.max_speed : lvl->sine.max_speed)) * su;
+            e->accel = (ce->kind == 3) ? lvl->v.accel : lvl->sine.accel;
+        }
+    }
+}
+
 static void spawn_next_wave(game_state* g) {
     const int wave_id = ++g->wave_id_alloc;
     const leveldef_level* lvl;
@@ -1023,6 +1112,26 @@ static void spawn_next_wave(game_state* g) {
             announce_wave(g, p->wave_name);
         }
         spawn_wave_swarm_profile(g, wave_id, profile_id);
+        g->wave_index += 1;
+        g->wave_cooldown_s = lvl->wave_cooldown_between_s;
+        return;
+    }
+    if (lvl && lvl->wave_mode == LEVELDEF_WAVES_CURATED) {
+        const leveldef_curated_enemy* ce;
+        if (lvl->curated_count <= 0) {
+            return;
+        }
+        ce = &lvl->curated[g->wave_index % lvl->curated_count];
+        if (ce->kind == 5) {
+            announce_wave(g, "curated boid contact");
+        } else if (ce->kind == 4) {
+            announce_wave(g, "curated kamikaze contact");
+        } else if (ce->kind == 3) {
+            announce_wave(g, "curated v wing");
+        } else {
+            announce_wave(g, "curated sine wing");
+        }
+        spawn_curated_enemy(g, wave_id, ce);
         g->wave_index += 1;
         g->wave_cooldown_s = lvl->wave_cooldown_between_s;
         return;

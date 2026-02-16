@@ -54,6 +54,18 @@ static int wave_mode_from_name(const char* name) {
     }
     if (strcmp(name, "normal") == 0) return LEVELDEF_WAVES_NORMAL;
     if (strcmp(name, "boid_only") == 0) return LEVELDEF_WAVES_BOID_ONLY;
+    if (strcmp(name, "curated") == 0) return LEVELDEF_WAVES_CURATED;
+    return -1;
+}
+
+static int curated_kind_from_name(const char* name) {
+    if (!name) {
+        return -1;
+    }
+    if (strcmp(name, "sine") == 0 || strcmp(name, "sine_snake") == 0) return 2;
+    if (strcmp(name, "v") == 0 || strcmp(name, "v_formation") == 0) return 3;
+    if (strcmp(name, "kamikaze") == 0) return 4;
+    if (strcmp(name, "boid") == 0 || strcmp(name, "swarm") == 0) return 5;
     return -1;
 }
 
@@ -193,6 +205,50 @@ static int parse_searchlight(leveldef_level* lvl, const char* value, FILE* log_o
     return 1;
 }
 
+static int parse_curated_enemy(leveldef_level* lvl, const char* value, FILE* log_out) {
+    char buf[320];
+    char* tok;
+    char* save = NULL;
+    const int expected = 6;
+    char* fields[6];
+    int i = 0;
+    leveldef_curated_enemy ce;
+
+    if (!lvl || !value || lvl->curated_count >= (int)(sizeof(lvl->curated) / sizeof(lvl->curated[0]))) {
+        return 0;
+    }
+    memset(&ce, 0, sizeof(ce));
+    strncpy(buf, value, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    tok = strtok_r(buf, ",", &save);
+    while (tok && i < expected) {
+        fields[i++] = trim(tok);
+        tok = strtok_r(NULL, ",", &save);
+    }
+    if (i != expected) {
+        if (log_out) {
+            fprintf(log_out, "leveldef: curated_enemy expects %d fields, got %d\n", expected, i);
+        }
+        return 0;
+    }
+
+    ce.kind = curated_kind_from_name(fields[0]);
+    ce.x01 = strtof(fields[1], NULL);
+    ce.y01 = strtof(fields[2], NULL);
+    ce.a = strtof(fields[3], NULL);
+    ce.b = strtof(fields[4], NULL);
+    ce.c = strtof(fields[5], NULL);
+    if (ce.kind < 0) {
+        if (log_out) {
+            fprintf(log_out, "leveldef: invalid curated_enemy kind '%s'\n", fields[0]);
+        }
+        return 0;
+    }
+    lvl->curated[lvl->curated_count++] = ce;
+    return 1;
+}
+
 static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out) {
     FILE* f;
     char line[640];
@@ -253,6 +309,7 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                     if (sid >= 0 && sid < LEVEL_STYLE_COUNT) {
                         cur_level = &db->levels[sid];
                         cur_level->searchlight_count = 0;
+                        cur_level->curated_count = 0;
                         cur_level->boid_cycle_count = 0;
                         cur_level->wave_cycle_count = 0;
                     } else if (log_out) {
@@ -401,6 +458,8 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_level->kamikaze.radius_max = strtof(v, NULL);
                     } else if (strcmp(k, "searchlight") == 0) {
                         (void)parse_searchlight(cur_level, v, log_out);
+                    } else if (strcmp(k, "curated_enemy") == 0) {
+                        (void)parse_curated_enemy(cur_level, v, log_out);
                     }
                 } else if (sec == SEC_PROFILE && cur_profile) {
                     if (strcmp(k, "wave_name") == 0) {
@@ -633,6 +692,13 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
             if (l->boid_cycle_count <= 0) {
                 if (log_out) {
                     fprintf(log_out, "leveldef: level %d boid_only missing boid_cycle\n", i);
+                }
+                ok = 0;
+            }
+        } else if (l->wave_mode == LEVELDEF_WAVES_CURATED) {
+            if (l->curated_count <= 0) {
+                if (log_out) {
+                    fprintf(log_out, "leveldef: level %d curated mode missing curated_enemy entries\n", i);
                 }
                 ok = 0;
             }

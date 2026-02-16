@@ -98,6 +98,8 @@ typedef struct render_metrics {
     const char* level_editor_status_text;
     float level_editor_timeline_01;
     float level_editor_level_length_screens;
+    int level_editor_wave_mode;
+    int level_editor_render_style;
     int level_editor_selected_marker;
     int level_editor_selected_property;
     int level_editor_tool_selected;

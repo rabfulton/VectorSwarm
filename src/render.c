@@ -1,6 +1,7 @@
 #include "render.h"
 
 #include "acoustics_ui_layout.h"
+#include "leveldef.h"
 #include "planetarium/commander_nick_dialogues.h"
 #include "vg_ui.h"
 #include "vg_ui_ext.h"
@@ -1880,8 +1881,8 @@ static vg_color level_editor_marker_color(const palette_theme* pal, int kind) {
     if (kind == 1) {
         return (vg_color){0.95f, 0.36f, 0.36f, 1.0f};
     }
-    if (kind == 5) {
-        return (vg_color){0.52f, 0.95f, 1.0f, 1.0f};
+    if (kind == 2 || kind == 3 || kind == 4 || kind == 5) {
+        return (vg_color){1.0f, 0.26f, 0.26f, 1.0f};
     }
     return pal->secondary;
 }
@@ -1943,6 +1944,20 @@ static const char* editor_wave_type_name(int kind) {
         case 5: return "BOID";
         default: return "UNKNOWN";
     }
+}
+
+static const char* editor_wave_mode_name(int mode) {
+    if (mode == LEVELDEF_WAVES_BOID_ONLY) return "BOID ONLY";
+    if (mode == LEVELDEF_WAVES_CURATED) return "CURATED";
+    return "NORMAL";
+}
+
+static const char* editor_render_style_name(int style) {
+    if (style == LEVEL_RENDER_CYLINDER) return "CYLINDER";
+    if (style == LEVEL_RENDER_DRIFTER) return "DRIFTER";
+    if (style == LEVEL_RENDER_DRIFTER_SHADED) return "DRIFTER SHADED";
+    if (style == LEVEL_RENDER_FOG) return "FOG";
+    return "DEFENDER";
 }
 
 static int editor_marker_properties_text(
@@ -2032,6 +2047,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     const vg_rect prev_btn = {controls_x, m + timeline_h - row_h, nav_w, row_h};
     const vg_rect next_btn = {name_box.x + name_box.w + name_gap, name_box.y, nav_w, row_h};
     const vg_rect load_btn = {controls_x, m, controls_w * 0.48f, row_h};
+    const vg_rect save_new_btn = {controls_x + controls_w * 0.52f, m + row_h + 8.0f * ui, controls_w * 0.48f, row_h};
     const vg_rect save_btn = {controls_x + controls_w * 0.52f, m, controls_w * 0.48f, row_h};
     const vg_rect swarm_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 54.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
     const vg_rect watcher_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 106.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
@@ -2080,6 +2096,8 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     r = vg_draw_button(ctx, load_btn, "LOAD", 11.0f * ui, &frame, &text, 0);
     if (r != VG_OK) return r;
     r = vg_draw_button(ctx, save_btn, "SAVE", 11.0f * ui, &frame, &text, 0);
+    if (r != VG_OK) return r;
+    r = vg_draw_button(ctx, save_new_btn, "SAVE NEW", 10.4f * ui, &frame, &text, 0);
     if (r != VG_OK) return r;
     r = vg_draw_button(ctx, prev_btn, "", 12.6f * ui, &frame, &text, 0);
     if (r != VG_OK) return r;
@@ -2228,28 +2246,37 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             } else if (kind == 5) {
                 vg_stroke_style mk2 = mk;
                 mk2.intensity *= 0.78f;
-                r = draw_editor_diamond(ctx, (vg_vec2){vx, vy}, 7.0f * ui * glyph_scale, &mk);
+                r = draw_editor_diamond(ctx, (vg_vec2){vx, vy}, 21.0f * ui * glyph_scale, &mk);
                 if (r != VG_OK) return r;
-                r = draw_editor_diamond(ctx, (vg_vec2){vx + 12.0f * ui, vy + 5.0f * ui}, 5.4f * ui * glyph_scale, &mk2);
+                r = draw_editor_diamond(ctx, (vg_vec2){vx + 22.0f * ui, vy + 9.0f * ui}, 16.2f * ui * glyph_scale, &mk2);
                 if (r != VG_OK) return r;
-                r = draw_editor_diamond(ctx, (vg_vec2){vx - 11.0f * ui, vy - 6.0f * ui}, 4.9f * ui * glyph_scale, &mk2);
+                r = draw_editor_diamond(ctx, (vg_vec2){vx - 20.0f * ui, vy - 11.0f * ui}, 14.7f * ui * glyph_scale, &mk2);
             } else {
-                r = draw_editor_diamond(ctx, (vg_vec2){vx, vy}, 6.5f * ui * glyph_scale, &mk);
+                r = draw_editor_diamond(ctx, (vg_vec2){vx, vy}, 19.5f * ui * glyph_scale, &mk);
             }
             if (r != VG_OK) return r;
         }
         {
-            /* Static player spawn representation (screen center-left baseline). */
-            const float px = viewport.x + viewport.w * 0.10f;
+            /* Player spawn representation anchored in world-space (not screen-space). */
+            const float su = fmaxf(0.5f, fminf(w / 1920.0f, h / 1080.0f));
+            const float len_screens = fmaxf(metrics->level_editor_level_length_screens, 1.0f);
+            const float start_screen = clampf(metrics->level_editor_timeline_01, 0.0f, 1.0f) * fmaxf(len_screens - 1.0f, 0.0f);
+            const float view_min = start_screen / len_screens;
+            const float view_max = (start_screen + 1.0f) / len_screens;
+            const float player_world_x = 170.0f * su;
+            const float player_x01 = clampf((player_world_x / fmaxf(w, 1.0f)) / len_screens, 0.0f, 1.0f);
+            const float px = viewport.x + ((player_x01 - view_min) / fmaxf(view_max - view_min, 1.0e-5f)) * viewport.w;
             const float py = viewport.y + viewport.h * 0.50f;
-            vg_stroke_style ps = frame;
-            ps.width_px = 1.5f * ui;
-            ps.intensity = 1.08f;
-            ps.color = pal.ship;
-            r = draw_editor_ship(ctx, (vg_vec2){px, py}, 0.85f * ui, &ps);
-            if (r != VG_OK) return r;
-            r = draw_text_vector_glow(ctx, "PLAYER", (vg_vec2){px - 20.0f * ui, py - 18.0f * ui}, 7.6f * ui, 0.45f * ui, &frame, &text);
-            if (r != VG_OK) return r;
+            if (px >= viewport.x - 18.0f * ui && px <= viewport.x + viewport.w + 18.0f * ui) {
+                vg_stroke_style ps = frame;
+                ps.width_px = 1.5f * ui;
+                ps.intensity = 1.08f;
+                ps.color = pal.ship;
+                r = draw_editor_ship(ctx, (vg_vec2){px, py}, 0.85f * ui, &ps);
+                if (r != VG_OK) return r;
+                r = draw_text_vector_glow(ctx, "PLAYER", (vg_vec2){px - 20.0f * ui, py - 18.0f * ui}, 7.6f * ui, 0.45f * ui, &frame, &text);
+                if (r != VG_OK) return r;
+            }
         }
     }
 
@@ -2285,14 +2312,10 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             }
         } else {
             char line1[96];
-            char line2[96];
-            char line3[96];
             char status_disp[128];
             editor_sanitize_label(metrics->level_editor_status_text ? metrics->level_editor_status_text : "ready", status_disp, sizeof(status_disp));
             snprintf(line0, sizeof(line0), "LEVEL PROPERTIES");
             snprintf(line1, sizeof(line1), "OBJECTS %d", metrics->level_editor_marker_count);
-            snprintf(line2, sizeof(line2), "LENGTH %.1f SCREENS", metrics->level_editor_level_length_screens);
-            snprintf(line3, sizeof(line3), "%s", status_disp);
             const float tx = props.x + 12.0f * ui;
             float ty = props.y + props.h - 42.0f * ui;
             r = draw_text_vector_glow(ctx, line0, (vg_vec2){tx, ty}, 11.2f * ui, 0.72f * ui, &frame, &text);
@@ -2300,11 +2323,29 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             ty -= 28.0f * ui;
             r = draw_text_vector_glow(ctx, line1, (vg_vec2){tx, ty}, 10.8f * ui, 0.68f * ui, &frame, &text);
             if (r != VG_OK) return r;
-            ty -= 26.0f * ui;
-            r = draw_text_vector_glow(ctx, line2, (vg_vec2){tx, ty}, 10.8f * ui, 0.68f * ui, &frame, &text);
-            if (r != VG_OK) return r;
-            ty -= 26.0f * ui;
-            r = draw_text_vector_glow(ctx, line3, (vg_vec2){tx, ty}, 10.8f * ui, 0.68f * ui, &frame, &text);
+            ty -= 30.0f * ui;
+            {
+                int selected_prop = metrics->level_editor_selected_property;
+                if (selected_prop < 0) selected_prop = 0;
+                if (selected_prop > 2) selected_prop = 2;
+                char row[96];
+                const vg_rect rb0 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
+                snprintf(row, sizeof(row), "WAVE MODE      %s", editor_wave_mode_name(metrics->level_editor_wave_mode));
+                r = vg_draw_button(ctx, rb0, row, 10.4f * ui, &frame, &text, (selected_prop == 0) ? 1 : 0);
+                if (r != VG_OK) return r;
+                ty -= 32.0f * ui;
+                const vg_rect rb1 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
+                snprintf(row, sizeof(row), "RENDER STYLE   %s", editor_render_style_name(metrics->level_editor_render_style));
+                r = vg_draw_button(ctx, rb1, row, 10.4f * ui, &frame, &text, (selected_prop == 1) ? 1 : 0);
+                if (r != VG_OK) return r;
+                ty -= 32.0f * ui;
+                const vg_rect rb2 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
+                snprintf(row, sizeof(row), "LENGTH         %.1f", metrics->level_editor_level_length_screens);
+                r = vg_draw_button(ctx, rb2, row, 10.4f * ui, &frame, &text, (selected_prop == 2) ? 1 : 0);
+                if (r != VG_OK) return r;
+            }
+            ty -= 34.0f * ui;
+            r = draw_text_vector_glow(ctx, status_disp, (vg_vec2){tx, ty}, 10.0f * ui, 0.58f * ui, &frame, &text);
             if (r != VG_OK) return r;
         }
     }

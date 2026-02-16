@@ -2787,7 +2787,21 @@ static int handle_level_editor_mouse(app* a, int mouse_x, int mouse_y, int mouse
             set_tty_message(a, "level editor: load failed");
         }
     } else if (action == 3) {
-        set_tty_message(a, "level editor: save not implemented");
+        const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
+        char saved_path[LEVEL_EDITOR_PATH_CAP];
+        if (level_editor_save_current(&a->level_editor, db, saved_path, sizeof(saved_path))) {
+            set_tty_message(a, "level editor: saved");
+        } else {
+            set_tty_message(a, a->level_editor.status_text[0] ? a->level_editor.status_text : "level editor: save failed");
+        }
+    } else if (action == 6) {
+        const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
+        char saved_path[LEVEL_EDITOR_PATH_CAP];
+        if (level_editor_save_new(&a->level_editor, db, saved_path, sizeof(saved_path))) {
+            set_tty_message(a, "level editor: saved new");
+        } else {
+            set_tty_message(a, a->level_editor.status_text[0] ? a->level_editor.status_text : "level editor: save new failed");
+        }
     } else if (action == 4) {
         const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
         if (level_editor_cycle_level(&a->level_editor, db, -1)) {
@@ -5409,6 +5423,8 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .level_editor_status_text = a->level_editor.status_text,
         .level_editor_timeline_01 = a->level_editor.timeline_01,
         .level_editor_level_length_screens = a->level_editor.level_length_screens,
+        .level_editor_wave_mode = a->level_editor.level_wave_mode,
+        .level_editor_render_style = a->level_editor.level_render_style,
         .level_editor_selected_marker = a->level_editor.selected_marker,
         .level_editor_selected_property = a->level_editor.selected_property,
         .level_editor_tool_selected = a->level_editor.entity_tool_selected,

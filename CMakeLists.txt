@@ -4,6 +4,7 @@ project(v_type C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
+enable_testing()
 
 add_subdirectory(DefconDraw)
 
@@ -147,3 +148,17 @@ if(GLSLANG_VALIDATOR AND XXD_EXECUTABLE)
 else()
     target_compile_definitions(v_type PRIVATE V_TYPE_HAS_TERRAIN_SHADERS=0)
 endif()
+
+add_executable(level_roundtrip_test
+    tests/level_roundtrip_test.c
+    src/level_editor.c
+    src/leveldef.c
+)
+target_include_directories(level_roundtrip_test PRIVATE
+    src
+    DefconDraw/include
+)
+target_compile_definitions(level_roundtrip_test PRIVATE VTYPE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_definitions(level_roundtrip_test PRIVATE _POSIX_C_SOURCE=200809L)
+target_link_libraries(level_roundtrip_test PRIVATE m)
+add_test(NAME level_roundtrip_test COMMAND $<TARGET_FILE:level_roundtrip_test>)

@@ -11,7 +11,8 @@
 
 enum leveldef_wave_mode {
     LEVELDEF_WAVES_NORMAL = 0,
-    LEVELDEF_WAVES_BOID_ONLY = 1
+    LEVELDEF_WAVES_BOID_ONLY = 1,
+    LEVELDEF_WAVES_CURATED = 2
 };
 
 enum leveldef_spawn_mode {
@@ -149,6 +150,15 @@ typedef struct leveldef_wave_kamikaze_tuning {
     float radius_max;
 } leveldef_wave_kamikaze_tuning;
 
+typedef struct leveldef_curated_enemy {
+    int kind; /* level editor marker kind: 2=sine,3=v,4=kamikaze,5=boid */
+    float x01; /* in screens (same unit as exit_x01) */
+    float y01; /* 0..1 on screen */
+    float a;
+    float b;
+    float c;
+} leveldef_curated_enemy;
+
 typedef struct leveldef_level {
     int render_style; /* enum level_render_style_id */
     int wave_mode;
@@ -167,6 +177,8 @@ typedef struct leveldef_level {
     leveldef_wave_sine_tuning sine;
     leveldef_wave_v_tuning v;
     leveldef_wave_kamikaze_tuning kamikaze;
+    int curated_count;
+    leveldef_curated_enemy curated[LEVELDEF_MAX_BOID_CYCLE * 8];
     int searchlight_count;
     leveldef_searchlight searchlights[MAX_SEARCHLIGHTS];
 } leveldef_level;

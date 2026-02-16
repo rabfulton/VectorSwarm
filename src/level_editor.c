@@ -2,7 +2,9 @@
 
 #include <ctype.h>
 #include <math.h>
+#include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static float clampf(float v, float lo, float hi) {
@@ -25,6 +27,98 @@ static int strieq(const char* a, const char* b) {
     return (*a == '\0' && *b == '\0');
 }
 
+static int stristarts(const char* s, const char* prefix) {
+    if (!s || !prefix) {
+        return 0;
+    }
+    while (*prefix) {
+        if (*s == '\0') {
+            return 0;
+        }
+        if (tolower((unsigned char)*s) != tolower((unsigned char)*prefix)) {
+            return 0;
+        }
+        ++s;
+        ++prefix;
+    }
+    return 1;
+}
+
+static int resolve_level_file_path(const char* level_name, char* out, size_t out_cap) {
+    static const char* dirs[] = {"data/levels", "../data/levels"};
+    char path[LEVEL_EDITOR_PATH_CAP];
+    if (!level_name || !out || out_cap == 0) {
+        return 0;
+    }
+    for (int i = 0; i < (int)(sizeof(dirs) / sizeof(dirs[0])); ++i) {
+        if (snprintf(path, sizeof(path), "%s/%s.cfg", dirs[i], level_name) >= (int)sizeof(path)) {
+            continue;
+        }
+        FILE* f = fopen(path, "rb");
+        if (f) {
+            fclose(f);
+            snprintf(out, out_cap, "%s", path);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int read_file_text(const char* path, char* out, size_t out_cap) {
+    if (!path || !out || out_cap == 0) {
+        return 0;
+    }
+    FILE* f = fopen(path, "rb");
+    if (!f) {
+        return 0;
+    }
+    const size_t n = fread(out, 1, out_cap - 1, f);
+    out[n] = '\0';
+    fclose(f);
+    return 1;
+}
+
+static int write_file_text(const char* path, const char* text) {
+    if (!path || !text) {
+        return 0;
+    }
+    FILE* f = fopen(path, "wb");
+    if (!f) {
+        return 0;
+    }
+    const size_t n = strlen(text);
+    const size_t w = fwrite(text, 1, n, f);
+    fclose(f);
+    return w == n;
+}
+
+static int path_exists(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (!f) {
+        return 0;
+    }
+    fclose(f);
+    return 1;
+}
+
+static int choose_levels_dir(char* out, size_t out_cap) {
+    static const char* dirs[] = {"../data/levels", "data/levels"};
+    char probe[LEVEL_EDITOR_PATH_CAP];
+    if (!out || out_cap == 0) {
+        return 0;
+    }
+    for (int i = 0; i < (int)(sizeof(dirs) / sizeof(dirs[0])); ++i) {
+        if (snprintf(probe, sizeof(probe), "%s/combat.cfg", dirs[i]) >= (int)sizeof(probe)) {
+            continue;
+        }
+        if (path_exists(probe)) {
+            snprintf(out, out_cap, "%s", dirs[i]);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int is_wave_kind(int kind) {
     return (kind == LEVEL_EDITOR_MARKER_WAVE_SINE ||
             kind == LEVEL_EDITOR_MARKER_WAVE_V ||
@@ -32,9 +126,391 @@ static int is_wave_kind(int kind) {
             kind == LEVEL_EDITOR_MARKER_BOID);
 }
 
-static int marker_property_count(const level_editor_state* s) {
-    if (!s || s->selected_marker < 0 || s->selected_marker >= s->marker_count) {
+static float marker_pick_radius01(int kind) {
+    if (kind == LEVEL_EDITOR_MARKER_BOID ||
+        kind == LEVEL_EDITOR_MARKER_WAVE_SINE ||
+        kind == LEVEL_EDITOR_MARKER_WAVE_V ||
+        kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
+        return 0.18f;
+    }
+    if (kind == LEVEL_EDITOR_MARKER_SEARCHLIGHT) {
+        return 0.12f;
+    }
+    if (kind == LEVEL_EDITOR_MARKER_EXIT) {
+        return 0.11f;
+    }
+    return 0.08f;
+}
+
+typedef struct wave_marker_ref {
+    float x01;
+    level_editor_marker marker;
+} wave_marker_ref;
+
+static int compare_wave_marker_ref(const void* a, const void* b) {
+    const wave_marker_ref* wa = (const wave_marker_ref*)a;
+    const wave_marker_ref* wb = (const wave_marker_ref*)b;
+    if (wa->x01 < wb->x01) return -1;
+    if (wa->x01 > wb->x01) return 1;
+    return 0;
+}
+
+static const char* style_header_name(int style) {
+    switch (style) {
+        case LEVEL_STYLE_DEFENDER: return "DEFENDER";
+        case LEVEL_STYLE_ENEMY_RADAR: return "ENEMY_RADAR";
+        case LEVEL_STYLE_EVENT_HORIZON: return "EVENT_HORIZON";
+        case LEVEL_STYLE_EVENT_HORIZON_LEGACY: return "EVENT_HORIZON_LEGACY";
+        case LEVEL_STYLE_HIGH_PLAINS_DRIFTER: return "HIGH_PLAINS_DRIFTER";
+        case LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2: return "HIGH_PLAINS_DRIFTER_2";
+        case LEVEL_STYLE_FOG_OF_WAR: return "FOG_OF_WAR";
+        default: return "UNKNOWN";
+    }
+}
+
+static const char* render_style_name(int render_style) {
+    switch (render_style) {
+        case LEVEL_RENDER_DEFENDER: return "defender";
+        case LEVEL_RENDER_CYLINDER: return "cylinder";
+        case LEVEL_RENDER_DRIFTER: return "drifter";
+        case LEVEL_RENDER_DRIFTER_SHADED: return "drifter_shaded";
+        case LEVEL_RENDER_FOG: return "fog";
+        default: return "defender";
+    }
+}
+
+static const char* wave_mode_name(int mode) {
+    if (mode == LEVELDEF_WAVES_BOID_ONLY) {
+        return "boid_only";
+    }
+    if (mode == LEVELDEF_WAVES_CURATED) {
+        return "curated";
+    }
+    return "normal";
+}
+
+static const char* spawn_mode_name(int mode) {
+    switch (mode) {
+        case LEVELDEF_SPAWN_SEQUENCED_CLEAR: return "sequenced_clear";
+        case LEVELDEF_SPAWN_TIMED: return "timed";
+        case LEVELDEF_SPAWN_TIMED_SEQUENCED: return "timed_sequenced";
+        default: return "sequenced_clear";
+    }
+}
+
+static const char* wave_pattern_name(int p) {
+    switch (p) {
+        case LEVELDEF_WAVE_SINE_SNAKE: return "sine_snake";
+        case LEVELDEF_WAVE_V_FORMATION: return "v_formation";
+        case LEVELDEF_WAVE_SWARM: return "swarm";
+        case LEVELDEF_WAVE_KAMIKAZE: return "kamikaze";
+        default: return "sine_snake";
+    }
+}
+
+static const char* searchlight_motion_name(int motion) {
+    switch (motion) {
+        case SEARCHLIGHT_MOTION_LINEAR: return "linear";
+        case SEARCHLIGHT_MOTION_SPIN: return "spin";
+        case SEARCHLIGHT_MOTION_PENDULUM: return "pendulum";
+        default: return "pendulum";
+    }
+}
+
+static const char* searchlight_source_name(int source) {
+    switch (source) {
+        case SEARCHLIGHT_SOURCE_ORB: return "orb";
+        case SEARCHLIGHT_SOURCE_DOME: return "dome";
+        default: return "dome";
+    }
+}
+
+static const char* curated_kind_name(int kind) {
+    if (kind == LEVEL_EDITOR_MARKER_WAVE_SINE) return "sine";
+    if (kind == LEVEL_EDITOR_MARKER_WAVE_V) return "v";
+    if (kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) return "kamikaze";
+    if (kind == LEVEL_EDITOR_MARKER_BOID) return "boid";
+    return "sine";
+}
+
+static const char* render_style_file_base(int render_style) {
+    switch (render_style) {
+        case LEVEL_RENDER_DEFENDER: return "level_defender";
+        case LEVEL_RENDER_CYLINDER: return "level_enemy_radar";
+        case LEVEL_RENDER_DRIFTER: return "level_high_plains_drifter";
+        case LEVEL_RENDER_DRIFTER_SHADED: return "level_high_plains_drifter_2";
+        case LEVEL_RENDER_FOG: return "level_fog_of_war";
+        default: return "level_defender";
+    }
+}
+
+static int appendf(char* out, size_t out_cap, size_t* used, const char* fmt, ...) {
+    int n = 0;
+    va_list ap;
+    if (!out || !used || *used >= out_cap) {
         return 0;
+    }
+    va_start(ap, fmt);
+    n = vsnprintf(out + *used, out_cap - *used, fmt, ap);
+    va_end(ap);
+    if (n < 0 || (size_t)n >= (out_cap - *used)) {
+        return 0;
+    }
+    *used += (size_t)n;
+    return 1;
+}
+
+static int build_level_serialized_text(const level_editor_state* s, const leveldef_db* db, char* out, size_t out_cap) {
+    size_t used = 0;
+    leveldef_level lvl;
+    int searchlight_n = 0;
+    int i = 0;
+    int found_exit = 0;
+    int wave_n = 0;
+    wave_marker_ref waves[LEVEL_EDITOR_MAX_MARKERS];
+    const leveldef_level* base = NULL;
+    const float level_len = fmaxf(s ? s->level_length_screens : 1.0f, 1.0f);
+
+    if (!s || !db || !out || out_cap == 0) {
+        return 0;
+    }
+    base = leveldef_get_level(db, s->level_style);
+    if (!base) {
+        return 0;
+    }
+    lvl = *base;
+    lvl.render_style = s->level_render_style;
+    lvl.wave_mode = s->level_wave_mode;
+
+    lvl.exit_enabled = 0;
+    for (i = 0; i < s->marker_count; ++i) {
+        const level_editor_marker* m = &s->markers[i];
+        if (m->kind == LEVEL_EDITOR_MARKER_EXIT && !found_exit) {
+            lvl.exit_enabled = 1;
+            lvl.exit_x01 = m->x01 * level_len;
+            lvl.exit_y01 = m->y01;
+            found_exit = 1;
+        }
+    }
+
+    lvl.searchlight_count = 0;
+    for (i = 0; i < s->marker_count && searchlight_n < MAX_SEARCHLIGHTS; ++i) {
+        const level_editor_marker* m = &s->markers[i];
+        leveldef_searchlight sl;
+        if (m->kind != LEVEL_EDITOR_MARKER_SEARCHLIGHT) {
+            continue;
+        }
+        if (searchlight_n < base->searchlight_count) {
+            sl = base->searchlights[searchlight_n];
+        } else if (base->searchlight_count > 0) {
+            sl = base->searchlights[base->searchlight_count - 1];
+        } else {
+            memset(&sl, 0, sizeof(sl));
+            sl.sweep_motion = SEARCHLIGHT_MOTION_PENDULUM;
+            sl.source_type = SEARCHLIGHT_SOURCE_DOME;
+            sl.source_radius = 14.0f;
+            sl.clear_grace_s = 2.0f;
+            sl.fire_interval_s = 0.08f;
+            sl.projectile_speed = 900.0f;
+            sl.projectile_ttl_s = 2.0f;
+            sl.projectile_radius = 3.2f;
+            sl.aim_jitter_deg = 1.0f;
+        }
+        sl.anchor_x01 = m->x01 * level_len;
+        sl.anchor_y01 = m->y01;
+        sl.length_h01 = m->a;
+        sl.half_angle_deg = m->b;
+        sl.sweep_speed = m->c;
+        sl.sweep_amplitude_deg = m->d;
+        lvl.searchlights[searchlight_n++] = sl;
+    }
+    lvl.searchlight_count = searchlight_n;
+
+    for (i = 0; i < s->marker_count; ++i) {
+        const level_editor_marker* m = &s->markers[i];
+        if (!is_wave_kind(m->kind) || wave_n >= LEVEL_EDITOR_MAX_MARKERS) {
+            continue;
+        }
+        waves[wave_n].x01 = m->x01;
+        waves[wave_n].marker = *m;
+        ++wave_n;
+    }
+    if (wave_n > 1) {
+        qsort(waves, (size_t)wave_n, sizeof(waves[0]), compare_wave_marker_ref);
+    }
+
+    if (lvl.wave_mode == LEVELDEF_WAVES_CURATED) {
+        int curated_n = 0;
+        for (i = 0; i < wave_n && curated_n < (int)(sizeof(lvl.curated) / sizeof(lvl.curated[0])); ++i) {
+            const level_editor_marker* m = &waves[i].marker;
+            if (!is_wave_kind(m->kind)) {
+                continue;
+            }
+            lvl.curated[curated_n].kind = m->kind;
+            lvl.curated[curated_n].x01 = m->x01 * level_len;
+            lvl.curated[curated_n].y01 = m->y01;
+            lvl.curated[curated_n].a = m->a;
+            lvl.curated[curated_n].b = m->b;
+            lvl.curated[curated_n].c = m->c;
+            ++curated_n;
+        }
+        lvl.curated_count = curated_n;
+    } else if (lvl.wave_mode == LEVELDEF_WAVES_BOID_ONLY) {
+        const int base_cycle_n = (base->boid_cycle_count > 0) ? base->boid_cycle_count : 1;
+        int boid_n = 0;
+        for (i = 0; i < wave_n && boid_n < LEVELDEF_MAX_BOID_CYCLE; ++i) {
+            if (waves[i].marker.kind != LEVEL_EDITOR_MARKER_BOID) {
+                continue;
+            }
+            lvl.boid_cycle[boid_n] = (base->boid_cycle_count > 0)
+                ? base->boid_cycle[boid_n % base_cycle_n]
+                : ((lvl.default_boid_profile >= 0) ? lvl.default_boid_profile : 0);
+            ++boid_n;
+        }
+        if (boid_n > 0) {
+            lvl.boid_cycle_count = boid_n;
+        }
+    } else {
+        int cycle_n = 0;
+        int idx = 0;
+        for (i = 0; i < wave_n && cycle_n < LEVELDEF_MAX_BOID_CYCLE; ++i) {
+            const level_editor_marker* m = &waves[i].marker;
+            if (m->kind == LEVEL_EDITOR_MARKER_BOID) {
+                lvl.wave_cycle[cycle_n++] = LEVELDEF_WAVE_SWARM;
+                continue;
+            }
+            if (m->kind == LEVEL_EDITOR_MARKER_WAVE_SINE) {
+                lvl.wave_cycle[cycle_n++] = LEVELDEF_WAVE_SINE_SNAKE;
+            } else if (m->kind == LEVEL_EDITOR_MARKER_WAVE_V) {
+                lvl.wave_cycle[cycle_n++] = LEVELDEF_WAVE_V_FORMATION;
+            } else if (m->kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
+                lvl.wave_cycle[cycle_n++] = LEVELDEF_WAVE_KAMIKAZE;
+            }
+        }
+        if (cycle_n > 0) {
+            lvl.wave_cycle_count = cycle_n;
+        }
+        for (i = 0; i < lvl.wave_cycle_count; ++i) {
+            const level_editor_marker* m = &waves[i].marker;
+            const float slots = (float)((lvl.wave_cycle_count > 0) ? lvl.wave_cycle_count : 1);
+            const float wave_base = ((float)i / slots) * (level_len - 1.0f);
+            const float local_start = m->x01 * level_len - wave_base;
+            if (m->kind == LEVEL_EDITOR_MARKER_WAVE_SINE) {
+                lvl.sine.start_x01 = local_start;
+                lvl.sine.home_y01 = m->y01;
+                lvl.sine.count = (int)lroundf(m->a);
+                lvl.sine.form_amp = m->b;
+                lvl.sine.max_speed = m->c;
+            } else if (m->kind == LEVEL_EDITOR_MARKER_WAVE_V) {
+                lvl.v.start_x01 = local_start;
+                lvl.v.home_y01 = m->y01;
+                lvl.v.count = (int)lroundf(m->a);
+                lvl.v.form_amp = m->b;
+                lvl.v.max_speed = m->c;
+            } else if (m->kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
+                lvl.kamikaze.start_x01 = local_start;
+                lvl.kamikaze.count = (int)lroundf(m->a);
+                lvl.kamikaze.max_speed = m->b;
+                lvl.kamikaze.accel = m->c;
+            }
+        }
+    }
+
+    if (!appendf(out, out_cap, &used, "# LevelDef v1\n")) return 0;
+    if (!appendf(out, out_cap, &used, "# wave_cycle tokens: sine_snake,v_formation,swarm,kamikaze\n")) return 0;
+    if (!appendf(out, out_cap, &used, "# searchlight CSV fields:\n")) return 0;
+    if (!appendf(out, out_cap, &used, "# anchor_x01,anchor_y01,length_h01,half_angle_deg,sweep_center_deg,sweep_amplitude_deg,\n")) return 0;
+    if (!appendf(out, out_cap, &used, "# sweep_speed,sweep_phase_deg,sweep_motion,source_type,source_radius,clear_grace_s,\n")) return 0;
+    if (!appendf(out, out_cap, &used, "# fire_interval_s,projectile_speed,projectile_ttl_s,projectile_radius,aim_jitter_deg\n")) return 0;
+    if (!appendf(out, out_cap, &used, "[level %s]\n", style_header_name(s->level_style))) return 0;
+    if (!appendf(out, out_cap, &used, "render_style=%s\n", render_style_name(lvl.render_style))) return 0;
+    if (!appendf(out, out_cap, &used, "wave_mode=%s\n", wave_mode_name(lvl.wave_mode))) return 0;
+    if (!appendf(out, out_cap, &used, "spawn_mode=%s\n", spawn_mode_name(lvl.spawn_mode))) return 0;
+    if (!appendf(out, out_cap, &used, "spawn_interval_s=%.3f\n", lvl.spawn_interval_s)) return 0;
+    if (lvl.default_boid_profile >= 0 && lvl.default_boid_profile < db->profile_count) {
+        if (!appendf(out, out_cap, &used, "default_boid_profile=%s\n", db->profiles[lvl.default_boid_profile].name)) return 0;
+    } else {
+        if (!appendf(out, out_cap, &used, "default_boid_profile=FISH\n")) return 0;
+    }
+    if (!appendf(out, out_cap, &used, "wave_cooldown_initial_s=%.3f\n", lvl.wave_cooldown_initial_s)) return 0;
+    if (!appendf(out, out_cap, &used, "wave_cooldown_between_s=%.3f\n", lvl.wave_cooldown_between_s)) return 0;
+    if (!appendf(out, out_cap, &used, "exit_enabled=%d\n", lvl.exit_enabled ? 1 : 0)) return 0;
+    if (!appendf(out, out_cap, &used, "exit_x01=%.3f\n", lvl.exit_x01)) return 0;
+    if (!appendf(out, out_cap, &used, "exit_y01=%.3f\n", lvl.exit_y01)) return 0;
+
+    if (lvl.wave_mode == LEVELDEF_WAVES_BOID_ONLY) {
+        if (!appendf(out, out_cap, &used, "boid_cycle=")) return 0;
+        for (i = 0; i < lvl.boid_cycle_count; ++i) {
+            const int pid = lvl.boid_cycle[i];
+            const char* pname = (pid >= 0 && pid < db->profile_count) ? db->profiles[pid].name : "FISH";
+            if (!appendf(out, out_cap, &used, "%s%s", (i > 0) ? "," : "", pname)) return 0;
+        }
+        if (!appendf(out, out_cap, &used, "\n")) return 0;
+    } else if (lvl.wave_mode == LEVELDEF_WAVES_CURATED) {
+        for (i = 0; i < lvl.curated_count; ++i) {
+            const leveldef_curated_enemy* ce = &lvl.curated[i];
+            if (!appendf(out, out_cap, &used, "curated_enemy=%s,%.3f,%.3f,%.3f,%.3f,%.3f\n",
+                curated_kind_name(ce->kind), ce->x01, ce->y01, ce->a, ce->b, ce->c)) return 0;
+        }
+    } else {
+        if (!appendf(out, out_cap, &used, "wave_cycle=")) return 0;
+        for (i = 0; i < lvl.wave_cycle_count; ++i) {
+            if (!appendf(out, out_cap, &used, "%s%s", (i > 0) ? "," : "", wave_pattern_name(lvl.wave_cycle[i]))) return 0;
+        }
+        if (!appendf(out, out_cap, &used, "\n")) return 0;
+    }
+
+    if (!appendf(out, out_cap, &used, "sine.count=%d\n", lvl.sine.count)) return 0;
+    if (!appendf(out, out_cap, &used, "sine.start_x01=%.3f\n", lvl.sine.start_x01)) return 0;
+    if (!appendf(out, out_cap, &used, "sine.spacing_x=%.3f\n", lvl.sine.spacing_x)) return 0;
+    if (!appendf(out, out_cap, &used, "sine.home_y01=%.3f\n", lvl.sine.home_y01)) return 0;
+    if (!appendf(out, out_cap, &used, "sine.phase_step=%.3f\n", lvl.sine.phase_step)) return 0;
+    if (!appendf(out, out_cap, &used, "sine.form_amp=%.3f\n", lvl.sine.form_amp)) return 0;
+    if (!appendf(out, out_cap, &used, "sine.form_freq=%.3f\n", lvl.sine.form_freq)) return 0;
+    if (!appendf(out, out_cap, &used, "sine.break_delay_base=%.3f\n", lvl.sine.break_delay_base)) return 0;
+    if (!appendf(out, out_cap, &used, "sine.break_delay_step=%.3f\n", lvl.sine.break_delay_step)) return 0;
+    if (!appendf(out, out_cap, &used, "sine.max_speed=%.3f\n", lvl.sine.max_speed)) return 0;
+    if (!appendf(out, out_cap, &used, "sine.accel=%.3f\n", lvl.sine.accel)) return 0;
+    if (!appendf(out, out_cap, &used, "v.count=%d\n", lvl.v.count)) return 0;
+    if (!appendf(out, out_cap, &used, "v.start_x01=%.3f\n", lvl.v.start_x01)) return 0;
+    if (!appendf(out, out_cap, &used, "v.spacing_x=%.3f\n", lvl.v.spacing_x)) return 0;
+    if (!appendf(out, out_cap, &used, "v.home_y01=%.3f\n", lvl.v.home_y01)) return 0;
+    if (!appendf(out, out_cap, &used, "v.home_y_step=%.3f\n", lvl.v.home_y_step)) return 0;
+    if (!appendf(out, out_cap, &used, "v.phase_step=%.3f\n", lvl.v.phase_step)) return 0;
+    if (!appendf(out, out_cap, &used, "v.form_amp=%.3f\n", lvl.v.form_amp)) return 0;
+    if (!appendf(out, out_cap, &used, "v.form_freq=%.3f\n", lvl.v.form_freq)) return 0;
+    if (!appendf(out, out_cap, &used, "v.break_delay_min=%.3f\n", lvl.v.break_delay_min)) return 0;
+    if (!appendf(out, out_cap, &used, "v.break_delay_rand=%.3f\n", lvl.v.break_delay_rand)) return 0;
+    if (!appendf(out, out_cap, &used, "v.max_speed=%.3f\n", lvl.v.max_speed)) return 0;
+    if (!appendf(out, out_cap, &used, "v.accel=%.3f\n", lvl.v.accel)) return 0;
+    if (!appendf(out, out_cap, &used, "kamikaze.count=%d\n", lvl.kamikaze.count)) return 0;
+    if (!appendf(out, out_cap, &used, "kamikaze.start_x01=%.3f\n", lvl.kamikaze.start_x01)) return 0;
+    if (!appendf(out, out_cap, &used, "kamikaze.spacing_x=%.3f\n", lvl.kamikaze.spacing_x)) return 0;
+    if (!appendf(out, out_cap, &used, "kamikaze.y_margin=%.3f\n", lvl.kamikaze.y_margin)) return 0;
+    if (!appendf(out, out_cap, &used, "kamikaze.max_speed=%.3f\n", lvl.kamikaze.max_speed)) return 0;
+    if (!appendf(out, out_cap, &used, "kamikaze.accel=%.3f\n", lvl.kamikaze.accel)) return 0;
+    if (!appendf(out, out_cap, &used, "kamikaze.radius_min=%.3f\n", lvl.kamikaze.radius_min)) return 0;
+    if (!appendf(out, out_cap, &used, "kamikaze.radius_max=%.3f\n", lvl.kamikaze.radius_max)) return 0;
+
+    for (i = 0; i < lvl.searchlight_count; ++i) {
+        const leveldef_searchlight* sl = &lvl.searchlights[i];
+        if (!appendf(out, out_cap, &used,
+            "searchlight=%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%s,%s,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
+            sl->anchor_x01, sl->anchor_y01, sl->length_h01, sl->half_angle_deg, sl->sweep_center_deg,
+            sl->sweep_amplitude_deg, sl->sweep_speed, sl->sweep_phase_deg, searchlight_motion_name(sl->sweep_motion),
+            searchlight_source_name(sl->source_type), sl->source_radius, sl->clear_grace_s, sl->fire_interval_s,
+            sl->projectile_speed, sl->projectile_ttl_s, sl->projectile_radius, sl->aim_jitter_deg)) return 0;
+    }
+
+    return 1;
+}
+
+static int marker_property_count(const level_editor_state* s) {
+    if (!s) {
+        return 0;
+    }
+    if (s->selected_marker < 0 || s->selected_marker >= s->marker_count) {
+        return 3; /* WAVE MODE, RENDER STYLE, LENGTH */
     }
     const int kind = s->markers[s->selected_marker].kind;
     if (kind == LEVEL_EDITOR_MARKER_SEARCHLIGHT) {
@@ -83,6 +559,54 @@ static void remap_level_length(level_editor_state* s, float new_len, int selecte
     s->level_length_screens = new_len;
 }
 
+static void auto_pan_to_marker(level_editor_state* s, int marker_index) {
+    if (!s || marker_index < 0 || marker_index >= s->marker_count) {
+        return;
+    }
+    const float len = fmaxf(s->level_length_screens, 1.0f);
+    if (len <= 1.0f) {
+        s->timeline_01 = 0.0f;
+        return;
+    }
+
+    const float selected_screen = s->markers[marker_index].x01 * len;
+    const float span = len - 1.0f;
+    float start_screen = clampf(s->timeline_01, 0.0f, 1.0f) * span;
+
+    const float left_margin = 0.10f;
+    const float right_margin = 0.90f;
+    const float min_visible = start_screen + left_margin;
+    const float max_visible = start_screen + right_margin;
+
+    if (selected_screen < min_visible) {
+        start_screen = selected_screen - left_margin;
+    } else if (selected_screen > max_visible) {
+        start_screen = selected_screen - right_margin;
+    }
+
+    start_screen = clampf(start_screen, 0.0f, span);
+    s->timeline_01 = (span > 0.0f) ? (start_screen / span) : 0.0f;
+}
+
+static void move_marker_x(level_editor_state* s, int marker_index, float delta01) {
+    if (!s || marker_index < 0 || marker_index >= s->marker_count || delta01 == 0.0f) {
+        return;
+    }
+    level_editor_marker* m = &s->markers[marker_index];
+    const float old_len = fmaxf(s->level_length_screens, 1.0f);
+    float abs_x = m->x01 * old_len + delta01 * old_len;
+    if (abs_x < 0.0f) {
+        abs_x = 0.0f;
+    }
+    if (abs_x > old_len) {
+        const float new_len = ceilf(abs_x + 0.25f);
+        remap_level_length(s, new_len, marker_index, abs_x);
+    } else {
+        m->x01 = clampf(abs_x / old_len, 0.0f, 1.0f);
+    }
+    auto_pan_to_marker(s, marker_index);
+}
+
 static int level_style_from_name_loose(const char* name) {
     if (!name || !name[0]) {
         return -1;
@@ -106,6 +630,27 @@ static int level_style_from_name_loose(const char* name) {
         return LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2;
     }
     if (strieq(name, "fog_of_war") || strieq(name, "level_fog_of_war")) {
+        return LEVEL_STYLE_FOG_OF_WAR;
+    }
+    if (stristarts(name, "level_defender")) {
+        return LEVEL_STYLE_DEFENDER;
+    }
+    if (stristarts(name, "level_enemy_radar")) {
+        return LEVEL_STYLE_ENEMY_RADAR;
+    }
+    if (stristarts(name, "level_event_horizon_legacy")) {
+        return LEVEL_STYLE_EVENT_HORIZON_LEGACY;
+    }
+    if (stristarts(name, "level_event_horizon")) {
+        return LEVEL_STYLE_EVENT_HORIZON;
+    }
+    if (stristarts(name, "level_high_plains_drifter_2")) {
+        return LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2;
+    }
+    if (stristarts(name, "level_high_plains_drifter")) {
+        return LEVEL_STYLE_HIGH_PLAINS_DRIFTER;
+    }
+    if (stristarts(name, "level_fog_of_war")) {
         return LEVEL_STYLE_FOG_OF_WAR;
     }
     return -1;
@@ -205,6 +750,12 @@ void level_editor_compute_layout(float w, float h, level_editor_layout* out) {
         controls_w * 0.48f,
         row_h
     };
+    out->save_new_button = (vg_rect){
+        controls_x + controls_w * 0.52f,
+        m + row_h + 8.0f * ui,
+        controls_w * 0.48f,
+        row_h
+    };
     out->save_button = (vg_rect){
         controls_x + controls_w * 0.52f,
         m,
@@ -278,7 +829,24 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
     const int cycle_n = (lvl->wave_mode == LEVELDEF_WAVES_BOID_ONLY) ? lvl->boid_cycle_count : lvl->wave_cycle_count;
     const float slots = (float)((cycle_n > 0) ? cycle_n : 1);
 
-    if (lvl->wave_mode == LEVELDEF_WAVES_BOID_ONLY) {
+    if (lvl->wave_mode == LEVELDEF_WAVES_CURATED) {
+        for (int i = 0; i < lvl->curated_count; ++i) {
+            const leveldef_curated_enemy* ce = &lvl->curated[i];
+            if (!is_wave_kind(ce->kind)) {
+                continue;
+            }
+            push_marker(
+                s,
+                ce->kind,
+                ce->x01 / fmaxf(s->level_length_screens, 1.0f),
+                ce->y01,
+                ce->a,
+                ce->b,
+                ce->c,
+                0.0f
+            );
+        }
+    } else if (lvl->wave_mode == LEVELDEF_WAVES_BOID_ONLY) {
         for (int i = 0; i < lvl->boid_cycle_count; ++i) {
             const int pid = lvl->boid_cycle[i];
             const leveldef_boid_profile* p = leveldef_get_boid_profile(db, pid);
@@ -315,6 +883,8 @@ void level_editor_init(level_editor_state* s) {
     }
     memset(s, 0, sizeof(*s));
     s->level_style = LEVEL_STYLE_DEFENDER;
+    s->level_render_style = LEVEL_RENDER_DEFENDER;
+    s->level_wave_mode = LEVELDEF_WAVES_NORMAL;
     snprintf(s->level_name, sizeof(s->level_name), "%s", level_style_name(s->level_style));
     snprintf(s->status_text, sizeof(s->status_text), "ready");
     s->entry_active = 1;
@@ -328,6 +898,9 @@ void level_editor_init(level_editor_state* s) {
     s->entity_drag_kind = 0;
     s->entity_drag_x = 0.0f;
     s->entity_drag_y = 0.0f;
+    s->dirty = 0;
+    s->source_path[0] = '\0';
+    s->source_text[0] = '\0';
 }
 
 int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, const char* name) {
@@ -345,10 +918,24 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
 
     {
         const leveldef_level* lvl = leveldef_get_level(db, style);
-        const int cycle_n = lvl ? ((lvl->wave_mode == LEVELDEF_WAVES_BOID_ONLY) ? lvl->boid_cycle_count : lvl->wave_cycle_count) : 0;
-        s->level_length_screens = fmaxf(8.0f, 6.0f + (float)cycle_n * 1.2f);
+        const int cycle_n = lvl ? ((lvl->wave_mode == LEVELDEF_WAVES_BOID_ONLY) ? lvl->boid_cycle_count :
+                                   (lvl->wave_mode == LEVELDEF_WAVES_CURATED) ? lvl->curated_count :
+                                   lvl->wave_cycle_count) : 0;
+        const float cycle_len = fmaxf(8.0f, 6.0f + (float)cycle_n * 1.2f);
+        const float data_len = lvl ? fmaxf(1.0f, lvl->exit_x01 + 0.75f) : cycle_len;
+        s->level_length_screens = fmaxf(cycle_len, data_len);
+        if (lvl) {
+            s->level_render_style = lvl->render_style;
+            s->level_wave_mode = lvl->wave_mode;
+        }
     }
     build_markers(s, db, style);
+    s->dirty = 0;
+    s->source_path[0] = '\0';
+    s->source_text[0] = '\0';
+    if (resolve_level_file_path(s->level_name, s->source_path, sizeof(s->source_path))) {
+        (void)read_file_text(s->source_path, s->source_text, sizeof(s->source_text));
+    }
     snprintf(s->status_text, sizeof(s->status_text), "loaded %s (%d objects)", s->level_name, s->marker_count);
     return 1;
 }
@@ -405,6 +992,7 @@ static void add_marker_at_view(
     }
     s->selected_marker = s->marker_count - 1;
     s->selected_property = 0;
+    s->dirty = 1;
 }
 
 int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_y, float w, float h, int mouse_down, int mouse_pressed) {
@@ -431,6 +1019,10 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
         if (point_in_rect(mouse_x, mouse_y, l.save_button)) {
             s->entry_active = 0;
             return 3;
+        }
+        if (point_in_rect(mouse_x, mouse_y, l.save_new_button)) {
+            s->entry_active = 0;
+            return 6;
         }
         if (point_in_rect(mouse_x, mouse_y, l.prev_button)) {
             s->entry_active = 0;
@@ -484,7 +1076,12 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
                     best = i;
                 }
             }
-            if (best >= 0 && best_d2 < 0.006f) {
+            float pick_d2 = 0.006f;
+            if (best >= 0) {
+                const float r = marker_pick_radius01(s->markers[best].kind);
+                pick_d2 = r * r;
+            }
+            if (best >= 0 && best_d2 < pick_d2) {
                 s->selected_marker = best;
             } else {
                 if (s->entity_tool_selected == LEVEL_EDITOR_MARKER_BOID || s->entity_tool_selected == LEVEL_EDITOR_MARKER_SEARCHLIGHT) {
@@ -570,10 +1167,9 @@ const char* level_editor_selected_property_name(const level_editor_state* s) {
 }
 
 void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
-    if (!s || s->selected_marker < 0 || s->selected_marker >= s->marker_count || delta == 0.0f) {
+    if (!s || delta == 0.0f) {
         return;
     }
-    level_editor_marker* m = &s->markers[s->selected_marker];
     const int prop_count = marker_property_count(s);
     if (prop_count <= 0) {
         return;
@@ -584,21 +1180,44 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
     if (s->selected_property >= prop_count) {
         s->selected_property = prop_count - 1;
     }
+    if (s->selected_marker < 0 || s->selected_marker >= s->marker_count) {
+        switch (s->selected_property) {
+            case 0: {
+                const int dir = (delta >= 0.0f) ? 1 : -1;
+                const int n = 3;
+                int m = s->level_wave_mode;
+                if (m < 0 || m >= n) {
+                    m = 0;
+                }
+                s->level_wave_mode = (m + dir + n) % n;
+            } break;
+            case 1: {
+                const int dir = (delta >= 0.0f) ? 1 : -1;
+                const int n = 5;
+                int r = s->level_render_style;
+                if (r < 0 || r >= n) {
+                    r = LEVEL_RENDER_DEFENDER;
+                }
+                s->level_render_style = (r + dir + n) % n;
+            } break;
+            case 2:
+                s->level_length_screens = clampf(
+                    s->level_length_screens + delta * 20.0f,
+                    1.0f,
+                    400.0f
+                );
+                break;
+            default:
+                break;
+        }
+        s->dirty = 1;
+        return;
+    }
+    level_editor_marker* m = &s->markers[s->selected_marker];
 
     if (m->kind == LEVEL_EDITOR_MARKER_SEARCHLIGHT) {
         switch (s->selected_property) {
-            case 0: {
-                const float old_len = fmaxf(s->level_length_screens, 1.0f);
-                float abs_x = m->x01 * old_len + delta * old_len;
-                if (abs_x < 0.0f) {
-                    abs_x = 0.0f;
-                }
-                float new_len = old_len;
-                if (abs_x > old_len) {
-                    new_len = ceilf(abs_x + 0.25f);
-                }
-                remap_level_length(s, new_len, s->selected_marker, abs_x);
-            } break;
+            case 0: move_marker_x(s, s->selected_marker, delta); break;
             case 1: m->y01 = clampf(m->y01 + delta, 0.0f, 1.0f); break;
             case 2: m->a += delta; break;
             case 3: m->b += delta * 20.0f; break;
@@ -606,26 +1225,17 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             case 5: m->d += delta * 20.0f; break;
             default: break;
         }
+        s->dirty = 1;
         return;
     }
 
     if (m->kind == LEVEL_EDITOR_MARKER_EXIT) {
         switch (s->selected_property) {
-            case 0: {
-                const float old_len = fmaxf(s->level_length_screens, 1.0f);
-                float abs_x = m->x01 * old_len + delta * old_len;
-                if (abs_x < 0.0f) {
-                    abs_x = 0.0f;
-                }
-                float new_len = old_len;
-                if (abs_x > old_len) {
-                    new_len = ceilf(abs_x + 0.25f);
-                }
-                remap_level_length(s, new_len, s->selected_marker, abs_x);
-            } break;
+            case 0: move_marker_x(s, s->selected_marker, delta); break;
             case 1: m->y01 = clampf(m->y01 + delta, 0.0f, 1.0f); break;
             default: break;
         }
+        s->dirty = 1;
         return;
     }
 
@@ -634,24 +1244,14 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             case 0:
                 m->kind = cycle_wave_kind(m->kind, (delta >= 0.0f) ? 1 : -1);
                 break;
-            case 1: {
-                const float old_len = fmaxf(s->level_length_screens, 1.0f);
-                float abs_x = m->x01 * old_len + delta * old_len;
-                if (abs_x < 0.0f) {
-                    abs_x = 0.0f;
-                }
-                float new_len = old_len;
-                if (abs_x > old_len) {
-                    new_len = ceilf(abs_x + 0.25f);
-                }
-                remap_level_length(s, new_len, s->selected_marker, abs_x);
-            } break;
+            case 1: move_marker_x(s, s->selected_marker, delta); break;
             case 2: m->y01 = clampf(m->y01 + delta, 0.0f, 1.0f); break;
             case 3: m->a += delta * 80.0f; break;
             case 4: m->b += delta * 30.0f; break;
             case 5: m->c += delta * 30.0f; break;
             default: break;
         }
+        s->dirty = 1;
         return;
     }
 }
@@ -670,4 +1270,103 @@ int level_editor_cycle_level(level_editor_state* s, const leveldef_db* db, int d
     }
     style = (style + delta + n) % n;
     return level_editor_load_by_name(s, db, level_style_name(style));
+}
+
+int level_editor_save_current(level_editor_state* s, const leveldef_db* db, char* out_path, size_t out_path_cap) {
+    (void)db;
+    if (!s) {
+        return 0;
+    }
+    if (out_path && out_path_cap > 0) {
+        out_path[0] = '\0';
+    }
+
+    if (s->source_path[0] == '\0') {
+        if (!resolve_level_file_path(s->level_name, s->source_path, sizeof(s->source_path))) {
+            snprintf(s->status_text, sizeof(s->status_text), "save failed: level file not found");
+            return 0;
+        }
+    }
+    if (s->source_text[0] == '\0') {
+        if (!read_file_text(s->source_path, s->source_text, sizeof(s->source_text))) {
+            snprintf(s->status_text, sizeof(s->status_text), "save failed: read source");
+            return 0;
+        }
+    }
+    if (s->dirty) {
+        char serialized[16384];
+        if (!build_level_serialized_text(s, db, serialized, sizeof(serialized))) {
+            snprintf(s->status_text, sizeof(s->status_text), "save failed: serialize");
+            return 0;
+        }
+        if (!write_file_text(s->source_path, serialized)) {
+            snprintf(s->status_text, sizeof(s->status_text), "save failed: write");
+            return 0;
+        }
+        snprintf(s->source_text, sizeof(s->source_text), "%s", serialized);
+        s->dirty = 0;
+    } else if (!write_file_text(s->source_path, s->source_text)) {
+        snprintf(s->status_text, sizeof(s->status_text), "save failed: write");
+        return 0;
+    }
+    if (out_path && out_path_cap > 0) {
+        snprintf(out_path, out_path_cap, "%s", s->source_path);
+    }
+    snprintf(s->status_text, sizeof(s->status_text), "saved %s", s->level_name);
+    return 1;
+}
+
+int level_editor_save_new(level_editor_state* s, const leveldef_db* db, char* out_path, size_t out_path_cap) {
+    char dir[LEVEL_EDITOR_PATH_CAP];
+    char serialized[16384];
+    char path[LEVEL_EDITOR_PATH_CAP];
+    char level_name[LEVEL_EDITOR_NAME_CAP];
+    const char* base;
+    int next = 1;
+
+    if (!s || !db) {
+        return 0;
+    }
+    if (out_path && out_path_cap > 0) {
+        out_path[0] = '\0';
+    }
+    if (!choose_levels_dir(dir, sizeof(dir))) {
+        snprintf(s->status_text, sizeof(s->status_text), "save new failed: levels dir not found");
+        return 0;
+    }
+    if (!build_level_serialized_text(s, db, serialized, sizeof(serialized))) {
+        snprintf(s->status_text, sizeof(s->status_text), "save new failed: serialize");
+        return 0;
+    }
+
+    base = render_style_file_base(s->level_render_style);
+    for (next = 1; next <= 999; ++next) {
+        if (snprintf(level_name, sizeof(level_name), "%s_%02d", base, next) >= (int)sizeof(level_name)) {
+            continue;
+        }
+        if (snprintf(path, sizeof(path), "%s/%s.cfg", dir, level_name) >= (int)sizeof(path)) {
+            continue;
+        }
+        if (!path_exists(path)) {
+            break;
+        }
+    }
+    if (next > 999) {
+        snprintf(s->status_text, sizeof(s->status_text), "save new failed: no free slot");
+        return 0;
+    }
+    if (!write_file_text(path, serialized)) {
+        snprintf(s->status_text, sizeof(s->status_text), "save new failed: write");
+        return 0;
+    }
+
+    snprintf(s->level_name, sizeof(s->level_name), "%s", level_name);
+    snprintf(s->source_path, sizeof(s->source_path), "%s", path);
+    snprintf(s->source_text, sizeof(s->source_text), "%s", serialized);
+    s->dirty = 0;
+    if (out_path && out_path_cap > 0) {
+        snprintf(out_path, out_path_cap, "%s", path);
+    }
+    snprintf(s->status_text, sizeof(s->status_text), "saved new %s", level_name);
+    return 1;
 }
