@@ -4404,6 +4404,33 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             }
         }
 
+        for (size_t i = 0; i < MAX_ENEMY_DEBRIS; ++i) {
+            const enemy_debris* dbr = &g->debris[i];
+            if (!dbr->active || dbr->alpha <= 0.01f) {
+                continue;
+            }
+            const float c = cosf(dbr->angle);
+            const float s = sinf(dbr->angle);
+            const float hx = c * dbr->half_len;
+            const float hy = s * dbr->half_len;
+            float d0 = 0.0f;
+            float d1 = 0.0f;
+            const vg_vec2 a = project_cylinder_point(g, dbr->b.x - hx, dbr->b.y - hy, &d0);
+            const vg_vec2 b = project_cylinder_point(g, dbr->b.x + hx, dbr->b.y + hy, &d1);
+            const float depth = 0.5f * (d0 + d1);
+            vg_stroke_style ds = enemy_style;
+            ds.width_px *= 0.72f + depth * 0.90f;
+            ds.intensity *= (0.26f + depth * 0.86f) * dbr->alpha;
+            ds.color.a *= dbr->alpha * (0.24f + depth * 0.82f);
+            {
+                const vg_vec2 seg[] = {a, b};
+                r = vg_draw_polyline(ctx, seg, 2, &ds, 0);
+            }
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+
         for (size_t i = 0; i < MAX_ENEMIES; ++i) {
             if (!g->enemies[i].active) {
                 continue;
@@ -4753,6 +4780,30 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         es.width_px *= 0.80f;
         es.intensity *= 0.95f;
         r = vg_draw_polyline(ctx, bolt, 2, &es, 0);
+        if (r != VG_OK) {
+            (void)vg_transform_pop(ctx);
+            return r;
+        }
+    }
+
+    for (size_t i = 0; i < MAX_ENEMY_DEBRIS; ++i) {
+        const enemy_debris* dbr = &g->debris[i];
+        if (!dbr->active || dbr->alpha <= 0.01f) {
+            continue;
+        }
+        const float c = cosf(dbr->angle);
+        const float s = sinf(dbr->angle);
+        const float hx = c * dbr->half_len;
+        const float hy = s * dbr->half_len;
+        const vg_vec2 seg[] = {
+            {dbr->b.x - hx, dbr->b.y - hy},
+            {dbr->b.x + hx, dbr->b.y + hy}
+        };
+        vg_stroke_style ds = enemy_style;
+        ds.width_px *= 0.90f;
+        ds.intensity *= 0.92f * dbr->alpha;
+        ds.color.a *= dbr->alpha;
+        r = vg_draw_polyline(ctx, seg, 2, &ds, 0);
         if (r != VG_OK) {
             (void)vg_transform_pop(ctx);
             return r;

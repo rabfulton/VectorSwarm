@@ -9,6 +9,7 @@
 #define MAX_ENEMY_BULLETS 512
 #define MAX_ENEMIES 64
 #define MAX_PARTICLES 1024
+#define MAX_ENEMY_DEBRIS 512
 #define MAX_AUDIO_EVENTS 64
 #define MAX_SEARCHLIGHTS 4
 #define MAX_CURATED_RUNTIME 128
@@ -92,9 +93,11 @@ typedef struct enemy {
     float swarm_coh_r;
     float swarm_goal_amp;
     float swarm_goal_freq;
+    float swarm_goal_dir;
     float swarm_wander_w;
     float swarm_wander_freq;
     float swarm_drag;
+    float lane_dir;
     float home_y;
     int armed;
     int weapon_id;
@@ -178,6 +181,17 @@ typedef struct particle {
     float a;
 } particle;
 
+typedef struct enemy_debris {
+    int active;
+    body b;
+    float half_len;
+    float angle;
+    float spin_rate;
+    float age_s;
+    float life_s;
+    float alpha;
+} enemy_debris;
+
 typedef struct game_input {
     int left;
     int right;
@@ -222,6 +236,7 @@ typedef struct game_state {
     enemy_bullet enemy_bullets[MAX_ENEMY_BULLETS];
     enemy enemies[MAX_ENEMIES];
     particle particles[MAX_PARTICLES];
+    enemy_debris debris[MAX_ENEMY_DEBRIS];
     game_audio_event audio_events[MAX_AUDIO_EVENTS];
     searchlight searchlights[MAX_SEARCHLIGHTS];
     int searchlight_count;
