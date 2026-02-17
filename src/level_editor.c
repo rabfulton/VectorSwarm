@@ -972,7 +972,11 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
         return 0;
     }
     s->level_style = style;
-    snprintf(s->level_name, sizeof(s->level_name), "%s", level_style_name(style));
+    if (name && name[0] != '\0') {
+        snprintf(s->level_name, sizeof(s->level_name), "%s", name);
+    } else {
+        snprintf(s->level_name, sizeof(s->level_name), "%s", level_style_name(style));
+    }
     s->timeline_01 = 0.0f;
 
     {

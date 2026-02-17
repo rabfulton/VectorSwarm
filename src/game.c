@@ -1,6 +1,7 @@
 #include "game.h"
 #include "leveldef.h"
 
+#include <dirent.h>
 #include <math.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -78,6 +79,123 @@ static float lerpf(float a, float b, float t) {
 
 static leveldef_db g_leveldef;
 static int g_leveldef_ready = 0;
+static char g_level_dir[256];
+
+#define MAX_DISCOVERED_LEVELS 128
+typedef struct discovered_level {
+    char name[64];
+    int style_hint;
+    leveldef_level level;
+} discovered_level;
+static discovered_level g_levels[MAX_DISCOVERED_LEVELS];
+static int g_level_count = 0;
+
+static int strieq(const char* a, const char* b) {
+    if (!a || !b) {
+        return 0;
+    }
+    while (*a && *b) {
+        char ca = *a;
+        char cb = *b;
+        if (ca >= 'A' && ca <= 'Z') ca = (char)(ca - 'A' + 'a');
+        if (cb >= 'A' && cb <= 'Z') cb = (char)(cb - 'A' + 'a');
+        if (ca != cb) {
+            return 0;
+        }
+        ++a;
+        ++b;
+    }
+    return (*a == '\0' && *b == '\0');
+}
+
+static int has_prefix(const char* s, const char* prefix) {
+    if (!s || !prefix) return 0;
+    while (*prefix) {
+        if (*s++ != *prefix++) return 0;
+    }
+    return 1;
+}
+
+static int has_suffix(const char* s, const char* suffix) {
+    size_t ls, lx;
+    if (!s || !suffix) return 0;
+    ls = strlen(s);
+    lx = strlen(suffix);
+    if (ls < lx) return 0;
+    return strcmp(s + ls - lx, suffix) == 0;
+}
+
+static int cmp_strptr(const void* a, const void* b) {
+    const char* sa = *(const char* const*)a;
+    const char* sb = *(const char* const*)b;
+    return strcmp(sa, sb);
+}
+
+static int discover_levels_from_dir(const char* dir_path) {
+    DIR* d = NULL;
+    struct dirent* de = NULL;
+    char names[MAX_DISCOVERED_LEVELS][64];
+    const char* ordered[MAX_DISCOVERED_LEVELS];
+    int file_n = 0;
+    int out_n = 0;
+    if (!dir_path || !dir_path[0]) {
+        return 0;
+    }
+    d = opendir(dir_path);
+    if (!d) {
+        return 0;
+    }
+    while ((de = readdir(d)) != NULL) {
+        const char* fn = de->d_name;
+        if (!has_prefix(fn, "level_") || !has_suffix(fn, ".cfg")) {
+            continue;
+        }
+        if (file_n >= MAX_DISCOVERED_LEVELS) {
+            break;
+        }
+        snprintf(names[file_n], sizeof(names[file_n]), "%s", fn);
+        ordered[file_n] = names[file_n];
+        ++file_n;
+    }
+    closedir(d);
+    if (file_n <= 0) {
+        return 0;
+    }
+    qsort(ordered, (size_t)file_n, sizeof(ordered[0]), cmp_strptr);
+    for (int i = 0; i < file_n && out_n < MAX_DISCOVERED_LEVELS; ++i) {
+        char path[512];
+        char base_name[64];
+        int style = -1;
+        leveldef_level lvl;
+        snprintf(path, sizeof(path), "%s/%s", dir_path, ordered[i]);
+        if (!leveldef_load_level_file_with_base(&g_leveldef, path, &lvl, &style, stderr)) {
+            continue;
+        }
+        snprintf(base_name, sizeof(base_name), "%s", ordered[i]);
+        {
+            const size_t n = strlen(base_name);
+            if (n > 4 && strcmp(base_name + n - 4, ".cfg") == 0) {
+                base_name[n - 4] = '\0';
+            }
+        }
+        snprintf(g_levels[out_n].name, sizeof(g_levels[out_n].name), "%s", base_name);
+        g_levels[out_n].style_hint = style;
+        g_levels[out_n].level = lvl;
+        ++out_n;
+    }
+    g_level_count = out_n;
+    return out_n > 0;
+}
+
+static const leveldef_level* current_leveldef(const game_state* g) {
+    if (g && g_level_count > 0 && g->level_index >= 0 && g->level_index < g_level_count) {
+        return &g_levels[g->level_index].level;
+    }
+    if (!g) {
+        return NULL;
+    }
+    return leveldef_get_level(&g_leveldef, g->level_style);
+}
 
 static void ensure_leveldef_loaded(void) {
     static const char* level_dirs[] = {
@@ -112,6 +230,11 @@ static void ensure_leveldef_loaded(void) {
         fprintf(stderr, "FATAL: failed to load LevelDef config from %s\n", chosen_dir);
         exit(1);
     }
+    snprintf(g_level_dir, sizeof(g_level_dir), "%s", chosen_dir);
+    if (!discover_levels_from_dir(chosen_dir)) {
+        fprintf(stderr, "FATAL: no levels discovered in %s\n", chosen_dir);
+        exit(1);
+    }
     g_leveldef_ready = 1;
 }
 
@@ -129,6 +252,7 @@ static enemy_bullet* spawn_enemy_bullet_at(
     float ttl_s,
     float radius
 );
+static int set_level_index(game_state* g, int index);
 
 static float dist_sq(float ax, float ay, float bx, float by) {
     const float dx = ax - bx;
@@ -203,7 +327,7 @@ static void configure_searchlights_for_level(game_state* g) {
     ensure_leveldef_loaded();
     memset(g->searchlights, 0, sizeof(g->searchlights));
     g->searchlight_count = 0;
-    lvl = leveldef_get_level(&g_leveldef, g->level_style);
+    lvl = current_leveldef(g);
     if (!lvl) {
         return;
     }
@@ -318,7 +442,7 @@ static void configure_exit_portal_for_level(game_state* g) {
         return;
     }
     ensure_leveldef_loaded();
-    lvl = leveldef_get_level(&g_leveldef, g->level_style);
+    lvl = current_leveldef(g);
     if (!lvl || !lvl->exit_enabled) {
         return;
     }
@@ -334,7 +458,7 @@ static void apply_level_runtime_config(game_state* g) {
         return;
     }
     ensure_leveldef_loaded();
-    lvl = leveldef_get_level(&g_leveldef, g->level_style);
+    lvl = current_leveldef(g);
     if (!lvl) {
         fprintf(stderr, "FATAL: missing LevelDef for level style %d\n", g->level_style);
         exit(1);
@@ -345,6 +469,33 @@ static void apply_level_runtime_config(game_state* g) {
     memset(g->curated_spawned, 0, sizeof(g->curated_spawned));
     configure_searchlights_for_level(g);
     configure_exit_portal_for_level(g);
+}
+
+static int set_level_index(game_state* g, int index) {
+    const float su = gameplay_ui_scale(g);
+    if (!g || g_level_count <= 0 || index < 0 || index >= g_level_count) {
+        return 0;
+    }
+    g->level_index = index;
+    g->level_style = g_levels[index].style_hint;
+    memset(g->bullets, 0, sizeof(g->bullets));
+    memset(g->enemy_bullets, 0, sizeof(g->enemy_bullets));
+    memset(g->enemies, 0, sizeof(g->enemies));
+    memset(g->particles, 0, sizeof(g->particles));
+    g->active_particles = 0;
+    g->wave_index = 0;
+    g->wave_id_alloc = 0;
+    g->wave_announce_pending = 0;
+    g->fire_sfx_pending = 0;
+    g->player.b.x = 170.0f * su;
+    g->player.b.y = g->world_h * 0.5f;
+    g->player.b.vx = 0.0f;
+    g->player.b.vy = 0.0f;
+    g->camera_vx = 0.0f;
+    g->camera_x = g->player.b.x;
+    g->camera_y = g->world_h * 0.5f;
+    apply_level_runtime_config(g);
+    return 1;
 }
 
 static float gameplay_ui_scale(const game_state* g) {
@@ -854,7 +1005,7 @@ static void spawn_wave_sine_snake(game_state* g, int wave_id) {
     const leveldef_wave_sine_tuning* w;
     const float su = gameplay_ui_scale(g);
     ensure_leveldef_loaded();
-    lvl = leveldef_get_level(&g_leveldef, g->level_style);
+    lvl = current_leveldef(g);
     if (!lvl) {
         return;
     }
@@ -890,7 +1041,7 @@ static void spawn_wave_v_formation(game_state* g, int wave_id) {
     const leveldef_wave_v_tuning* w;
     const float su = gameplay_ui_scale(g);
     ensure_leveldef_loaded();
-    lvl = leveldef_get_level(&g_leveldef, g->level_style);
+    lvl = current_leveldef(g);
     if (!lvl) {
         return;
     }
@@ -969,7 +1120,7 @@ static void spawn_wave_kamikaze(game_state* g, int wave_id) {
     const leveldef_wave_kamikaze_tuning* w;
     const float su = gameplay_ui_scale(g);
     ensure_leveldef_loaded();
-    lvl = leveldef_get_level(&g_leveldef, g->level_style);
+    lvl = current_leveldef(g);
     if (!lvl) {
         return;
     }
@@ -1011,7 +1162,7 @@ static void spawn_curated_enemy(game_state* g, int wave_id, const leveldef_curat
         return;
     }
     ensure_leveldef_loaded();
-    lvl = leveldef_get_level(&g_leveldef, g->level_style);
+    lvl = current_leveldef(g);
     if (!lvl) {
         return;
     }
@@ -1096,7 +1247,7 @@ static void spawn_next_wave(game_state* g) {
     const int wave_id = ++g->wave_id_alloc;
     const leveldef_level* lvl;
     ensure_leveldef_loaded();
-    lvl = leveldef_get_level(&g_leveldef, g->level_style);
+    lvl = current_leveldef(g);
     if (!lvl) {
         return;
     }
@@ -1380,8 +1531,19 @@ void game_init(game_state* g, float world_w, float world_h) {
     g->camera_x = g->player.b.x;
     g->camera_y = world_h * 0.5f;
     g->level_style = LEVEL_STYLE_DEFENDER;
+    g->level_index = 0;
     g->wave_index = 0;
     g->wave_id_alloc = 0;
+    ensure_leveldef_loaded();
+    for (int i = 0; i < g_level_count; ++i) {
+        if (g_levels[i].style_hint == LEVEL_STYLE_DEFENDER) {
+            g->level_index = i;
+            break;
+        }
+    }
+    if (g_level_count > 0) {
+        g->level_style = g_levels[g->level_index].style_hint;
+    }
     apply_level_runtime_config(g);
 
     for (size_t i = 0; i < MAX_STARS; ++i) {
@@ -1414,21 +1576,14 @@ void game_cycle_level(game_state* g) {
     if (!g) {
         return;
     }
-    g->level_style = (g->level_style + 1) % LEVEL_STYLE_COUNT;
-    const float su = gameplay_ui_scale(g);
-    memset(g->bullets, 0, sizeof(g->bullets));
-    memset(g->enemy_bullets, 0, sizeof(g->enemy_bullets));
-    memset(g->enemies, 0, sizeof(g->enemies));
-    memset(g->particles, 0, sizeof(g->particles));
-    g->active_particles = 0;
-    g->player.b.x = 170.0f * su;
-    g->player.b.y = g->world_h * 0.5f;
-    g->player.b.vx = 0.0f;
-    g->player.b.vy = 0.0f;
-    g->camera_vx = 0.0f;
-    g->camera_x = g->player.b.x;
-    g->camera_y = g->world_h * 0.5f;
-    apply_level_runtime_config(g);
+    ensure_leveldef_loaded();
+    if (g_level_count > 0) {
+        const int next = (g->level_index + 1) % g_level_count;
+        (void)set_level_index(g, next);
+    } else {
+        g->level_style = (g->level_style + 1) % LEVEL_STYLE_COUNT;
+        apply_level_runtime_config(g);
+    }
 }
 
 void game_update(game_state* g, float dt, const game_input* in) {
@@ -1436,10 +1591,11 @@ void game_update(game_state* g, float dt, const game_input* in) {
     const float su = gameplay_ui_scale(g);
 
     if (in->restart && g->lives <= 0) {
-        const int level_style = g->level_style;
+        const int restart_level_index = g->level_index;
         game_init(g, g->world_w, g->world_h);
-        g->level_style = level_style;
-        apply_level_runtime_config(g);
+        if (!set_level_index(g, restart_level_index)) {
+            apply_level_runtime_config(g);
+        }
     }
 
     for (size_t i = 0; i < MAX_STARS; ++i) {
@@ -1555,7 +1711,7 @@ void game_update(game_state* g, float dt, const game_input* in) {
     }
 
     if (g->lives > 0) {
-        const leveldef_level* lvl = leveldef_get_level(&g_leveldef, g->level_style);
+        const leveldef_level* lvl = current_leveldef(g);
         if (lvl) {
             if (lvl->wave_mode == LEVELDEF_WAVES_CURATED &&
                 lvl->render_style == LEVEL_RENDER_DEFENDER) {
@@ -1807,4 +1963,39 @@ int game_pop_audio_events(game_state* g, game_audio_event* out, int out_cap) {
 const struct leveldef_db* game_leveldef_get(void) {
     ensure_leveldef_loaded();
     return &g_leveldef;
+}
+
+const char* game_current_level_name(const game_state* g) {
+    ensure_leveldef_loaded();
+    if (g && g_level_count > 0 && g->level_index >= 0 && g->level_index < g_level_count) {
+        return g_levels[g->level_index].name;
+    }
+    if (!g) {
+        return "level_defender";
+    }
+    switch (g->level_style) {
+        case LEVEL_STYLE_ENEMY_RADAR: return "level_enemy_radar";
+        case LEVEL_STYLE_EVENT_HORIZON: return "level_event_horizon";
+        case LEVEL_STYLE_EVENT_HORIZON_LEGACY: return "level_event_horizon_legacy";
+        case LEVEL_STYLE_HIGH_PLAINS_DRIFTER: return "level_high_plains_drifter";
+        case LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2: return "level_high_plains_drifter_2";
+        case LEVEL_STYLE_FOG_OF_WAR: return "level_fog_of_war";
+        default: return "level_defender";
+    }
+}
+
+int game_set_level_by_name(game_state* g, const char* name) {
+    if (!g || !name || !name[0]) {
+        return 0;
+    }
+    ensure_leveldef_loaded();
+    if (g_level_count <= 0) {
+        return 0;
+    }
+    for (int i = 0; i < g_level_count; ++i) {
+        if (strieq(g_levels[i].name, name)) {
+            return set_level_index(g, i);
+        }
+    }
+    return 0;
 }

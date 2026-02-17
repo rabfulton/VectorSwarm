@@ -764,3 +764,61 @@ int leveldef_load_project_layout(leveldef_db* db, const char* dir_path, FILE* lo
     }
     return ok;
 }
+
+int leveldef_load_level_file_with_base(
+    const leveldef_db* base_db,
+    const char* level_path,
+    leveldef_level* out_level,
+    int* out_style,
+    FILE* log_out
+) {
+    FILE* f = NULL;
+    char line[320];
+    int style = -1;
+    leveldef_db tmp;
+
+    if (!base_db || !level_path || !out_level) {
+        return 0;
+    }
+    f = fopen(level_path, "r");
+    if (!f) {
+        return 0;
+    }
+    while (fgets(line, sizeof(line), f)) {
+        char* s = trim(line);
+        char kind[32];
+        char name[64];
+        if (s[0] == '\0' || s[0] == '#') {
+            continue;
+        }
+        kind[0] = '\0';
+        name[0] = '\0';
+        if (sscanf(s, "[%31s %63[^]]", kind, name) == 2) {
+            size_t n = strlen(kind);
+            if (n > 0 && kind[n - 1] == ']') {
+                kind[n - 1] = '\0';
+            }
+            if (strcmp(kind, "level") == 0) {
+                style = level_style_from_name(trim(name));
+                break;
+            }
+        }
+    }
+    fclose(f);
+    if (style < 0 || style >= LEVEL_STYLE_COUNT) {
+        if (log_out) {
+            fprintf(log_out, "leveldef: %s has unknown [level ...] header\n", level_path);
+        }
+        return 0;
+    }
+
+    tmp = *base_db;
+    if (!leveldef_apply_file(&tmp, level_path, log_out)) {
+        return 0;
+    }
+    *out_level = tmp.levels[style];
+    if (out_style) {
+        *out_style = style;
+    }
+    return 1;
+}

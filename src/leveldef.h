@@ -193,6 +193,13 @@ typedef struct leveldef_db {
 void leveldef_init_defaults(leveldef_db* db);
 int leveldef_load_with_defaults(leveldef_db* db, const char* path, FILE* log_out);
 int leveldef_load_project_layout(leveldef_db* db, const char* dir_path, FILE* log_out);
+int leveldef_load_level_file_with_base(
+    const leveldef_db* base_db,
+    const char* level_path,
+    leveldef_level* out_level,
+    int* out_style,
+    FILE* log_out
+);
 int leveldef_find_boid_profile(const leveldef_db* db, const char* name);
 const leveldef_boid_profile* leveldef_get_boid_profile(const leveldef_db* db, int profile_id);
 const leveldef_level* leveldef_get_level(const leveldef_db* db, int level_style);

@@ -214,6 +214,7 @@ typedef struct game_state {
     float camera_vx;
     float camera_vy;
     int level_style; /* enum level_style_id */
+    int level_index;
     int render_style; /* enum level_render_style_id */
     player_state player;
     star stars[MAX_STARS];
@@ -242,5 +243,7 @@ int game_pop_wave_announcement(game_state* g, char* out, size_t out_cap);
 int game_pop_fire_sfx_count(game_state* g);
 int game_pop_audio_events(game_state* g, game_audio_event* out, int out_cap);
 const struct leveldef_db* game_leveldef_get(void);
+const char* game_current_level_name(const game_state* g);
+int game_set_level_by_name(game_state* g, const char* name);
 
 #endif
