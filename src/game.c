@@ -1417,16 +1417,40 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt) {
 
     float avoid_x = 0.0f;
     float avoid_y = 0.0f;
+    float player_avoid_boost = 0.0f;
     {
-        float dx = level_uses_cylinder(g) ? wrap_delta(e->b.x, g->player.b.x, cylinder_period(g)) : (e->b.x - g->player.b.x);
-        float dy = e->b.y - g->player.b.y;
+        /* Use a short prediction lead so swarms react before collisions happen. */
+        const float lead = 0.22f;
+        const float px = g->player.b.x + g->player.b.vx * lead;
+        const float py = g->player.b.y + g->player.b.vy * lead;
+        float dx = level_uses_cylinder(g) ? wrap_delta(e->b.x, px, cylinder_period(g)) : (e->b.x - px);
+        float dy = e->b.y - py;
         float d2 = dx * dx + dy * dy;
-        if (d2 < (185.0f * su) * (185.0f * su)) {
+        const float aware_r = 300.0f * su;
+        const float aware_r2 = aware_r * aware_r;
+        const float personal_r = 120.0f * su;
+        const float personal_r2 = personal_r * personal_r;
+        if (d2 < aware_r2) {
             if (d2 < 1e-4f) {
                 d2 = 1e-4f;
             }
-            avoid_x += dx / d2;
-            avoid_y += dy / d2;
+            {
+                const float far_falloff = 1.0f - (d2 / aware_r2);
+                avoid_x += (dx / d2) * far_falloff;
+                avoid_y += (dy / d2) * far_falloff;
+                if (far_falloff > player_avoid_boost) {
+                    player_avoid_boost = far_falloff;
+                }
+            }
+            if (d2 < personal_r2) {
+                /* Extra hard push near the player to avoid collisions aggressively. */
+                const float near_falloff = 1.0f - (d2 / personal_r2);
+                avoid_x += (dx / d2) * (1.75f * near_falloff);
+                avoid_y += (dy / d2) * (1.75f * near_falloff);
+                if (near_falloff > player_avoid_boost) {
+                    player_avoid_boost = near_falloff;
+                }
+            }
         }
     }
     if (g->searchlight_count > 0) {
@@ -1468,7 +1492,7 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt) {
     float sep_w = (e->swarm_sep_w > 0.01f) ? e->swarm_sep_w : 1.85f;
     float ali_w = (e->swarm_ali_w > 0.01f) ? e->swarm_ali_w : 0.60f;
     float coh_w = (e->swarm_coh_w > 0.01f) ? e->swarm_coh_w : 0.55f;
-    const float avoid_w = (e->swarm_avoid_w > 0.01f) ? e->swarm_avoid_w : 2.70f;
+    float avoid_w = (e->swarm_avoid_w > 0.01f) ? e->swarm_avoid_w : 2.70f;
     float goal_w = (e->swarm_goal_w > 0.01f) ? e->swarm_goal_w : 0.95f;
     const float wander_w = (e->swarm_wander_w > 0.01f) ? e->swarm_wander_w : 0.0f;
     const float wander_freq = (e->swarm_wander_freq > 0.01f) ? e->swarm_wander_freq : 0.9f;
@@ -1481,6 +1505,8 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt) {
     ali_w *= (0.90f + 0.25f * tightness); /* tighter -> stronger alignment */
     coh_w *= tightness;                    /* tighter -> stronger cohesion */
     goal_w *= (0.92f + 0.18f * tightness);
+    avoid_w *= (1.0f + 2.4f * player_avoid_boost);
+    goal_w *= (1.0f - 0.45f * player_avoid_boost);
     {
         const float wp = g->t * wander_freq +
                          (float)e->slot_index * 0.73f +
