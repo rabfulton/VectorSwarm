@@ -13,6 +13,7 @@
 #define ACOUSTICS_SLOT_COUNT 5
 #define VIDEO_MENU_RES_COUNT 6
 #define VIDEO_MENU_DIAL_COUNT 12
+#define CONTROL_ACTION_COUNT_RENDER 6
 #ifndef LEVEL_EDITOR_MAX_MARKERS
 #define LEVEL_EDITOR_MAX_MARKERS 256
 #endif
@@ -58,6 +59,7 @@ typedef struct render_metrics {
     int show_video_menu;
     int show_planetarium;
     int show_level_editor;
+    int show_controls_menu;
     int video_menu_selected;
     int video_menu_fullscreen;
     int palette_mode;
@@ -115,6 +117,15 @@ typedef struct render_metrics {
     float level_editor_marker_b[LEVEL_EDITOR_MAX_MARKERS];
     float level_editor_marker_c[LEVEL_EDITOR_MAX_MARKERS];
     float level_editor_marker_d[LEVEL_EDITOR_MAX_MARKERS];
+    int controls_selected;
+    int controls_selected_column;
+    int controls_rebinding_action;
+    int controls_rebinding_column;
+    int controls_use_gamepad;
+    const char* controls_pad_name;
+    const char* controls_action_label[CONTROL_ACTION_COUNT_RENDER];
+    const char* controls_key_label[CONTROL_ACTION_COUNT_RENDER];
+    const char* controls_pad_label[CONTROL_ACTION_COUNT_RENDER];
 } render_metrics;
 
 typedef struct wormhole_line_vertex {

@@ -90,6 +90,11 @@ static int save_settings_to_path(const app_settings* s, const char* path) {
     for (int i = 0; i < VIDEO_MENU_DIAL_COUNT; ++i) {
         fprintf(f, "dial%d=%.6f\n", i, clampf(s->video_dial_01[i], 0.0f, 1.0f));
     }
+    fprintf(f, "controls_use_gamepad=%d\n", s->controls_use_gamepad ? 1 : 0);
+    for (int i = 0; i < SETTINGS_CONTROL_ACTION_COUNT; ++i) {
+        fprintf(f, "bind_key_%d=%d\n", i, s->controls_key_scancode[i]);
+        fprintf(f, "bind_pad_%d=%d\n", i, s->controls_pad_button[i]);
+    }
     fclose(f);
     return 1;
 }
@@ -131,7 +136,12 @@ int settings_load(app_settings* io, const settings_resolution* resolutions, int 
     int width = -1;
     int height = -1;
     int palette = io->palette;
+    int controls_use_gamepad = io->controls_use_gamepad;
+    int controls_key_scancode[SETTINGS_CONTROL_ACTION_COUNT];
+    int controls_pad_button[SETTINGS_CONTROL_ACTION_COUNT];
     float dials[VIDEO_MENU_DIAL_COUNT];
+    memcpy(controls_key_scancode, io->controls_key_scancode, sizeof(controls_key_scancode));
+    memcpy(controls_pad_button, io->controls_pad_button, sizeof(controls_pad_button));
     memcpy(dials, io->video_dial_01, sizeof(dials));
 
     char line[128];
@@ -155,6 +165,17 @@ int settings_load(app_settings* io, const settings_resolution* resolutions, int 
             int dial = -1;
             if (sscanf(key, "dial%d", &dial) == 1 && dial >= 0 && dial < VIDEO_MENU_DIAL_COUNT) {
                 dials[dial] = clampf(strtof(value, NULL), 0.0f, 1.0f);
+            } else if (strcmp(key, "controls_use_gamepad") == 0) {
+                controls_use_gamepad = (atoi(value) != 0) ? 1 : 0;
+            } else {
+                int bind_index = -1;
+                if (sscanf(key, "bind_key_%d", &bind_index) == 1 &&
+                    bind_index >= 0 && bind_index < SETTINGS_CONTROL_ACTION_COUNT) {
+                    controls_key_scancode[bind_index] = atoi(value);
+                } else if (sscanf(key, "bind_pad_%d", &bind_index) == 1 &&
+                           bind_index >= 0 && bind_index < SETTINGS_CONTROL_ACTION_COUNT) {
+                    controls_pad_button[bind_index] = atoi(value);
+                }
             }
         }
     }
@@ -179,6 +200,9 @@ int settings_load(app_settings* io, const settings_resolution* resolutions, int 
     io->fullscreen = fullscreen ? 1 : 0;
     io->selected = io->fullscreen ? 0 : selected;
     io->palette = palette;
+    io->controls_use_gamepad = controls_use_gamepad ? 1 : 0;
+    memcpy(io->controls_key_scancode, controls_key_scancode, sizeof(controls_key_scancode));
+    memcpy(io->controls_pad_button, controls_pad_button, sizeof(controls_pad_button));
     memcpy(io->video_dial_01, dials, sizeof(dials));
     return 1;
 }

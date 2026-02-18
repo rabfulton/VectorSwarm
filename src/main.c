@@ -65,6 +65,16 @@
 #define TERRAIN_ROWS 24
 #define TERRAIN_COLS 70
 
+enum control_action_id {
+    CONTROL_ACTION_UP = 0,
+    CONTROL_ACTION_DOWN = 1,
+    CONTROL_ACTION_LEFT = 2,
+    CONTROL_ACTION_RIGHT = 3,
+    CONTROL_ACTION_PRIMARY_FIRE = 4,
+    CONTROL_ACTION_SECONDARY_FIRE = 5,
+    CONTROL_ACTION_COUNT = 6
+};
+
 typedef struct video_resolution {
     int w;
     int h;
@@ -315,6 +325,7 @@ typedef struct app {
     int show_video_menu;
     int show_planetarium;
     int show_level_editor;
+    int show_controls_menu;
     int video_menu_selected;
     int video_menu_fullscreen;
     int palette_mode;
@@ -346,6 +357,18 @@ typedef struct app {
     float acoustics_combat_value_01[ACOUST_COMBAT_SLIDER_COUNT];
     int thruster_note_on;
     int current_system_index;
+    int controls_selected;
+    int controls_selected_column; /* 0=keyboard, 1=joypad */
+    int controls_rebinding_action; /* -1 when idle */
+    int controls_rebinding_column; /* 0=keyboard, 1=joypad */
+    int controls_use_gamepad;
+    int controls_key_scancode[CONTROL_ACTION_COUNT];
+    int controls_pad_button[CONTROL_ACTION_COUNT];
+    char controls_key_label[CONTROL_ACTION_COUNT][48];
+    char controls_pad_label[CONTROL_ACTION_COUNT][48];
+    char controls_pad_name[96];
+    SDL_GameController* controls_gamepad;
+    SDL_JoystickID controls_gamepad_instance;
     int planetarium_selected;
     int planetarium_nodes_quelled[PLANETARIUM_MAX_SYSTEMS][PLANETARIUM_MAX_SYSTEMS];
     uint8_t* nick_rgba8;
@@ -416,6 +439,83 @@ static int env_flag_enabled(const char* name) {
         return 1;
     }
     return 0;
+}
+
+static const char* k_control_action_labels[CONTROL_ACTION_COUNT] = {
+    "UP", "DOWN", "LEFT", "RIGHT", "PRIMARY FIRE", "SECONDARY FIRE"
+};
+
+static void controls_set_defaults(app* a) {
+    if (!a) {
+        return;
+    }
+    a->controls_use_gamepad = 0;
+    a->controls_selected = 0;
+    a->controls_selected_column = 0;
+    a->controls_rebinding_action = -1;
+    a->controls_rebinding_column = 0;
+    a->controls_key_scancode[CONTROL_ACTION_UP] = SDL_SCANCODE_W;
+    a->controls_key_scancode[CONTROL_ACTION_DOWN] = SDL_SCANCODE_S;
+    a->controls_key_scancode[CONTROL_ACTION_LEFT] = SDL_SCANCODE_A;
+    a->controls_key_scancode[CONTROL_ACTION_RIGHT] = SDL_SCANCODE_D;
+    a->controls_key_scancode[CONTROL_ACTION_PRIMARY_FIRE] = SDL_SCANCODE_SPACE;
+    a->controls_key_scancode[CONTROL_ACTION_SECONDARY_FIRE] = SDL_SCANCODE_LSHIFT;
+    a->controls_pad_button[CONTROL_ACTION_UP] = SDL_CONTROLLER_BUTTON_DPAD_UP;
+    a->controls_pad_button[CONTROL_ACTION_DOWN] = SDL_CONTROLLER_BUTTON_DPAD_DOWN;
+    a->controls_pad_button[CONTROL_ACTION_LEFT] = SDL_CONTROLLER_BUTTON_DPAD_LEFT;
+    a->controls_pad_button[CONTROL_ACTION_RIGHT] = SDL_CONTROLLER_BUTTON_DPAD_RIGHT;
+    a->controls_pad_button[CONTROL_ACTION_PRIMARY_FIRE] = SDL_CONTROLLER_BUTTON_A;
+    a->controls_pad_button[CONTROL_ACTION_SECONDARY_FIRE] = SDL_CONTROLLER_BUTTON_B;
+}
+
+static void controls_refresh_labels(app* a) {
+    if (!a) {
+        return;
+    }
+    for (int i = 0; i < CONTROL_ACTION_COUNT; ++i) {
+        const char* key_name = SDL_GetScancodeName((SDL_Scancode)a->controls_key_scancode[i]);
+        const char* pad_name = SDL_GameControllerGetStringForButton((SDL_GameControllerButton)a->controls_pad_button[i]);
+        if (!key_name || !key_name[0]) {
+            key_name = "UNBOUND";
+        }
+        if (!pad_name || !pad_name[0]) {
+            pad_name = "UNBOUND";
+        }
+        snprintf(a->controls_key_label[i], sizeof(a->controls_key_label[i]), "%s", key_name);
+        snprintf(a->controls_pad_label[i], sizeof(a->controls_pad_label[i]), "%s", pad_name);
+    }
+    if (a->controls_gamepad) {
+        const char* n = SDL_GameControllerName(a->controls_gamepad);
+        snprintf(a->controls_pad_name, sizeof(a->controls_pad_name), "%s", (n && n[0]) ? n : "GAMEPAD");
+    } else {
+        snprintf(a->controls_pad_name, sizeof(a->controls_pad_name), "NO GAMEPAD");
+    }
+}
+
+static void controls_open_first_gamepad(app* a) {
+    if (!a || a->controls_gamepad) {
+        return;
+    }
+    const int n = SDL_NumJoysticks();
+    for (int i = 0; i < n; ++i) {
+        if (!SDL_IsGameController(i)) {
+            continue;
+        }
+        a->controls_gamepad = SDL_GameControllerOpen(i);
+        if (!a->controls_gamepad) {
+            continue;
+        }
+        {
+            SDL_Joystick* js = SDL_GameControllerGetJoystick(a->controls_gamepad);
+            a->controls_gamepad_instance = SDL_JoystickInstanceID(js);
+        }
+        break;
+    }
+    controls_refresh_labels(a);
+}
+
+static int controls_ui_active(const app* a) {
+    return a && (a->show_acoustics || a->show_video_menu || a->show_planetarium || a->show_level_editor || a->show_controls_menu);
 }
 
 static void reset_terrain_tuning(app* a) {
@@ -905,6 +1005,11 @@ static void app_to_settings(const app* a, app_settings* out) {
     for (int i = 0; i < VIDEO_MENU_DIAL_COUNT; ++i) {
         out->video_dial_01[i] = clampf(a->video_dial_01[i], 0.0f, 1.0f);
     }
+    out->controls_use_gamepad = a->controls_use_gamepad ? 1 : 0;
+    for (int i = 0; i < CONTROL_ACTION_COUNT; ++i) {
+        out->controls_key_scancode[i] = a->controls_key_scancode[i];
+        out->controls_pad_button[i] = a->controls_pad_button[i];
+    }
 }
 
 static void settings_to_app(app* a, const app_settings* in) {
@@ -917,6 +1022,12 @@ static void settings_to_app(app* a, const app_settings* in) {
     for (int i = 0; i < VIDEO_MENU_DIAL_COUNT; ++i) {
         a->video_dial_01[i] = clampf(in->video_dial_01[i], 0.0f, 1.0f);
     }
+    a->controls_use_gamepad = in->controls_use_gamepad ? 1 : 0;
+    for (int i = 0; i < CONTROL_ACTION_COUNT; ++i) {
+        a->controls_key_scancode[i] = in->controls_key_scancode[i];
+        a->controls_pad_button[i] = in->controls_pad_button[i];
+    }
+    controls_refresh_labels(a);
 }
 
 static int save_settings(const app* a) {
@@ -968,7 +1079,7 @@ static void map_mouse_to_scene_coords(const app* a, int mouse_x, int mouse_y, fl
     const float sy = h / (float)win_h;
     float x = clampf((float)mouse_x * sx, 0.0f, w);
     float y = clampf(((float)win_h - (float)mouse_y) * sy, 0.0f, h);
-    if (a->show_acoustics || a->show_crt_ui || a->show_video_menu) {
+    if (a->show_acoustics || a->show_crt_ui || a->show_video_menu || a->show_controls_menu) {
         vg_crt_profile crt;
         vg_get_crt_profile(a->vg, &crt);
         const float k = clampf(crt.barrel_distortion, 0.0f, 0.30f);
@@ -1944,6 +2055,61 @@ static void planetarium_node_center(const app* a, int idx, float* out_x, float* 
     *out_y = cy + c * rx * sinf(rot) + s * ry * cosf(rot);
 }
 
+static int handle_controls_menu_mouse(app* a, int mouse_x, int mouse_y, int set_value) {
+    if (!a || !a->show_controls_menu) {
+        return 0;
+    }
+    float mx = 0.0f;
+    float my = 0.0f;
+    map_mouse_to_scene_coords(a, mouse_x, mouse_y, &mx, &my);
+    const float w = (float)a->swapchain_extent.width;
+    const float h = (float)a->swapchain_extent.height;
+    const vg_rect panel = make_ui_safe_frame(w, h);
+    const float table_x = panel.x + panel.w * 0.04f;
+    const float table_y0 = panel.y + panel.h * 0.74f;
+    const float row_h = panel.h * 0.085f;
+    const float act_w = panel.w * 0.34f;
+    const float key_w = panel.w * 0.25f;
+    const float pad_w = panel.w * 0.25f;
+    const float gap = panel.w * 0.02f;
+    for (int i = 0; i < CONTROL_ACTION_COUNT; ++i) {
+        const vg_rect rk = {table_x + act_w + gap, table_y0 - (float)i * row_h, key_w, row_h * 0.72f};
+        const vg_rect rp = {rk.x + rk.w + gap, rk.y, pad_w, rk.h};
+        if (mx >= rk.x && mx <= rk.x + rk.w && my >= rk.y && my <= rk.y + rk.h) {
+            if (set_value) {
+                a->controls_selected = i;
+                a->controls_selected_column = 0;
+                a->controls_rebinding_action = i;
+                a->controls_rebinding_column = 0;
+            }
+            return 1;
+        }
+        if (mx >= rp.x && mx <= rp.x + rp.w && my >= rp.y && my <= rp.y + rp.h) {
+            if (set_value) {
+                a->controls_selected = i;
+                a->controls_selected_column = 1;
+                a->controls_rebinding_action = i;
+                a->controls_rebinding_column = 1;
+            }
+            return 1;
+        }
+    }
+    {
+        const int row = CONTROL_ACTION_COUNT;
+        const vg_rect rt = {table_x, table_y0 - (float)row * row_h, act_w + gap + key_w + gap + pad_w, row_h * 0.72f};
+        if (mx >= rt.x && mx <= rt.x + rt.w && my >= rt.y && my <= rt.y + rt.h) {
+            if (set_value) {
+                a->controls_selected = row;
+                a->controls_use_gamepad = !a->controls_use_gamepad;
+                (void)save_settings(a);
+                set_tty_message(a, a->controls_use_gamepad ? "joypad input enabled" : "joypad input disabled");
+            }
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int handle_planetarium_mouse(app* a, int mouse_x, int mouse_y, int set_value) {
     if (!a) {
         return 0;
@@ -2322,6 +2488,10 @@ static void clear_scene_color_depth(VkCommandBuffer cmd, VkExtent2D extent) {
 static void cleanup(app* a) {
     if (a->device != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(a->device);
+    }
+    if (a->controls_gamepad) {
+        SDL_GameControllerClose(a->controls_gamepad);
+        a->controls_gamepad = NULL;
     }
     if (a->audio_dev != 0) {
         SDL_PauseAudioDevice(a->audio_dev, 1);
@@ -4602,6 +4772,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .show_video_menu = a->show_video_menu,
         .show_planetarium = a->show_planetarium,
         .show_level_editor = a->show_level_editor,
+        .show_controls_menu = a->show_controls_menu,
         .video_menu_selected = a->video_menu_selected,
         .video_menu_fullscreen = a->video_menu_fullscreen,
         .palette_mode = a->palette_mode,
@@ -4622,11 +4793,11 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .terrain_tuning_text = (a->fog_tuning_enabled &&
                                 a->fog_tuning_show &&
                                 a->game.render_style == LEVEL_RENDER_FOG &&
-                                !a->show_acoustics && !a->show_video_menu && !a->show_planetarium && !a->show_level_editor)
+                                !a->show_acoustics && !a->show_video_menu && !a->show_planetarium && !a->show_level_editor && !a->show_controls_menu)
             ? a->fog_tuning_text
             : ((a->particle_tuning_enabled &&
                 a->particle_tuning_show &&
-                !a->show_acoustics && !a->show_video_menu && !a->show_planetarium && !a->show_level_editor)
+                !a->show_acoustics && !a->show_video_menu && !a->show_planetarium && !a->show_level_editor && !a->show_controls_menu)
                 ? a->particle_tuning_text
                 : ((a->terrain_tuning_enabled &&
                     a->terrain_tuning_show &&
@@ -4705,12 +4876,24 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         metrics.level_editor_marker_c[i] = a->level_editor.markers[i].c;
         metrics.level_editor_marker_d[i] = a->level_editor.markers[i].d;
     }
+    metrics.controls_selected = a->controls_selected;
+    metrics.controls_selected_column = a->controls_selected_column;
+    metrics.controls_rebinding_action = a->controls_rebinding_action;
+    metrics.controls_rebinding_column = a->controls_rebinding_column;
+    metrics.controls_use_gamepad = a->controls_use_gamepad;
+    metrics.controls_pad_name = a->controls_pad_name;
+    for (int i = 0; i < CONTROL_ACTION_COUNT; ++i) {
+        metrics.controls_action_label[i] = k_control_action_labels[i];
+        metrics.controls_key_label[i] = a->controls_key_label[i];
+        metrics.controls_pad_label[i] = a->controls_pad_label[i];
+    }
     {
         const int in_gameplay_scene =
             !a->show_acoustics &&
             !a->show_video_menu &&
             !a->show_planetarium &&
-            !a->show_level_editor;
+            !a->show_level_editor &&
+            !a->show_controls_menu;
         const int use_gpu_terrain =
             (a->game.render_style == LEVEL_RENDER_DRIFTER_SHADED ||
              a->game.render_style == LEVEL_RENDER_DRIFTER);
@@ -4896,9 +5079,10 @@ int main(void) {
     a.crt_ui_mouse_drag = 0;
     a.show_fps_counter = 0;
     a.show_acoustics = 0;
-	    a.show_video_menu = 0;
+    a.show_video_menu = 0;
     a.show_planetarium = 0;
     a.show_level_editor = 0;
+    a.show_controls_menu = 0;
     a.terrain_wire_enabled = 1;
     a.terrain_tuning_enabled = env_flag_enabled("VTYPE_TERRAIN_TUNING");
     a.terrain_tuning_show = 1;
@@ -4943,6 +5127,10 @@ int main(void) {
     a.wave_tty_visible[0] = '\0';
     a.current_system_index = 0;
     a.planetarium_selected = 0;
+    a.controls_gamepad = NULL;
+    a.controls_gamepad_instance = -1;
+    controls_set_defaults(&a);
+    controls_refresh_labels(&a);
     memset(a.planetarium_nodes_quelled, 0, sizeof(a.planetarium_nodes_quelled));
     level_editor_init(&a.level_editor);
     {
@@ -4956,7 +5144,7 @@ int main(void) {
         acoustics_slot_defaults_view(&sv);
     }
 
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
         fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return 1;
     }
@@ -4970,6 +5158,7 @@ int main(void) {
         }
     }
     (void)load_settings(&a);
+    controls_open_first_gamepad(&a);
     apply_acoustics(&a);
 
     int start_w = APP_WIDTH;
@@ -5037,7 +5226,25 @@ int main(void) {
             if (ev.type == SDL_QUIT) {
                 running = 0;
             } else if (ev.type == SDL_KEYDOWN && !ev.key.repeat) {
-                if (ev.key.keysym.sym == SDLK_ESCAPE && a.show_video_menu) {
+                if (a.show_controls_menu && a.controls_rebinding_action >= 0) {
+                    if (ev.key.keysym.sym == SDLK_ESCAPE) {
+                        a.controls_rebinding_action = -1;
+                        a.controls_rebinding_column = 0;
+                        set_tty_message(&a, "controls bind canceled");
+                    } else if (a.controls_rebinding_column == 0) {
+                        const int idx = a.controls_rebinding_action;
+                        if (idx >= 0 && idx < CONTROL_ACTION_COUNT) {
+                            a.controls_key_scancode[idx] = ev.key.keysym.scancode;
+                            a.controls_rebinding_action = -1;
+                            controls_refresh_labels(&a);
+                            (void)save_settings(&a);
+                            set_tty_message(&a, "keyboard binding updated");
+                        }
+                    }
+                    continue;
+                } else if (ev.key.keysym.sym == SDLK_ESCAPE && a.show_controls_menu) {
+                    a.show_controls_menu = 0;
+                } else if (ev.key.keysym.sym == SDLK_ESCAPE && a.show_video_menu) {
                     a.show_video_menu = 0;
                 } else if (ev.key.keysym.sym == SDLK_ESCAPE && a.show_planetarium) {
                     a.show_planetarium = 0;
@@ -5069,6 +5276,7 @@ int main(void) {
                     if (a.show_video_menu) {
                         a.show_acoustics = 0;
                         a.show_planetarium = 0;
+                        a.show_controls_menu = 0;
                         a.show_level_editor = 0;
                         SDL_StopTextInput();
                         a.show_crt_ui = 0;
@@ -5080,6 +5288,7 @@ int main(void) {
                     if (a.show_planetarium) {
                         a.show_video_menu = 0;
                         a.show_acoustics = 0;
+                        a.show_controls_menu = 0;
                         a.show_level_editor = 0;
                         SDL_StopTextInput();
                         a.show_crt_ui = 0;
@@ -5116,8 +5325,23 @@ int main(void) {
                     if (a.show_acoustics) {
                         a.show_planetarium = 0;
                         a.show_video_menu = 0;
+                        a.show_controls_menu = 0;
                         a.show_level_editor = 0;
                         SDL_StopTextInput();
+                    }
+                } else if (ev.key.keysym.sym == SDLK_5) {
+                    a.show_controls_menu = !a.show_controls_menu;
+                    if (a.show_controls_menu) {
+                        a.show_planetarium = 0;
+                        a.show_video_menu = 0;
+                        a.show_acoustics = 0;
+                        a.show_level_editor = 0;
+                        a.show_crt_ui = 0;
+                        a.video_menu_dial_drag = -1;
+                        SDL_StopTextInput();
+                        controls_refresh_labels(&a);
+                    } else {
+                        a.controls_rebinding_action = -1;
                     }
                 } else if (ev.key.keysym.sym == SDLK_l) {
                     a.show_level_editor = !a.show_level_editor;
@@ -5125,6 +5349,7 @@ int main(void) {
                         a.show_planetarium = 0;
                         a.show_video_menu = 0;
                         a.show_acoustics = 0;
+                        a.show_controls_menu = 0;
                         a.show_crt_ui = 0;
                         a.video_menu_dial_drag = -1;
                         a.level_editor.entry_active = 1;
@@ -5214,6 +5439,31 @@ int main(void) {
                     } else {
                         a.acoustics_page = (a.acoustics_page + 1) % ACOUSTICS_PAGE_COUNT;
                     }
+                } else if (a.show_controls_menu && ev.key.keysym.sym == SDLK_UP) {
+                    const int rows = CONTROL_ACTION_COUNT + 1;
+                    a.controls_selected = (a.controls_selected + rows - 1) % rows;
+                } else if (a.show_controls_menu && ev.key.keysym.sym == SDLK_DOWN) {
+                    const int rows = CONTROL_ACTION_COUNT + 1;
+                    a.controls_selected = (a.controls_selected + 1) % rows;
+                } else if (a.show_controls_menu && ev.key.keysym.sym == SDLK_LEFT) {
+                    if (a.controls_selected < CONTROL_ACTION_COUNT) {
+                        a.controls_selected_column = 0;
+                    }
+                } else if (a.show_controls_menu && ev.key.keysym.sym == SDLK_RIGHT) {
+                    if (a.controls_selected < CONTROL_ACTION_COUNT) {
+                        a.controls_selected_column = 1;
+                    }
+                } else if (a.show_controls_menu &&
+                           (ev.key.keysym.sym == SDLK_RETURN || ev.key.keysym.sym == SDLK_KP_ENTER || ev.key.keysym.sym == SDLK_SPACE)) {
+                    if (a.controls_selected < CONTROL_ACTION_COUNT) {
+                        a.controls_rebinding_action = a.controls_selected;
+                        a.controls_rebinding_column = a.controls_selected_column;
+                        set_tty_message(&a, (a.controls_rebinding_column == 0) ? "press a key..." : "press a gamepad button...");
+                    } else {
+                        a.controls_use_gamepad = !a.controls_use_gamepad;
+                        (void)save_settings(&a);
+                        set_tty_message(&a, a.controls_use_gamepad ? "joypad input enabled" : "joypad input disabled");
+                    }
                 } else if (a.show_level_editor && ev.key.keysym.sym == SDLK_RETURN) {
                     const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
                     if (level_editor_load_by_name(&a.level_editor, db, a.level_editor.level_name)) {
@@ -5246,15 +5496,15 @@ int main(void) {
                 } else if (ev.key.keysym.sym == SDLK_r) {
                     restart_pressed = 1;
                 } else if (a.fog_tuning_enabled &&
-                           !a.show_acoustics && !a.show_video_menu && !a.show_planetarium && !a.show_level_editor &&
+                           !a.show_acoustics && !a.show_video_menu && !a.show_planetarium && !a.show_level_editor && !a.show_controls_menu &&
                            handle_fog_tuning_key(&a, ev.key.keysym.sym)) {
                     /* handled by fog tuning controls */
                 } else if (a.particle_tuning_enabled &&
-                           !a.show_acoustics && !a.show_video_menu && !a.show_planetarium && !a.show_level_editor &&
+                           !a.show_acoustics && !a.show_video_menu && !a.show_planetarium && !a.show_level_editor && !a.show_controls_menu &&
                            handle_particle_tuning_key(&a, ev.key.keysym.sym)) {
                     /* handled by particle tuning controls */
                 } else if (a.terrain_tuning_enabled &&
-                           !a.show_acoustics && !a.show_video_menu && !a.show_planetarium && !a.show_level_editor &&
+                           !a.show_acoustics && !a.show_video_menu && !a.show_planetarium && !a.show_level_editor && !a.show_controls_menu &&
                            handle_terrain_tuning_key(&a, ev.key.keysym.sym)) {
                     /* handled by terrain tuning controls */
                 } else if (a.show_acoustics && ev.key.keysym.sym == SDLK_UP) {
@@ -5291,12 +5541,66 @@ int main(void) {
                 } else if (a.show_crt_ui && ev.key.keysym.sym == SDLK_RIGHT) {
                     adjust_crt_profile(&a, a.crt_ui_selected, +1);
                 }
+            } else if (ev.type == SDL_CONTROLLERDEVICEADDED) {
+                if (!a.controls_gamepad) {
+                    controls_open_first_gamepad(&a);
+                }
+            } else if (ev.type == SDL_CONTROLLERDEVICEREMOVED) {
+                if (a.controls_gamepad && ev.cdevice.which == a.controls_gamepad_instance) {
+                    SDL_GameControllerClose(a.controls_gamepad);
+                    a.controls_gamepad = NULL;
+                    a.controls_gamepad_instance = -1;
+                    controls_refresh_labels(&a);
+                    controls_open_first_gamepad(&a);
+                }
+            } else if (ev.type == SDL_CONTROLLERBUTTONDOWN) {
+                if (a.show_controls_menu && a.controls_rebinding_action >= 0 && a.controls_rebinding_column == 1) {
+                    const int idx = a.controls_rebinding_action;
+                    if (idx >= 0 && idx < CONTROL_ACTION_COUNT) {
+                        a.controls_pad_button[idx] = (int)ev.cbutton.button;
+                        a.controls_rebinding_action = -1;
+                        controls_refresh_labels(&a);
+                        (void)save_settings(&a);
+                        set_tty_message(&a, "gamepad binding updated");
+                    }
+                } else if (a.show_controls_menu && a.controls_rebinding_action < 0) {
+                    if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_UP) {
+                        const int rows = CONTROL_ACTION_COUNT + 1;
+                        a.controls_selected = (a.controls_selected + rows - 1) % rows;
+                    } else if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_DOWN) {
+                        const int rows = CONTROL_ACTION_COUNT + 1;
+                        a.controls_selected = (a.controls_selected + 1) % rows;
+                    } else if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_LEFT) {
+                        if (a.controls_selected < CONTROL_ACTION_COUNT) {
+                            a.controls_selected_column = 0;
+                        }
+                    } else if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_RIGHT) {
+                        if (a.controls_selected < CONTROL_ACTION_COUNT) {
+                            a.controls_selected_column = 1;
+                        }
+                    } else if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_A) {
+                        if (a.controls_selected < CONTROL_ACTION_COUNT) {
+                            a.controls_rebinding_action = a.controls_selected;
+                            a.controls_rebinding_column = a.controls_selected_column;
+                            set_tty_message(&a, (a.controls_rebinding_column == 0) ? "press a key..." : "press a gamepad button...");
+                        } else {
+                            a.controls_use_gamepad = !a.controls_use_gamepad;
+                            (void)save_settings(&a);
+                            set_tty_message(&a, a.controls_use_gamepad ? "joypad input enabled" : "joypad input disabled");
+                        }
+                    } else if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_B) {
+                        a.show_controls_menu = 0;
+                    }
+                }
             } else if (ev.type == SDL_TEXTINPUT) {
                 if (a.show_level_editor && a.level_editor.entry_active) {
                     level_editor_append_text(&a.level_editor, ev.text.text);
                 }
             } else if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT) {
                 if (a.show_video_menu && handle_video_menu_mouse(&a, ev.button.x, ev.button.y, 1)) {
+                    a.acoustics_mouse_drag = 0;
+                    a.crt_ui_mouse_drag = 0;
+                } else if (a.show_controls_menu && handle_controls_menu_mouse(&a, ev.button.x, ev.button.y, 1)) {
                     a.acoustics_mouse_drag = 0;
                     a.crt_ui_mouse_drag = 0;
                 } else if (a.show_level_editor && handle_level_editor_mouse(&a, ev.button.x, ev.button.y, 1, 1)) {
@@ -5357,12 +5661,28 @@ int main(void) {
         const uint8_t* keys = SDL_GetKeyboardState(NULL);
         game_input in;
         memset(&in, 0, sizeof(in));
-        if (!a.show_acoustics && !a.show_video_menu && !a.show_planetarium && !a.show_level_editor) {
-            in.left = keys[SDL_SCANCODE_A] || keys[SDL_SCANCODE_LEFT];
-            in.right = keys[SDL_SCANCODE_D] || keys[SDL_SCANCODE_RIGHT];
-            in.up = keys[SDL_SCANCODE_W] || keys[SDL_SCANCODE_UP];
-            in.down = keys[SDL_SCANCODE_S] || keys[SDL_SCANCODE_DOWN];
-            in.fire = keys[SDL_SCANCODE_SPACE] || keys[SDL_SCANCODE_LCTRL];
+        if (!controls_ui_active(&a)) {
+            in.up = keys[a.controls_key_scancode[CONTROL_ACTION_UP]] ? 1 : 0;
+            in.down = keys[a.controls_key_scancode[CONTROL_ACTION_DOWN]] ? 1 : 0;
+            in.left = keys[a.controls_key_scancode[CONTROL_ACTION_LEFT]] ? 1 : 0;
+            in.right = keys[a.controls_key_scancode[CONTROL_ACTION_RIGHT]] ? 1 : 0;
+            in.fire = keys[a.controls_key_scancode[CONTROL_ACTION_PRIMARY_FIRE]] ? 1 : 0;
+            in.secondary_fire = keys[a.controls_key_scancode[CONTROL_ACTION_SECONDARY_FIRE]] ? 1 : 0;
+            if (a.controls_use_gamepad && a.controls_gamepad) {
+                const int axis_deadzone = 8000;
+                const Sint16 lx = SDL_GameControllerGetAxis(a.controls_gamepad, SDL_CONTROLLER_AXIS_LEFTX);
+                const Sint16 ly = SDL_GameControllerGetAxis(a.controls_gamepad, SDL_CONTROLLER_AXIS_LEFTY);
+                if (lx > axis_deadzone) in.right = 1;
+                if (lx < -axis_deadzone) in.left = 1;
+                if (ly > axis_deadzone) in.down = 1;
+                if (ly < -axis_deadzone) in.up = 1;
+                in.up |= SDL_GameControllerGetButton(a.controls_gamepad, (SDL_GameControllerButton)a.controls_pad_button[CONTROL_ACTION_UP]) ? 1 : 0;
+                in.down |= SDL_GameControllerGetButton(a.controls_gamepad, (SDL_GameControllerButton)a.controls_pad_button[CONTROL_ACTION_DOWN]) ? 1 : 0;
+                in.left |= SDL_GameControllerGetButton(a.controls_gamepad, (SDL_GameControllerButton)a.controls_pad_button[CONTROL_ACTION_LEFT]) ? 1 : 0;
+                in.right |= SDL_GameControllerGetButton(a.controls_gamepad, (SDL_GameControllerButton)a.controls_pad_button[CONTROL_ACTION_RIGHT]) ? 1 : 0;
+                in.fire |= SDL_GameControllerGetButton(a.controls_gamepad, (SDL_GameControllerButton)a.controls_pad_button[CONTROL_ACTION_PRIMARY_FIRE]) ? 1 : 0;
+                in.secondary_fire |= SDL_GameControllerGetButton(a.controls_gamepad, (SDL_GameControllerButton)a.controls_pad_button[CONTROL_ACTION_SECONDARY_FIRE]) ? 1 : 0;
+            }
             in.restart = restart_pressed;
         }
 
@@ -5372,11 +5692,11 @@ int main(void) {
         if (dt_raw <= 0.0f) dt_raw = 1.0f / 60.0f;
         float dt_sim = dt_raw;
         if (dt_sim > (1.0f / 15.0f)) dt_sim = 1.0f / 15.0f;
-        if (!a.show_acoustics && !a.show_video_menu && !a.show_planetarium && !a.show_level_editor) {
+        if (!controls_ui_active(&a)) {
             game_update(&a.game, dt_sim, &in);
         }
         if (a.audio_ready) {
-            const int thrust_on = (!a.show_acoustics && !a.show_video_menu && !a.show_planetarium && !a.show_level_editor) &&
+            const int thrust_on = (!controls_ui_active(&a)) &&
                                   (in.left || in.right || in.up || in.down) && (a.game.lives > 0);
             atomic_store_explicit(&a.thrust_gate, thrust_on ? 1 : 0, memory_order_release);
         }

@@ -3,6 +3,8 @@
 
 #include "render.h"
 
+#define SETTINGS_CONTROL_ACTION_COUNT 6
+
 typedef struct settings_resolution {
     int w;
     int h;
@@ -15,6 +17,9 @@ typedef struct app_settings {
     int width;
     int height;
     float video_dial_01[VIDEO_MENU_DIAL_COUNT];
+    int controls_use_gamepad;
+    int controls_key_scancode[SETTINGS_CONTROL_ACTION_COUNT];
+    int controls_pad_button[SETTINGS_CONTROL_ACTION_COUNT];
 } app_settings;
 
 int settings_save(const app_settings* s);

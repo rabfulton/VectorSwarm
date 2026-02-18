@@ -199,6 +199,7 @@ typedef struct game_input {
     int up;
     int down;
     int fire;
+    int secondary_fire;
     int restart;
 } game_input;
 

@@ -1862,6 +1862,62 @@ static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render
     return VG_OK;
 }
 
+static vg_result draw_controls_menu(vg_context* ctx, float w, float h, const render_metrics* metrics) {
+    const float ui = ui_reference_scale(w, h);
+    const vg_rect panel = make_ui_safe_frame(w, h);
+    const palette_theme pal = get_palette_theme(metrics->palette_mode);
+    vg_stroke_style frame = make_stroke(2.0f * ui, 1.0f, pal.primary, VG_BLEND_ALPHA);
+    vg_stroke_style txt = make_stroke(1.2f * ui, 1.0f, pal.secondary, VG_BLEND_ALPHA);
+    vg_fill_style haze = make_fill(0.30f, pal.haze, VG_BLEND_ALPHA);
+    vg_result r = vg_fill_rect(ctx, panel, &haze);
+    if (r != VG_OK) return r;
+    r = vg_draw_rect(ctx, panel, &frame);
+    if (r != VG_OK) return r;
+
+    r = draw_text_vector_glow(ctx, "CONTROLS", (vg_vec2){panel.x + panel.w * 0.04f, panel.y + panel.h * 0.92f}, 18.0f * ui, 1.3f * ui, &frame, &txt);
+    if (r != VG_OK) return r;
+    r = draw_text_vector_glow(ctx, "5 EXIT   ARROWS/NAV SELECT   ENTER BIND", (vg_vec2){panel.x + panel.w * 0.04f, panel.y + panel.h * 0.875f}, 10.0f * ui, 0.8f * ui, &frame, &txt);
+    if (r != VG_OK) return r;
+
+    {
+        char gp[128];
+        snprintf(gp, sizeof(gp), "GAMEPAD: %s", (metrics->controls_pad_name && metrics->controls_pad_name[0]) ? metrics->controls_pad_name : "NO GAMEPAD");
+        r = draw_text_vector_glow(ctx, gp, (vg_vec2){panel.x + panel.w * 0.04f, panel.y + panel.h * 0.82f}, 10.8f * ui, 0.8f * ui, &frame, &txt);
+        if (r != VG_OK) return r;
+    }
+
+    const float table_x = panel.x + panel.w * 0.04f;
+    const float table_y0 = panel.y + panel.h * 0.74f;
+    const float row_h = panel.h * 0.085f;
+    const float act_w = panel.w * 0.34f;
+    const float key_w = panel.w * 0.25f;
+    const float pad_w = panel.w * 0.25f;
+    for (int i = 0; i < CONTROL_ACTION_COUNT_RENDER; ++i) {
+        const vg_rect ra = {table_x, table_y0 - (float)i * row_h, act_w, row_h * 0.72f};
+        const vg_rect rk = {ra.x + ra.w + panel.w * 0.02f, ra.y, key_w, ra.h};
+        const vg_rect rp = {rk.x + rk.w + panel.w * 0.02f, ra.y, pad_w, ra.h};
+        r = vg_draw_button(ctx, ra, metrics->controls_action_label[i], 12.0f * ui, &frame, &txt, 0);
+        if (r != VG_OK) return r;
+        r = vg_draw_button(ctx, rk, metrics->controls_key_label[i], 12.0f * ui, &frame, &txt,
+                           (metrics->controls_selected == i && metrics->controls_selected_column == 0) ? 1 : 0);
+        if (r != VG_OK) return r;
+        r = vg_draw_button(ctx, rp, metrics->controls_pad_label[i], 12.0f * ui, &frame, &txt,
+                           (metrics->controls_selected == i && metrics->controls_selected_column == 1) ? 1 : 0);
+        if (r != VG_OK) return r;
+    }
+    {
+        const int row = CONTROL_ACTION_COUNT_RENDER;
+        const vg_rect rt = {table_x, table_y0 - (float)row * row_h, act_w + panel.w * 0.02f + key_w + panel.w * 0.02f + pad_w, row_h * 0.72f};
+        r = vg_draw_button(ctx, rt, metrics->controls_use_gamepad ? "USE JOYPAD: ON" : "USE JOYPAD: OFF", 12.0f * ui, &frame, &txt, (metrics->controls_selected == row) ? 1 : 0);
+        if (r != VG_OK) return r;
+    }
+    if (metrics->controls_rebinding_action >= 0) {
+        r = draw_text_vector_glow(ctx, "PRESS A KEY OR GAMEPAD BUTTON  (ESC TO CANCEL)", (vg_vec2){panel.x + panel.w * 0.04f, panel.y + panel.h * 0.08f}, 11.0f * ui, 0.85f * ui, &frame, &txt);
+        if (r != VG_OK) return r;
+    }
+    return VG_OK;
+}
+
 static const char* level_editor_marker_name(int kind) {
     switch (kind) {
         case 0: return "EXIT";
@@ -4255,6 +4311,17 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             return r;
         }
         r = draw_level_editor_ui(ctx, g->world_w, g->world_h, metrics, metrics->ui_time_s);
+        if (r != VG_OK) {
+            return r;
+        }
+        return draw_mouse_pointer(ctx, g->world_w, g->world_h, metrics, &txt_main);
+    }
+    if (metrics->show_controls_menu) {
+        vg_result r = vg_fill_rect(ctx, (vg_rect){0.0f, 0.0f, g->world_w, g->world_h}, &bg);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = draw_controls_menu(ctx, g->world_w, g->world_h, metrics);
         if (r != VG_OK) {
             return r;
         }
