@@ -15,6 +15,7 @@ find_package(Vulkan REQUIRED)
 
 add_executable(v_type
     src/acoustics_ui_layout.c
+    src/audio.c
     src/game.c
     src/level_editor.c
     src/leveldef.c

@@ -1,5 +1,6 @@
 #include "game.h"
 #include "acoustics_ui_layout.h"
+#include "audio.h"
 #include "level_editor.h"
 #include "leveldef.h"
 #include "planetarium/planetarium_registry.h"
@@ -65,9 +66,6 @@
 #define ACOUSTICS_SLOTS_PATH "acoustics_slots.cfg"
 #define SETTINGS_PATH "settings.cfg"
 #define ACOUSTICS_SCOPE_HISTORY_SAMPLES 8192
-#define AUDIO_SPATIAL_EVENT_CAP 256
-#define AUDIO_COMBAT_VOICE_COUNT 24
-#define AUDIO_MAX_BEEP_SAMPLES 4096
 #define GPU_PARTICLE_MAX_INSTANCES MAX_PARTICLES
 #define TERRAIN_ROWS 24
 #define TERRAIN_COLS 70
@@ -182,39 +180,6 @@ enum acoustics_combat_slider_id {
     ACOUST_COMBAT_EXP_PANW = 13,
     ACOUST_COMBAT_SLIDER_COUNT = 14
 };
-
-typedef struct audio_spatial_event {
-    uint8_t type;
-    float pan;
-    float gain;
-} audio_spatial_event;
-
-typedef struct audio_combat_voice {
-    int active;
-    uint8_t type;
-    float pan;
-    float gain;
-    float phase;
-    float freq_hz;
-    float attack_s;
-    float decay_s;
-    float noise_mix;
-    float fm_depth_hz;
-    float fm_rate_hz;
-    float fm_phase;
-    float time_s;
-} audio_combat_voice;
-
-typedef struct combat_sound_params {
-    float level;
-    float pitch_hz;
-    float attack_ms;
-    float decay_ms;
-    float noise_mix;
-    float fm_depth_hz;
-    float fm_rate_hz;
-    float pan_width;
-} combat_sound_params;
 
 typedef struct app {
     SDL_Window* window;
@@ -785,11 +750,6 @@ static float high_plains_looped_noise(float world_x, float z) {
     return n0 * 0.78f + n1 * 0.22f;
 }
 
-static float rand01_from_state(uint32_t* s) {
-    *s = (*s * 1664525u) + 1013904223u;
-    return (float)((*s >> 8) & 0x00ffffffu) / 16777215.0f;
-}
-
 static const planetary_system_def* app_planetarium_system(const app* a) {
     if (!a) {
         return NULL;
@@ -1225,19 +1185,15 @@ static int audio_spatial_enqueue(app* a, uint8_t type, float pan, float gain) {
     if (!a || !a->audio_ready) {
         return 0;
     }
-    const uint32_t cap = AUDIO_SPATIAL_EVENT_CAP;
-    const uint32_t w = atomic_load_explicit(&a->audio_spatial_write, memory_order_relaxed);
-    const uint32_t r = atomic_load_explicit(&a->audio_spatial_read, memory_order_acquire);
-    const uint32_t next = (w + 1u) % cap;
-    if (next == r) {
-        return 0;
-    }
-    audio_spatial_event* e = &a->audio_spatial_q[w];
-    e->type = type;
-    e->pan = clampf(pan, -1.0f, 1.0f);
-    e->gain = clampf(gain, 0.0f, 2.0f);
-    atomic_store_explicit(&a->audio_spatial_write, next, memory_order_release);
-    return 1;
+    return audio_spatial_enqueue_ring(
+        &a->audio_spatial_write,
+        &a->audio_spatial_read,
+        a->audio_spatial_q,
+        AUDIO_SPATIAL_EVENT_CAP,
+        type,
+        pan,
+        gain
+    );
 }
 
 static void trigger_thruster_test(app* a) {
@@ -2086,154 +2042,6 @@ static void rebuild_scope_window(app* a) {
     }
 }
 
-static int audio_spatial_dequeue(app* a, audio_spatial_event* out) {
-    if (!a || !out) {
-        return 0;
-    }
-    const uint32_t cap = AUDIO_SPATIAL_EVENT_CAP;
-    const uint32_t r = atomic_load_explicit(&a->audio_spatial_read, memory_order_relaxed);
-    const uint32_t w = atomic_load_explicit(&a->audio_spatial_write, memory_order_acquire);
-    if (r == w) {
-        return 0;
-    }
-    *out = a->audio_spatial_q[r];
-    atomic_store_explicit(&a->audio_spatial_read, (r + 1u) % cap, memory_order_release);
-    return 1;
-}
-
-static void spawn_combat_voice(app* a, const audio_spatial_event* ev) {
-    if (!a || !ev) {
-        return;
-    }
-    const int type = (int)ev->type;
-    const combat_sound_params* p = NULL;
-    int limit = 0;
-    float pitch_scale = 1.0f;
-    if (type == GAME_AUDIO_EVENT_ENEMY_FIRE) {
-        p = &a->enemy_fire_sound;
-        limit = 14;
-    } else if (type == GAME_AUDIO_EVENT_SEARCHLIGHT_FIRE) {
-        p = &a->enemy_fire_sound;
-        limit = 14;
-        pitch_scale = 0.5f; /* One octave below standard enemy gun. */
-    } else if (type == GAME_AUDIO_EVENT_EXPLOSION) {
-        p = &a->explosion_sound;
-        limit = 10;
-    } else {
-        return;
-    }
-
-    int active_same = 0;
-    int free_i = -1;
-    int steal_i = 0;
-    float oldest = -1.0f;
-    for (int i = 0; i < AUDIO_COMBAT_VOICE_COUNT; ++i) {
-        audio_combat_voice* v = &a->combat_voices[i];
-        if (!v->active) {
-            if (free_i < 0) {
-                free_i = i;
-            }
-            continue;
-        }
-        if ((int)v->type == type) {
-            active_same += 1;
-            if (v->time_s > oldest) {
-                oldest = v->time_s;
-                steal_i = i;
-            }
-        }
-    }
-    if (active_same >= limit && free_i < 0) {
-        free_i = steal_i;
-    }
-    if (free_i < 0) {
-        for (int i = 0; i < AUDIO_COMBAT_VOICE_COUNT; ++i) {
-            if (a->combat_voices[i].time_s > oldest) {
-                oldest = a->combat_voices[i].time_s;
-                free_i = i;
-            }
-        }
-    }
-    if (free_i < 0) {
-        return;
-    }
-
-    audio_combat_voice* v = &a->combat_voices[free_i];
-    const float jitter = (rand01_from_state(&a->audio_rng) - 0.5f) * ((type == GAME_AUDIO_EVENT_EXPLOSION) ? 0.18f : 0.08f);
-    v->active = 1;
-    v->type = (uint8_t)type;
-    v->pan = clampf(ev->pan * p->pan_width, -1.0f, 1.0f);
-    v->gain = clampf(p->level * ev->gain, 0.0f, 1.2f);
-    v->phase = rand01_from_state(&a->audio_rng) * 6.28318530718f;
-    v->freq_hz = p->pitch_hz * pitch_scale * (1.0f + jitter);
-    v->attack_s = fmaxf(0.0001f, p->attack_ms * 0.001f);
-    v->decay_s = fmaxf(0.005f, p->decay_ms * 0.001f);
-    v->noise_mix = clampf(p->noise_mix, 0.0f, 1.0f);
-    v->fm_depth_hz = (type == GAME_AUDIO_EVENT_EXPLOSION) ? fmaxf(0.0f, p->fm_depth_hz) : 0.0f;
-    v->fm_rate_hz = (type == GAME_AUDIO_EVENT_EXPLOSION) ? fmaxf(0.0f, p->fm_rate_hz) : 0.0f;
-    v->fm_phase = rand01_from_state(&a->audio_rng) * 6.28318530718f;
-    v->time_s = 0.0f;
-}
-
-static void render_combat_voices(app* a, float* left, float* right, uint32_t n) {
-    if (!a || !left || !right || n == 0u) {
-        return;
-    }
-    const float sr = (float)a->audio_have.freq;
-    for (int vi = 0; vi < AUDIO_COMBAT_VOICE_COUNT; ++vi) {
-        audio_combat_voice* v = &a->combat_voices[vi];
-        if (!v->active) {
-            continue;
-        }
-        for (uint32_t i = 0; i < n; ++i) {
-            const float t = v->time_s;
-            const float total_s = v->attack_s + v->decay_s;
-            if (t >= total_s) {
-                v->active = 0;
-                break;
-            }
-            float env = 0.0f;
-            if (t < v->attack_s) {
-                env = t / v->attack_s;
-            } else {
-                env = 1.0f - (t - v->attack_s) / v->decay_s;
-            }
-            if (env < 0.0f) {
-                env = 0.0f;
-            }
-
-            float freq = v->freq_hz;
-            if (v->type == GAME_AUDIO_EVENT_EXPLOSION) {
-                const float down = clampf((t / (v->decay_s + v->attack_s + 0.001f)), 0.0f, 1.0f);
-                freq *= (1.0f - 0.55f * down);
-                if (v->fm_depth_hz > 0.0f) {
-                    const float fm = sinf(v->fm_phase) * v->fm_depth_hz * (0.35f + 0.65f * env);
-                    freq = fmaxf(8.0f, freq + fm);
-                }
-            }
-            const float step = 2.0f * 3.14159265358979323846f * freq / sr;
-            const float tone = sinf(v->phase);
-            const float noise = rand01_from_state(&a->audio_rng) * 2.0f - 1.0f;
-            const float s = ((1.0f - v->noise_mix) * tone + v->noise_mix * noise) * env * v->gain;
-            const float pan = clampf(v->pan, -1.0f, 1.0f);
-            const float l_gain = sqrtf(0.5f * (1.0f - pan));
-            const float r_gain = sqrtf(0.5f * (1.0f + pan));
-            left[i] += s * l_gain;
-            right[i] += s * r_gain;
-
-            v->phase += step;
-            if (v->phase > 6.28318530718f) {
-                v->phase -= 6.28318530718f;
-            }
-            v->fm_phase += 2.0f * 3.14159265358979323846f * v->fm_rate_hz / sr;
-            if (v->fm_phase > 6.28318530718f) {
-                v->fm_phase -= 6.28318530718f;
-            }
-            v->time_s += 1.0f / sr;
-        }
-    }
-}
-
 static void audio_callback(void* userdata, Uint8* stream, int len) {
     app* a = (app*)userdata;
     if (!a || !stream || len <= 0) {
@@ -2285,27 +2093,39 @@ static void audio_callback(void* userdata, Uint8* stream, int len) {
             voices = 3;
         }
         for (int v = 0; v < voices; ++v) {
-            const float jitter = (rand01_from_state(&a->audio_rng) - 0.5f) * 0.012f;
+            const float jitter = (audio_rand01_from_state(&a->audio_rng) - 0.5f) * 0.012f;
             const float hz = base_hz * intervals[v] * (1.0f + jitter);
             wtp_note_on_hz(&a->weapon_synth, (int32_t)a->fire_note_id++, hz);
         }
     }
 
     audio_spatial_event ev;
-    while (audio_spatial_dequeue(a, &ev)) {
-        spawn_combat_voice(a, &ev);
+    while (audio_spatial_dequeue_ring(
+        &a->audio_spatial_read,
+        &a->audio_spatial_write,
+        a->audio_spatial_q,
+        AUDIO_SPATIAL_EVENT_CAP,
+        &ev
+    )) {
+        audio_spawn_combat_voice(
+            a->combat_voices, AUDIO_COMBAT_VOICE_COUNT, &a->audio_rng, &ev, &a->enemy_fire_sound, &a->explosion_sound
+        );
     }
     for (uint32_t i = 0; i < enemy_fire_tests; ++i) {
         ev.type = (uint8_t)GAME_AUDIO_EVENT_ENEMY_FIRE;
         ev.pan = 0.0f;
         ev.gain = 1.0f;
-        spawn_combat_voice(a, &ev);
+        audio_spawn_combat_voice(
+            a->combat_voices, AUDIO_COMBAT_VOICE_COUNT, &a->audio_rng, &ev, &a->enemy_fire_sound, &a->explosion_sound
+        );
     }
     for (uint32_t i = 0; i < explosion_tests; ++i) {
         ev.type = (uint8_t)GAME_AUDIO_EVENT_EXPLOSION;
         ev.pan = 0.0f;
         ev.gain = 1.0f;
-        spawn_combat_voice(a, &ev);
+        audio_spawn_combat_voice(
+            a->combat_voices, AUDIO_COMBAT_VOICE_COUNT, &a->audio_rng, &ev, &a->enemy_fire_sound, &a->explosion_sound
+        );
     }
 
     uint32_t remaining = frames;
@@ -2327,7 +2147,15 @@ static void audio_callback(void* userdata, Uint8* stream, int len) {
         }
         memset(a->audio_mix_tmp_c, 0, sizeof(float) * n);
         memset(a->audio_mix_tmp_d, 0, sizeof(float) * n);
-        render_combat_voices(a, a->audio_mix_tmp_c, a->audio_mix_tmp_d, n);
+        audio_render_combat_voices(
+            a->combat_voices,
+            AUDIO_COMBAT_VOICE_COUNT,
+            &a->audio_rng,
+            (float)a->audio_have.freq,
+            a->audio_mix_tmp_c,
+            a->audio_mix_tmp_d,
+            n
+        );
         for (uint32_t i = 0; i < n; ++i) {
             const float mono = a->audio_mix_tmp_a[i] + a->audio_mix_tmp_b[i];
             float l = mono + a->audio_mix_tmp_c[i];
@@ -2362,23 +2190,7 @@ static void queue_teletype_beep(app* a, float freq_hz, float dur_s, float amp) {
         return;
     }
     const int sample_rate = (a->audio_have.freq > 0) ? a->audio_have.freq : 48000;
-    int n = (int)(dur_s * (float)sample_rate);
-    if (n < 64) {
-        n = 64;
-    }
-    if (n > AUDIO_MAX_BEEP_SAMPLES) {
-        n = AUDIO_MAX_BEEP_SAMPLES;
-    }
-    float samples[AUDIO_MAX_BEEP_SAMPLES];
-    float phase = 0.0f;
-    const float step = 2.0f * 3.14159265358979323846f * freq_hz / (float)sample_rate;
-    for (int i = 0; i < n; ++i) {
-        const float t = (float)i / (float)(n - 1);
-        const float env = (1.0f - t) * (1.0f - t);
-        samples[i] = sinf(phase) * amp * env;
-        phase += step;
-    }
-    (void)wtp_ringbuffer_write(&a->beep_rb, samples, (uint32_t)n);
+    audio_queue_teletype_beep(&a->beep_rb, sample_rate, freq_hz, dur_s, amp);
 }
 
 static void teletype_beep_cb(void* user, char ch, float freq_hz, float dur_s, float amp) {
