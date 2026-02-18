@@ -2,6 +2,7 @@
 #include "game.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 static float clampf(float v, float lo, float hi) {
@@ -16,6 +17,513 @@ float audio_rand01_from_state(uint32_t* state) {
     }
     *state = (*state * 1664525u) + 1013904223u;
     return (float)((*state >> 8) & 0x00ffffffu) / 16777215.0f;
+}
+
+static float lerpf(float a, float b, float t) {
+    return a + (b - a) * t;
+}
+
+static float round_to(float v, float step) {
+    if (step <= 0.0f) {
+        return v;
+    }
+    return floorf(v / step + 0.5f) * step;
+}
+
+float acoustics_value_to_display(int id, float t01) {
+    const float t = clampf(t01, 0.0f, 1.0f);
+    switch (id) {
+        case ACOUST_FIRE_WAVE: return floorf(t * 4.0f + 0.5f);
+        case ACOUST_FIRE_PITCH: return lerpf(90.0f, 420.0f, t);
+        case ACOUST_FIRE_ATTACK: return lerpf(0.2f, 28.0f, t);
+        case ACOUST_FIRE_DECAY: return lerpf(12.0f, 220.0f, t);
+        case ACOUST_FIRE_CUTOFF: return lerpf(600.0f, 10000.0f, t);
+        case ACOUST_FIRE_RESONANCE: return lerpf(0.05f, 0.98f, t);
+        case ACOUST_FIRE_SWEEP_ST: return lerpf(-24.0f, 24.0f, t);
+        case ACOUST_FIRE_SWEEP_DECAY: return lerpf(2.0f, 260.0f, t);
+        case ACOUST_THR_LEVEL: return lerpf(0.04f, 0.60f, t);
+        case ACOUST_THR_PITCH: return lerpf(30.0f, 180.0f, t);
+        case ACOUST_THR_ATTACK: return lerpf(4.0f, 140.0f, t);
+        case ACOUST_THR_RELEASE: return lerpf(18.0f, 650.0f, t);
+        case ACOUST_THR_CUTOFF: return lerpf(120.0f, 3200.0f, t);
+        case ACOUST_THR_RESONANCE: return lerpf(0.02f, 0.90f, t);
+        default: return t;
+    }
+}
+
+float acoustics_value_to_ui_display(int id, float t01) {
+    const float v = acoustics_value_to_display(id, t01);
+    switch (id) {
+        case ACOUST_FIRE_WAVE:
+            return v;
+        case ACOUST_FIRE_PITCH:
+        case ACOUST_FIRE_ATTACK:
+        case ACOUST_FIRE_DECAY:
+        case ACOUST_FIRE_SWEEP_DECAY:
+        case ACOUST_THR_PITCH:
+        case ACOUST_THR_ATTACK:
+        case ACOUST_THR_RELEASE:
+            return round_to(v, 1.0f);
+        case ACOUST_FIRE_CUTOFF:
+        case ACOUST_THR_CUTOFF:
+            return round_to(v * 0.001f, 0.01f);
+        case ACOUST_FIRE_RESONANCE:
+        case ACOUST_THR_RESONANCE:
+        case ACOUST_THR_LEVEL:
+            return round_to(v, 0.01f);
+        case ACOUST_FIRE_SWEEP_ST:
+            return round_to(v, 0.1f);
+        default:
+            return v;
+    }
+}
+
+float acoustics_combat_value_to_display(int id, float t01) {
+    const float t = clampf(t01, 0.0f, 1.0f);
+    switch (id) {
+        case ACOUST_COMBAT_ENEMY_LEVEL:
+        case ACOUST_COMBAT_EXP_LEVEL:
+            return lerpf(0.02f, 0.95f, t);
+        case ACOUST_COMBAT_ENEMY_PITCH:
+            return lerpf(150.0f, 1800.0f, t);
+        case ACOUST_COMBAT_EXP_PITCH:
+            return lerpf(40.0f, 280.0f, t);
+        case ACOUST_COMBAT_ENEMY_ATTACK:
+        case ACOUST_COMBAT_EXP_ATTACK:
+            return lerpf(0.1f, 45.0f, t);
+        case ACOUST_COMBAT_ENEMY_DECAY:
+            return lerpf(14.0f, 280.0f, t);
+        case ACOUST_COMBAT_EXP_DECAY:
+            return lerpf(60.0f, 900.0f, t);
+        case ACOUST_COMBAT_ENEMY_NOISE:
+        case ACOUST_COMBAT_EXP_NOISE:
+            return t;
+        case ACOUST_COMBAT_EXP_FM_DEPTH:
+            return lerpf(0.0f, 420.0f, t);
+        case ACOUST_COMBAT_EXP_FM_RATE:
+            return lerpf(8.0f, 1600.0f, t);
+        case ACOUST_COMBAT_ENEMY_PANW:
+        case ACOUST_COMBAT_EXP_PANW:
+            return lerpf(0.25f, 1.20f, t);
+        default: return t;
+    }
+}
+
+float acoustics_combat_value_to_ui_display(int id, float t01) {
+    const float v = acoustics_combat_value_to_display(id, t01);
+    switch (id) {
+        case ACOUST_COMBAT_ENEMY_LEVEL:
+        case ACOUST_COMBAT_EXP_LEVEL:
+        case ACOUST_COMBAT_ENEMY_NOISE:
+        case ACOUST_COMBAT_EXP_NOISE:
+        case ACOUST_COMBAT_ENEMY_PANW:
+        case ACOUST_COMBAT_EXP_PANW:
+            return round_to(v, 0.01f);
+        case ACOUST_COMBAT_ENEMY_ATTACK:
+        case ACOUST_COMBAT_ENEMY_DECAY:
+        case ACOUST_COMBAT_EXP_ATTACK:
+        case ACOUST_COMBAT_EXP_DECAY:
+        case ACOUST_COMBAT_EXP_FM_DEPTH:
+        case ACOUST_COMBAT_EXP_FM_RATE:
+            return round_to(v, 1.0f);
+        case ACOUST_COMBAT_ENEMY_PITCH:
+        case ACOUST_COMBAT_EXP_PITCH:
+            return round_to(v, 1.0f);
+        default:
+            return round_to(v, 0.01f);
+    }
+}
+
+void acoustics_defaults_init(float out_values_01[ACOUSTICS_SLIDER_COUNT]) {
+    if (!out_values_01) {
+        return;
+    }
+    out_values_01[ACOUST_FIRE_WAVE] = 0.275879592f;
+    out_values_01[ACOUST_FIRE_PITCH] = 0.602183819f;
+    out_values_01[ACOUST_FIRE_ATTACK] = 0.003753547f;
+    out_values_01[ACOUST_FIRE_DECAY] = 0.460912049f;
+    out_values_01[ACOUST_FIRE_CUTOFF] = 0.100429699f;
+    out_values_01[ACOUST_FIRE_RESONANCE] = 0.985629857f;
+    out_values_01[ACOUST_FIRE_SWEEP_ST] = 0.949483037f;
+    out_values_01[ACOUST_FIRE_SWEEP_DECAY] = 0.827205420f;
+    out_values_01[ACOUST_THR_LEVEL] = 0.570973873f;
+    out_values_01[ACOUST_THR_PITCH] = 0.997384906f;
+    out_values_01[ACOUST_THR_ATTACK] = 0.814027071f;
+    out_values_01[ACOUST_THR_RELEASE] = 0.294867337f;
+    out_values_01[ACOUST_THR_CUTOFF] = 0.035423841f;
+    out_values_01[ACOUST_THR_RESONANCE] = 0.998682797f;
+}
+
+void acoustics_combat_defaults_init(float out_values_01[ACOUST_COMBAT_SLIDER_COUNT]) {
+    if (!out_values_01) {
+        return;
+    }
+    out_values_01[ACOUST_COMBAT_ENEMY_LEVEL] = 0.40f;
+    out_values_01[ACOUST_COMBAT_ENEMY_PITCH] = 0.36f;
+    out_values_01[ACOUST_COMBAT_ENEMY_ATTACK] = 0.05f;
+    out_values_01[ACOUST_COMBAT_ENEMY_DECAY] = 0.36f;
+    out_values_01[ACOUST_COMBAT_ENEMY_NOISE] = 0.20f;
+    out_values_01[ACOUST_COMBAT_ENEMY_PANW] = 0.78f;
+    out_values_01[ACOUST_COMBAT_EXP_LEVEL] = 0.58f;
+    out_values_01[ACOUST_COMBAT_EXP_PITCH] = 0.28f;
+    out_values_01[ACOUST_COMBAT_EXP_ATTACK] = 0.07f;
+    out_values_01[ACOUST_COMBAT_EXP_DECAY] = 0.54f;
+    out_values_01[ACOUST_COMBAT_EXP_NOISE] = 0.64f;
+    out_values_01[ACOUST_COMBAT_EXP_FM_DEPTH] = 0.28f;
+    out_values_01[ACOUST_COMBAT_EXP_FM_RATE] = 0.21f;
+    out_values_01[ACOUST_COMBAT_EXP_PANW] = 0.90f;
+}
+
+static int file_exists_readable(const char* path) {
+    if (!path || path[0] == '\0') {
+        return 0;
+    }
+    FILE* f = fopen(path, "r");
+    if (!f) {
+        return 0;
+    }
+    fclose(f);
+    return 1;
+}
+
+const char* resolve_acoustics_slots_path(void) {
+    static const char* candidates[] = {
+        "acoustics_slots.cfg",
+        "build/acoustics_slots.cfg",
+        "../build/acoustics_slots.cfg"
+    };
+    for (int i = 0; i < (int)(sizeof(candidates) / sizeof(candidates[0])); ++i) {
+        if (file_exists_readable(candidates[i])) {
+            return candidates[i];
+        }
+    }
+    return "acoustics_slots.cfg";
+}
+
+void acoustics_slot_defaults_view(acoustics_slot_view* v) {
+    if (!v || !v->fire_slot_selected || !v->thr_slot_selected || !v->enemy_slot_selected || !v->exp_slot_selected ||
+        !v->fire_slot_defined || !v->thr_slot_defined || !v->enemy_slot_defined || !v->exp_slot_defined ||
+        !v->fire_slots || !v->thr_slots || !v->enemy_slots || !v->exp_slots ||
+        !v->value_01 || !v->combat_value_01) {
+        return;
+    }
+    *v->fire_slot_selected = 0;
+    *v->thr_slot_selected = 0;
+    *v->enemy_slot_selected = 0;
+    *v->exp_slot_selected = 0;
+    memset(v->fire_slot_defined, 0, ACOUSTICS_SLOT_COUNT * sizeof(v->fire_slot_defined[0]));
+    memset(v->thr_slot_defined, 0, ACOUSTICS_SLOT_COUNT * sizeof(v->thr_slot_defined[0]));
+    memset(v->enemy_slot_defined, 0, ACOUSTICS_SLOT_COUNT * sizeof(v->enemy_slot_defined[0]));
+    memset(v->exp_slot_defined, 0, ACOUSTICS_SLOT_COUNT * sizeof(v->exp_slot_defined[0]));
+    memset(v->fire_slots, 0, ACOUSTICS_SLOT_COUNT * sizeof(v->fire_slots[0]));
+    memset(v->thr_slots, 0, ACOUSTICS_SLOT_COUNT * sizeof(v->thr_slots[0]));
+    memset(v->enemy_slots, 0, ACOUSTICS_SLOT_COUNT * sizeof(v->enemy_slots[0]));
+    memset(v->exp_slots, 0, ACOUSTICS_SLOT_COUNT * sizeof(v->exp_slots[0]));
+    for (int i = 0; i < 8; ++i) {
+        v->fire_slots[0][i] = v->value_01[i];
+    }
+    for (int i = 0; i < 6; ++i) {
+        v->thr_slots[0][i] = v->value_01[8 + i];
+        v->enemy_slots[0][i] = v->combat_value_01[i];
+    }
+    for (int i = 0; i < 8; ++i) {
+        v->exp_slots[0][i] = v->combat_value_01[6 + i];
+    }
+    v->fire_slot_defined[0] = 1u;
+    v->thr_slot_defined[0] = 1u;
+    v->enemy_slot_defined[0] = 1u;
+    v->exp_slot_defined[0] = 1u;
+}
+
+void acoustics_capture_current_to_selected_slot_view(acoustics_slot_view* v, int is_fire) {
+    if (!v || !v->value_01 || !v->fire_slots || !v->thr_slots || !v->fire_slot_defined || !v->thr_slot_defined ||
+        !v->fire_slot_selected || !v->thr_slot_selected) {
+        return;
+    }
+    if (is_fire) {
+        const int s = *v->fire_slot_selected;
+        if (s < 0 || s >= ACOUSTICS_SLOT_COUNT) {
+            return;
+        }
+        for (int i = 0; i < 8; ++i) {
+            v->fire_slots[s][i] = v->value_01[i];
+        }
+        v->fire_slot_defined[s] = 1u;
+        return;
+    }
+    const int s = *v->thr_slot_selected;
+    if (s < 0 || s >= ACOUSTICS_SLOT_COUNT) {
+        return;
+    }
+    for (int i = 0; i < 6; ++i) {
+        v->thr_slots[s][i] = v->value_01[8 + i];
+    }
+    v->thr_slot_defined[s] = 1u;
+}
+
+void acoustics_capture_current_to_selected_combat_slot_view(acoustics_slot_view* v, int is_enemy) {
+    if (!v || !v->combat_value_01 || !v->enemy_slots || !v->exp_slots ||
+        !v->enemy_slot_defined || !v->exp_slot_defined || !v->enemy_slot_selected || !v->exp_slot_selected) {
+        return;
+    }
+    if (is_enemy) {
+        const int s = *v->enemy_slot_selected;
+        if (s < 0 || s >= ACOUSTICS_SLOT_COUNT) {
+            return;
+        }
+        for (int i = 0; i < 6; ++i) {
+            v->enemy_slots[s][i] = v->combat_value_01[i];
+        }
+        v->enemy_slot_defined[s] = 1u;
+        return;
+    }
+    const int s = *v->exp_slot_selected;
+    if (s < 0 || s >= ACOUSTICS_SLOT_COUNT) {
+        return;
+    }
+    for (int i = 0; i < 8; ++i) {
+        v->exp_slots[s][i] = v->combat_value_01[6 + i];
+    }
+    v->exp_slot_defined[s] = 1u;
+}
+
+void acoustics_load_slot_to_current_view(acoustics_slot_view* v, int is_fire, int slot_idx) {
+    if (!v || !v->value_01 || !v->fire_slots || !v->thr_slots || !v->fire_slot_defined || !v->thr_slot_defined ||
+        slot_idx < 0 || slot_idx >= ACOUSTICS_SLOT_COUNT) {
+        return;
+    }
+    if (is_fire) {
+        if (!v->fire_slot_defined[slot_idx]) {
+            return;
+        }
+        for (int i = 0; i < 8; ++i) {
+            v->value_01[i] = v->fire_slots[slot_idx][i];
+        }
+        return;
+    }
+    if (!v->thr_slot_defined[slot_idx]) {
+        return;
+    }
+    for (int i = 0; i < 6; ++i) {
+        v->value_01[8 + i] = v->thr_slots[slot_idx][i];
+    }
+}
+
+void acoustics_load_combat_slot_to_current_view(acoustics_slot_view* v, int is_enemy, int slot_idx) {
+    if (!v || !v->combat_value_01 || !v->enemy_slots || !v->exp_slots ||
+        !v->enemy_slot_defined || !v->exp_slot_defined || slot_idx < 0 || slot_idx >= ACOUSTICS_SLOT_COUNT) {
+        return;
+    }
+    if (is_enemy) {
+        if (!v->enemy_slot_defined[slot_idx]) {
+            return;
+        }
+        for (int i = 0; i < 6; ++i) {
+            v->combat_value_01[i] = v->enemy_slots[slot_idx][i];
+        }
+        return;
+    }
+    if (!v->exp_slot_defined[slot_idx]) {
+        return;
+    }
+    for (int i = 0; i < 8; ++i) {
+        v->combat_value_01[6 + i] = v->exp_slots[slot_idx][i];
+    }
+}
+
+int acoustics_save_slots_view(const acoustics_slot_view* v, const char* path) {
+    if (!v || !path || !v->fire_slot_selected || !v->thr_slot_selected || !v->enemy_slot_selected || !v->exp_slot_selected ||
+        !v->fire_slot_defined || !v->thr_slot_defined || !v->enemy_slot_defined || !v->exp_slot_defined ||
+        !v->fire_slots || !v->thr_slots || !v->enemy_slots || !v->exp_slots || !v->combat_value_01) {
+        return 0;
+    }
+    FILE* f = fopen(path, "w");
+    if (!f) {
+        return 0;
+    }
+    fprintf(f, "version=2\n");
+    fprintf(f, "fsel=%d\n", *v->fire_slot_selected);
+    fprintf(f, "tsel=%d\n", *v->thr_slot_selected);
+    fprintf(f, "cfsel=%d\n", *v->enemy_slot_selected);
+    fprintf(f, "ctsel=%d\n", *v->exp_slot_selected);
+    for (int s = 0; s < ACOUSTICS_SLOT_COUNT; ++s) {
+        fprintf(f, "fd%d=%d\n", s, v->fire_slot_defined[s] ? 1 : 0);
+        fprintf(f, "td%d=%d\n", s, v->thr_slot_defined[s] ? 1 : 0);
+        fprintf(f, "cfd%d=%d\n", s, v->enemy_slot_defined[s] ? 1 : 0);
+        fprintf(f, "ctd%d=%d\n", s, v->exp_slot_defined[s] ? 1 : 0);
+        for (int i = 0; i < 8; ++i) {
+            fprintf(f, "fv%d_%d=%.9f\n", s, i, v->fire_slots[s][i]);
+        }
+        for (int i = 0; i < 6; ++i) {
+            fprintf(f, "tv%d_%d=%.9f\n", s, i, v->thr_slots[s][i]);
+            fprintf(f, "cfv%d_%d=%.9f\n", s, i, v->enemy_slots[s][i]);
+        }
+        for (int i = 0; i < 8; ++i) {
+            fprintf(f, "ctv%d_%d=%.9f\n", s, i, v->exp_slots[s][i]);
+        }
+    }
+    for (int i = 0; i < ACOUST_COMBAT_SLIDER_COUNT; ++i) {
+        fprintf(f, "cv%d=%.9f\n", i, v->combat_value_01[i]);
+    }
+    fclose(f);
+    return 1;
+}
+
+int acoustics_load_slots_view(acoustics_slot_view* v, const char* path) {
+    if (!v || !path || !v->fire_slot_selected || !v->thr_slot_selected || !v->enemy_slot_selected || !v->exp_slot_selected ||
+        !v->fire_slot_defined || !v->thr_slot_defined || !v->enemy_slot_defined || !v->exp_slot_defined ||
+        !v->fire_slots || !v->thr_slots || !v->enemy_slots || !v->exp_slots || !v->combat_value_01 || !v->value_01) {
+        return 0;
+    }
+    FILE* f = fopen(path, "r");
+    if (!f) {
+        return 0;
+    }
+    char key[64];
+    float value = 0.0f;
+    while (fscanf(f, "%63[^=]=%f\n", key, &value) == 2) {
+        if (strcmp(key, "fsel") == 0) {
+            *v->fire_slot_selected = (int)clampf(value, 0.0f, (float)(ACOUSTICS_SLOT_COUNT - 1));
+            continue;
+        }
+        if (strcmp(key, "tsel") == 0) {
+            *v->thr_slot_selected = (int)clampf(value, 0.0f, (float)(ACOUSTICS_SLOT_COUNT - 1));
+            continue;
+        }
+        if (strcmp(key, "cfsel") == 0) {
+            *v->enemy_slot_selected = (int)clampf(value, 0.0f, (float)(ACOUSTICS_SLOT_COUNT - 1));
+            continue;
+        }
+        if (strcmp(key, "ctsel") == 0) {
+            *v->exp_slot_selected = (int)clampf(value, 0.0f, (float)(ACOUSTICS_SLOT_COUNT - 1));
+            continue;
+        }
+        int s = 0;
+        int i = 0;
+        if (sscanf(key, "fd%d", &s) == 1 && s >= 0 && s < ACOUSTICS_SLOT_COUNT) {
+            v->fire_slot_defined[s] = (value >= 0.5f) ? 1u : 0u;
+            continue;
+        }
+        if (sscanf(key, "td%d", &s) == 1 && s >= 0 && s < ACOUSTICS_SLOT_COUNT) {
+            v->thr_slot_defined[s] = (value >= 0.5f) ? 1u : 0u;
+            continue;
+        }
+        if (sscanf(key, "cfd%d", &s) == 1 && s >= 0 && s < ACOUSTICS_SLOT_COUNT) {
+            v->enemy_slot_defined[s] = (value >= 0.5f) ? 1u : 0u;
+            continue;
+        }
+        if (sscanf(key, "ctd%d", &s) == 1 && s >= 0 && s < ACOUSTICS_SLOT_COUNT) {
+            v->exp_slot_defined[s] = (value >= 0.5f) ? 1u : 0u;
+            continue;
+        }
+        if (sscanf(key, "fv%d_%d", &s, &i) == 2 && s >= 0 && s < ACOUSTICS_SLOT_COUNT && i >= 0 && i < 8) {
+            v->fire_slots[s][i] = clampf(value, 0.0f, 1.0f);
+            continue;
+        }
+        if (sscanf(key, "tv%d_%d", &s, &i) == 2 && s >= 0 && s < ACOUSTICS_SLOT_COUNT && i >= 0 && i < 6) {
+            v->thr_slots[s][i] = clampf(value, 0.0f, 1.0f);
+            continue;
+        }
+        if (sscanf(key, "cfv%d_%d", &s, &i) == 2 && s >= 0 && s < ACOUSTICS_SLOT_COUNT && i >= 0 && i < 6) {
+            v->enemy_slots[s][i] = clampf(value, 0.0f, 1.0f);
+            continue;
+        }
+        if (sscanf(key, "ctv%d_%d", &s, &i) == 2 && s >= 0 && s < ACOUSTICS_SLOT_COUNT && i >= 0 && i < 8) {
+            v->exp_slots[s][i] = clampf(value, 0.0f, 1.0f);
+            continue;
+        }
+        if (sscanf(key, "cv%d", &i) == 1 && i >= 0 && i < ACOUST_COMBAT_SLIDER_COUNT) {
+            v->combat_value_01[i] = clampf(value, 0.0f, 1.0f);
+            continue;
+        }
+    }
+    fclose(f);
+    acoustics_load_slot_to_current_view(v, 1, *v->fire_slot_selected);
+    acoustics_load_slot_to_current_view(v, 0, *v->thr_slot_selected);
+    acoustics_load_combat_slot_to_current_view(v, 1, *v->enemy_slot_selected);
+    acoustics_load_combat_slot_to_current_view(v, 0, *v->exp_slot_selected);
+    return 1;
+}
+
+void acoustics_apply_locked(acoustics_runtime_view* v) {
+    if (!v || !v->value_01 || !v->combat_value_01 || !v->weapon_synth || !v->thruster_synth ||
+        !v->enemy_fire_sound || !v->explosion_sound) {
+        return;
+    }
+    const int fire_wave_idx = (int)floorf(clampf(v->value_01[ACOUST_FIRE_WAVE], 0.0f, 1.0f) * 4.0f + 0.5f);
+    enum wtp_waveform_type fire_wave = (enum wtp_waveform_type)fire_wave_idx;
+    if (fire_wave >= WTP_WT_TYPES) {
+        fire_wave = WTP_WT_SAW;
+    }
+    wtp_set_waveform(v->weapon_synth, fire_wave);
+    wtp_set_adsr_ms(
+        v->weapon_synth,
+        acoustics_value_to_display(ACOUST_FIRE_ATTACK, v->value_01[ACOUST_FIRE_ATTACK]),
+        acoustics_value_to_display(ACOUST_FIRE_DECAY, v->value_01[ACOUST_FIRE_DECAY]),
+        0.0f,
+        80.0f
+    );
+    wtp_set_pitch_env(
+        v->weapon_synth,
+        acoustics_value_to_display(ACOUST_FIRE_SWEEP_ST, v->value_01[ACOUST_FIRE_SWEEP_ST]),
+        0.0f,
+        acoustics_value_to_display(ACOUST_FIRE_SWEEP_DECAY, v->value_01[ACOUST_FIRE_SWEEP_DECAY])
+    );
+    wtp_set_filter(
+        v->weapon_synth,
+        acoustics_value_to_display(ACOUST_FIRE_CUTOFF, v->value_01[ACOUST_FIRE_CUTOFF]),
+        acoustics_value_to_display(ACOUST_FIRE_RESONANCE, v->value_01[ACOUST_FIRE_RESONANCE])
+    );
+    v->weapon_synth->gain = 0.40f;
+    v->weapon_synth->clip_level = 0.92f;
+
+    wtp_set_waveform(v->thruster_synth, WTP_WT_NOISE);
+    wtp_set_adsr_ms(
+        v->thruster_synth,
+        acoustics_value_to_display(ACOUST_THR_ATTACK, v->value_01[ACOUST_THR_ATTACK]),
+        30.0f,
+        0.92f,
+        acoustics_value_to_display(ACOUST_THR_RELEASE, v->value_01[ACOUST_THR_RELEASE])
+    );
+    wtp_set_filter(
+        v->thruster_synth,
+        acoustics_value_to_display(ACOUST_THR_CUTOFF, v->value_01[ACOUST_THR_CUTOFF]),
+        acoustics_value_to_display(ACOUST_THR_RESONANCE, v->value_01[ACOUST_THR_RESONANCE])
+    );
+    v->thruster_synth->gain = acoustics_value_to_display(ACOUST_THR_LEVEL, v->value_01[ACOUST_THR_LEVEL]);
+    v->thruster_synth->clip_level = 0.85f;
+
+    v->enemy_fire_sound->level =
+        acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_LEVEL, v->combat_value_01[ACOUST_COMBAT_ENEMY_LEVEL]);
+    v->enemy_fire_sound->pitch_hz =
+        acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_PITCH, v->combat_value_01[ACOUST_COMBAT_ENEMY_PITCH]);
+    v->enemy_fire_sound->attack_ms =
+        acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_ATTACK, v->combat_value_01[ACOUST_COMBAT_ENEMY_ATTACK]);
+    v->enemy_fire_sound->decay_ms =
+        acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_DECAY, v->combat_value_01[ACOUST_COMBAT_ENEMY_DECAY]);
+    v->enemy_fire_sound->noise_mix =
+        acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_NOISE, v->combat_value_01[ACOUST_COMBAT_ENEMY_NOISE]);
+    v->enemy_fire_sound->fm_depth_hz = 0.0f;
+    v->enemy_fire_sound->fm_rate_hz = 0.0f;
+    v->enemy_fire_sound->pan_width =
+        acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_PANW, v->combat_value_01[ACOUST_COMBAT_ENEMY_PANW]);
+
+    v->explosion_sound->level =
+        acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_LEVEL, v->combat_value_01[ACOUST_COMBAT_EXP_LEVEL]);
+    v->explosion_sound->pitch_hz =
+        acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_PITCH, v->combat_value_01[ACOUST_COMBAT_EXP_PITCH]);
+    v->explosion_sound->attack_ms =
+        acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_ATTACK, v->combat_value_01[ACOUST_COMBAT_EXP_ATTACK]);
+    v->explosion_sound->decay_ms =
+        acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_DECAY, v->combat_value_01[ACOUST_COMBAT_EXP_DECAY]);
+    v->explosion_sound->noise_mix =
+        acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_NOISE, v->combat_value_01[ACOUST_COMBAT_EXP_NOISE]);
+    v->explosion_sound->fm_depth_hz =
+        acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_FM_DEPTH, v->combat_value_01[ACOUST_COMBAT_EXP_FM_DEPTH]);
+    v->explosion_sound->fm_rate_hz =
+        acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_FM_RATE, v->combat_value_01[ACOUST_COMBAT_EXP_FM_RATE]);
+    v->explosion_sound->pan_width =
+        acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_PANW, v->combat_value_01[ACOUST_COMBAT_EXP_PANW]);
 }
 
 int audio_spatial_enqueue_ring(

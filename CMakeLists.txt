@@ -23,6 +23,7 @@ add_executable(v_type
     src/planetarium/planetarium_registry.c
     src/planetarium/planetarium_validate.c
     src/render.c
+    src/settings.c
     src/wavetable_poly_synth_lib.c
 )
 set_target_properties(v_type PROPERTIES OUTPUT_NAME "VectorSwarm")

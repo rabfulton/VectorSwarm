@@ -7,6 +7,7 @@
 #include "planetarium/planetarium_validate.h"
 #include "planetarium_propaganda.h"
 #include "render.h"
+#include "settings.h"
 #include "ui_layout.h"
 #include "vg.h"
 #include "vg_ui.h"
@@ -24,13 +25,9 @@
 #include <stdint.h>
 #include <math.h>
 #include <limits.h>
-#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
 
 #ifndef V_TYPE_HAS_POST_SHADERS
 #define V_TYPE_HAS_POST_SHADERS 0
@@ -63,8 +60,6 @@
 #define APP_WIDTH 1280
 #define APP_HEIGHT 720
 #define APP_MAX_SWAPCHAIN_IMAGES 8
-#define ACOUSTICS_SLOTS_PATH "acoustics_slots.cfg"
-#define SETTINGS_PATH "settings.cfg"
 #define ACOUSTICS_SCOPE_HISTORY_SAMPLES 8192
 #define GPU_PARTICLE_MAX_INSTANCES MAX_PARTICLES
 #define TERRAIN_ROWS 24
@@ -161,24 +156,6 @@ enum acoustics_page_id {
     ACOUSTICS_PAGE_SYNTH = 0,
     ACOUSTICS_PAGE_COMBAT = 1,
     ACOUSTICS_PAGE_COUNT = 2
-};
-
-enum acoustics_combat_slider_id {
-    ACOUST_COMBAT_ENEMY_LEVEL = 0,
-    ACOUST_COMBAT_ENEMY_PITCH = 1,
-    ACOUST_COMBAT_ENEMY_ATTACK = 2,
-    ACOUST_COMBAT_ENEMY_DECAY = 3,
-    ACOUST_COMBAT_ENEMY_NOISE = 4,
-    ACOUST_COMBAT_ENEMY_PANW = 5,
-    ACOUST_COMBAT_EXP_LEVEL = 6,
-    ACOUST_COMBAT_EXP_PITCH = 7,
-    ACOUST_COMBAT_EXP_ATTACK = 8,
-    ACOUST_COMBAT_EXP_DECAY = 9,
-    ACOUST_COMBAT_EXP_NOISE = 10,
-    ACOUST_COMBAT_EXP_FM_DEPTH = 11,
-    ACOUST_COMBAT_EXP_FM_RATE = 12,
-    ACOUST_COMBAT_EXP_PANW = 13,
-    ACOUST_COMBAT_SLIDER_COUNT = 14
 };
 
 typedef struct app {
@@ -809,15 +786,6 @@ static int planetarium_quelled_count(const app* a) {
     return count;
 }
 
-static int resolution_index_from_wh(int w, int h) {
-    for (int i = 0; i < VIDEO_MENU_RES_COUNT; ++i) {
-        if (k_video_resolutions[i].w == w && k_video_resolutions[i].h == h) {
-            return i;
-        }
-    }
-    return -1;
-}
-
 static void map_mouse_to_scene_coords(const app* a, int mouse_x, int mouse_y, float* out_x, float* out_y);
 static float drawable_scale_y(const app* a);
 
@@ -921,161 +889,61 @@ static int update_video_menu_dial_drag(app* a, int mouse_x, int mouse_y) {
     return 1;
 }
 
-static int ensure_dir_recursive(const char* path) {
-    if (!path || path[0] == '\0') {
-        return 0;
+static void app_to_settings(const app* a, app_settings* out) {
+    if (!a || !out) {
+        return;
     }
-    char tmp[PATH_MAX];
-    size_t n = strlen(path);
-    if (n >= sizeof(tmp)) {
-        return 0;
+    out->fullscreen = a->video_menu_fullscreen ? 1 : 0;
+    out->selected = a->video_menu_selected;
+    out->palette = a->palette_mode;
+    out->width = APP_WIDTH;
+    out->height = APP_HEIGHT;
+    if (out->selected > 0 && out->selected <= VIDEO_MENU_RES_COUNT) {
+        out->width = k_video_resolutions[out->selected - 1].w;
+        out->height = k_video_resolutions[out->selected - 1].h;
     }
-    memcpy(tmp, path, n + 1u);
-    for (size_t i = 1; i < n; ++i) {
-        if (tmp[i] == '/') {
-            tmp[i] = '\0';
-            if (tmp[0] != '\0') {
-                if (mkdir(tmp, 0755) != 0 && errno != EEXIST) {
-                    return 0;
-                }
-            }
-            tmp[i] = '/';
-        }
-    }
-    if (mkdir(tmp, 0755) != 0 && errno != EEXIST) {
-        return 0;
-    }
-    return 1;
-}
-
-static int make_xdg_settings_path(char* out, size_t out_cap) {
-    if (!out || out_cap == 0u) {
-        return 0;
-    }
-    const char* xdg = getenv("XDG_CONFIG_HOME");
-    if (xdg && xdg[0] != '\0') {
-        int n = snprintf(out, out_cap, "%s/VectorSwarm/%s", xdg, SETTINGS_PATH);
-        return (n > 0 && (size_t)n < out_cap) ? 1 : 0;
-    }
-    const char* home = getenv("HOME");
-    if (!home || home[0] == '\0') {
-        return 0;
-    }
-    int n = snprintf(out, out_cap, "%s/.config/VectorSwarm/%s", home, SETTINGS_PATH);
-    return (n > 0 && (size_t)n < out_cap) ? 1 : 0;
-}
-
-static int save_settings_to_path(const app* a, const char* path) {
-    if (!a || !path || path[0] == '\0') {
-        return 0;
-    }
-    FILE* f = fopen(path, "w");
-    if (!f) {
-        return 0;
-    }
-    const int sel = a->video_menu_selected;
-    int w = APP_WIDTH;
-    int h = APP_HEIGHT;
-    if (sel > 0 && sel <= VIDEO_MENU_RES_COUNT) {
-        w = k_video_resolutions[sel - 1].w;
-        h = k_video_resolutions[sel - 1].h;
-    }
-    fprintf(f, "fullscreen=%d\n", a->video_menu_fullscreen ? 1 : 0);
-    fprintf(f, "selected=%d\n", sel);
-    fprintf(f, "width=%d\n", w);
-    fprintf(f, "height=%d\n", h);
-    fprintf(f, "palette=%d\n", a->palette_mode);
     for (int i = 0; i < VIDEO_MENU_DIAL_COUNT; ++i) {
-        fprintf(f, "dial%d=%.6f\n", i, clampf(a->video_dial_01[i], 0.0f, 1.0f));
+        out->video_dial_01[i] = clampf(a->video_dial_01[i], 0.0f, 1.0f);
     }
-    fclose(f);
-    return 1;
+}
+
+static void settings_to_app(app* a, const app_settings* in) {
+    if (!a || !in) {
+        return;
+    }
+    a->video_menu_fullscreen = in->fullscreen ? 1 : 0;
+    a->video_menu_selected = in->selected;
+    a->palette_mode = in->palette;
+    for (int i = 0; i < VIDEO_MENU_DIAL_COUNT; ++i) {
+        a->video_dial_01[i] = clampf(in->video_dial_01[i], 0.0f, 1.0f);
+    }
 }
 
 static int save_settings(const app* a) {
-    char xdg_path[PATH_MAX];
-    if (make_xdg_settings_path(xdg_path, sizeof(xdg_path))) {
-        char dir[PATH_MAX];
-        snprintf(dir, sizeof(dir), "%s", xdg_path);
-        char* slash = strrchr(dir, '/');
-        if (slash) {
-            *slash = '\0';
-            (void)ensure_dir_recursive(dir);
-        }
-        return save_settings_to_path(a, xdg_path);
-    }
-    return 0;
-}
-
-static int load_settings_from_path(app* a, const char* path) {
-    if (!a || !path) {
-        return 0;
-    }
-    FILE* f = fopen(path, "r");
-    if (!f) {
-        return 0;
-    }
-    int fullscreen = a->video_menu_fullscreen;
-    int selected = a->video_menu_selected;
-    int width = -1;
-    int height = -1;
-    char line[128];
-    while (fgets(line, sizeof(line), f)) {
-        char key[64];
-        char value[64];
-        if (sscanf(line, "%63[^=]=%63s", key, value) != 2) {
-            continue;
-        }
-        if (strcmp(key, "fullscreen") == 0) {
-            fullscreen = (atoi(value) != 0) ? 1 : 0;
-        } else if (strcmp(key, "selected") == 0) {
-            selected = atoi(value);
-        } else if (strcmp(key, "width") == 0) {
-            width = atoi(value);
-        } else if (strcmp(key, "height") == 0) {
-            height = atoi(value);
-        } else if (strcmp(key, "palette") == 0) {
-            a->palette_mode = atoi(value);
-        } else {
-            int dial = -1;
-            if (sscanf(key, "dial%d", &dial) == 1 && dial >= 0 && dial < VIDEO_MENU_DIAL_COUNT) {
-                a->video_dial_01[dial] = clampf(strtof(value, NULL), 0.0f, 1.0f);
-            }
-        }
-    }
-    fclose(f);
-
-    if (selected < 0 || selected > VIDEO_MENU_RES_COUNT) {
-        selected = 1;
-    }
-    if (width > 0 && height > 0) {
-        int idx = resolution_index_from_wh(width, height);
-        if (idx >= 0) {
-            selected = idx + 1;
-        }
-    }
-    if (!fullscreen && selected == 0) {
-        selected = 1;
-    }
-    if (a->palette_mode < 0 || a->palette_mode > 2) {
-        a->palette_mode = 0;
-    }
-    a->video_menu_fullscreen = fullscreen ? 1 : 0;
-    a->video_menu_selected = a->video_menu_fullscreen ? 0 : selected;
-    return 1;
+    app_settings s;
+    memset(&s, 0, sizeof(s));
+    app_to_settings(a, &s);
+    return settings_save(&s);
 }
 
 static int load_settings(app* a) {
     if (!a) {
         return 0;
     }
-    char xdg_path[PATH_MAX];
-    if (make_xdg_settings_path(xdg_path, sizeof(xdg_path))) {
-        if (load_settings_from_path(a, xdg_path)) {
-            return 1;
-        }
+    app_settings s;
+    memset(&s, 0, sizeof(s));
+    app_to_settings(a, &s);
+
+    settings_resolution resolutions[VIDEO_MENU_RES_COUNT];
+    for (int i = 0; i < VIDEO_MENU_RES_COUNT; ++i) {
+        resolutions[i].w = k_video_resolutions[i].w;
+        resolutions[i].h = k_video_resolutions[i].h;
     }
-    return 0;
+    if (!settings_load(&s, resolutions, VIDEO_MENU_RES_COUNT, 1)) {
+        return 0;
+    }
+    settings_to_app(a, &s);
+    return 1;
 }
 
 static void map_mouse_to_scene_coords(const app* a, int mouse_x, int mouse_y, float* out_x, float* out_y) {
@@ -1217,23 +1085,6 @@ static void trigger_explosion_test(app* a) {
     atomic_fetch_add_explicit(&a->pending_explosion_tests, 1u, memory_order_acq_rel);
 }
 
-enum acoustics_slider_id {
-    ACOUST_FIRE_WAVE = 0,
-    ACOUST_FIRE_PITCH = 1,
-    ACOUST_FIRE_ATTACK = 2,
-    ACOUST_FIRE_DECAY = 3,
-    ACOUST_FIRE_CUTOFF = 4,
-    ACOUST_FIRE_RESONANCE = 5,
-    ACOUST_FIRE_SWEEP_ST = 6,
-    ACOUST_FIRE_SWEEP_DECAY = 7,
-    ACOUST_THR_LEVEL = 8,
-    ACOUST_THR_PITCH = 9,
-    ACOUST_THR_ATTACK = 10,
-    ACOUST_THR_RELEASE = 11,
-    ACOUST_THR_CUTOFF = 12,
-    ACOUST_THR_RESONANCE = 13
-};
-
 static void apply_acoustics(app* a);
 static void trigger_fire_test(app* a);
 static void trigger_thruster_test(app* a);
@@ -1267,502 +1118,41 @@ static void map_mouse_to_scene_coords(const app* a, int mouse_x, int mouse_y, fl
 
 static int audio_spatial_enqueue(app* a, uint8_t type, float pan, float gain);
 
-static float acoustics_value_to_display(int id, float t01) {
-    const float t = clampf(t01, 0.0f, 1.0f);
-    switch (id) {
-        case ACOUST_FIRE_WAVE: return floorf(t * 4.0f + 0.5f);
-        case ACOUST_FIRE_PITCH: return lerpf(90.0f, 420.0f, t);
-        case ACOUST_FIRE_ATTACK: return lerpf(0.2f, 28.0f, t);
-        case ACOUST_FIRE_DECAY: return lerpf(12.0f, 220.0f, t);
-        case ACOUST_FIRE_CUTOFF: return lerpf(600.0f, 10000.0f, t);
-        case ACOUST_FIRE_RESONANCE: return lerpf(0.05f, 0.98f, t);
-        case ACOUST_FIRE_SWEEP_ST: return lerpf(-24.0f, 24.0f, t);
-        case ACOUST_FIRE_SWEEP_DECAY: return lerpf(2.0f, 260.0f, t);
-        case ACOUST_THR_LEVEL: return lerpf(0.04f, 0.60f, t);
-        case ACOUST_THR_PITCH: return lerpf(30.0f, 180.0f, t);
-        case ACOUST_THR_ATTACK: return lerpf(4.0f, 140.0f, t);
-        case ACOUST_THR_RELEASE: return lerpf(18.0f, 650.0f, t);
-        case ACOUST_THR_CUTOFF: return lerpf(120.0f, 3200.0f, t);
-        case ACOUST_THR_RESONANCE: return lerpf(0.02f, 0.90f, t);
-        default: return t;
-    }
-}
-
-static float round_to(float v, float step) {
-    if (step <= 0.0f) {
-        return v;
-    }
-    return floorf(v / step + 0.5f) * step;
-}
-
-static float acoustics_value_to_ui_display(int id, float t01) {
-    const float v = acoustics_value_to_display(id, t01);
-    switch (id) {
-        case ACOUST_FIRE_WAVE:
-            return v;
-        case ACOUST_FIRE_PITCH:
-        case ACOUST_FIRE_ATTACK:
-        case ACOUST_FIRE_DECAY:
-        case ACOUST_FIRE_SWEEP_DECAY:
-        case ACOUST_THR_PITCH:
-        case ACOUST_THR_ATTACK:
-        case ACOUST_THR_RELEASE:
-            return round_to(v, 1.0f);
-        case ACOUST_FIRE_CUTOFF:
-        case ACOUST_THR_CUTOFF:
-            return round_to(v * 0.001f, 0.01f);
-        case ACOUST_FIRE_RESONANCE:
-        case ACOUST_THR_RESONANCE:
-        case ACOUST_THR_LEVEL:
-            return round_to(v, 0.01f);
-        case ACOUST_FIRE_SWEEP_ST:
-            return round_to(v, 0.1f);
-        default:
-            return round_to(v, 0.01f);
-    }
-}
-
-static float acoustics_combat_value_to_display(int id, float t01) {
-    const float t = clampf(t01, 0.0f, 1.0f);
-    switch (id) {
-        case ACOUST_COMBAT_ENEMY_LEVEL:
-        case ACOUST_COMBAT_EXP_LEVEL:
-            return lerpf(0.02f, 0.95f, t);
-        case ACOUST_COMBAT_ENEMY_PITCH:
-            return lerpf(150.0f, 1800.0f, t);
-        case ACOUST_COMBAT_EXP_PITCH:
-            return lerpf(40.0f, 280.0f, t);
-        case ACOUST_COMBAT_ENEMY_ATTACK:
-        case ACOUST_COMBAT_EXP_ATTACK:
-            return lerpf(0.1f, 45.0f, t);
-        case ACOUST_COMBAT_ENEMY_DECAY:
-            return lerpf(14.0f, 280.0f, t);
-        case ACOUST_COMBAT_EXP_DECAY:
-            return lerpf(60.0f, 900.0f, t);
-        case ACOUST_COMBAT_ENEMY_NOISE:
-        case ACOUST_COMBAT_EXP_NOISE:
-            return t;
-        case ACOUST_COMBAT_EXP_FM_DEPTH:
-            return lerpf(0.0f, 420.0f, t);
-        case ACOUST_COMBAT_EXP_FM_RATE:
-            return lerpf(8.0f, 1600.0f, t);
-        case ACOUST_COMBAT_ENEMY_PANW:
-        case ACOUST_COMBAT_EXP_PANW:
-            return lerpf(0.25f, 1.20f, t);
-        default:
-            return t;
-    }
-}
-
-static float acoustics_combat_value_to_ui_display(int id, float t01) {
-    const float v = acoustics_combat_value_to_display(id, t01);
-    switch (id) {
-        case ACOUST_COMBAT_ENEMY_LEVEL:
-        case ACOUST_COMBAT_EXP_LEVEL:
-        case ACOUST_COMBAT_ENEMY_NOISE:
-        case ACOUST_COMBAT_EXP_NOISE:
-        case ACOUST_COMBAT_ENEMY_PANW:
-        case ACOUST_COMBAT_EXP_PANW:
-            return round_to(v, 0.01f);
-        case ACOUST_COMBAT_ENEMY_ATTACK:
-        case ACOUST_COMBAT_EXP_ATTACK:
-        case ACOUST_COMBAT_ENEMY_DECAY:
-        case ACOUST_COMBAT_EXP_DECAY:
-        case ACOUST_COMBAT_EXP_FM_DEPTH:
-        case ACOUST_COMBAT_EXP_FM_RATE:
-            return round_to(v, 1.0f);
-        case ACOUST_COMBAT_ENEMY_PITCH:
-        case ACOUST_COMBAT_EXP_PITCH:
-            return round_to(v, 1.0f);
-        default:
-            return round_to(v, 0.01f);
-    }
-}
-
 static void acoustics_defaults(app* a) {
-    /* Seed first-install defaults from current tuned build/acoustics_slots.cfg:
-       fire slot 3 (fsel=3) and thruster slot 1 (tsel=1). */
-    a->acoustics_value_01[ACOUST_FIRE_WAVE] = 0.275879592f;
-    a->acoustics_value_01[ACOUST_FIRE_PITCH] = 0.602183819f;
-    a->acoustics_value_01[ACOUST_FIRE_ATTACK] = 0.003753547f;
-    a->acoustics_value_01[ACOUST_FIRE_DECAY] = 0.460912049f;
-    a->acoustics_value_01[ACOUST_FIRE_CUTOFF] = 0.100429699f;
-    a->acoustics_value_01[ACOUST_FIRE_RESONANCE] = 0.985629857f;
-    a->acoustics_value_01[ACOUST_FIRE_SWEEP_ST] = 0.949483037f;
-    a->acoustics_value_01[ACOUST_FIRE_SWEEP_DECAY] = 0.827205420f;
-    a->acoustics_value_01[ACOUST_THR_LEVEL] = 0.570973873f;
-    a->acoustics_value_01[ACOUST_THR_PITCH] = 0.997384906f;
-    a->acoustics_value_01[ACOUST_THR_ATTACK] = 0.814027071f;
-    a->acoustics_value_01[ACOUST_THR_RELEASE] = 0.294867337f;
-    a->acoustics_value_01[ACOUST_THR_CUTOFF] = 0.035423841f;
-    a->acoustics_value_01[ACOUST_THR_RESONANCE] = 0.998682797f;
+    if (!a) {
+        return;
+    }
+    acoustics_defaults_init(a->acoustics_value_01);
 }
 
 static void acoustics_combat_defaults(app* a) {
     if (!a) {
         return;
     }
-    a->acoustics_combat_value_01[ACOUST_COMBAT_ENEMY_LEVEL] = 0.40f;
-    a->acoustics_combat_value_01[ACOUST_COMBAT_ENEMY_PITCH] = 0.36f;
-    a->acoustics_combat_value_01[ACOUST_COMBAT_ENEMY_ATTACK] = 0.05f;
-    a->acoustics_combat_value_01[ACOUST_COMBAT_ENEMY_DECAY] = 0.36f;
-    a->acoustics_combat_value_01[ACOUST_COMBAT_ENEMY_NOISE] = 0.20f;
-    a->acoustics_combat_value_01[ACOUST_COMBAT_ENEMY_PANW] = 0.78f;
-    a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_LEVEL] = 0.58f;
-    a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_PITCH] = 0.28f;
-    a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_ATTACK] = 0.07f;
-    a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_DECAY] = 0.54f;
-    a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_NOISE] = 0.64f;
-    a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_FM_DEPTH] = 0.28f;
-    a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_FM_RATE] = 0.21f;
-    a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_PANW] = 0.90f;
+    acoustics_combat_defaults_init(a->acoustics_combat_value_01);
 }
 
-static void acoustics_slot_defaults(app* a) {
+static acoustics_slot_view acoustics_make_slot_view(app* a) {
+    acoustics_slot_view v;
+    memset(&v, 0, sizeof(v));
     if (!a) {
-        return;
+        return v;
     }
-    a->acoustics_fire_slot_selected = 0;
-    a->acoustics_thr_slot_selected = 0;
-    a->acoustics_enemy_slot_selected = 0;
-    a->acoustics_exp_slot_selected = 0;
-    memset(a->acoustics_fire_slot_defined, 0, sizeof(a->acoustics_fire_slot_defined));
-    memset(a->acoustics_thr_slot_defined, 0, sizeof(a->acoustics_thr_slot_defined));
-    memset(a->acoustics_enemy_slot_defined, 0, sizeof(a->acoustics_enemy_slot_defined));
-    memset(a->acoustics_exp_slot_defined, 0, sizeof(a->acoustics_exp_slot_defined));
-    memset(a->acoustics_fire_slots, 0, sizeof(a->acoustics_fire_slots));
-    memset(a->acoustics_thr_slots, 0, sizeof(a->acoustics_thr_slots));
-    memset(a->acoustics_enemy_slots, 0, sizeof(a->acoustics_enemy_slots));
-    memset(a->acoustics_exp_slots, 0, sizeof(a->acoustics_exp_slots));
-    for (int i = 0; i < 8; ++i) {
-        a->acoustics_fire_slots[0][i] = a->acoustics_value_01[i];
-    }
-    for (int i = 0; i < 6; ++i) {
-        a->acoustics_thr_slots[0][i] = a->acoustics_value_01[8 + i];
-        a->acoustics_enemy_slots[0][i] = a->acoustics_combat_value_01[i];
-    }
-    for (int i = 0; i < 8; ++i) {
-        a->acoustics_exp_slots[0][i] = a->acoustics_combat_value_01[6 + i];
-    }
-    a->acoustics_fire_slot_defined[0] = 1u;
-    a->acoustics_thr_slot_defined[0] = 1u;
-    a->acoustics_enemy_slot_defined[0] = 1u;
-    a->acoustics_exp_slot_defined[0] = 1u;
-}
-
-static void capture_current_to_selected_slot(app* a, int is_fire) {
-    if (!a) {
-        return;
-    }
-    if (is_fire) {
-        const int s = a->acoustics_fire_slot_selected;
-        if (s < 0 || s >= ACOUSTICS_SLOT_COUNT) {
-            return;
-        }
-        for (int i = 0; i < 8; ++i) {
-            a->acoustics_fire_slots[s][i] = a->acoustics_value_01[i];
-        }
-        a->acoustics_fire_slot_defined[s] = 1u;
-        return;
-    }
-    {
-        const int s = a->acoustics_thr_slot_selected;
-        if (s < 0 || s >= ACOUSTICS_SLOT_COUNT) {
-            return;
-        }
-        for (int i = 0; i < 6; ++i) {
-            a->acoustics_thr_slots[s][i] = a->acoustics_value_01[8 + i];
-        }
-        a->acoustics_thr_slot_defined[s] = 1u;
-    }
-}
-
-static void capture_current_to_selected_slots(app* a) {
-    if (!a) {
-        return;
-    }
-    capture_current_to_selected_slot(a, 1);
-    capture_current_to_selected_slot(a, 0);
-}
-
-static void capture_current_to_selected_combat_slot(app* a, int is_enemy) {
-    if (!a) {
-        return;
-    }
-    if (is_enemy) {
-        const int s = a->acoustics_enemy_slot_selected;
-        if (s < 0 || s >= ACOUSTICS_SLOT_COUNT) {
-            return;
-        }
-        for (int i = 0; i < 6; ++i) {
-            a->acoustics_enemy_slots[s][i] = a->acoustics_combat_value_01[i];
-        }
-        a->acoustics_enemy_slot_defined[s] = 1u;
-    } else {
-        const int s = a->acoustics_exp_slot_selected;
-        if (s < 0 || s >= ACOUSTICS_SLOT_COUNT) {
-            return;
-        }
-        for (int i = 0; i < 8; ++i) {
-            a->acoustics_exp_slots[s][i] = a->acoustics_combat_value_01[6 + i];
-        }
-        a->acoustics_exp_slot_defined[s] = 1u;
-    }
-}
-
-static void capture_current_to_selected_combat_slots(app* a) {
-    if (!a) {
-        return;
-    }
-    capture_current_to_selected_combat_slot(a, 1);
-    capture_current_to_selected_combat_slot(a, 0);
-}
-
-static void load_slot_to_current(app* a, int is_fire, int slot_idx, int apply_now) {
-    if (!a || slot_idx < 0 || slot_idx >= ACOUSTICS_SLOT_COUNT) {
-        return;
-    }
-    if (is_fire) {
-        if (!a->acoustics_fire_slot_defined[slot_idx]) {
-            return;
-        }
-        for (int i = 0; i < 8; ++i) {
-            a->acoustics_value_01[i] = a->acoustics_fire_slots[slot_idx][i];
-        }
-    } else {
-        if (!a->acoustics_thr_slot_defined[slot_idx]) {
-            return;
-        }
-        for (int i = 0; i < 6; ++i) {
-            a->acoustics_value_01[8 + i] = a->acoustics_thr_slots[slot_idx][i];
-        }
-    }
-    if (apply_now) {
-        apply_acoustics(a);
-    }
-}
-
-static void load_combat_slot_to_current(app* a, int is_enemy, int slot_idx, int apply_now) {
-    if (!a || slot_idx < 0 || slot_idx >= ACOUSTICS_SLOT_COUNT) {
-        return;
-    }
-    if (is_enemy) {
-        if (!a->acoustics_enemy_slot_defined[slot_idx]) {
-            return;
-        }
-        for (int i = 0; i < 6; ++i) {
-            a->acoustics_combat_value_01[i] = a->acoustics_enemy_slots[slot_idx][i];
-        }
-    } else {
-        if (!a->acoustics_exp_slot_defined[slot_idx]) {
-            return;
-        }
-        for (int i = 0; i < 8; ++i) {
-            a->acoustics_combat_value_01[6 + i] = a->acoustics_exp_slots[slot_idx][i];
-        }
-    }
-    if (apply_now) {
-        apply_acoustics(a);
-    }
-}
-
-static int save_acoustics_slots(const app* a, const char* path) {
-    if (!a || !path) {
-        return 0;
-    }
-    FILE* f = fopen(path, "w");
-    if (!f) {
-        return 0;
-    }
-    fprintf(f, "version=2\n");
-    fprintf(f, "fsel=%d\n", a->acoustics_fire_slot_selected);
-    fprintf(f, "tsel=%d\n", a->acoustics_thr_slot_selected);
-    fprintf(f, "cfsel=%d\n", a->acoustics_enemy_slot_selected);
-    fprintf(f, "ctsel=%d\n", a->acoustics_exp_slot_selected);
-    for (int s = 0; s < ACOUSTICS_SLOT_COUNT; ++s) {
-        fprintf(f, "fd%d=%d\n", s, a->acoustics_fire_slot_defined[s] ? 1 : 0);
-        fprintf(f, "td%d=%d\n", s, a->acoustics_thr_slot_defined[s] ? 1 : 0);
-        fprintf(f, "cfd%d=%d\n", s, a->acoustics_enemy_slot_defined[s] ? 1 : 0);
-        fprintf(f, "ctd%d=%d\n", s, a->acoustics_exp_slot_defined[s] ? 1 : 0);
-        for (int i = 0; i < 8; ++i) {
-            fprintf(f, "fv%d_%d=%.9f\n", s, i, a->acoustics_fire_slots[s][i]);
-        }
-        for (int i = 0; i < 6; ++i) {
-            fprintf(f, "tv%d_%d=%.9f\n", s, i, a->acoustics_thr_slots[s][i]);
-            fprintf(f, "cfv%d_%d=%.9f\n", s, i, a->acoustics_enemy_slots[s][i]);
-        }
-        for (int i = 0; i < 8; ++i) {
-            fprintf(f, "ctv%d_%d=%.9f\n", s, i, a->acoustics_exp_slots[s][i]);
-        }
-    }
-    for (int i = 0; i < ACOUST_COMBAT_SLIDER_COUNT; ++i) {
-        fprintf(f, "cv%d=%.9f\n", i, a->acoustics_combat_value_01[i]);
-    }
-    fclose(f);
-    return 1;
-}
-
-static int load_acoustics_slots(app* a, const char* path) {
-    if (!a || !path) {
-        return 0;
-    }
-    FILE* f = fopen(path, "r");
-    if (!f) {
-        return 0;
-    }
-    char key[64];
-    float v = 0.0f;
-    while (fscanf(f, "%63[^=]=%f\n", key, &v) == 2) {
-        if (strcmp(key, "fsel") == 0) {
-            a->acoustics_fire_slot_selected = (int)clampf(v, 0.0f, (float)(ACOUSTICS_SLOT_COUNT - 1));
-            continue;
-        }
-        if (strcmp(key, "tsel") == 0) {
-            a->acoustics_thr_slot_selected = (int)clampf(v, 0.0f, (float)(ACOUSTICS_SLOT_COUNT - 1));
-            continue;
-        }
-        if (strcmp(key, "cfsel") == 0) {
-            a->acoustics_enemy_slot_selected = (int)clampf(v, 0.0f, (float)(ACOUSTICS_SLOT_COUNT - 1));
-            continue;
-        }
-        if (strcmp(key, "ctsel") == 0) {
-            a->acoustics_exp_slot_selected = (int)clampf(v, 0.0f, (float)(ACOUSTICS_SLOT_COUNT - 1));
-            continue;
-        }
-        int s = 0;
-        int i = 0;
-        if (sscanf(key, "fd%d", &s) == 1 && s >= 0 && s < ACOUSTICS_SLOT_COUNT) {
-            a->acoustics_fire_slot_defined[s] = (v >= 0.5f) ? 1u : 0u;
-            continue;
-        }
-        if (sscanf(key, "td%d", &s) == 1 && s >= 0 && s < ACOUSTICS_SLOT_COUNT) {
-            a->acoustics_thr_slot_defined[s] = (v >= 0.5f) ? 1u : 0u;
-            continue;
-        }
-        if (sscanf(key, "cfd%d", &s) == 1 && s >= 0 && s < ACOUSTICS_SLOT_COUNT) {
-            a->acoustics_enemy_slot_defined[s] = (v >= 0.5f) ? 1u : 0u;
-            continue;
-        }
-        if (sscanf(key, "ctd%d", &s) == 1 && s >= 0 && s < ACOUSTICS_SLOT_COUNT) {
-            a->acoustics_exp_slot_defined[s] = (v >= 0.5f) ? 1u : 0u;
-            continue;
-        }
-        if (sscanf(key, "fv%d_%d", &s, &i) == 2 && s >= 0 && s < ACOUSTICS_SLOT_COUNT && i >= 0 && i < 8) {
-            a->acoustics_fire_slots[s][i] = clampf(v, 0.0f, 1.0f);
-            continue;
-        }
-        if (sscanf(key, "tv%d_%d", &s, &i) == 2 && s >= 0 && s < ACOUSTICS_SLOT_COUNT && i >= 0 && i < 6) {
-            a->acoustics_thr_slots[s][i] = clampf(v, 0.0f, 1.0f);
-            continue;
-        }
-        if (sscanf(key, "cfv%d_%d", &s, &i) == 2 && s >= 0 && s < ACOUSTICS_SLOT_COUNT && i >= 0 && i < 6) {
-            a->acoustics_enemy_slots[s][i] = clampf(v, 0.0f, 1.0f);
-            continue;
-        }
-        if (sscanf(key, "ctv%d_%d", &s, &i) == 2 && s >= 0 && s < ACOUSTICS_SLOT_COUNT && i >= 0 && i < 8) {
-            a->acoustics_exp_slots[s][i] = clampf(v, 0.0f, 1.0f);
-            continue;
-        }
-        if (sscanf(key, "cv%d", &i) == 1 && i >= 0 && i < ACOUST_COMBAT_SLIDER_COUNT) {
-            a->acoustics_combat_value_01[i] = clampf(v, 0.0f, 1.0f);
-            continue;
-        }
-    }
-    fclose(f);
-    load_slot_to_current(a, 1, a->acoustics_fire_slot_selected, 0);
-    load_slot_to_current(a, 0, a->acoustics_thr_slot_selected, 0);
-    load_combat_slot_to_current(a, 1, a->acoustics_enemy_slot_selected, 0);
-    load_combat_slot_to_current(a, 0, a->acoustics_exp_slot_selected, 1);
-    return 1;
-}
-
-static int file_exists_readable(const char* path) {
-    if (!path || path[0] == '\0') {
-        return 0;
-    }
-    FILE* f = fopen(path, "r");
-    if (!f) {
-        return 0;
-    }
-    fclose(f);
-    return 1;
-}
-
-static const char* resolve_acoustics_slots_path(void) {
-    static const char* candidates[] = {
-        ACOUSTICS_SLOTS_PATH,
-        "build/" ACOUSTICS_SLOTS_PATH,
-        "../build/" ACOUSTICS_SLOTS_PATH
-    };
-    for (int i = 0; i < (int)(sizeof(candidates) / sizeof(candidates[0])); ++i) {
-        if (file_exists_readable(candidates[i])) {
-            return candidates[i];
-        }
-    }
-    return ACOUSTICS_SLOTS_PATH;
-}
-
-static void apply_acoustics_locked(app* a) {
-    const int fire_wave_idx = (int)floorf(clampf(a->acoustics_value_01[ACOUST_FIRE_WAVE], 0.0f, 1.0f) * 4.0f + 0.5f);
-    enum wtp_waveform_type fire_wave = (enum wtp_waveform_type)fire_wave_idx;
-    if (fire_wave >= WTP_WT_TYPES) {
-        fire_wave = WTP_WT_SAW;
-    }
-    wtp_set_waveform(&a->weapon_synth, fire_wave);
-    wtp_set_adsr_ms(
-        &a->weapon_synth,
-        acoustics_value_to_display(ACOUST_FIRE_ATTACK, a->acoustics_value_01[ACOUST_FIRE_ATTACK]),
-        acoustics_value_to_display(ACOUST_FIRE_DECAY, a->acoustics_value_01[ACOUST_FIRE_DECAY]),
-        0.0f,
-        80.0f
-    );
-    wtp_set_pitch_env(
-        &a->weapon_synth,
-        acoustics_value_to_display(ACOUST_FIRE_SWEEP_ST, a->acoustics_value_01[ACOUST_FIRE_SWEEP_ST]),
-        0.0f,
-        acoustics_value_to_display(ACOUST_FIRE_SWEEP_DECAY, a->acoustics_value_01[ACOUST_FIRE_SWEEP_DECAY])
-    );
-    wtp_set_filter(
-        &a->weapon_synth,
-        acoustics_value_to_display(ACOUST_FIRE_CUTOFF, a->acoustics_value_01[ACOUST_FIRE_CUTOFF]),
-        acoustics_value_to_display(ACOUST_FIRE_RESONANCE, a->acoustics_value_01[ACOUST_FIRE_RESONANCE])
-    );
-    a->weapon_synth.gain = 0.40f;
-    a->weapon_synth.clip_level = 0.92f;
-
-    wtp_set_waveform(&a->thruster_synth, WTP_WT_NOISE);
-    wtp_set_adsr_ms(
-        &a->thruster_synth,
-        acoustics_value_to_display(ACOUST_THR_ATTACK, a->acoustics_value_01[ACOUST_THR_ATTACK]),
-        30.0f,
-        0.92f,
-        acoustics_value_to_display(ACOUST_THR_RELEASE, a->acoustics_value_01[ACOUST_THR_RELEASE])
-    );
-    wtp_set_filter(
-        &a->thruster_synth,
-        acoustics_value_to_display(ACOUST_THR_CUTOFF, a->acoustics_value_01[ACOUST_THR_CUTOFF]),
-        acoustics_value_to_display(ACOUST_THR_RESONANCE, a->acoustics_value_01[ACOUST_THR_RESONANCE])
-    );
-    a->thruster_synth.gain = acoustics_value_to_display(ACOUST_THR_LEVEL, a->acoustics_value_01[ACOUST_THR_LEVEL]);
-    a->thruster_synth.clip_level = 0.85f;
-
-    a->enemy_fire_sound.level = acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_LEVEL, a->acoustics_combat_value_01[ACOUST_COMBAT_ENEMY_LEVEL]);
-    a->enemy_fire_sound.pitch_hz = acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_PITCH, a->acoustics_combat_value_01[ACOUST_COMBAT_ENEMY_PITCH]);
-    a->enemy_fire_sound.attack_ms = acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_ATTACK, a->acoustics_combat_value_01[ACOUST_COMBAT_ENEMY_ATTACK]);
-    a->enemy_fire_sound.decay_ms = acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_DECAY, a->acoustics_combat_value_01[ACOUST_COMBAT_ENEMY_DECAY]);
-    a->enemy_fire_sound.noise_mix = acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_NOISE, a->acoustics_combat_value_01[ACOUST_COMBAT_ENEMY_NOISE]);
-    a->enemy_fire_sound.fm_depth_hz = 0.0f;
-    a->enemy_fire_sound.fm_rate_hz = 0.0f;
-    a->enemy_fire_sound.pan_width = acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_PANW, a->acoustics_combat_value_01[ACOUST_COMBAT_ENEMY_PANW]);
-
-    a->explosion_sound.level = acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_LEVEL, a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_LEVEL]);
-    a->explosion_sound.pitch_hz = acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_PITCH, a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_PITCH]);
-    a->explosion_sound.attack_ms = acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_ATTACK, a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_ATTACK]);
-    a->explosion_sound.decay_ms = acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_DECAY, a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_DECAY]);
-    a->explosion_sound.noise_mix = acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_NOISE, a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_NOISE]);
-    a->explosion_sound.fm_depth_hz = acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_FM_DEPTH, a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_FM_DEPTH]);
-    a->explosion_sound.fm_rate_hz = acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_FM_RATE, a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_FM_RATE]);
-    a->explosion_sound.pan_width = acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_PANW, a->acoustics_combat_value_01[ACOUST_COMBAT_EXP_PANW]);
+    v.fire_slot_selected = &a->acoustics_fire_slot_selected;
+    v.thr_slot_selected = &a->acoustics_thr_slot_selected;
+    v.enemy_slot_selected = &a->acoustics_enemy_slot_selected;
+    v.exp_slot_selected = &a->acoustics_exp_slot_selected;
+    v.fire_slot_defined = a->acoustics_fire_slot_defined;
+    v.thr_slot_defined = a->acoustics_thr_slot_defined;
+    v.enemy_slot_defined = a->acoustics_enemy_slot_defined;
+    v.exp_slot_defined = a->acoustics_exp_slot_defined;
+    v.fire_slots = a->acoustics_fire_slots;
+    v.thr_slots = a->acoustics_thr_slots;
+    v.enemy_slots = a->acoustics_enemy_slots;
+    v.exp_slots = a->acoustics_exp_slots;
+    v.value_01 = a->acoustics_value_01;
+    v.combat_value_01 = a->acoustics_combat_value_01;
+    return v;
 }
 
 static void apply_acoustics(app* a) {
@@ -1770,7 +1160,15 @@ static void apply_acoustics(app* a) {
         return;
     }
     SDL_LockAudioDevice(a->audio_dev);
-    apply_acoustics_locked(a);
+    acoustics_runtime_view v = {
+        .value_01 = a->acoustics_value_01,
+        .combat_value_01 = a->acoustics_combat_value_01,
+        .weapon_synth = &a->weapon_synth,
+        .thruster_synth = &a->thruster_synth,
+        .enemy_fire_sound = &a->enemy_fire_sound,
+        .explosion_sound = &a->explosion_sound
+    };
+    acoustics_apply_locked(&v);
     SDL_UnlockAudioDevice(a->audio_dev);
 }
 
@@ -1820,6 +1218,7 @@ static int handle_acoustics_ui_mouse(app* a, int mouse_x, int mouse_y, int set_v
     );
     const acoustics_ui_layout l = make_acoustics_ui_layout(w, h, value_col_width_px, (a->acoustics_page == ACOUSTICS_PAGE_COMBAT) ? 6 : 8, (a->acoustics_page == ACOUSTICS_PAGE_COMBAT) ? 8 : 6);
     const vg_rect page_btn = acoustics_page_toggle_button_rect(w, h);
+    acoustics_slot_view sv = acoustics_make_slot_view(a);
     float mx = 0.0f;
     float my = 0.0f;
     map_mouse_to_scene_coords(a, mouse_x, mouse_y, &mx, &my);
@@ -1860,11 +1259,11 @@ static int handle_acoustics_ui_mouse(app* a, int mouse_x, int mouse_y, int set_v
             if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
                 if (set_value) {
                     if (a->acoustics_page == ACOUSTICS_PAGE_SYNTH) {
-                        capture_current_to_selected_slot(a, (p == 0) ? 1 : 0);
+                        acoustics_capture_current_to_selected_slot_view(&sv, (p == 0) ? 1 : 0);
                     } else {
-                        capture_current_to_selected_combat_slot(a, (p == 0) ? 1 : 0);
+                        acoustics_capture_current_to_selected_combat_slot_view(&sv, (p == 0) ? 1 : 0);
                     }
-                    (void)save_acoustics_slots(a, a->acoustics_slots_path);
+                    (void)acoustics_save_slots_view(&sv, a->acoustics_slots_path);
                 }
                 return 1;
             }
@@ -1876,21 +1275,25 @@ static int handle_acoustics_ui_mouse(app* a, int mouse_x, int mouse_y, int set_v
                     if (a->acoustics_page == ACOUSTICS_PAGE_SYNTH) {
                         if (p == 0) {
                             a->acoustics_fire_slot_selected = s;
-                            load_slot_to_current(a, 1, s, 1);
+                            acoustics_load_slot_to_current_view(&sv, 1, s);
+                            apply_acoustics(a);
                         } else {
                             a->acoustics_thr_slot_selected = s;
-                            load_slot_to_current(a, 0, s, 1);
+                            acoustics_load_slot_to_current_view(&sv, 0, s);
+                            apply_acoustics(a);
                         }
                     } else {
                         if (p == 0) {
                             a->acoustics_enemy_slot_selected = s;
-                            load_combat_slot_to_current(a, 1, s, 1);
+                            acoustics_load_combat_slot_to_current_view(&sv, 1, s);
+                            apply_acoustics(a);
                         } else {
                             a->acoustics_exp_slot_selected = s;
-                            load_combat_slot_to_current(a, 0, s, 1);
+                            acoustics_load_combat_slot_to_current_view(&sv, 0, s);
+                            apply_acoustics(a);
                         }
                     }
-                    (void)save_acoustics_slots(a, a->acoustics_slots_path);
+                    (void)acoustics_save_slots_view(&sv, a->acoustics_slots_path);
                 }
                 return 1;
             }
@@ -5548,7 +4951,10 @@ int main(void) {
     }
     acoustics_defaults(&a);
     acoustics_combat_defaults(&a);
-    acoustics_slot_defaults(&a);
+    {
+        acoustics_slot_view sv = acoustics_make_slot_view(&a);
+        acoustics_slot_defaults_view(&sv);
+    }
 
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
         fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
@@ -5557,7 +4963,12 @@ int main(void) {
     srand((unsigned int)SDL_GetTicks());
     init_teletype_audio(&a);
     snprintf(a.acoustics_slots_path, sizeof(a.acoustics_slots_path), "%s", resolve_acoustics_slots_path());
-    (void)load_acoustics_slots(&a, a.acoustics_slots_path);
+    {
+        acoustics_slot_view sv = acoustics_make_slot_view(&a);
+        if (acoustics_load_slots_view(&sv, a.acoustics_slots_path)) {
+            apply_acoustics(&a);
+        }
+    }
     (void)load_settings(&a);
     apply_acoustics(&a);
 
@@ -5768,12 +5179,17 @@ int main(void) {
                     }
                 } else if (a.show_acoustics && ev.key.keysym.sym == SDLK_s) {
                     if (a.acoustics_page == ACOUSTICS_PAGE_SYNTH) {
-                        capture_current_to_selected_slots(&a);
+                        acoustics_slot_view sv = acoustics_make_slot_view(&a);
+                        acoustics_capture_current_to_selected_slot_view(&sv, 1);
+                        acoustics_capture_current_to_selected_slot_view(&sv, 0);
                     }
-                    if (save_acoustics_slots(&a, a.acoustics_slots_path)) {
-                        set_tty_message(&a, "acoustics slots saved");
-                    } else {
-                        set_tty_message(&a, "acoustics slots save failed");
+                    {
+                        acoustics_slot_view sv = acoustics_make_slot_view(&a);
+                        if (acoustics_save_slots_view(&sv, a.acoustics_slots_path)) {
+                            set_tty_message(&a, "acoustics slots saved");
+                        } else {
+                            set_tty_message(&a, "acoustics slots save failed");
+                        }
                     }
                 } else if (ev.key.keysym.sym == SDLK_f) {
                     if (a.show_acoustics) {
