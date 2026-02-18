@@ -106,6 +106,8 @@
 - `default_boid_profile` profile name
 - `wave_cooldown_initial_s` float
 - `wave_cooldown_between_s` float
+- `bidirectional_spawns` int (`0`/`1`; when `1`, cylinder levels can spawn waves from either direction)
+- `cylinder_double_swarm_chance` float (`0..1`, chance to spawn mirrored second swarm on cylinder levels)
 - `exit_enabled` int (`0`/`1`) for side-scrolling level portal
 - `exit_x01` float (portal x in world-width units; `1.0` = one screen width)
 - `exit_y01` float (portal y normalized by world height)

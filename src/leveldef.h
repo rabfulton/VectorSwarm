@@ -8,6 +8,7 @@
 #define LEVELDEF_MAX_BOID_PROFILES 16
 #define LEVELDEF_MAX_BOID_CYCLE 8
 #define LEVELDEF_WEAPON_COUNT 3
+#define LEVELDEF_MAX_DISCOVERED_LEVELS 128
 
 enum leveldef_wave_mode {
     LEVELDEF_WAVES_NORMAL = 0,
@@ -167,6 +168,8 @@ typedef struct leveldef_level {
     int default_boid_profile;
     float wave_cooldown_initial_s;
     float wave_cooldown_between_s;
+    int bidirectional_spawns;
+    float cylinder_double_swarm_chance;
     int exit_enabled;
     float exit_x01;
     float exit_y01;
@@ -190,6 +193,12 @@ typedef struct leveldef_db {
     leveldef_level levels[LEVEL_STYLE_COUNT];
 } leveldef_db;
 
+typedef struct leveldef_discovered_level {
+    char name[64];
+    int style_hint;
+    leveldef_level level;
+} leveldef_discovered_level;
+
 void leveldef_init_defaults(leveldef_db* db);
 int leveldef_load_with_defaults(leveldef_db* db, const char* path, FILE* log_out);
 int leveldef_load_project_layout(leveldef_db* db, const char* dir_path, FILE* log_out);
@@ -198,6 +207,13 @@ int leveldef_load_level_file_with_base(
     const char* level_path,
     leveldef_level* out_level,
     int* out_style,
+    FILE* log_out
+);
+int leveldef_discover_levels_from_dir(
+    const leveldef_db* base_db,
+    const char* dir_path,
+    leveldef_discovered_level* out_levels,
+    int out_cap,
     FILE* log_out
 );
 int leveldef_find_boid_profile(const leveldef_db* db, const char* name);

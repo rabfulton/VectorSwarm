@@ -1,5 +1,6 @@
 #include "leveldef.h"
 
+#include <dirent.h>
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
@@ -89,6 +90,29 @@ static int spawn_mode_from_name(const char* name) {
     if (strcmp(name, "timed") == 0) return LEVELDEF_SPAWN_TIMED;
     if (strcmp(name, "timed_sequenced") == 0) return LEVELDEF_SPAWN_TIMED_SEQUENCED;
     return -1;
+}
+
+static int has_prefix(const char* s, const char* prefix) {
+    if (!s || !prefix) return 0;
+    while (*prefix) {
+        if (*s++ != *prefix++) return 0;
+    }
+    return 1;
+}
+
+static int has_suffix(const char* s, const char* suffix) {
+    size_t ls, lx;
+    if (!s || !suffix) return 0;
+    ls = strlen(s);
+    lx = strlen(suffix);
+    if (ls < lx) return 0;
+    return strcmp(s + ls - lx, suffix) == 0;
+}
+
+static int cmp_strptr(const void* a, const void* b) {
+    const char* sa = *(const char* const*)a;
+    const char* sb = *(const char* const*)b;
+    return strcmp(sa, sb);
 }
 
 static char* trim(char* s) {
@@ -362,6 +386,10 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_level->wave_cooldown_initial_s = strtof(v, NULL);
                     } else if (strcmp(k, "wave_cooldown_between_s") == 0) {
                         cur_level->wave_cooldown_between_s = strtof(v, NULL);
+                    } else if (strcmp(k, "bidirectional_spawns") == 0) {
+                        cur_level->bidirectional_spawns = atoi(v) ? 1 : 0;
+                    } else if (strcmp(k, "cylinder_double_swarm_chance") == 0) {
+                        cur_level->cylinder_double_swarm_chance = strtof(v, NULL);
                     } else if (strcmp(k, "exit_enabled") == 0) {
                         cur_level->exit_enabled = atoi(v) ? 1 : 0;
                     } else if (strcmp(k, "exit_x01") == 0) {
@@ -682,6 +710,18 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
             }
             ok = 0;
         }
+        if (l->bidirectional_spawns != 0 && l->bidirectional_spawns != 1) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid bidirectional_spawns (expected 0/1)\n", i);
+            }
+            ok = 0;
+        }
+        if (l->cylinder_double_swarm_chance < 0.0f || l->cylinder_double_swarm_chance > 1.0f) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid cylinder_double_swarm_chance (expected 0..1)\n", i);
+            }
+            ok = 0;
+        }
         if (l->default_boid_profile < 0 || l->default_boid_profile >= db->profile_count) {
             if (log_out) {
                 fprintf(log_out, "leveldef: level %d invalid default_boid_profile\n", i);
@@ -821,4 +861,67 @@ int leveldef_load_level_file_with_base(
         *out_style = style;
     }
     return 1;
+}
+
+int leveldef_discover_levels_from_dir(
+    const leveldef_db* base_db,
+    const char* dir_path,
+    leveldef_discovered_level* out_levels,
+    int out_cap,
+    FILE* log_out
+) {
+    DIR* d = NULL;
+    struct dirent* de = NULL;
+    char names[LEVELDEF_MAX_DISCOVERED_LEVELS][64];
+    const char* ordered[LEVELDEF_MAX_DISCOVERED_LEVELS];
+    int file_n = 0;
+    int out_n = 0;
+
+    if (!base_db || !dir_path || !dir_path[0] || !out_levels || out_cap <= 0) {
+        return 0;
+    }
+    d = opendir(dir_path);
+    if (!d) {
+        return 0;
+    }
+    while ((de = readdir(d)) != NULL) {
+        const char* fn = de->d_name;
+        if (!has_prefix(fn, "level_") || !has_suffix(fn, ".cfg")) {
+            continue;
+        }
+        if (file_n >= LEVELDEF_MAX_DISCOVERED_LEVELS) {
+            break;
+        }
+        snprintf(names[file_n], sizeof(names[file_n]), "%s", fn);
+        ordered[file_n] = names[file_n];
+        ++file_n;
+    }
+    closedir(d);
+    if (file_n <= 0) {
+        return 0;
+    }
+
+    qsort(ordered, (size_t)file_n, sizeof(ordered[0]), cmp_strptr);
+    for (int i = 0; i < file_n && out_n < out_cap; ++i) {
+        char path[512];
+        char base_name[64];
+        int style = -1;
+        leveldef_level lvl;
+        snprintf(path, sizeof(path), "%s/%s", dir_path, ordered[i]);
+        if (!leveldef_load_level_file_with_base(base_db, path, &lvl, &style, log_out)) {
+            continue;
+        }
+        snprintf(base_name, sizeof(base_name), "%s", ordered[i]);
+        {
+            const size_t n = strlen(base_name);
+            if (n > 4 && strcmp(base_name + n - 4, ".cfg") == 0) {
+                base_name[n - 4] = '\0';
+            }
+        }
+        snprintf(out_levels[out_n].name, sizeof(out_levels[out_n].name), "%s", base_name);
+        out_levels[out_n].style_hint = style;
+        out_levels[out_n].level = lvl;
+        ++out_n;
+    }
+    return out_n;
 }

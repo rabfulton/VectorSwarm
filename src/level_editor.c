@@ -478,6 +478,8 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
     }
     if (!appendf(out, out_cap, &used, "wave_cooldown_initial_s=%.3f\n", lvl.wave_cooldown_initial_s)) return 0;
     if (!appendf(out, out_cap, &used, "wave_cooldown_between_s=%.3f\n", lvl.wave_cooldown_between_s)) return 0;
+    if (!appendf(out, out_cap, &used, "bidirectional_spawns=%d\n", lvl.bidirectional_spawns ? 1 : 0)) return 0;
+    if (!appendf(out, out_cap, &used, "cylinder_double_swarm_chance=%.3f\n", lvl.cylinder_double_swarm_chance)) return 0;
     if (!appendf(out, out_cap, &used, "exit_enabled=%d\n", lvl.exit_enabled ? 1 : 0)) return 0;
     if (!appendf(out, out_cap, &used, "exit_x01=%.3f\n", lvl.exit_x01)) return 0;
     if (!appendf(out, out_cap, &used, "exit_y01=%.3f\n", lvl.exit_y01)) return 0;
