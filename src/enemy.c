@@ -813,12 +813,30 @@ static void enemy_try_fire(game_state* g, enemy* e, float dt, const leveldef_db*
     }
 
     {
+        const float dx_player = uses_cylinder ? wrap_delta(g->player.b.x, e->b.x, period) : (e->b.x - g->camera_x);
+        const float dy_player = g->player.b.y - e->b.y;
+        int in_fire_region = 0;
+        if (uses_cylinder) {
+            /* Same visible side of cylinder: +/- 90 degrees (half the circumference). */
+            in_fire_region = (fabsf(dx_player) <= period * 0.25f) ? 1 : 0;
+        } else {
+            /* Same screen on defender-style levels. */
+            in_fire_region =
+                (fabsf(dx_player) <= g->world_w * 0.5f) &&
+                (fabsf(dy_player) <= g->world_h * 0.5f);
+        }
+        if (!in_fire_region) {
+            enemy_reset_fire_cooldown(w, &t, e);
+            return;
+        }
+    }
+
+    {
         const float dx = uses_cylinder ? wrap_delta(g->player.b.x, e->b.x, period) : (g->player.b.x - e->b.x);
         const float dy = g->player.b.y - e->b.y;
         const float d2 = dx * dx + dy * dy;
         const float rmin = t.fire_range_min;
-        const float rmax = t.fire_range_max;
-        if (d2 < rmin * rmin || d2 > rmax * rmax) {
+        if (d2 < rmin * rmin) {
             enemy_reset_fire_cooldown(w, &t, e);
             return;
         }
@@ -831,6 +849,12 @@ static void enemy_try_fire(game_state* g, enemy* e, float dt, const leveldef_db*
 }
 
 static void update_enemy_formation(game_state* g, enemy* e, float dt, float su, int uses_cylinder, float period) {
+    const float dx_player = uses_cylinder ? wrap_delta(g->player.b.x, e->b.x, period) : (g->player.b.x - e->b.x);
+    const float dy_player = g->player.b.y - e->b.y;
+    const int same_screen =
+        (fabsf(dx_player) <= g->world_w * 0.52f) &&
+        (fabsf(dy_player) <= g->world_h * 0.52f);
+
     e->ai_timer_s += dt;
     if (e->state == ENEMY_STATE_FORMATION) {
         switch (e->formation_kind) {
@@ -854,14 +878,16 @@ static void update_enemy_formation(game_state* g, enemy* e, float dt, float su, 
                 const float target_vx = lane_dir * 165.0f * su;
                 const float target_vy = (desired_y - e->b.y) * 2.4f;
                 steer_to_velocity(&e->b, target_vx, target_vy, e->accel, 1.2f);
-                if (e->ai_timer_s > e->break_delay_s) {
-                    const float legacy_p_per_frame = 0.014f;
-                    const float lambda = -logf(1.0f - legacy_p_per_frame) * 60.0f;
-                    const float p_dt = 1.0f - expf(-lambda * fmaxf(dt, 0.0f));
-                    if (frand01() < p_dt) {
-                        e->state = ENEMY_STATE_BREAK_ATTACK;
-                        e->ai_timer_s = 0.0f;
-                        e->break_delay_s = 1.0f + frand01() * 2.0f;
+                if (same_screen) {
+                    const float warmup_s = 0.9f;
+                    const float mean_interval_s = 2.7f;
+                    if (e->ai_timer_s > warmup_s) {
+                        const float p_dt = 1.0f - expf(-fmaxf(dt, 0.0f) / mean_interval_s);
+                        if (frand01() < p_dt) {
+                            e->state = ENEMY_STATE_BREAK_ATTACK;
+                            e->ai_timer_s = 0.0f;
+                            e->break_delay_s = 1.6f + frand01() * 1.1f;
+                        }
                     }
                 }
             } break;
@@ -870,13 +896,42 @@ static void update_enemy_formation(game_state* g, enemy* e, float dt, float su, 
         const float lead = 0.45f;
         const float tx = g->player.b.x + g->player.b.vx * lead;
         const float ty = g->player.b.y + g->player.b.vy * lead;
-        float dir_x = uses_cylinder ? wrap_delta(tx, e->b.x, period) : (tx - e->b.x);
-        float dir_y = ty - e->b.y;
-        normalize2(&dir_x, &dir_y);
-        steer_to_velocity(&e->b, dir_x * (e->max_speed * 1.18f), dir_y * (e->max_speed * 1.18f), e->accel * 1.25f, 1.0f);
-        if (e->ai_timer_s > 1.6f) {
+        float to_x = uses_cylinder ? wrap_delta(tx, e->b.x, period) : (tx - e->b.x);
+        float to_y = ty - e->b.y;
+        float dir_x, dir_y;
+
+        normalize2(&to_x, &to_y);
+        if (e->formation_kind == ENEMY_FORMATION_V) {
+            const float turn_sign = ((e->slot_index ^ e->wave_id) & 1) ? -1.0f : 1.0f;
+            const float arc_t = clampf(e->ai_timer_s / fmaxf(e->break_delay_s, 0.1f), 0.0f, 1.0f);
+            const float arc_w = (1.0f - arc_t) * 1.05f;
+            const float px = -to_y * turn_sign;
+            const float py = to_x * turn_sign;
+            dir_x = to_x + px * arc_w;
+            dir_y = to_y + py * arc_w;
+            normalize2(&dir_x, &dir_y);
+            steer_to_velocity(
+                &e->b,
+                dir_x * (e->max_speed * 1.62f),
+                dir_y * (e->max_speed * 1.62f),
+                e->accel * 1.35f,
+                0.92f
+            );
+        } else {
+            dir_x = to_x;
+            dir_y = to_y;
+            steer_to_velocity(
+                &e->b,
+                dir_x * (e->max_speed * 1.18f),
+                dir_y * (e->max_speed * 1.18f),
+                e->accel * 1.25f,
+                1.0f
+            );
+        }
+        if (e->ai_timer_s > fmaxf(e->break_delay_s, 1.4f)) {
             e->state = ENEMY_STATE_FORMATION;
             e->ai_timer_s = 0.0f;
+            e->break_delay_s = 0.0f;
         }
     }
 }
