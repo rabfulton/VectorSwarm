@@ -99,6 +99,7 @@ typedef struct enemy {
     float swarm_drag;
     float lane_dir;
     float home_y;
+    int formation_kind;
     int armed;
     int weapon_id;
     float fire_cooldown_s;

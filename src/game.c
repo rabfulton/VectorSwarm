@@ -1,4 +1,5 @@
 #include "game.h"
+#include "enemy.h"
 #include "leveldef.h"
 
 #include <math.h>
@@ -18,6 +19,12 @@ enum enemy_state {
     ENEMY_STATE_BREAK_ATTACK = 1,
     ENEMY_STATE_SWARM = 2,
     ENEMY_STATE_KAMIKAZE = 3
+};
+
+enum enemy_formation_kind {
+    ENEMY_FORMATION_NONE = 0,
+    ENEMY_FORMATION_SINE = 1,
+    ENEMY_FORMATION_V = 2
 };
 
 enum enemy_weapon_id {
@@ -964,6 +971,16 @@ static void enforce_auto_spawn_side(game_state* g, enemy* e, int bidirectional_s
     }
 }
 
+static float lane_dir_toward_player_x(const game_state* g, float enemy_x) {
+    if (!g) {
+        return -1.0f;
+    }
+    const float dx = level_uses_cylinder(g) ?
+        wrap_delta(g->player.b.x, enemy_x, cylinder_period(g)) :
+        (g->player.b.x - enemy_x);
+    return (dx < 0.0f) ? -1.0f : 1.0f;
+}
+
 static void announce_wave(game_state* g, const char* wave_name) {
     g->wave_announce_pending = 1;
     snprintf(g->wave_announce_text, sizeof(g->wave_announce_text), "inbound enemy wave %02d\n%s", g->wave_index + 1, wave_name);
@@ -991,6 +1008,7 @@ static void spawn_wave_sine_snake(game_state* g, int wave_id, int bidirectional_
         }
         e->archetype = ENEMY_ARCH_FORMATION;
         e->state = ENEMY_STATE_FORMATION;
+        e->formation_kind = ENEMY_FORMATION_SINE;
         enemy_assign_combat_loadout(g, e);
         e->wave_id = wave_id;
         e->slot_index = i;
@@ -998,7 +1016,7 @@ static void spawn_wave_sine_snake(game_state* g, int wave_id, int bidirectional_
         enforce_auto_spawn_side(g, e, bidirectional_spawns);
         e->home_y = g->world_h * w->home_y01;
         e->b.y = e->home_y;
-        e->lane_dir = -spawn_side;
+        e->lane_dir = lane_dir_toward_player_x(g, e->b.x);
         e->form_phase = (float)i * w->phase_step;
         e->form_amp = w->form_amp * su;
         e->form_freq = w->form_freq;
@@ -1032,6 +1050,7 @@ static void spawn_wave_v_formation(game_state* g, int wave_id, int bidirectional
         const int off = i - mid;
         e->archetype = ENEMY_ARCH_FORMATION;
         e->state = ENEMY_STATE_FORMATION;
+        e->formation_kind = ENEMY_FORMATION_V;
         enemy_assign_combat_loadout(g, e);
         e->wave_id = wave_id;
         e->slot_index = i;
@@ -1039,7 +1058,7 @@ static void spawn_wave_v_formation(game_state* g, int wave_id, int bidirectional
         enforce_auto_spawn_side(g, e, bidirectional_spawns);
         e->home_y = g->world_h * w->home_y01 + (float)off * w->home_y_step * su;
         e->b.y = e->home_y;
-        e->lane_dir = -spawn_side;
+        e->lane_dir = lane_dir_toward_player_x(g, e->b.x);
         e->form_phase = (float)i * w->phase_step;
         e->form_amp = w->form_amp * su;
         e->form_freq = w->form_freq;
@@ -1217,6 +1236,7 @@ static void spawn_curated_enemy(game_state* g, int wave_id, const leveldef_curat
         } else {
             e->archetype = ENEMY_ARCH_FORMATION;
             e->state = ENEMY_STATE_FORMATION;
+            e->formation_kind = (ce->kind == 3) ? ENEMY_FORMATION_V : ENEMY_FORMATION_SINE;
             e->home_y = g->world_h * ce->y01;
             e->b.y = e->home_y;
             e->form_phase = (float)i * 0.4f;
@@ -1225,6 +1245,7 @@ static void spawn_curated_enemy(game_state* g, int wave_id, const leveldef_curat
             e->break_delay_s = 0.8f + 0.14f * (float)i;
             e->max_speed = ((ce->c > 0.0f) ? ce->c : ((ce->kind == 3) ? lvl->v.max_speed : lvl->sine.max_speed)) * su;
             e->accel = (ce->kind == 3) ? lvl->v.accel : lvl->sine.accel;
+            e->lane_dir = lane_dir_toward_player_x(g, e->b.x);
         }
     }
 }
@@ -1321,22 +1342,44 @@ static void update_enemy_formation(game_state* g, enemy* e, float dt) {
     e->ai_timer_s += dt;
     if (e->state == ENEMY_STATE_FORMATION) {
         const float su = gameplay_ui_scale(g);
-        const float desired_y = e->home_y + sinf(g->t * e->form_freq + e->form_phase) * e->form_amp;
-        const float lane_dir = (e->lane_dir < 0.0f) ? -1.0f : 1.0f;
-        const float target_vx = lane_dir * 165.0f * su;
-        const float target_vy = (desired_y - e->b.y) * 2.4f;
-        steer_to_velocity(&e->b, target_vx, target_vy, e->accel, 1.2f);
+        switch (e->formation_kind) {
+            case ENEMY_FORMATION_SINE: {
+                /* Sine snake: approach player in X only, preserve wave in Y. */
+                const float dx_to_player = level_uses_cylinder(g) ?
+                    wrap_delta(g->player.b.x, e->b.x, cylinder_period(g)) :
+                    (g->player.b.x - e->b.x);
+                if (fabsf(dx_to_player) > g->world_w * 0.10f) {
+                    e->lane_dir = (dx_to_player < 0.0f) ? -1.0f : 1.0f;
+                }
+                {
+                    const float lane_dir = (e->lane_dir < 0.0f) ? -1.0f : 1.0f;
+                    const float target_vx = lane_dir * 165.0f * su;
+                    const float desired_y = e->home_y + sinf(g->t * e->form_freq + e->form_phase) * e->form_amp;
+                    const float target_vy = (desired_y - e->b.y) * 2.4f;
+                    steer_to_velocity(&e->b, target_vx, target_vy, e->accel, 1.2f);
+                }
+            } break;
+            case ENEMY_FORMATION_V:
+            default: {
+                const float desired_y = e->home_y + sinf(g->t * e->form_freq + e->form_phase) * e->form_amp;
+                const float lane_dir = (e->lane_dir < 0.0f) ? -1.0f : 1.0f;
+                const float target_vx = lane_dir * 165.0f * su;
+                const float target_vy = (desired_y - e->b.y) * 2.4f;
+                steer_to_velocity(&e->b, target_vx, target_vy, e->accel, 1.2f);
 
-        if (e->ai_timer_s > e->break_delay_s) {
-            /* Keep break-attack transition rate stable across frame rates. */
-            const float legacy_p_per_frame = 0.014f; /* tuned at ~60 fps */
-            const float lambda = -logf(1.0f - legacy_p_per_frame) * 60.0f;
-            const float p_dt = 1.0f - expf(-lambda * fmaxf(dt, 0.0f));
-            if (frand01() < p_dt) {
-                e->state = ENEMY_STATE_BREAK_ATTACK;
-                e->ai_timer_s = 0.0f;
-                e->break_delay_s = 1.0f + frand01() * 2.0f;
+                if (e->ai_timer_s > e->break_delay_s) {
+                    /* Keep break-attack transition rate stable across frame rates. */
+                    const float legacy_p_per_frame = 0.014f; /* tuned at ~60 fps */
+                    const float lambda = -logf(1.0f - legacy_p_per_frame) * 60.0f;
+                    const float p_dt = 1.0f - expf(-lambda * fmaxf(dt, 0.0f));
+                    if (frand01() < p_dt) {
+                        e->state = ENEMY_STATE_BREAK_ATTACK;
+                        e->ai_timer_s = 0.0f;
+                        e->break_delay_s = 1.0f + frand01() * 2.0f;
+                    }
+                }
             }
+            break;
         }
     } else {
         const float lead = 0.45f;
@@ -1759,7 +1802,16 @@ static void game_update_wave_spawning(game_state* g, float dt) {
             }
             if (world_x >= activate_min_x && world_x <= activate_x) {
                 const int wave_id = ++g->wave_id_alloc;
-                spawn_curated_enemy(g, wave_id, ce);
+                enemy_spawn_curated_enemy(
+                    g,
+                    &g_leveldef,
+                    lvl,
+                    wave_id,
+                    ce,
+                    gameplay_ui_scale(g),
+                    level_uses_cylinder(g),
+                    cylinder_period(g)
+                );
                 g->curated_spawned[i] = 1u;
                 g->curated_spawned_count += 1;
             }
@@ -1769,16 +1821,37 @@ static void game_update_wave_spawning(game_state* g, float dt) {
     g->wave_cooldown_s -= dt;
     if (lvl->spawn_mode == LEVELDEF_SPAWN_SEQUENCED_CLEAR) {
         if (game_enemy_count(g) <= 0 && g->wave_cooldown_s <= 0.0f) {
-            spawn_next_wave(g);
+            enemy_spawn_next_wave(
+                g,
+                &g_leveldef,
+                lvl,
+                gameplay_ui_scale(g),
+                level_uses_cylinder(g),
+                cylinder_period(g)
+            );
         }
     } else if (lvl->spawn_mode == LEVELDEF_SPAWN_TIMED) {
         if (g->wave_cooldown_s <= 0.0f) {
-            spawn_next_wave(g);
+            enemy_spawn_next_wave(
+                g,
+                &g_leveldef,
+                lvl,
+                gameplay_ui_scale(g),
+                level_uses_cylinder(g),
+                cylinder_period(g)
+            );
             g->wave_cooldown_s = lvl->spawn_interval_s;
         }
     } else if (lvl->spawn_mode == LEVELDEF_SPAWN_TIMED_SEQUENCED) {
         if (g->wave_cooldown_s <= 0.0f && game_enemy_count(g) <= 0) {
-            spawn_next_wave(g);
+            enemy_spawn_next_wave(
+                g,
+                &g_leveldef,
+                lvl,
+                gameplay_ui_scale(g),
+                level_uses_cylinder(g),
+                cylinder_period(g)
+            );
             g->wave_cooldown_s = lvl->spawn_interval_s;
         }
     }
@@ -1980,10 +2053,7 @@ void game_update(game_state* g, float dt, const game_input* in) {
     game_update_player_weapons(g, dt, in);
     game_update_player_bullets(g, dt);
     game_update_wave_spawning(g, dt);
-    int player_hit_this_frame = game_update_enemies(g, dt, su);
-    player_hit_this_frame = game_update_enemy_bullets(g, dt, su, player_hit_this_frame);
-    game_resolve_player_bullet_enemy_hits(g);
-    game_update_enemy_debris(g, dt, su);
+    enemy_update_system(g, &g_leveldef, dt, su, level_uses_cylinder(g), cylinder_period(g));
     game_update_particles(g, dt);
     game_update_camera(g, dt);
 }
