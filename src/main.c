@@ -3,6 +3,7 @@
 #include "audio.h"
 #include "level_editor.h"
 #include "leveldef.h"
+#include "menu.h"
 #include "planetarium/planetarium_registry.h"
 #include "planetarium/planetarium_validate.h"
 #include "planetarium_propaganda.h"
@@ -282,6 +283,7 @@ typedef struct app {
 
     vg_context* vg;
     game_state game;
+    menu_state menu;
     vg_text_fx_typewriter wave_tty;
     vg_text_fx_marquee planetarium_marquee;
     SDL_AudioDeviceID audio_dev;
@@ -321,11 +323,6 @@ typedef struct app {
     int show_fps_counter;
     int crt_ui_selected;
     int crt_ui_mouse_drag;
-    int show_acoustics;
-    int show_video_menu;
-    int show_planetarium;
-    int show_level_editor;
-    int show_controls_menu;
     int video_menu_selected;
     int video_menu_fullscreen;
     int palette_mode;
@@ -514,8 +511,46 @@ static void controls_open_first_gamepad(app* a) {
     controls_refresh_labels(a);
 }
 
+static void menu_open_screen(app* a, int screen, int return_screen) {
+    if (!a) {
+        return;
+    }
+    menu_open(&a->menu, screen, return_screen);
+    a->video_menu_dial_drag = -1;
+    if (!menu_is_screen(&a->menu, APP_SCREEN_CONTROLS)) {
+        a->controls_rebinding_action = -1;
+        a->controls_rebinding_column = 0;
+    }
+    if (menu_is_screen(&a->menu, APP_SCREEN_LEVEL_EDITOR)) {
+        a->level_editor.entry_active = 1;
+        SDL_StartTextInput();
+    } else {
+        a->level_editor.entry_active = 0;
+        SDL_StopTextInput();
+    }
+}
+
+static void menu_back_screen(app* a) {
+    if (!a) {
+        return;
+    }
+    menu_back(&a->menu);
+    a->video_menu_dial_drag = -1;
+    if (!menu_is_screen(&a->menu, APP_SCREEN_CONTROLS)) {
+        a->controls_rebinding_action = -1;
+        a->controls_rebinding_column = 0;
+    }
+    if (menu_is_screen(&a->menu, APP_SCREEN_LEVEL_EDITOR)) {
+        a->level_editor.entry_active = 1;
+        SDL_StartTextInput();
+    } else {
+        a->level_editor.entry_active = 0;
+        SDL_StopTextInput();
+    }
+}
+
 static int controls_ui_active(const app* a) {
-    return a && (a->show_acoustics || a->show_video_menu || a->show_planetarium || a->show_level_editor || a->show_controls_menu);
+    return a ? (!menu_is_gameplay(&a->menu)) : 0;
 }
 
 static void reset_terrain_tuning(app* a) {
@@ -1079,7 +1114,7 @@ static void map_mouse_to_scene_coords(const app* a, int mouse_x, int mouse_y, fl
     const float sy = h / (float)win_h;
     float x = clampf((float)mouse_x * sx, 0.0f, w);
     float y = clampf(((float)win_h - (float)mouse_y) * sy, 0.0f, h);
-    if (a->show_acoustics || a->show_crt_ui || a->show_video_menu || a->show_controls_menu) {
+    if (!menu_is_gameplay(&a->menu) || a->show_crt_ui) {
         vg_crt_profile crt;
         vg_get_crt_profile(a->vg, &crt);
         const float k = clampf(crt.barrel_distortion, 0.0f, 0.30f);
@@ -2056,7 +2091,7 @@ static void planetarium_node_center(const app* a, int idx, float* out_x, float* 
 }
 
 static int handle_controls_menu_mouse(app* a, int mouse_x, int mouse_y, int set_value) {
-    if (!a || !a->show_controls_menu) {
+    if (!a || !menu_is_screen(&a->menu, APP_SCREEN_CONTROLS)) {
         return 0;
     }
     float mx = 0.0f;
@@ -2106,6 +2141,55 @@ static int handle_controls_menu_mouse(app* a, int mouse_x, int mouse_y, int set_
             }
             return 1;
         }
+    }
+    return 0;
+}
+
+static int handle_shipyard_mouse(app* a, int mouse_x, int mouse_y, int set_value) {
+    if (!a || a->menu.current != APP_SCREEN_SHIPYARD) {
+        return 0;
+    }
+    float mx = 0.0f;
+    float my = 0.0f;
+    map_mouse_to_scene_coords(a, mouse_x, mouse_y, &mx, &my);
+    const float w = (float)a->swapchain_extent.width;
+    const float h = (float)a->swapchain_extent.height;
+    const vg_rect panel = make_ui_safe_frame(w, h);
+    const vg_rect links_box = {
+        panel.x + panel.w * 0.03f,
+        panel.y + panel.h * 0.16f,
+        panel.w * 0.34f,
+        panel.h * 0.66f
+    };
+    const float btn_h = links_box.h * 0.14f;
+    const float btn_gap = links_box.h * 0.045f;
+    const float bx = links_box.x + links_box.w * 0.08f;
+    const float bw = links_box.w * 0.84f;
+    float by = links_box.y + links_box.h - btn_h - links_box.h * 0.08f;
+    const int targets[5] = {
+        APP_SCREEN_ACOUSTICS,
+        APP_SCREEN_VIDEO,
+        APP_SCREEN_PLANETARIUM,
+        APP_SCREEN_CONTROLS,
+        APP_SCREEN_LEVEL_EDITOR
+    };
+    for (int i = 0; i < 5; ++i) {
+        const vg_rect r = {bx, by, bw, btn_h};
+        if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h) {
+            if (set_value) {
+                menu_open_screen(a, targets[i], APP_SCREEN_SHIPYARD);
+                if (targets[i] == APP_SCREEN_VIDEO) {
+                    sync_video_dials_from_live_crt(a);
+                } else if (targets[i] == APP_SCREEN_PLANETARIUM) {
+                    sync_planetarium_marquee(a);
+                    announce_planetarium_selection(a);
+                } else if (targets[i] == APP_SCREEN_CONTROLS) {
+                    controls_refresh_labels(a);
+                }
+            }
+            return 1;
+        }
+        by -= (btn_h + btn_gap);
     }
     return 0;
 }
@@ -4768,11 +4852,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .teletype_text = a->wave_tty_visible,
         .planetarium_marquee_text = a->planetarium_marquee.text,
         .planetarium_marquee_offset_px = a->planetarium_marquee.offset_px,
-        .show_acoustics = a->show_acoustics,
-        .show_video_menu = a->show_video_menu,
-        .show_planetarium = a->show_planetarium,
-        .show_level_editor = a->show_level_editor,
-        .show_controls_menu = a->show_controls_menu,
+        .menu_screen = a->menu.current,
         .video_menu_selected = a->video_menu_selected,
         .video_menu_fullscreen = a->video_menu_fullscreen,
         .palette_mode = a->palette_mode,
@@ -4793,11 +4873,11 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .terrain_tuning_text = (a->fog_tuning_enabled &&
                                 a->fog_tuning_show &&
                                 a->game.render_style == LEVEL_RENDER_FOG &&
-                                !a->show_acoustics && !a->show_video_menu && !a->show_planetarium && !a->show_level_editor && !a->show_controls_menu)
+                                menu_is_gameplay(&a->menu))
             ? a->fog_tuning_text
             : ((a->particle_tuning_enabled &&
                 a->particle_tuning_show &&
-                !a->show_acoustics && !a->show_video_menu && !a->show_planetarium && !a->show_level_editor && !a->show_controls_menu)
+                menu_is_gameplay(&a->menu))
                 ? a->particle_tuning_text
                 : ((a->terrain_tuning_enabled &&
                     a->terrain_tuning_show &&
@@ -4888,12 +4968,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         metrics.controls_pad_label[i] = a->controls_pad_label[i];
     }
     {
-        const int in_gameplay_scene =
-            !a->show_acoustics &&
-            !a->show_video_menu &&
-            !a->show_planetarium &&
-            !a->show_level_editor &&
-            !a->show_controls_menu;
+        const int in_gameplay_scene = menu_is_gameplay(&a->menu);
         const int use_gpu_terrain =
             (a->game.render_style == LEVEL_RENDER_DRIFTER_SHADED ||
              a->game.render_style == LEVEL_RENDER_DRIFTER);
@@ -5016,8 +5091,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
     pc.p3[1] = 0.76f;
     vkCmdPushConstants(cmd, a->post_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
-    if (a->particle_bloom_enabled &&
-        !a->show_acoustics && !a->show_video_menu && !a->show_planetarium && !a->show_level_editor) {
+    if (a->particle_bloom_enabled && menu_is_gameplay(&a->menu)) {
         record_gpu_particles_bloom(a, cmd);
     }
     vkCmdEndRenderPass(cmd);
@@ -5078,11 +5152,7 @@ int main(void) {
     a.crt_ui_selected = 0;
     a.crt_ui_mouse_drag = 0;
     a.show_fps_counter = 0;
-    a.show_acoustics = 0;
-    a.show_video_menu = 0;
-    a.show_planetarium = 0;
-    a.show_level_editor = 0;
-    a.show_controls_menu = 0;
+    menu_init(&a.menu);
     a.terrain_wire_enabled = 1;
     a.terrain_tuning_enabled = env_flag_enabled("VTYPE_TERRAIN_TUNING");
     a.terrain_tuning_show = 1;
@@ -5226,7 +5296,7 @@ int main(void) {
             if (ev.type == SDL_QUIT) {
                 running = 0;
             } else if (ev.type == SDL_KEYDOWN && !ev.key.repeat) {
-                if (a.show_controls_menu && a.controls_rebinding_action >= 0) {
+                if (menu_is_screen(&a.menu, APP_SCREEN_CONTROLS) && a.controls_rebinding_action >= 0) {
                     if (ev.key.keysym.sym == SDLK_ESCAPE) {
                         a.controls_rebinding_action = -1;
                         a.controls_rebinding_column = 0;
@@ -5242,15 +5312,8 @@ int main(void) {
                         }
                     }
                     continue;
-                } else if (ev.key.keysym.sym == SDLK_ESCAPE && a.show_controls_menu) {
-                    a.show_controls_menu = 0;
-                } else if (ev.key.keysym.sym == SDLK_ESCAPE && a.show_video_menu) {
-                    a.show_video_menu = 0;
-                } else if (ev.key.keysym.sym == SDLK_ESCAPE && a.show_planetarium) {
-                    a.show_planetarium = 0;
-                } else if (ev.key.keysym.sym == SDLK_ESCAPE && a.show_level_editor) {
-                    a.show_level_editor = 0;
-                    SDL_StopTextInput();
+                } else if (ev.key.keysym.sym == SDLK_ESCAPE && !menu_is_gameplay(&a.menu)) {
+                    menu_back_screen(&a);
                 } else if (ev.key.keysym.sym == SDLK_ESCAPE) {
                     running = 0;
                 } else if (ev.key.keysym.sym == SDLK_n) {
@@ -5272,31 +5335,25 @@ int main(void) {
                         set_tty_message(&a, "level mode: defender");
                     }
                 } else if (ev.key.keysym.sym == SDLK_2) {
-                    a.show_video_menu = !a.show_video_menu;
-                    if (a.show_video_menu) {
-                        a.show_acoustics = 0;
-                        a.show_planetarium = 0;
-                        a.show_controls_menu = 0;
-                        a.show_level_editor = 0;
-                        SDL_StopTextInput();
+                    if (a.menu.current == APP_SCREEN_VIDEO) {
+                        menu_back_screen(&a);
+                    } else {
+                        const int ret = menu_preferred_return(&a.menu);
+                        menu_open_screen(&a, APP_SCREEN_VIDEO, ret);
                         a.show_crt_ui = 0;
-                        a.video_menu_dial_drag = -1;
                         sync_video_dials_from_live_crt(&a);
                     }
                 } else if (ev.key.keysym.sym == SDLK_3) {
-                    a.show_planetarium = !a.show_planetarium;
-                    if (a.show_planetarium) {
-                        a.show_video_menu = 0;
-                        a.show_acoustics = 0;
-                        a.show_controls_menu = 0;
-                        a.show_level_editor = 0;
-                        SDL_StopTextInput();
+                    if (a.menu.current == APP_SCREEN_PLANETARIUM) {
+                        menu_back_screen(&a);
+                    } else {
+                        const int ret = menu_preferred_return(&a.menu);
+                        menu_open_screen(&a, APP_SCREEN_PLANETARIUM, ret);
                         a.show_crt_ui = 0;
-                        a.video_menu_dial_drag = -1;
                         sync_planetarium_marquee(&a);
                         announce_planetarium_selection(&a);
                     }
-                } else if (a.show_video_menu && ev.key.keysym.sym == SDLK_a) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_VIDEO) && ev.key.keysym.sym == SDLK_a) {
                     a.msaa_enabled = !a.msaa_enabled;
                     if (a.msaa_enabled && a.msaa_samples == VK_SAMPLE_COUNT_1_BIT) {
                         a.msaa_enabled = 0;
@@ -5308,70 +5365,65 @@ int main(void) {
                             running = 0;
                         }
                     }
-                } else if (a.show_video_menu && ev.key.keysym.sym == SDLK_UP) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_VIDEO) && ev.key.keysym.sym == SDLK_UP) {
                     const int count = VIDEO_MENU_RES_COUNT + 1;
                     a.video_menu_selected = (a.video_menu_selected + count - 1) % count;
-                } else if (a.show_video_menu && ev.key.keysym.sym == SDLK_DOWN) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_VIDEO) && ev.key.keysym.sym == SDLK_DOWN) {
                     const int count = VIDEO_MENU_RES_COUNT + 1;
                     a.video_menu_selected = (a.video_menu_selected + 1) % count;
-                } else if (a.show_video_menu && (ev.key.keysym.sym == SDLK_RETURN || ev.key.keysym.sym == SDLK_KP_ENTER || ev.key.keysym.sym == SDLK_SPACE)) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_VIDEO) && (ev.key.keysym.sym == SDLK_RETURN || ev.key.keysym.sym == SDLK_KP_ENTER || ev.key.keysym.sym == SDLK_SPACE)) {
                     if (apply_video_mode(&a)) {
                         set_tty_message(&a, "display mode applied");
                     } else {
                         set_tty_message(&a, "display mode apply failed");
                     }
                 } else if (ev.key.keysym.sym == SDLK_1) {
-                    a.show_acoustics = !a.show_acoustics;
-                    if (a.show_acoustics) {
-                        a.show_planetarium = 0;
-                        a.show_video_menu = 0;
-                        a.show_controls_menu = 0;
-                        a.show_level_editor = 0;
-                        SDL_StopTextInput();
+                    if (a.menu.current == APP_SCREEN_ACOUSTICS) {
+                        menu_back_screen(&a);
+                    } else {
+                        const int ret = menu_preferred_return(&a.menu);
+                        menu_open_screen(&a, APP_SCREEN_ACOUSTICS, ret);
                     }
                 } else if (ev.key.keysym.sym == SDLK_5) {
-                    a.show_controls_menu = !a.show_controls_menu;
-                    if (a.show_controls_menu) {
-                        a.show_planetarium = 0;
-                        a.show_video_menu = 0;
-                        a.show_acoustics = 0;
-                        a.show_level_editor = 0;
-                        a.show_crt_ui = 0;
-                        a.video_menu_dial_drag = -1;
-                        SDL_StopTextInput();
-                        controls_refresh_labels(&a);
+                    if (a.menu.current == APP_SCREEN_CONTROLS) {
+                        menu_back_screen(&a);
                     } else {
-                        a.controls_rebinding_action = -1;
+                        const int ret = menu_preferred_return(&a.menu);
+                        menu_open_screen(&a, APP_SCREEN_CONTROLS, ret);
+                        a.show_crt_ui = 0;
+                        controls_refresh_labels(&a);
                     }
                 } else if (ev.key.keysym.sym == SDLK_l) {
-                    a.show_level_editor = !a.show_level_editor;
-                    if (a.show_level_editor) {
-                        a.show_planetarium = 0;
-                        a.show_video_menu = 0;
-                        a.show_acoustics = 0;
-                        a.show_controls_menu = 0;
-                        a.show_crt_ui = 0;
-                        a.video_menu_dial_drag = -1;
-                        a.level_editor.entry_active = 1;
-                        SDL_StartTextInput();
+                    if (a.menu.current == APP_SCREEN_LEVEL_EDITOR) {
+                        menu_back_screen(&a);
                     } else {
-                        SDL_StopTextInput();
+                        const int ret = menu_preferred_return(&a.menu);
+                        menu_open_screen(&a, APP_SCREEN_LEVEL_EDITOR, ret);
+                        a.show_crt_ui = 0;
                     }
                 } else if (ev.key.keysym.sym == SDLK_4) {
+                    if (a.menu.current == APP_SCREEN_SHIPYARD) {
+                        menu_back_screen(&a);
+                    } else {
+                        const int ret = menu_is_gameplay(&a.menu) ? APP_SCREEN_GAMEPLAY : a.menu.current;
+                        menu_open_screen(&a, APP_SCREEN_SHIPYARD, ret);
+                        a.show_crt_ui = 0;
+                    }
+                } else if (ev.key.keysym.sym == SDLK_0) {
                     a.terrain_wire_enabled = !a.terrain_wire_enabled;
                     set_tty_message(&a, a.terrain_wire_enabled ? "terrain wire: on" : "terrain wire: off");
                 } else if (ev.key.keysym.sym == SDLK_b) {
                     a.particle_bloom_enabled = !a.particle_bloom_enabled;
                     set_tty_message(&a, a.particle_bloom_enabled ? "particle bloom: on" : "particle bloom: off");
-                } else if (a.show_planetarium && ev.key.keysym.sym == SDLK_LEFT) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_PLANETARIUM) && ev.key.keysym.sym == SDLK_LEFT) {
                     const int max_idx = app_planetarium_planet_count(&a);
                     a.planetarium_selected = (a.planetarium_selected + max_idx) % (max_idx + 1);
                     announce_planetarium_selection(&a);
-                } else if (a.show_planetarium && ev.key.keysym.sym == SDLK_RIGHT) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_PLANETARIUM) && ev.key.keysym.sym == SDLK_RIGHT) {
                     const int max_idx = app_planetarium_planet_count(&a);
                     a.planetarium_selected = (a.planetarium_selected + 1) % (max_idx + 1);
                     announce_planetarium_selection(&a);
-                } else if (a.show_planetarium &&
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_PLANETARIUM) &&
                            (ev.key.keysym.sym == SDLK_RETURN || ev.key.keysym.sym == SDLK_KP_ENTER || ev.key.keysym.sym == SDLK_SPACE)) {
                     const planetary_system_def* sys = app_planetarium_system(&a);
                     const int boss_idx = app_planetarium_planet_count(&a);
@@ -5384,7 +5436,7 @@ int main(void) {
                             set_tty_message(&a, "system already quelled");
                         }
                     } else if (quelled >= boss_idx) {
-                        a.show_planetarium = 0;
+                        menu_back_screen(&a);
                         if (sys && sys->boss_gate_ready_text && sys->boss_gate_ready_text[0] != '\0') {
                             set_tty_message(&a, sys->boss_gate_ready_text);
                         } else {
@@ -5402,7 +5454,7 @@ int main(void) {
                             set_tty_message(&a, "boss locked: quell all systems first");
                         }
                     }
-                } else if (a.show_acoustics && ev.key.keysym.sym == SDLK_s) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_ACOUSTICS) && ev.key.keysym.sym == SDLK_s) {
                     if (a.acoustics_page == ACOUSTICS_PAGE_SYNTH) {
                         acoustics_slot_view sv = acoustics_make_slot_view(&a);
                         acoustics_capture_current_to_selected_slot_view(&sv, 1);
@@ -5417,7 +5469,7 @@ int main(void) {
                         }
                     }
                 } else if (ev.key.keysym.sym == SDLK_f) {
-                    if (a.show_acoustics) {
+                    if (menu_is_screen(&a.menu, APP_SCREEN_ACOUSTICS)) {
                         if (a.acoustics_page == ACOUSTICS_PAGE_COMBAT) {
                             trigger_enemy_fire_test(&a);
                         } else {
@@ -5427,33 +5479,33 @@ int main(void) {
                         a.show_fps_counter = !a.show_fps_counter;
                         set_tty_message(&a, a.show_fps_counter ? "fps counter: on" : "fps counter: off");
                     }
-                } else if (a.show_acoustics && ev.key.keysym.sym == SDLK_g) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_ACOUSTICS) && ev.key.keysym.sym == SDLK_g) {
                     if (a.acoustics_page == ACOUSTICS_PAGE_COMBAT) {
                         trigger_explosion_test(&a);
                     } else {
                         trigger_thruster_test(&a);
                     }
-                } else if (a.show_acoustics && (ev.key.keysym.sym == SDLK_q || ev.key.keysym.sym == SDLK_e)) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_ACOUSTICS) && (ev.key.keysym.sym == SDLK_q || ev.key.keysym.sym == SDLK_e)) {
                     if (ev.key.keysym.sym == SDLK_q) {
                         a.acoustics_page = (a.acoustics_page + ACOUSTICS_PAGE_COUNT - 1) % ACOUSTICS_PAGE_COUNT;
                     } else {
                         a.acoustics_page = (a.acoustics_page + 1) % ACOUSTICS_PAGE_COUNT;
                     }
-                } else if (a.show_controls_menu && ev.key.keysym.sym == SDLK_UP) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_CONTROLS) && ev.key.keysym.sym == SDLK_UP) {
                     const int rows = CONTROL_ACTION_COUNT + 1;
                     a.controls_selected = (a.controls_selected + rows - 1) % rows;
-                } else if (a.show_controls_menu && ev.key.keysym.sym == SDLK_DOWN) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_CONTROLS) && ev.key.keysym.sym == SDLK_DOWN) {
                     const int rows = CONTROL_ACTION_COUNT + 1;
                     a.controls_selected = (a.controls_selected + 1) % rows;
-                } else if (a.show_controls_menu && ev.key.keysym.sym == SDLK_LEFT) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_CONTROLS) && ev.key.keysym.sym == SDLK_LEFT) {
                     if (a.controls_selected < CONTROL_ACTION_COUNT) {
                         a.controls_selected_column = 0;
                     }
-                } else if (a.show_controls_menu && ev.key.keysym.sym == SDLK_RIGHT) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_CONTROLS) && ev.key.keysym.sym == SDLK_RIGHT) {
                     if (a.controls_selected < CONTROL_ACTION_COUNT) {
                         a.controls_selected_column = 1;
                     }
-                } else if (a.show_controls_menu &&
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_CONTROLS) &&
                            (ev.key.keysym.sym == SDLK_RETURN || ev.key.keysym.sym == SDLK_KP_ENTER || ev.key.keysym.sym == SDLK_SPACE)) {
                     if (a.controls_selected < CONTROL_ACTION_COUNT) {
                         a.controls_rebinding_action = a.controls_selected;
@@ -5464,31 +5516,31 @@ int main(void) {
                         (void)save_settings(&a);
                         set_tty_message(&a, a.controls_use_gamepad ? "joypad input enabled" : "joypad input disabled");
                     }
-                } else if (a.show_level_editor && ev.key.keysym.sym == SDLK_RETURN) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR) && ev.key.keysym.sym == SDLK_RETURN) {
                     const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
                     if (level_editor_load_by_name(&a.level_editor, db, a.level_editor.level_name)) {
                         set_tty_message(&a, "level editor: loaded");
                     } else {
                         set_tty_message(&a, "level editor: load failed");
                     }
-                } else if (a.show_level_editor && ev.key.keysym.sym == SDLK_BACKSPACE) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR) && ev.key.keysym.sym == SDLK_BACKSPACE) {
                     level_editor_backspace(&a.level_editor);
-                } else if (a.show_level_editor && ev.key.keysym.sym == SDLK_UP) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR) && ev.key.keysym.sym == SDLK_UP) {
                     level_editor_select_marker(&a.level_editor, -1);
-                } else if (a.show_level_editor && ev.key.keysym.sym == SDLK_DOWN) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR) && ev.key.keysym.sym == SDLK_DOWN) {
                     level_editor_select_marker(&a.level_editor, 1);
-                } else if (a.show_level_editor && ev.key.keysym.sym == SDLK_TAB) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR) && ev.key.keysym.sym == SDLK_TAB) {
                     level_editor_select_property(&a.level_editor, 1);
-                } else if (a.show_level_editor && ev.key.keysym.sym == SDLK_COMMA) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR) && ev.key.keysym.sym == SDLK_COMMA) {
                     const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
                     (void)level_editor_cycle_level(&a.level_editor, db, -1);
-                } else if (a.show_level_editor && ev.key.keysym.sym == SDLK_PERIOD) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR) && ev.key.keysym.sym == SDLK_PERIOD) {
                     const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
                     (void)level_editor_cycle_level(&a.level_editor, db, 1);
-                } else if (a.show_level_editor && ev.key.keysym.sym == SDLK_LEFT) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR) && ev.key.keysym.sym == SDLK_LEFT) {
                     const float step = (ev.key.keysym.mod & KMOD_SHIFT) ? 0.05f : 0.01f;
                     level_editor_adjust_selected_property(&a.level_editor, -step);
-                } else if (a.show_level_editor && ev.key.keysym.sym == SDLK_RIGHT) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR) && ev.key.keysym.sym == SDLK_RIGHT) {
                     const float step = (ev.key.keysym.mod & KMOD_SHIFT) ? 0.05f : 0.01f;
                     level_editor_adjust_selected_property(&a.level_editor, step);
                 } else if (ev.key.keysym.sym == SDLK_TAB) {
@@ -5496,37 +5548,37 @@ int main(void) {
                 } else if (ev.key.keysym.sym == SDLK_r) {
                     restart_pressed = 1;
                 } else if (a.fog_tuning_enabled &&
-                           !a.show_acoustics && !a.show_video_menu && !a.show_planetarium && !a.show_level_editor && !a.show_controls_menu &&
+                           menu_is_gameplay(&a.menu) &&
                            handle_fog_tuning_key(&a, ev.key.keysym.sym)) {
                     /* handled by fog tuning controls */
                 } else if (a.particle_tuning_enabled &&
-                           !a.show_acoustics && !a.show_video_menu && !a.show_planetarium && !a.show_level_editor && !a.show_controls_menu &&
+                           menu_is_gameplay(&a.menu) &&
                            handle_particle_tuning_key(&a, ev.key.keysym.sym)) {
                     /* handled by particle tuning controls */
                 } else if (a.terrain_tuning_enabled &&
-                           !a.show_acoustics && !a.show_video_menu && !a.show_planetarium && !a.show_level_editor && !a.show_controls_menu &&
+                           menu_is_gameplay(&a.menu) &&
                            handle_terrain_tuning_key(&a, ev.key.keysym.sym)) {
                     /* handled by terrain tuning controls */
-                } else if (a.show_acoustics && ev.key.keysym.sym == SDLK_UP) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_ACOUSTICS) && ev.key.keysym.sym == SDLK_UP) {
                     if (a.acoustics_page == ACOUSTICS_PAGE_COMBAT) {
                         a.acoustics_combat_selected =
                             (a.acoustics_combat_selected + ACOUST_COMBAT_SLIDER_COUNT - 1) % ACOUST_COMBAT_SLIDER_COUNT;
                     } else {
                         a.acoustics_selected = (a.acoustics_selected + ACOUSTICS_SLIDER_COUNT - 1) % ACOUSTICS_SLIDER_COUNT;
                     }
-                } else if (a.show_acoustics && ev.key.keysym.sym == SDLK_DOWN) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_ACOUSTICS) && ev.key.keysym.sym == SDLK_DOWN) {
                     if (a.acoustics_page == ACOUSTICS_PAGE_COMBAT) {
                         a.acoustics_combat_selected = (a.acoustics_combat_selected + 1) % ACOUST_COMBAT_SLIDER_COUNT;
                     } else {
                         a.acoustics_selected = (a.acoustics_selected + 1) % ACOUSTICS_SLIDER_COUNT;
                     }
-                } else if (a.show_acoustics && ev.key.keysym.sym == SDLK_LEFT) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_ACOUSTICS) && ev.key.keysym.sym == SDLK_LEFT) {
                     float* v = (a.acoustics_page == ACOUSTICS_PAGE_COMBAT) ?
                         &a.acoustics_combat_value_01[a.acoustics_combat_selected] :
                         &a.acoustics_value_01[a.acoustics_selected];
                     *v = clampf(*v - 0.02f, 0.0f, 1.0f);
                     apply_acoustics(&a);
-                } else if (a.show_acoustics && ev.key.keysym.sym == SDLK_RIGHT) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_ACOUSTICS) && ev.key.keysym.sym == SDLK_RIGHT) {
                     float* v = (a.acoustics_page == ACOUSTICS_PAGE_COMBAT) ?
                         &a.acoustics_combat_value_01[a.acoustics_combat_selected] :
                         &a.acoustics_value_01[a.acoustics_selected];
@@ -5554,7 +5606,7 @@ int main(void) {
                     controls_open_first_gamepad(&a);
                 }
             } else if (ev.type == SDL_CONTROLLERBUTTONDOWN) {
-                if (a.show_controls_menu && a.controls_rebinding_action >= 0 && a.controls_rebinding_column == 1) {
+                if (menu_is_screen(&a.menu, APP_SCREEN_CONTROLS) && a.controls_rebinding_action >= 0 && a.controls_rebinding_column == 1) {
                     const int idx = a.controls_rebinding_action;
                     if (idx >= 0 && idx < CONTROL_ACTION_COUNT) {
                         a.controls_pad_button[idx] = (int)ev.cbutton.button;
@@ -5563,7 +5615,7 @@ int main(void) {
                         (void)save_settings(&a);
                         set_tty_message(&a, "gamepad binding updated");
                     }
-                } else if (a.show_controls_menu && a.controls_rebinding_action < 0) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_CONTROLS) && a.controls_rebinding_action < 0) {
                     if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_UP) {
                         const int rows = CONTROL_ACTION_COUNT + 1;
                         a.controls_selected = (a.controls_selected + rows - 1) % rows;
@@ -5589,33 +5641,36 @@ int main(void) {
                             set_tty_message(&a, a.controls_use_gamepad ? "joypad input enabled" : "joypad input disabled");
                         }
                     } else if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_B) {
-                        a.show_controls_menu = 0;
+                        menu_back_screen(&a);
                     }
                 }
             } else if (ev.type == SDL_TEXTINPUT) {
-                if (a.show_level_editor && a.level_editor.entry_active) {
+                if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR) && a.level_editor.entry_active) {
                     level_editor_append_text(&a.level_editor, ev.text.text);
                 }
             } else if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT) {
-                if (a.show_video_menu && handle_video_menu_mouse(&a, ev.button.x, ev.button.y, 1)) {
+                if (menu_is_screen(&a.menu, APP_SCREEN_VIDEO) && handle_video_menu_mouse(&a, ev.button.x, ev.button.y, 1)) {
                     a.acoustics_mouse_drag = 0;
                     a.crt_ui_mouse_drag = 0;
-                } else if (a.show_controls_menu && handle_controls_menu_mouse(&a, ev.button.x, ev.button.y, 1)) {
+                } else if (a.menu.current == APP_SCREEN_SHIPYARD && handle_shipyard_mouse(&a, ev.button.x, ev.button.y, 1)) {
                     a.acoustics_mouse_drag = 0;
                     a.crt_ui_mouse_drag = 0;
-                } else if (a.show_level_editor && handle_level_editor_mouse(&a, ev.button.x, ev.button.y, 1, 1)) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_CONTROLS) && handle_controls_menu_mouse(&a, ev.button.x, ev.button.y, 1)) {
                     a.acoustics_mouse_drag = 0;
                     a.crt_ui_mouse_drag = 0;
-                } else if (a.show_planetarium && handle_planetarium_mouse(&a, ev.button.x, ev.button.y, 1)) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR) && handle_level_editor_mouse(&a, ev.button.x, ev.button.y, 1, 1)) {
                     a.acoustics_mouse_drag = 0;
                     a.crt_ui_mouse_drag = 0;
-                } else if (a.show_acoustics && handle_acoustics_ui_mouse(&a, ev.button.x, ev.button.y, 1)) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_PLANETARIUM) && handle_planetarium_mouse(&a, ev.button.x, ev.button.y, 1)) {
+                    a.acoustics_mouse_drag = 0;
+                    a.crt_ui_mouse_drag = 0;
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_ACOUSTICS) && handle_acoustics_ui_mouse(&a, ev.button.x, ev.button.y, 1)) {
                     a.acoustics_mouse_drag = 1;
                 } else if (a.show_crt_ui && handle_crt_ui_mouse(&a, ev.button.x, ev.button.y, 1)) {
                     a.crt_ui_mouse_drag = 1;
                 }
             } else if (ev.type == SDL_MOUSEBUTTONUP && ev.button.button == SDL_BUTTON_LEFT) {
-                if (a.show_level_editor) {
+                if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR)) {
                     float mx = 0.0f;
                     float my = 0.0f;
                     map_mouse_to_scene_coords(&a, ev.button.x, ev.button.y, &mx, &my);
@@ -5627,7 +5682,7 @@ int main(void) {
                         (float)a.swapchain_extent.height
                     );
                 }
-                if (a.show_video_menu) {
+                if (menu_is_screen(&a.menu, APP_SCREEN_VIDEO)) {
                     if (a.video_menu_dial_drag >= 0) {
                         (void)save_settings(&a);
                     }
@@ -5640,9 +5695,9 @@ int main(void) {
                 a.acoustics_mouse_drag = 0;
                 a.level_editor.timeline_drag = 0;
             } else if (ev.type == SDL_MOUSEMOTION) {
-                if (a.show_video_menu && a.video_menu_dial_drag >= 0) {
+                if (menu_is_screen(&a.menu, APP_SCREEN_VIDEO) && a.video_menu_dial_drag >= 0) {
                     (void)update_video_menu_dial_drag(&a, ev.motion.x, ev.motion.y);
-                } else if (a.show_level_editor) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR)) {
                     (void)handle_level_editor_mouse(
                         &a,
                         ev.motion.x,
@@ -5650,7 +5705,7 @@ int main(void) {
                         (ev.motion.state & SDL_BUTTON_LMASK) ? 1 : 0,
                         0
                     );
-                } else if (a.show_acoustics && a.acoustics_mouse_drag) {
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_ACOUSTICS) && a.acoustics_mouse_drag) {
                     (void)handle_acoustics_ui_mouse(&a, ev.motion.x, ev.motion.y, 1);
                 } else if (a.show_crt_ui && a.crt_ui_mouse_drag) {
                     (void)handle_crt_ui_mouse(&a, ev.motion.x, ev.motion.y, 1);

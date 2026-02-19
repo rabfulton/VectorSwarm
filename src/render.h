@@ -55,11 +55,7 @@ typedef struct render_metrics {
     const char* teletype_text;
     const char* planetarium_marquee_text;
     float planetarium_marquee_offset_px;
-    int show_acoustics;
-    int show_video_menu;
-    int show_planetarium;
-    int show_level_editor;
-    int show_controls_menu;
+    int menu_screen;
     int video_menu_selected;
     int video_menu_fullscreen;
     int palette_mode;

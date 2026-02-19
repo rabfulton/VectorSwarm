@@ -2,6 +2,7 @@
 
 #include "acoustics_ui_layout.h"
 #include "leveldef.h"
+#include "menu.h"
 #include "planetarium/commander_nick_dialogues.h"
 #include "vg_ui.h"
 #include "vg_ui_ext.h"
@@ -1698,6 +1699,137 @@ static vg_result draw_mouse_pointer(vg_context* ctx, float w, float h, const ren
     return vg_draw_pointer(ctx, VG_POINTER_ASTEROIDS, &pd);
 }
 
+static vg_result draw_shipyard_menu(vg_context* ctx, float w, float h, const render_metrics* metrics) {
+    const float ui = ui_reference_scale(w, h);
+    const vg_rect panel = make_ui_safe_frame(w, h);
+    const palette_theme pal = get_palette_theme(metrics->palette_mode);
+    vg_stroke_style frame = make_stroke(2.0f * ui, 1.0f, pal.primary, VG_BLEND_ALPHA);
+    vg_stroke_style txt = make_stroke(1.2f * ui, 1.0f, pal.secondary, VG_BLEND_ALPHA);
+    vg_fill_style haze = make_fill(0.30f, pal.haze, VG_BLEND_ALPHA);
+    vg_result r = vg_fill_rect(ctx, panel, &haze);
+    if (r != VG_OK) {
+        return r;
+    }
+    r = vg_draw_rect(ctx, panel, &frame);
+    if (r != VG_OK) {
+        return r;
+    }
+
+    r = draw_text_vector_glow(
+        ctx,
+        "SHIPYARD",
+        (vg_vec2){panel.x + panel.w * 0.04f, panel.y + panel.h * 0.92f},
+        20.0f * ui,
+        1.4f * ui,
+        &frame,
+        &txt
+    );
+    if (r != VG_OK) {
+        return r;
+    }
+    r = draw_text_vector_glow(
+        ctx,
+        "ESC BACK  ACOUSTICS  DISPLAY  PLANETARIUM  CONTROLS  LEVEL EDITOR",
+        (vg_vec2){panel.x + panel.w * 0.04f, panel.y + panel.h * 0.875f},
+        9.8f * ui,
+        0.8f * ui,
+        &frame,
+        &txt
+    );
+    if (r != VG_OK) {
+        return r;
+    }
+
+    const vg_rect links_box = {
+        panel.x + panel.w * 0.03f,
+        panel.y + panel.h * 0.16f,
+        panel.w * 0.34f,
+        panel.h * 0.66f
+    };
+    const vg_rect stats_box = {
+        panel.x + panel.w * 0.41f,
+        panel.y + panel.h * 0.16f,
+        panel.w * 0.56f,
+        panel.h * 0.66f
+    };
+    r = vg_draw_rect(ctx, links_box, &frame);
+    if (r != VG_OK) {
+        return r;
+    }
+    r = vg_draw_rect(ctx, stats_box, &frame);
+    if (r != VG_OK) {
+        return r;
+    }
+
+    {
+        static const char* labels[5] = {
+            "ACOUSTICS",
+            "DISPLAY",
+            "PLANETARIUM",
+            "CONTROLS",
+            "LEVEL EDITOR"
+        };
+        const float btn_h = links_box.h * 0.14f;
+        const float btn_gap = links_box.h * 0.045f;
+        const float bx = links_box.x + links_box.w * 0.08f;
+        const float bw = links_box.w * 0.84f;
+        float by = links_box.y + links_box.h - btn_h - links_box.h * 0.08f;
+        for (int i = 0; i < 5; ++i) {
+            r = vg_draw_button(ctx, (vg_rect){bx, by, bw, btn_h}, labels[i], 14.0f * ui, &frame, &txt, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            by -= (btn_h + btn_gap);
+        }
+    }
+
+    r = draw_text_vector_glow(
+        ctx,
+        "PILOT STATUS",
+        (vg_vec2){stats_box.x + stats_box.w * 0.05f, stats_box.y + stats_box.h * 0.88f},
+        12.0f * ui,
+        0.9f * ui,
+        &frame,
+        &txt
+    );
+    if (r != VG_OK) {
+        return r;
+    }
+    r = draw_text_vector_glow(
+        ctx,
+        "SORTIES FLOW THROUGH THIS HUB.",
+        (vg_vec2){stats_box.x + stats_box.w * 0.05f, stats_box.y + stats_box.h * 0.76f},
+        10.0f * ui,
+        0.8f * ui,
+        &frame,
+        &txt
+    );
+    if (r != VG_OK) {
+        return r;
+    }
+    r = draw_text_vector_glow(
+        ctx,
+        "LOADOUT AND PROGRESSION PANELS",
+        (vg_vec2){stats_box.x + stats_box.w * 0.05f, stats_box.y + stats_box.h * 0.67f},
+        10.0f * ui,
+        0.8f * ui,
+        &frame,
+        &txt
+    );
+    if (r != VG_OK) {
+        return r;
+    }
+    return draw_text_vector_glow(
+        ctx,
+        "WILL BE WIRED HERE NEXT.",
+        (vg_vec2){stats_box.x + stats_box.w * 0.05f, stats_box.y + stats_box.h * 0.58f},
+        10.0f * ui,
+        0.8f * ui,
+        &frame,
+        &txt
+    );
+}
+
 static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render_metrics* metrics, float t_s) {
     (void)t_s;
     const float ui = ui_reference_scale(w, h);
@@ -1750,7 +1882,7 @@ static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render
     }
     r = draw_text_vector_glow(
         ctx,
-        "UP/DOWN SELECT  ENTER APPLY  2 EXIT",
+        "UP/DOWN SELECT  ENTER APPLY  ESC BACK",
         (vg_vec2){panel.x + panel.w * 0.04f, panel.y + panel.h - panel.h * 0.15f},
         10.0f * ui,
         0.8f * ui,
@@ -1876,7 +2008,7 @@ static vg_result draw_controls_menu(vg_context* ctx, float w, float h, const ren
 
     r = draw_text_vector_glow(ctx, "CONTROLS", (vg_vec2){panel.x + panel.w * 0.04f, panel.y + panel.h * 0.92f}, 18.0f * ui, 1.3f * ui, &frame, &txt);
     if (r != VG_OK) return r;
-    r = draw_text_vector_glow(ctx, "5 EXIT   ARROWS/NAV SELECT   ENTER BIND", (vg_vec2){panel.x + panel.w * 0.04f, panel.y + panel.h * 0.875f}, 10.0f * ui, 0.8f * ui, &frame, &txt);
+    r = draw_text_vector_glow(ctx, "ESC BACK   ARROWS/NAV SELECT   ENTER BIND", (vg_vec2){panel.x + panel.w * 0.04f, panel.y + panel.h * 0.875f}, 10.0f * ui, 0.8f * ui, &frame, &txt);
     if (r != VG_OK) return r;
 
     {
@@ -2444,7 +2576,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
 
     r = draw_text_vector_glow(
         ctx,
-        "L EXIT  ENTER LOAD  DRAG TIMELINE  CLICK SELECT/PLACE  DRAG ENTITY TO PLACE  LEFT/RIGHT EDIT",
+        "ESC BACK  ENTER LOAD  DRAG TIMELINE  CLICK SELECT/PLACE  DRAG ENTITY TO PLACE  LEFT/RIGHT EDIT",
         (vg_vec2){timeline.x, timeline.y - 14.0f * ui},
         9.0f * ui,
         0.55f * ui,
@@ -2777,7 +2909,7 @@ static vg_result draw_planetarium_ui(vg_context* ctx, float w, float h, const re
         );
         if (r != VG_OK) return r;
     }
-    r = draw_text_vector_glow(ctx, "3 TO EXIT   LEFT/RIGHT SELECT   ENTER ACCEPT", (vg_vec2){panel.x + panel.w * 0.03f, panel.y + panel.h * 0.03f}, 11.8f * ui, 0.90f * ui, &frame, &txt);
+    r = draw_text_vector_glow(ctx, "ESC BACK   LEFT/RIGHT SELECT   ENTER ACCEPT", (vg_vec2){panel.x + panel.w * 0.03f, panel.y + panel.h * 0.03f}, 11.8f * ui, 0.90f * ui, &frame, &txt);
     if (r != VG_OK) return r;
     {
         char tty_fallback[96];
@@ -4271,7 +4403,18 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         VG_BLEND_ALPHA
     );
 
-    if (metrics->show_acoustics) {
+    if (metrics->menu_screen == APP_SCREEN_SHIPYARD) {
+        vg_result r = vg_fill_rect(ctx, (vg_rect){0.0f, 0.0f, g->world_w, g->world_h}, &bg);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = draw_shipyard_menu(ctx, g->world_w, g->world_h, metrics);
+        if (r != VG_OK) {
+            return r;
+        }
+        return draw_mouse_pointer(ctx, g->world_w, g->world_h, metrics, &txt_main);
+    }
+    if (metrics->menu_screen == APP_SCREEN_ACOUSTICS) {
         const vg_fill_style bg_acoustics = make_fill(1.0f, (vg_color){0.0f, 0.0f, 0.0f, 1.0f}, VG_BLEND_ALPHA);
         vg_result r = vg_fill_rect(ctx, (vg_rect){0.0f, 0.0f, g->world_w, g->world_h}, &bg_acoustics);
         if (r != VG_OK) {
@@ -4283,7 +4426,7 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         }
         return draw_mouse_pointer(ctx, g->world_w, g->world_h, metrics, &txt_main);
     }
-    if (metrics->show_video_menu) {
+    if (metrics->menu_screen == APP_SCREEN_VIDEO) {
         vg_result r = vg_fill_rect(ctx, (vg_rect){0.0f, 0.0f, g->world_w, g->world_h}, &bg);
         if (r != VG_OK) {
             return r;
@@ -4294,7 +4437,7 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         }
         return draw_mouse_pointer(ctx, g->world_w, g->world_h, metrics, &txt_main);
     }
-    if (metrics->show_planetarium) {
+    if (metrics->menu_screen == APP_SCREEN_PLANETARIUM) {
         vg_result r = vg_fill_rect(ctx, (vg_rect){0.0f, 0.0f, g->world_w, g->world_h}, &bg);
         if (r != VG_OK) {
             return r;
@@ -4305,7 +4448,7 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         }
         return draw_mouse_pointer(ctx, g->world_w, g->world_h, metrics, &txt_main);
     }
-    if (metrics->show_level_editor) {
+    if (metrics->menu_screen == APP_SCREEN_LEVEL_EDITOR) {
         vg_result r = vg_fill_rect(ctx, (vg_rect){0.0f, 0.0f, g->world_w, g->world_h}, &bg);
         if (r != VG_OK) {
             return r;
@@ -4316,7 +4459,7 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         }
         return draw_mouse_pointer(ctx, g->world_w, g->world_h, metrics, &txt_main);
     }
-    if (metrics->show_controls_menu) {
+    if (metrics->menu_screen == APP_SCREEN_CONTROLS) {
         vg_result r = vg_fill_rect(ctx, (vg_rect){0.0f, 0.0f, g->world_w, g->world_h}, &bg);
         if (r != VG_OK) {
             return r;

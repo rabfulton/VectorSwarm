@@ -21,6 +21,7 @@ add_executable(v_type
     src/level_editor.c
     src/leveldef.c
     src/main.c
+    src/menu.c
     src/planetarium/planetarium_registry.c
     src/planetarium/planetarium_validate.c
     src/render.c
