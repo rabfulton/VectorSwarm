@@ -30,6 +30,25 @@ static float round_to(float v, float step) {
     return floorf(v / step + 0.5f) * step;
 }
 
+static float osc_sample(uint8_t waveform, float phase, uint32_t* rng_state) {
+    const float p = fmodf(phase, 6.28318530718f);
+    const float u = p * (1.0f / 6.28318530718f);
+    switch (waveform) {
+        case 0: /* sine */
+            return sinf(p);
+        case 1: /* saw */
+            return 2.0f * u - 1.0f;
+        case 2: /* square */
+            return (u < 0.5f) ? 1.0f : -1.0f;
+        case 3: { /* triangle */
+            const float tri = 2.0f * fabsf(2.0f * u - 1.0f) - 1.0f;
+            return -tri;
+        }
+        default: /* noise */
+            return audio_rand01_from_state(rng_state) * 2.0f - 1.0f;
+    }
+}
+
 float acoustics_value_to_display(int id, float t01) {
     const float t = clampf(t01, 0.0f, 1.0f);
     switch (id) {
@@ -81,28 +100,36 @@ float acoustics_value_to_ui_display(int id, float t01) {
 float acoustics_combat_value_to_display(int id, float t01) {
     const float t = clampf(t01, 0.0f, 1.0f);
     switch (id) {
-        case ACOUST_COMBAT_ENEMY_LEVEL:
         case ACOUST_COMBAT_EXP_LEVEL:
             return lerpf(0.02f, 0.95f, t);
+        case ACOUST_COMBAT_ENEMY_WAVE:
+            return floorf(t * 4.0f + 0.5f);
         case ACOUST_COMBAT_ENEMY_PITCH:
-            return lerpf(150.0f, 1800.0f, t);
+            return lerpf(90.0f, 420.0f, t);
         case ACOUST_COMBAT_EXP_PITCH:
             return lerpf(40.0f, 280.0f, t);
         case ACOUST_COMBAT_ENEMY_ATTACK:
+            return lerpf(0.2f, 28.0f, t);
         case ACOUST_COMBAT_EXP_ATTACK:
             return lerpf(0.1f, 45.0f, t);
         case ACOUST_COMBAT_ENEMY_DECAY:
-            return lerpf(14.0f, 280.0f, t);
+            return lerpf(12.0f, 220.0f, t);
         case ACOUST_COMBAT_EXP_DECAY:
             return lerpf(60.0f, 900.0f, t);
-        case ACOUST_COMBAT_ENEMY_NOISE:
+        case ACOUST_COMBAT_ENEMY_CUTOFF:
+            return lerpf(600.0f, 10000.0f, t);
+        case ACOUST_COMBAT_ENEMY_RESONANCE:
+            return lerpf(0.05f, 0.98f, t);
+        case ACOUST_COMBAT_ENEMY_SWEEP_ST:
+            return lerpf(-24.0f, 24.0f, t);
+        case ACOUST_COMBAT_ENEMY_SWEEP_DECAY:
+            return lerpf(2.0f, 260.0f, t);
         case ACOUST_COMBAT_EXP_NOISE:
             return t;
         case ACOUST_COMBAT_EXP_FM_DEPTH:
             return lerpf(0.0f, 420.0f, t);
         case ACOUST_COMBAT_EXP_FM_RATE:
             return lerpf(8.0f, 1600.0f, t);
-        case ACOUST_COMBAT_ENEMY_PANW:
         case ACOUST_COMBAT_EXP_PANW:
             return lerpf(0.25f, 1.20f, t);
         default: return t;
@@ -112,21 +139,25 @@ float acoustics_combat_value_to_display(int id, float t01) {
 float acoustics_combat_value_to_ui_display(int id, float t01) {
     const float v = acoustics_combat_value_to_display(id, t01);
     switch (id) {
-        case ACOUST_COMBAT_ENEMY_LEVEL:
+        case ACOUST_COMBAT_ENEMY_WAVE:
+            return v;
         case ACOUST_COMBAT_EXP_LEVEL:
-        case ACOUST_COMBAT_ENEMY_NOISE:
         case ACOUST_COMBAT_EXP_NOISE:
-        case ACOUST_COMBAT_ENEMY_PANW:
         case ACOUST_COMBAT_EXP_PANW:
+        case ACOUST_COMBAT_ENEMY_RESONANCE:
             return round_to(v, 0.01f);
+        case ACOUST_COMBAT_ENEMY_CUTOFF:
+            return round_to(v * 0.001f, 0.01f);
+        case ACOUST_COMBAT_ENEMY_SWEEP_ST:
+            return round_to(v, 0.1f);
+        case ACOUST_COMBAT_ENEMY_PITCH:
         case ACOUST_COMBAT_ENEMY_ATTACK:
         case ACOUST_COMBAT_ENEMY_DECAY:
+        case ACOUST_COMBAT_ENEMY_SWEEP_DECAY:
         case ACOUST_COMBAT_EXP_ATTACK:
         case ACOUST_COMBAT_EXP_DECAY:
         case ACOUST_COMBAT_EXP_FM_DEPTH:
         case ACOUST_COMBAT_EXP_FM_RATE:
-            return round_to(v, 1.0f);
-        case ACOUST_COMBAT_ENEMY_PITCH:
         case ACOUST_COMBAT_EXP_PITCH:
             return round_to(v, 1.0f);
         default:
@@ -158,12 +189,14 @@ void acoustics_combat_defaults_init(float out_values_01[ACOUST_COMBAT_SLIDER_COU
     if (!out_values_01) {
         return;
     }
-    out_values_01[ACOUST_COMBAT_ENEMY_LEVEL] = 0.40f;
-    out_values_01[ACOUST_COMBAT_ENEMY_PITCH] = 0.36f;
-    out_values_01[ACOUST_COMBAT_ENEMY_ATTACK] = 0.05f;
-    out_values_01[ACOUST_COMBAT_ENEMY_DECAY] = 0.36f;
-    out_values_01[ACOUST_COMBAT_ENEMY_NOISE] = 0.20f;
-    out_values_01[ACOUST_COMBAT_ENEMY_PANW] = 0.78f;
+    out_values_01[ACOUST_COMBAT_ENEMY_WAVE] = 0.275879592f;
+    out_values_01[ACOUST_COMBAT_ENEMY_PITCH] = 0.602183819f;
+    out_values_01[ACOUST_COMBAT_ENEMY_ATTACK] = 0.003753547f;
+    out_values_01[ACOUST_COMBAT_ENEMY_DECAY] = 0.460912049f;
+    out_values_01[ACOUST_COMBAT_ENEMY_CUTOFF] = 0.100429699f;
+    out_values_01[ACOUST_COMBAT_ENEMY_RESONANCE] = 0.985629857f;
+    out_values_01[ACOUST_COMBAT_ENEMY_SWEEP_ST] = 0.949483037f;
+    out_values_01[ACOUST_COMBAT_ENEMY_SWEEP_DECAY] = 0.827205420f;
     out_values_01[ACOUST_COMBAT_EXP_LEVEL] = 0.58f;
     out_values_01[ACOUST_COMBAT_EXP_PITCH] = 0.28f;
     out_values_01[ACOUST_COMBAT_EXP_ATTACK] = 0.07f;
@@ -224,10 +257,12 @@ void acoustics_slot_defaults_view(acoustics_slot_view* v) {
     }
     for (int i = 0; i < 6; ++i) {
         v->thr_slots[0][i] = v->value_01[8 + i];
+    }
+    for (int i = 0; i < 8; ++i) {
         v->enemy_slots[0][i] = v->combat_value_01[i];
     }
     for (int i = 0; i < 8; ++i) {
-        v->exp_slots[0][i] = v->combat_value_01[6 + i];
+        v->exp_slots[0][i] = v->combat_value_01[8 + i];
     }
     v->fire_slot_defined[0] = 1u;
     v->thr_slot_defined[0] = 1u;
@@ -271,7 +306,7 @@ void acoustics_capture_current_to_selected_combat_slot_view(acoustics_slot_view*
         if (s < 0 || s >= ACOUSTICS_SLOT_COUNT) {
             return;
         }
-        for (int i = 0; i < 6; ++i) {
+        for (int i = 0; i < 8; ++i) {
             v->enemy_slots[s][i] = v->combat_value_01[i];
         }
         v->enemy_slot_defined[s] = 1u;
@@ -282,7 +317,7 @@ void acoustics_capture_current_to_selected_combat_slot_view(acoustics_slot_view*
         return;
     }
     for (int i = 0; i < 8; ++i) {
-        v->exp_slots[s][i] = v->combat_value_01[6 + i];
+        v->exp_slots[s][i] = v->combat_value_01[8 + i];
     }
     v->exp_slot_defined[s] = 1u;
 }
@@ -318,7 +353,7 @@ void acoustics_load_combat_slot_to_current_view(acoustics_slot_view* v, int is_e
         if (!v->enemy_slot_defined[slot_idx]) {
             return;
         }
-        for (int i = 0; i < 6; ++i) {
+        for (int i = 0; i < 8; ++i) {
             v->combat_value_01[i] = v->enemy_slots[slot_idx][i];
         }
         return;
@@ -327,7 +362,7 @@ void acoustics_load_combat_slot_to_current_view(acoustics_slot_view* v, int is_e
         return;
     }
     for (int i = 0; i < 8; ++i) {
-        v->combat_value_01[6 + i] = v->exp_slots[slot_idx][i];
+        v->combat_value_01[8 + i] = v->exp_slots[slot_idx][i];
     }
 }
 
@@ -341,7 +376,7 @@ int acoustics_save_slots_view(const acoustics_slot_view* v, const char* path) {
     if (!f) {
         return 0;
     }
-    fprintf(f, "version=2\n");
+    fprintf(f, "version=3\n");
     fprintf(f, "fsel=%d\n", *v->fire_slot_selected);
     fprintf(f, "tsel=%d\n", *v->thr_slot_selected);
     fprintf(f, "cfsel=%d\n", *v->enemy_slot_selected);
@@ -356,6 +391,8 @@ int acoustics_save_slots_view(const acoustics_slot_view* v, const char* path) {
         }
         for (int i = 0; i < 6; ++i) {
             fprintf(f, "tv%d_%d=%.9f\n", s, i, v->thr_slots[s][i]);
+        }
+        for (int i = 0; i < 8; ++i) {
             fprintf(f, "cfv%d_%d=%.9f\n", s, i, v->enemy_slots[s][i]);
         }
         for (int i = 0; i < 8; ++i) {
@@ -381,7 +418,12 @@ int acoustics_load_slots_view(acoustics_slot_view* v, const char* path) {
     }
     char key[64];
     float value = 0.0f;
+    int version = 1;
     while (fscanf(f, "%63[^=]=%f\n", key, &value) == 2) {
+        if (strcmp(key, "version") == 0) {
+            version = (int)clampf(value, 1.0f, 999.0f);
+            continue;
+        }
         if (strcmp(key, "fsel") == 0) {
             *v->fire_slot_selected = (int)clampf(value, 0.0f, (float)(ACOUSTICS_SLOT_COUNT - 1));
             continue;
@@ -424,16 +466,52 @@ int acoustics_load_slots_view(acoustics_slot_view* v, const char* path) {
             v->thr_slots[s][i] = clampf(value, 0.0f, 1.0f);
             continue;
         }
-        if (sscanf(key, "cfv%d_%d", &s, &i) == 2 && s >= 0 && s < ACOUSTICS_SLOT_COUNT && i >= 0 && i < 6) {
-            v->enemy_slots[s][i] = clampf(value, 0.0f, 1.0f);
+        if (sscanf(key, "cfv%d_%d", &s, &i) == 2 && s >= 0 && s < ACOUSTICS_SLOT_COUNT && i >= 0) {
+            if (version >= 3) {
+                if (i < 8) {
+                    v->enemy_slots[s][i] = clampf(value, 0.0f, 1.0f);
+                }
+            } else {
+                /* v2 enemy slot mapping:
+                 * 0=level 1=pitch 2=attack 3=decay 4=noise 5=pan
+                 * -> v3 keeps pitch/attack/decay; other modules retain defaults. */
+                int ni = -1;
+                if (i == 1) ni = ACOUST_COMBAT_ENEMY_PITCH;
+                else if (i == 2) ni = ACOUST_COMBAT_ENEMY_ATTACK;
+                else if (i == 3) ni = ACOUST_COMBAT_ENEMY_DECAY;
+                if (ni >= 0) {
+                    v->enemy_slots[s][ni] = clampf(value, 0.0f, 1.0f);
+                }
+            }
             continue;
         }
         if (sscanf(key, "ctv%d_%d", &s, &i) == 2 && s >= 0 && s < ACOUSTICS_SLOT_COUNT && i >= 0 && i < 8) {
             v->exp_slots[s][i] = clampf(value, 0.0f, 1.0f);
             continue;
         }
-        if (sscanf(key, "cv%d", &i) == 1 && i >= 0 && i < ACOUST_COMBAT_SLIDER_COUNT) {
-            v->combat_value_01[i] = clampf(value, 0.0f, 1.0f);
+        if (sscanf(key, "cv%d", &i) == 1 && i >= 0) {
+            if (version >= 3) {
+                if (i < ACOUST_COMBAT_SLIDER_COUNT) {
+                    v->combat_value_01[i] = clampf(value, 0.0f, 1.0f);
+                }
+            } else {
+                /* v2 -> v3 remap for live combat page values. */
+                int ni = -1;
+                if (i == 1) ni = ACOUST_COMBAT_ENEMY_PITCH;
+                else if (i == 2) ni = ACOUST_COMBAT_ENEMY_ATTACK;
+                else if (i == 3) ni = ACOUST_COMBAT_ENEMY_DECAY;
+                else if (i == 6) ni = ACOUST_COMBAT_EXP_LEVEL;
+                else if (i == 7) ni = ACOUST_COMBAT_EXP_PITCH;
+                else if (i == 8) ni = ACOUST_COMBAT_EXP_ATTACK;
+                else if (i == 9) ni = ACOUST_COMBAT_EXP_DECAY;
+                else if (i == 10) ni = ACOUST_COMBAT_EXP_NOISE;
+                else if (i == 11) ni = ACOUST_COMBAT_EXP_FM_DEPTH;
+                else if (i == 12) ni = ACOUST_COMBAT_EXP_FM_RATE;
+                else if (i == 13) ni = ACOUST_COMBAT_EXP_PANW;
+                if (ni >= 0) {
+                    v->combat_value_01[ni] = clampf(value, 0.0f, 1.0f);
+                }
+            }
             continue;
         }
     }
@@ -493,29 +571,41 @@ void acoustics_apply_locked(acoustics_runtime_view* v) {
     v->thruster_synth->gain = acoustics_value_to_display(ACOUST_THR_LEVEL, v->value_01[ACOUST_THR_LEVEL]);
     v->thruster_synth->clip_level = 0.85f;
 
-    v->enemy_fire_sound->level =
-        acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_LEVEL, v->combat_value_01[ACOUST_COMBAT_ENEMY_LEVEL]);
+    v->enemy_fire_sound->level = 0.40f;
+    v->enemy_fire_sound->waveform =
+        acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_WAVE, v->combat_value_01[ACOUST_COMBAT_ENEMY_WAVE]);
     v->enemy_fire_sound->pitch_hz =
         acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_PITCH, v->combat_value_01[ACOUST_COMBAT_ENEMY_PITCH]);
     v->enemy_fire_sound->attack_ms =
         acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_ATTACK, v->combat_value_01[ACOUST_COMBAT_ENEMY_ATTACK]);
     v->enemy_fire_sound->decay_ms =
         acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_DECAY, v->combat_value_01[ACOUST_COMBAT_ENEMY_DECAY]);
-    v->enemy_fire_sound->noise_mix =
-        acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_NOISE, v->combat_value_01[ACOUST_COMBAT_ENEMY_NOISE]);
+    v->enemy_fire_sound->cutoff_hz =
+        acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_CUTOFF, v->combat_value_01[ACOUST_COMBAT_ENEMY_CUTOFF]);
+    v->enemy_fire_sound->resonance =
+        acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_RESONANCE, v->combat_value_01[ACOUST_COMBAT_ENEMY_RESONANCE]);
+    v->enemy_fire_sound->sweep_st =
+        acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_SWEEP_ST, v->combat_value_01[ACOUST_COMBAT_ENEMY_SWEEP_ST]);
+    v->enemy_fire_sound->sweep_decay_ms =
+        acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_SWEEP_DECAY, v->combat_value_01[ACOUST_COMBAT_ENEMY_SWEEP_DECAY]);
+    v->enemy_fire_sound->noise_mix = 0.0f;
     v->enemy_fire_sound->fm_depth_hz = 0.0f;
     v->enemy_fire_sound->fm_rate_hz = 0.0f;
-    v->enemy_fire_sound->pan_width =
-        acoustics_combat_value_to_display(ACOUST_COMBAT_ENEMY_PANW, v->combat_value_01[ACOUST_COMBAT_ENEMY_PANW]);
+    v->enemy_fire_sound->pan_width = 0.78f;
 
     v->explosion_sound->level =
         acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_LEVEL, v->combat_value_01[ACOUST_COMBAT_EXP_LEVEL]);
+    v->explosion_sound->waveform = 0.0f;
     v->explosion_sound->pitch_hz =
         acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_PITCH, v->combat_value_01[ACOUST_COMBAT_EXP_PITCH]);
     v->explosion_sound->attack_ms =
         acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_ATTACK, v->combat_value_01[ACOUST_COMBAT_EXP_ATTACK]);
     v->explosion_sound->decay_ms =
         acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_DECAY, v->combat_value_01[ACOUST_COMBAT_EXP_DECAY]);
+    v->explosion_sound->cutoff_hz = 0.0f;
+    v->explosion_sound->resonance = 0.0f;
+    v->explosion_sound->sweep_st = 0.0f;
+    v->explosion_sound->sweep_decay_ms = 0.0f;
     v->explosion_sound->noise_mix =
         acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_NOISE, v->combat_value_01[ACOUST_COMBAT_EXP_NOISE]);
     v->explosion_sound->fm_depth_hz =
@@ -642,6 +732,7 @@ void audio_spawn_combat_voice(
                          ((type == GAME_AUDIO_EVENT_EXPLOSION) ? 0.18f : 0.08f);
     v->active = 1;
     v->type = (uint8_t)type;
+    v->waveform = (uint8_t)clampf(floorf(p->waveform + 0.5f), 0.0f, 4.0f);
     v->pan = clampf(ev->pan * p->pan_width, -1.0f, 1.0f);
     v->gain = clampf(p->level * ev->gain, 0.0f, 1.2f);
     v->phase = audio_rand01_from_state(rng_state) * 6.28318530718f;
@@ -652,6 +743,12 @@ void audio_spawn_combat_voice(
     v->fm_depth_hz = (type == GAME_AUDIO_EVENT_EXPLOSION) ? fmaxf(0.0f, p->fm_depth_hz) : 0.0f;
     v->fm_rate_hz = (type == GAME_AUDIO_EVENT_EXPLOSION) ? fmaxf(0.0f, p->fm_rate_hz) : 0.0f;
     v->fm_phase = audio_rand01_from_state(rng_state) * 6.28318530718f;
+    v->cutoff_hz = fmaxf(40.0f, p->cutoff_hz);
+    v->resonance = clampf(p->resonance, 0.0f, 0.99f);
+    v->sweep_st = p->sweep_st;
+    v->sweep_decay_s = fmaxf(0.002f, p->sweep_decay_ms * 0.001f);
+    v->filter_lp = 0.0f;
+    v->filter_bp = 0.0f;
     v->time_s = 0.0f;
 }
 
@@ -698,10 +795,22 @@ void audio_render_combat_voices(
                     const float fm = sinf(v->fm_phase) * v->fm_depth_hz * (0.35f + 0.65f * env);
                     freq = fmaxf(8.0f, freq + fm);
                 }
+            } else if (v->type == GAME_AUDIO_EVENT_ENEMY_FIRE || v->type == GAME_AUDIO_EVENT_SEARCHLIGHT_FIRE) {
+                const float st = v->sweep_st * expf(-t / fmaxf(v->sweep_decay_s, 0.002f));
+                freq *= powf(2.0f, st / 12.0f);
             }
             const float step = 2.0f * 3.14159265358979323846f * freq / sample_rate;
-            const float tone = sinf(v->phase);
+            float tone = osc_sample(v->waveform, v->phase, rng_state);
             const float noise = audio_rand01_from_state(rng_state) * 2.0f - 1.0f;
+            if (v->type == GAME_AUDIO_EVENT_ENEMY_FIRE || v->type == GAME_AUDIO_EVENT_SEARCHLIGHT_FIRE) {
+                /* 2-pole state-variable low-pass for enemy fire synth parity with player fire chain. */
+                const float f = clampf(2.0f * sinf(3.14159265358979323846f * v->cutoff_hz / sample_rate), 0.0f, 0.99f);
+                const float q = 2.0f - 1.9f * v->resonance;
+                const float hp = tone - v->filter_lp - q * v->filter_bp;
+                v->filter_bp += f * hp;
+                v->filter_lp += f * v->filter_bp;
+                tone = v->filter_lp;
+            }
             const float s = ((1.0f - v->noise_mix) * tone + v->noise_mix * noise) * env * v->gain;
             const float pan = clampf(v->pan, -1.0f, 1.0f);
             const float l_gain = sqrtf(0.5f * (1.0f - pan));

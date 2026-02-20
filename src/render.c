@@ -1286,8 +1286,8 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
     static const char* synth_thr_labels[6] = {
         "LEVEL", "PITCH HZ", "ATTACK MS", "RELEASE MS", "CUTOFF KHZ", "RESONANCE"
     };
-    static const char* combat_enemy_labels[6] = {
-        "LEVEL", "PITCH HZ", "ATTACK MS", "DECAY MS", "NOISE MIX", "PAN WIDTH"
+    static const char* combat_enemy_labels[8] = {
+        "WAVEFORM", "PITCH HZ", "ATTACK MS", "DECAY MS", "CUTOFF KHZ", "RESONANCE", "SWEEP ST", "SWEEP DECAY"
     };
     static const char* combat_exp_labels[8] = {
         "LEVEL", "PITCH HZ", "ATTACK MS", "DECAY MS", "NOISE MIX", "FM DEPTH", "FM RATE", "PAN WIDTH"
@@ -1318,7 +1318,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
     vg_ui_slider_item fire_items[8];
     vg_ui_slider_item thr_items[8];
     if (combat_page) {
-        for (int i = 0; i < 6; ++i) {
+        for (int i = 0; i < 8; ++i) {
             fire_items[i].label = combat_enemy_labels[i];
             fire_items[i].value_01 = metrics->acoustics_combat_value_01[i];
             fire_items[i].value_display = metrics->acoustics_combat_display[i];
@@ -1326,9 +1326,9 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         }
         for (int i = 0; i < 8; ++i) {
             thr_items[i].label = combat_exp_labels[i];
-            thr_items[i].value_01 = metrics->acoustics_combat_value_01[6 + i];
-            thr_items[i].value_display = metrics->acoustics_combat_display[6 + i];
-            thr_items[i].selected = (metrics->acoustics_combat_selected == (6 + i)) ? 1 : 0;
+            thr_items[i].value_01 = metrics->acoustics_combat_value_01[8 + i];
+            thr_items[i].value_display = metrics->acoustics_combat_display[8 + i];
+            thr_items[i].selected = (metrics->acoustics_combat_selected == (8 + i)) ? 1 : 0;
         }
     } else {
         for (int i = 0; i < 8; ++i) {
@@ -1351,7 +1351,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         combat_page ? metrics->acoustics_combat_display : metrics->acoustics_display,
         combat_page ? ACOUSTICS_COMBAT_SLIDER_COUNT : ACOUSTICS_SLIDER_COUNT
     );
-    const acoustics_ui_layout l = make_acoustics_ui_layout(w, h, value_col_width_px, combat_page ? 6 : 8, combat_page ? 8 : 6);
+    const acoustics_ui_layout l = make_acoustics_ui_layout(w, h, value_col_width_px, combat_page ? 8 : 8, combat_page ? 8 : 6);
     const vg_rect page_btn = acoustics_page_toggle_button_rect(w, h);
     const vg_rect fire_rect = l.panel[0];
     const vg_rect thr_rect = l.panel[1];
@@ -1367,7 +1367,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         .title_line_1 = combat_page ? "Q/E SWITCH PAGE  ARROWS OR MOUSE TO TUNE" : "Q/E SWITCH PAGE  ARROWS OR MOUSE TO TUNE",
         .footer_line = NULL,
         .items = fire_items,
-        .item_count = combat_page ? 6u : 8u,
+        .item_count = combat_page ? 8u : 8u,
         .row_height_px = 34.0f * ui,
         .label_size_px = 11.0f * ui,
         .value_size_px = 11.5f * ui,
@@ -1533,10 +1533,11 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         enum { FIRE_TRACE_SAMPLES = 96 };
         vg_vec2 amp_line[FIRE_TRACE_SAMPLES];
         vg_vec2 pitch_line[FIRE_TRACE_SAMPLES];
-        const float a_ms = metrics->acoustics_display[2];
-        const float d_ms = metrics->acoustics_display[3];
-        const float sweep_st = metrics->acoustics_display[6];
-        const float sweep_d_ms = metrics->acoustics_display[7];
+        const float* fire_preview = combat_page ? metrics->acoustics_combat_display : metrics->acoustics_display;
+        const float a_ms = fire_preview[2];
+        const float d_ms = fire_preview[3];
+        const float sweep_st = fire_preview[6];
+        const float sweep_d_ms = fire_preview[7];
         for (int i = 0; i < FIRE_TRACE_SAMPLES; ++i) {
             const float t = (float)i / (float)(FIRE_TRACE_SAMPLES - 1);
             const float x = fire_display.x + 8.0f * ui + (fire_display.w - 16.0f * ui) * t;

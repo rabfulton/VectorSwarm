@@ -346,7 +346,7 @@ typedef struct app {
     uint8_t acoustics_exp_slot_defined[ACOUSTICS_SLOT_COUNT];
     float acoustics_fire_slots[ACOUSTICS_SLOT_COUNT][8];
     float acoustics_thr_slots[ACOUSTICS_SLOT_COUNT][6];
-    float acoustics_enemy_slots[ACOUSTICS_SLOT_COUNT][6];
+    float acoustics_enemy_slots[ACOUSTICS_SLOT_COUNT][8];
     float acoustics_exp_slots[ACOUSTICS_SLOT_COUNT][8];
     char acoustics_slots_path[PATH_MAX];
     int acoustics_mouse_drag;
@@ -1365,7 +1365,7 @@ static int handle_acoustics_ui_mouse(app* a, int mouse_x, int mouse_y, int set_v
         display_values,
         display_count
     );
-    const acoustics_ui_layout l = make_acoustics_ui_layout(w, h, value_col_width_px, (a->acoustics_page == ACOUSTICS_PAGE_COMBAT) ? 6 : 8, (a->acoustics_page == ACOUSTICS_PAGE_COMBAT) ? 8 : 6);
+    const acoustics_ui_layout l = make_acoustics_ui_layout(w, h, value_col_width_px, (a->acoustics_page == ACOUSTICS_PAGE_COMBAT) ? 8 : 8, (a->acoustics_page == ACOUSTICS_PAGE_COMBAT) ? 8 : 6);
     const vg_rect page_btn = acoustics_page_toggle_button_rect(w, h);
     acoustics_slot_view sv = acoustics_make_slot_view(a);
     float mx = 0.0f;
@@ -1457,7 +1457,7 @@ static int handle_acoustics_ui_mouse(app* a, int mouse_x, int mouse_y, int set_v
         if (mx >= sx0 && mx <= sx1) {
             const int idx = (p == 0) ? row : (8 + row);
             if (a->acoustics_page == ACOUSTICS_PAGE_COMBAT) {
-                const int cidx = (p == 0) ? row : (6 + row);
+                const int cidx = (p == 0) ? row : (8 + row);
                 if (cidx >= 0 && cidx < ACOUST_COMBAT_SLIDER_COUNT) {
                     a->acoustics_combat_selected = cidx;
                     if (set_value) {

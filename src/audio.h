@@ -20,6 +20,7 @@ typedef struct audio_spatial_event {
 typedef struct audio_combat_voice {
     int active;
     uint8_t type;
+    uint8_t waveform;
     float pan;
     float gain;
     float phase;
@@ -30,14 +31,25 @@ typedef struct audio_combat_voice {
     float fm_depth_hz;
     float fm_rate_hz;
     float fm_phase;
+    float cutoff_hz;
+    float resonance;
+    float sweep_st;
+    float sweep_decay_s;
+    float filter_lp;
+    float filter_bp;
     float time_s;
 } audio_combat_voice;
 
 typedef struct combat_sound_params {
     float level;
+    float waveform;
     float pitch_hz;
     float attack_ms;
     float decay_ms;
+    float cutoff_hz;
+    float resonance;
+    float sweep_st;
+    float sweep_decay_ms;
     float noise_mix;
     float fm_depth_hz;
     float fm_rate_hz;
@@ -62,21 +74,23 @@ enum acoustics_slider_id {
 };
 
 enum acoustics_combat_slider_id {
-    ACOUST_COMBAT_ENEMY_LEVEL = 0,
+    ACOUST_COMBAT_ENEMY_WAVE = 0,
     ACOUST_COMBAT_ENEMY_PITCH = 1,
     ACOUST_COMBAT_ENEMY_ATTACK = 2,
     ACOUST_COMBAT_ENEMY_DECAY = 3,
-    ACOUST_COMBAT_ENEMY_NOISE = 4,
-    ACOUST_COMBAT_ENEMY_PANW = 5,
-    ACOUST_COMBAT_EXP_LEVEL = 6,
-    ACOUST_COMBAT_EXP_PITCH = 7,
-    ACOUST_COMBAT_EXP_ATTACK = 8,
-    ACOUST_COMBAT_EXP_DECAY = 9,
-    ACOUST_COMBAT_EXP_NOISE = 10,
-    ACOUST_COMBAT_EXP_FM_DEPTH = 11,
-    ACOUST_COMBAT_EXP_FM_RATE = 12,
-    ACOUST_COMBAT_EXP_PANW = 13,
-    ACOUST_COMBAT_SLIDER_COUNT = 14
+    ACOUST_COMBAT_ENEMY_CUTOFF = 4,
+    ACOUST_COMBAT_ENEMY_RESONANCE = 5,
+    ACOUST_COMBAT_ENEMY_SWEEP_ST = 6,
+    ACOUST_COMBAT_ENEMY_SWEEP_DECAY = 7,
+    ACOUST_COMBAT_EXP_LEVEL = 8,
+    ACOUST_COMBAT_EXP_PITCH = 9,
+    ACOUST_COMBAT_EXP_ATTACK = 10,
+    ACOUST_COMBAT_EXP_DECAY = 11,
+    ACOUST_COMBAT_EXP_NOISE = 12,
+    ACOUST_COMBAT_EXP_FM_DEPTH = 13,
+    ACOUST_COMBAT_EXP_FM_RATE = 14,
+    ACOUST_COMBAT_EXP_PANW = 15,
+    ACOUST_COMBAT_SLIDER_COUNT = 16
 };
 
 float audio_rand01_from_state(uint32_t* state);
@@ -100,7 +114,7 @@ typedef struct acoustics_slot_view {
     uint8_t* exp_slot_defined;
     float (*fire_slots)[8];
     float (*thr_slots)[6];
-    float (*enemy_slots)[6];
+    float (*enemy_slots)[8];
     float (*exp_slots)[8];
     float* value_01;
     float* combat_value_01;
