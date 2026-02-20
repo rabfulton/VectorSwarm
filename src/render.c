@@ -4530,7 +4530,8 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
     );
 
     if (metrics->menu_screen == APP_SCREEN_SHIPYARD) {
-        vg_result r = vg_fill_rect(ctx, (vg_rect){0.0f, 0.0f, g->world_w, g->world_h}, &bg);
+        const vg_fill_style bg_shipyard = make_fill(1.0f, (vg_color){0.0f, 0.0f, 0.0f, 1.0f}, VG_BLEND_ALPHA);
+        vg_result r = vg_fill_rect(ctx, (vg_rect){0.0f, 0.0f, g->world_w, g->world_h}, &bg_shipyard);
         if (r != VG_OK) {
             return r;
         }
