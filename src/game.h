@@ -97,6 +97,13 @@ typedef struct enemy {
     float swarm_wander_w;
     float swarm_wander_freq;
     float swarm_drag;
+    float facing_x;
+    float facing_y;
+    float kamikaze_tail;
+    float kamikaze_thrust;
+    float kamikaze_tail_start;
+    float kamikaze_thrust_scale;
+    float kamikaze_glide_scale;
     float lane_dir;
     float home_y;
     int formation_kind;

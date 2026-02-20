@@ -15,7 +15,8 @@ enum enemy_state {
     ENEMY_STATE_FORMATION = 0,
     ENEMY_STATE_BREAK_ATTACK = 1,
     ENEMY_STATE_SWARM = 2,
-    ENEMY_STATE_KAMIKAZE = 3
+    ENEMY_STATE_KAMIKAZE_COIL = 3,
+    ENEMY_STATE_KAMIKAZE_THRUST = 4
 };
 
 enum enemy_formation_kind {
@@ -368,6 +369,13 @@ static enemy* spawn_enemy_common(game_state* g, float su) {
         e->max_speed = 270.0f * su;
         e->accel = 6.0f;
         e->lane_dir = -1.0f;
+        e->facing_x = -1.0f;
+        e->facing_y = 0.0f;
+        e->kamikaze_tail = 0.0f;
+        e->kamikaze_thrust = 0.0f;
+        e->kamikaze_tail_start = 0.0f;
+        e->kamikaze_thrust_scale = 1.0f;
+        e->kamikaze_glide_scale = 1.0f;
         return e;
     }
     return NULL;
@@ -522,7 +530,7 @@ static void spawn_wave_kamikaze(game_state* g, const leveldef_db* db, const leve
                 break;
             }
             e->archetype = ENEMY_ARCH_KAMIKAZE;
-            e->state = ENEMY_STATE_KAMIKAZE;
+            e->state = ENEMY_STATE_KAMIKAZE_COIL;
             enemy_assign_combat_loadout(g, e, db);
             e->wave_id = wave_id;
             e->slot_index = i;
@@ -534,7 +542,20 @@ static void spawn_wave_kamikaze(game_state* g, const leveldef_db* db, const leve
             }
             e->max_speed = w->max_speed * su;
             e->accel = w->accel;
-            e->radius = (w->radius_min + frand01() * fmaxf(w->radius_max - w->radius_min, 0.0f)) * su;
+            {
+                const float r_span = fmaxf(w->radius_max - w->radius_min, 0.0f);
+                const float r01 = (r_span > 1e-4f) ? frand01() : 0.5f;
+                e->radius = (w->radius_min + r01 * r_span) * su;
+                e->kamikaze_thrust_scale = lerpf(1.00f, 1.50f, r01);
+                e->kamikaze_glide_scale = lerpf(1.00f, 1.70f, r01);
+            }
+            e->ai_timer_s = 0.0f;
+            e->break_delay_s = 0.90f + frand01() * 0.65f;
+            e->facing_x = lane_dir_toward_player_x(g, e->b.x, 0, 0.0f);
+            e->facing_y = 0.0f;
+            e->kamikaze_tail = 0.18f;
+            e->kamikaze_thrust = 0.0f;
+            e->kamikaze_tail_start = e->kamikaze_tail;
         }
     }
 }
@@ -610,10 +631,23 @@ void enemy_spawn_curated_enemy(
 
         if (ce->kind == 4) {
             e->archetype = ENEMY_ARCH_KAMIKAZE;
-            e->state = ENEMY_STATE_KAMIKAZE;
+            e->state = ENEMY_STATE_KAMIKAZE_COIL;
             e->max_speed = ((ce->b > 0.0f) ? ce->b : lvl->kamikaze.max_speed) * su;
             e->accel = (ce->c > 0.0f) ? ce->c : lvl->kamikaze.accel;
-            e->radius = (lvl->kamikaze.radius_min + frand01() * fmaxf(lvl->kamikaze.radius_max - lvl->kamikaze.radius_min, 0.0f)) * su;
+            {
+                const float r_span = fmaxf(lvl->kamikaze.radius_max - lvl->kamikaze.radius_min, 0.0f);
+                const float r01 = (r_span > 1e-4f) ? frand01() : 0.5f;
+                e->radius = (lvl->kamikaze.radius_min + r01 * r_span) * su;
+                e->kamikaze_thrust_scale = lerpf(1.00f, 1.50f, r01);
+                e->kamikaze_glide_scale = lerpf(1.00f, 1.70f, r01);
+            }
+            e->ai_timer_s = 0.0f;
+            e->break_delay_s = 0.85f + frand01() * 0.60f;
+            e->facing_x = lane_dir_toward_player_x(g, e->b.x, uses_cylinder, period);
+            e->facing_y = 0.0f;
+            e->kamikaze_tail = 0.18f;
+            e->kamikaze_thrust = 0.0f;
+            e->kamikaze_tail_start = e->kamikaze_tail;
         } else {
             e->archetype = ENEMY_ARCH_FORMATION;
             e->state = ENEMY_STATE_FORMATION;
@@ -936,14 +970,82 @@ static void update_enemy_formation(game_state* g, enemy* e, float dt, float su, 
     }
 }
 
-static void update_enemy_kamikaze(game_state* g, enemy* e, int uses_cylinder, float period) {
+static void update_enemy_kamikaze(game_state* g, enemy* e, float dt, int uses_cylinder, float period) {
     const float lead = 0.25f;
     const float tx = g->player.b.x + g->player.b.vx * lead;
     const float ty = g->player.b.y + g->player.b.vy * lead;
     float dir_x = uses_cylinder ? wrap_delta(tx, e->b.x, period) : (tx - e->b.x);
     float dir_y = ty - e->b.y;
     normalize2(&dir_x, &dir_y);
-    steer_to_velocity(&e->b, dir_x * e->max_speed, dir_y * e->max_speed, e->accel * 1.35f, 0.8f);
+
+    if (e->state == ENEMY_STATE_KAMIKAZE_COIL) {
+        const float turn_rate = clampf(dt * 7.4f, 0.0f, 1.0f);
+        e->facing_x += (dir_x - e->facing_x) * turn_rate;
+        e->facing_y += (dir_y - e->facing_y) * turn_rate;
+        normalize2(&e->facing_x, &e->facing_y);
+        e->kamikaze_thrust = 0.0f;
+        e->ai_timer_s += dt;
+        {
+            const float u = clampf(e->ai_timer_s / fmaxf(e->break_delay_s, 0.10f), 0.0f, 1.0f);
+            e->kamikaze_tail = lerpf(e->kamikaze_tail_start, 0.10f, u);
+        }
+        steer_to_velocity(
+            &e->b,
+            e->facing_x * (e->max_speed * 0.10f),
+            e->facing_y * (e->max_speed * 0.10f),
+            e->accel * 1.05f,
+            2.7f
+        );
+        if (e->ai_timer_s >= e->break_delay_s) {
+            e->state = ENEMY_STATE_KAMIKAZE_THRUST;
+            e->ai_timer_s = 0.0f;
+            {
+                const float glide_scale = fmaxf(e->kamikaze_glide_scale, 0.1f);
+                e->break_delay_s = (1.15f + frand01() * 0.55f) * glide_scale;
+            }
+            e->kamikaze_thrust = 1.0f;
+            e->kamikaze_tail = 1.0f;
+        }
+        return;
+    }
+
+    e->ai_timer_s += dt;
+    {
+        const float u = clampf(e->ai_timer_s / fmaxf(e->break_delay_s, 0.10f), 0.0f, 1.0f);
+        const float launch = expf(-u * 4.4f);
+        const float thrust_scale = fmaxf(e->kamikaze_thrust_scale, 0.1f);
+        const float target_v = e->max_speed * (0.32f + launch * (1.75f * thrust_scale));
+        float tail01;
+        if (u < 0.09f) {
+            /* Quick ramp prevents a hard discontinuity at phase switch. */
+            const float grow_u = clampf(u / 0.09f, 0.0f, 1.0f);
+            const float grow_s = grow_u * grow_u * (3.0f - 2.0f * grow_u);
+            tail01 = lerpf(0.10f, 1.0f, grow_s);
+        } else if (u > 0.72f) {
+            const float tail_u = clampf((u - 0.72f) / 0.28f, 0.0f, 1.0f);
+            const float tail_s = tail_u * tail_u * (3.0f - 2.0f * tail_u);
+            tail01 = lerpf(1.0f, 0.24f, tail_s);
+        } else {
+            tail01 = 1.0f;
+        }
+        e->kamikaze_thrust = launch;
+        e->kamikaze_tail = tail01;
+        steer_to_velocity(
+            &e->b,
+            e->facing_x * target_v,
+            e->facing_y * target_v,
+            e->accel * (1.00f + launch * 1.45f),
+            0.42f + (1.0f - launch) * 1.10f
+        );
+    }
+    if (e->ai_timer_s >= e->break_delay_s) {
+        e->state = ENEMY_STATE_KAMIKAZE_COIL;
+        e->ai_timer_s = 0.0f;
+        e->break_delay_s = 0.85f + frand01() * 0.75f;
+        e->kamikaze_thrust = 0.0f;
+        e->kamikaze_tail = 0.22f;
+        e->kamikaze_tail_start = e->kamikaze_tail;
+    }
 }
 
 static void update_enemy_swarm(game_state* g, enemy* e, float dt, int uses_cylinder, float period, float su) {
@@ -1132,17 +1234,25 @@ void enemy_update_system(
         if (e->archetype == ENEMY_ARCH_SWARM) {
             update_enemy_swarm(g, e, dt, uses_cylinder, period, su);
         } else if (e->archetype == ENEMY_ARCH_KAMIKAZE) {
-            update_enemy_kamikaze(g, e, uses_cylinder, period);
+            update_enemy_kamikaze(g, e, dt, uses_cylinder, period);
         } else {
             update_enemy_formation(g, e, dt, su, uses_cylinder, period);
         }
         integrate_body(&e->b, dt);
         {
             const float v = length2(e->b.vx, e->b.vy);
-            if (v > e->max_speed) {
-                const float s = e->max_speed / v;
+            float speed_cap = e->max_speed;
+            if (e->archetype == ENEMY_ARCH_KAMIKAZE && e->state == ENEMY_STATE_KAMIKAZE_THRUST) {
+                speed_cap *= 1.95f * fmaxf(e->kamikaze_thrust_scale, 0.1f);
+            }
+            if (v > speed_cap) {
+                const float s = speed_cap / v;
                 e->b.vx *= s;
                 e->b.vy *= s;
+            }
+            if (v > 1.0f) {
+                e->facing_x = e->b.vx / v;
+                e->facing_y = e->b.vy / v;
             }
         }
         if (!uses_cylinder && e->b.x < g->camera_x - g->world_w * 0.72f) {

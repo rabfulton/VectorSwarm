@@ -4447,6 +4447,90 @@ static vg_result draw_player_ship(
     return draw_ship_thruster(ctx, p, thruster_fill);
 }
 
+static vg_result draw_enemy_glyph(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
+    float fx = e->facing_x;
+    float fy = e->facing_y;
+    float f_len = sqrtf(fx * fx + fy * fy);
+    if (f_len < 1e-5f) {
+        fx = -1.0f;
+        fy = 0.0f;
+        f_len = 1.0f;
+    }
+    fx /= f_len;
+    fy /= f_len;
+    {
+        const float nx = -fy;
+        const float ny = fx;
+        const vg_vec2 body[] = {
+            {x + fx * (-1.0f * rr) + nx * (0.0f * rr), y + fy * (-1.0f * rr) + ny * (0.0f * rr)},
+            {x + fx * (-0.2f * rr) + nx * (-0.8f * rr), y + fy * (-0.2f * rr) + ny * (-0.8f * rr)},
+            {x + fx * (1.0f * rr) + nx * (0.0f * rr), y + fy * (1.0f * rr) + ny * (0.0f * rr)},
+            {x + fx * (-0.2f * rr) + nx * (0.8f * rr), y + fy * (-0.2f * rr) + ny * (0.8f * rr)},
+            {x + fx * (-1.0f * rr) + nx * (0.0f * rr), y + fy * (-1.0f * rr) + ny * (0.0f * rr)}
+        };
+        vg_result r = vg_draw_polyline(ctx, body, sizeof(body) / sizeof(body[0]), enemy_style, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+    }
+    if (e->kamikaze_tail <= 0.02f) {
+        return VG_OK;
+    }
+
+    {
+        fx = e->facing_x;
+        fy = e->facing_y;
+        f_len = sqrtf(fx * fx + fy * fy);
+        if (f_len < 1e-5f) {
+            fx = -1.0f;
+            fy = 0.0f;
+            f_len = 1.0f;
+        }
+        fx /= f_len;
+        fy /= f_len;
+        {
+            const float tx = -fx;
+            const float ty = -fy;
+            const float nx = -ty;
+            const float ny = tx;
+            const float tail01 = clampf(e->kamikaze_tail, 0.0f, 1.0f);
+            const float pulse01 = clampf(e->kamikaze_thrust, 0.0f, 1.0f);
+            const float base_back = rr * (0.72f + 0.18f * pulse01);
+            const float tail_len = rr * (0.55f + 2.05f * tail01);
+            const float spread = rr * (0.10f + 0.42f * tail01);
+            const vg_vec2 tail_center = {
+                x + tx * (base_back + rr * 0.22f),
+                y + ty * (base_back + rr * 0.22f)
+            };
+            const vg_vec2 tail_tip = {
+                tail_center.x + tx * tail_len,
+                tail_center.y + ty * tail_len
+            };
+            const vg_vec2 tail_l[] = {
+                {tail_center.x + nx * spread, tail_center.y + ny * spread},
+                {tail_tip.x, tail_tip.y}
+            };
+            const vg_vec2 tail_r[] = {
+                {tail_center.x - nx * spread, tail_center.y - ny * spread},
+                {tail_tip.x, tail_tip.y}
+            };
+            const vg_vec2 tail_mid[] = {
+                {tail_center.x, tail_center.y},
+                {tail_tip.x, tail_tip.y}
+            };
+            vg_result r = vg_draw_polyline(ctx, tail_l, 2, enemy_style, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_draw_polyline(ctx, tail_r, 2, enemy_style, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            return vg_draw_polyline(ctx, tail_mid, 2, enemy_style, 0);
+        }
+    }
+}
+
 vg_result render_frame(vg_context* ctx, const game_state* g, const render_metrics* metrics) {
     const palette_theme pal = get_palette_theme(metrics->palette_mode);
     vg_crt_profile crt;
@@ -4776,18 +4860,11 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             float d = 0.0f;
             const vg_vec2 c = project_cylinder_point(g, e->b.x, e->b.y, &d);
             const float rr = e->radius * (0.45f + d * 0.9f);
-            const vg_vec2 body[] = {
-                {c.x - rr, c.y},
-                {c.x - rr * 0.2f, c.y - rr * 0.8f},
-                {c.x + rr, c.y},
-                {c.x - rr * 0.2f, c.y + rr * 0.8f},
-                {c.x - rr, c.y}
-            };
             vg_stroke_style es = enemy_style;
             es.width_px *= 0.55f + d * 0.8f;
             es.intensity *= 0.20f + d * 0.80f;
             es.color.a *= 0.20f + d * 0.80f;
-            r = vg_draw_polyline(ctx, body, sizeof(body) / sizeof(body[0]), &es, 0);
+            r = draw_enemy_glyph(ctx, e, c.x, c.y, rr, &es);
             if (r != VG_OK) {
                 return r;
             }
@@ -5153,14 +5230,7 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         }
         const enemy* e = &g->enemies[i];
         const float rr = e->radius;
-        const vg_vec2 body[] = {
-            {e->b.x - rr, e->b.y},
-            {e->b.x - rr * 0.2f, e->b.y - rr * 0.8f},
-            {e->b.x + rr, e->b.y},
-            {e->b.x - rr * 0.2f, e->b.y + rr * 0.8f},
-            {e->b.x - rr, e->b.y}
-        };
-        r = vg_draw_polyline(ctx, body, sizeof(body) / sizeof(body[0]), &enemy_style, 0);
+        r = draw_enemy_glyph(ctx, e, e->b.x, e->b.y, rr, &enemy_style);
         if (r != VG_OK) {
             (void)vg_transform_pop(ctx);
             return r;
