@@ -16,6 +16,16 @@ static float frands1(void) {
     return frand01() * 2.0f - 1.0f;
 }
 
+static int clampi(int v, int lo, int hi) {
+    if (v < lo) {
+        return lo;
+    }
+    if (v > hi) {
+        return hi;
+    }
+    return v;
+}
+
 static float clampf(float v, float lo, float hi) {
     if (v < lo) {
         return lo;
@@ -476,8 +486,7 @@ static void emit_thruster(game_state* g, float dt) {
     }
 }
 
-static void spawn_bullet_single(game_state* g, float y_offset, float muzzle_speed) {
-    const float dir = (g->player.facing_x < 0.0f) ? -1.0f : 1.0f;
+static int spawn_bullet_single(game_state* g, float y_offset, float muzzle_speed, float dir, float muzzle_offset) {
     const float su = gameplay_ui_scale(g);
     const float vertical_inherit = 0.18f;
     for (size_t i = 0; i < MAX_BULLETS; ++i) {
@@ -486,7 +495,7 @@ static void spawn_bullet_single(game_state* g, float y_offset, float muzzle_spee
         }
         bullet* b = &g->bullets[i];
         b->active = 1;
-        b->b.x = g->player.b.x + dir * 36.0f * su;
+        b->b.x = g->player.b.x + dir * muzzle_offset * su;
         b->b.y = g->player.b.y + y_offset;
         b->spawn_x = b->b.x;
         b->b.vx = dir * muzzle_speed + g->player.b.vx;
@@ -494,25 +503,48 @@ static void spawn_bullet_single(game_state* g, float y_offset, float muzzle_spee
         b->b.ax = 0.0f;
         b->b.ay = 0.0f;
         b->ttl_s = 2.0f;
-        return;
+        return 1;
     }
+    return 0;
 }
 
 static void spawn_bullet(game_state* g) {
     const float su = gameplay_ui_scale(g);
+    const float dir = (g->player.facing_x < 0.0f) ? -1.0f : 1.0f;
     g->fire_sfx_pending += 1;
     if (g->weapon_level <= 1) {
-        spawn_bullet_single(g, 0.0f, 760.0f * su);
+        (void)spawn_bullet_single(g, 0.0f, 760.0f * su, dir, 36.0f);
         return;
     }
     if (g->weapon_level == 2) {
-        spawn_bullet_single(g, -12.0f * su, 800.0f * su);
-        spawn_bullet_single(g, 12.0f * su, 800.0f * su);
+        (void)spawn_bullet_single(g, -12.0f * su, 800.0f * su, dir, 36.0f);
+        (void)spawn_bullet_single(g, 12.0f * su, 800.0f * su, dir, 36.0f);
         return;
     }
-    spawn_bullet_single(g, 0.0f, 860.0f * su);
-    spawn_bullet_single(g, -15.0f * su, 860.0f * su);
-    spawn_bullet_single(g, 15.0f * su, 860.0f * su);
+    (void)spawn_bullet_single(g, 0.0f, 860.0f * su, dir, 36.0f);
+    (void)spawn_bullet_single(g, -15.0f * su, 860.0f * su, dir, 36.0f);
+    (void)spawn_bullet_single(g, 15.0f * su, 860.0f * su, dir, 36.0f);
+}
+
+static void spawn_secondary_bullet(game_state* g) {
+    if (!g || g->lives <= 0) {
+        return;
+    }
+    if (g->alt_weapon_equipped != PLAYER_ALT_WEAPON_REAR_GUN) {
+        return;
+    }
+    if (g->alt_weapon_ammo[PLAYER_ALT_WEAPON_REAR_GUN] <= 0) {
+        return;
+    }
+    {
+        const float su = gameplay_ui_scale(g);
+        const float dir = (g->player.facing_x < 0.0f) ? 1.0f : -1.0f;
+        if (spawn_bullet_single(g, 0.0f, 720.0f * su, dir, 30.0f)) {
+            g->alt_weapon_ammo[PLAYER_ALT_WEAPON_REAR_GUN] -= 1;
+            g->secondary_fire_cooldown_s = 0.085f;
+            g->fire_sfx_pending += 1;
+        }
+    }
 }
 
 static enemy_bullet* spawn_enemy_bullet_at(
@@ -550,6 +582,11 @@ void game_init(game_state* g, float world_w, float world_h) {
     g->world_h = world_h;
     g->lives = 3;
     g->weapon_level = 1;
+    g->alt_weapon_equipped = PLAYER_ALT_WEAPON_SHIELD;
+    g->alt_weapon_ammo[PLAYER_ALT_WEAPON_SHIELD] = 3;
+    g->alt_weapon_ammo[PLAYER_ALT_WEAPON_MISSILE] = 8;
+    g->alt_weapon_ammo[PLAYER_ALT_WEAPON_EMP] = 5;
+    g->alt_weapon_ammo[PLAYER_ALT_WEAPON_REAR_GUN] = 180;
     const float su = gameplay_ui_scale(g);
     g->player.b.x = 170.0f * su;
     g->player.b.y = world_h * 0.5f;
@@ -700,6 +737,9 @@ static void game_update_player_weapons(game_state* g, float dt, const game_input
     if (g->fire_cooldown_s > 0.0f) {
         g->fire_cooldown_s -= dt;
     }
+    if (g->secondary_fire_cooldown_s > 0.0f) {
+        g->secondary_fire_cooldown_s -= dt;
+    }
     if (g->score >= 3000) {
         g->weapon_level = 3;
     } else if (g->score >= 1200) {
@@ -712,6 +752,9 @@ static void game_update_player_weapons(game_state* g, float dt, const game_input
         spawn_bullet(g);
         g->fire_cooldown_s = 0.095f;
         g->weapon_heat = clampf(g->weapon_heat + 0.09f, 0.0f, 1.0f);
+    }
+    if (g->lives > 0 && in->secondary_fire && g->secondary_fire_cooldown_s <= 0.0f) {
+        spawn_secondary_bullet(g);
     }
 }
 
@@ -973,4 +1016,26 @@ int game_set_level_by_name(game_state* g, const char* name) {
         }
     }
     return 0;
+}
+
+void game_set_alt_weapon(game_state* g, int weapon_id) {
+    if (!g) {
+        return;
+    }
+    g->alt_weapon_equipped = clampi(weapon_id, 0, PLAYER_ALT_WEAPON_COUNT - 1);
+}
+
+int game_get_alt_weapon(const game_state* g) {
+    if (!g) {
+        return 0;
+    }
+    return clampi(g->alt_weapon_equipped, 0, PLAYER_ALT_WEAPON_COUNT - 1);
+}
+
+int game_get_alt_weapon_ammo(const game_state* g, int weapon_id) {
+    if (!g) {
+        return 0;
+    }
+    weapon_id = clampi(weapon_id, 0, PLAYER_ALT_WEAPON_COUNT - 1);
+    return g->alt_weapon_ammo[weapon_id];
 }

@@ -1829,7 +1829,7 @@ static vg_result draw_shipyard_menu(vg_context* ctx, float w, float h, const ren
         }
     }
     {
-        static const char* wlabels[4] = {"SHIELD", "MISSILE", "EMP", "CANNON"};
+        static const char* wlabels[4] = {"SHIELD", "MISSILE", "EMP", "REAR GUN"};
         const float icon_h = weap_box.h * 0.21f;
         const float icon_gap = weap_box.h * 0.05f;
         float y = weap_box.y + weap_box.h - icon_h;
@@ -1882,6 +1882,22 @@ static vg_result draw_shipyard_menu(vg_context* ctx, float w, float h, const ren
             );
             if (r != VG_OK) {
                 return r;
+            }
+            {
+                char ammo[24];
+                snprintf(ammo, sizeof(ammo), "%d", metrics->shipyard_weapon_ammo[i]);
+                r = draw_text_vector_glow(
+                    ctx,
+                    ammo,
+                    (vg_vec2){d.x + d.w * 0.05f, d.y + d.h * 0.84f},
+                    10.2f * ui,
+                    0.78f * ui,
+                    &frame,
+                    &txt
+                );
+                if (r != VG_OK) {
+                    return r;
+                }
             }
             y -= (icon_h + icon_gap);
         }

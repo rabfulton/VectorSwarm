@@ -514,6 +514,19 @@ static void controls_open_first_gamepad(app* a) {
     controls_refresh_labels(a);
 }
 
+static void sync_shipyard_weapon_to_game(app* a) {
+    if (!a) {
+        return;
+    }
+    if (a->shipyard_weapon_selected < 0) {
+        a->shipyard_weapon_selected = 0;
+    }
+    if (a->shipyard_weapon_selected >= PLAYER_ALT_WEAPON_COUNT) {
+        a->shipyard_weapon_selected = PLAYER_ALT_WEAPON_COUNT - 1;
+    }
+    game_set_alt_weapon(&a->game, a->shipyard_weapon_selected);
+}
+
 static void menu_open_screen(app* a, int screen, int return_screen) {
     if (!a) {
         return;
@@ -2200,6 +2213,7 @@ static int handle_shipyard_mouse(app* a, int mouse_x, int mouse_y, int set_value
                 if (set_value) {
                     if (a->shipyard_weapon_selected != i) {
                         a->shipyard_weapon_selected = i;
+                        sync_shipyard_weapon_to_game(a);
                         trigger_fire_test(a);
                     }
                 }
@@ -4931,6 +4945,12 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .nick_h = a->nick_h,
         .nick_stride = a->nick_stride,
         .shipyard_weapon_selected = a->shipyard_weapon_selected,
+        .shipyard_weapon_ammo = {
+            game_get_alt_weapon_ammo(&a->game, 0),
+            game_get_alt_weapon_ammo(&a->game, 1),
+            game_get_alt_weapon_ammo(&a->game, 2),
+            game_get_alt_weapon_ammo(&a->game, 3)
+        },
         .shipyard_ship_svg_asset = a->shipyard_ship_svg_asset,
         .shipyard_weapon_svg_assets = {
             a->shipyard_weapon_svg_assets[0],
@@ -5344,6 +5364,7 @@ int main(void) {
     }
 
     game_init(&a.game, (float)a.swapchain_extent.width, (float)a.swapchain_extent.height);
+    sync_shipyard_weapon_to_game(&a);
     apply_video_lab_controls(&a);
     vg_text_fx_typewriter_set_rate(&a.wave_tty, 0.038f);
     vg_text_fx_typewriter_set_beep(&a.wave_tty, teletype_beep_cb, &a);
@@ -5818,6 +5839,7 @@ int main(void) {
         float dt_sim = dt_raw;
         if (dt_sim > (1.0f / 15.0f)) dt_sim = 1.0f / 15.0f;
         if (!controls_ui_active(&a)) {
+            sync_shipyard_weapon_to_game(&a);
             game_update(&a.game, dt_sim, &in);
         }
         if (a.audio_ready) {

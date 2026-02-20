@@ -13,6 +13,7 @@
 #define MAX_AUDIO_EVENTS 64
 #define MAX_SEARCHLIGHTS 4
 #define MAX_CURATED_RUNTIME 128
+#define PLAYER_ALT_WEAPON_COUNT 4
 
 struct leveldef_db;
 
@@ -67,6 +68,13 @@ typedef struct bullet {
     float spawn_x;
     float ttl_s;
 } bullet;
+
+typedef enum player_alt_weapon_id {
+    PLAYER_ALT_WEAPON_SHIELD = 0,
+    PLAYER_ALT_WEAPON_MISSILE = 1,
+    PLAYER_ALT_WEAPON_EMP = 2,
+    PLAYER_ALT_WEAPON_REAR_GUN = 3
+} player_alt_weapon_id;
 
 typedef struct enemy {
     int active;
@@ -221,6 +229,7 @@ typedef struct game_state {
     int kills;
     int score;
     float fire_cooldown_s;
+    float secondary_fire_cooldown_s;
     float enemy_spawn_timer_s;
     float wave_cooldown_s;
     int wave_index;
@@ -256,6 +265,8 @@ typedef struct game_state {
     float exit_portal_x;
     float exit_portal_y;
     float exit_portal_radius;
+    int alt_weapon_equipped; /* enum player_alt_weapon_id */
+    int alt_weapon_ammo[PLAYER_ALT_WEAPON_COUNT];
 } game_state;
 
 void game_init(game_state* g, float world_w, float world_h);
@@ -272,5 +283,8 @@ int game_pop_audio_events(game_state* g, game_audio_event* out, int out_cap);
 const struct leveldef_db* game_leveldef_get(void);
 const char* game_current_level_name(const game_state* g);
 int game_set_level_by_name(game_state* g, const char* name);
+void game_set_alt_weapon(game_state* g, int weapon_id);
+int game_get_alt_weapon(const game_state* g);
+int game_get_alt_weapon_ammo(const game_state* g, int weapon_id);
 
 #endif
