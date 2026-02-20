@@ -4864,7 +4864,29 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             es.width_px *= 0.55f + d * 0.8f;
             es.intensity *= 0.20f + d * 0.80f;
             es.color.a *= 0.20f + d * 0.80f;
-            r = draw_enemy_glyph(ctx, e, c.x, c.y, rr, &es);
+            {
+                /* Cylinder-only orientation correction:
+                 * derive on-screen facing from projected nearby points so
+                 * the glyph flips naturally on the back half of the cylinder. */
+                enemy e_proj = *e;
+                const float sample = fmaxf(e->radius * 0.9f, 4.0f);
+                const vg_vec2 p_a = project_cylinder_point(
+                    g,
+                    e->b.x + e->facing_x * sample,
+                    e->b.y + e->facing_y * sample,
+                    NULL
+                );
+                float sfx = p_a.x - c.x;
+                float sfy = p_a.y - c.y;
+                const float sl = sqrtf(sfx * sfx + sfy * sfy);
+                if (sl > 1e-4f) {
+                    sfx /= sl;
+                    sfy /= sl;
+                    e_proj.facing_x = sfx;
+                    e_proj.facing_y = sfy;
+                }
+                r = draw_enemy_glyph(ctx, &e_proj, c.x, c.y, rr, &es);
+            }
             if (r != VG_OK) {
                 return r;
             }
