@@ -104,6 +104,9 @@ typedef struct enemy {
     float kamikaze_tail_start;
     float kamikaze_thrust_scale;
     float kamikaze_glide_scale;
+    float kamikaze_strike_x;
+    float kamikaze_strike_y;
+    int kamikaze_is_turning;
     float lane_dir;
     float home_y;
     int formation_kind;
