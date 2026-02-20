@@ -354,6 +354,7 @@ typedef struct app {
     float acoustics_combat_value_01[ACOUST_COMBAT_SLIDER_COUNT];
     int thruster_note_on;
     int current_system_index;
+    int shipyard_weapon_selected;
     int controls_selected;
     int controls_selected_column; /* 0=keyboard, 1=joypad */
     int controls_rebinding_action; /* -1 when idle */
@@ -372,6 +373,8 @@ typedef struct app {
     uint32_t nick_w;
     uint32_t nick_h;
     uint32_t nick_stride;
+    vg_svg_asset* shipyard_ship_svg_asset;
+    vg_svg_asset* shipyard_weapon_svg_assets[4];
     vg_svg_asset* surveillance_svg_asset;
     level_editor_state level_editor;
 } app;
@@ -2155,28 +2158,24 @@ static int handle_shipyard_mouse(app* a, int mouse_x, int mouse_y, int set_value
     const float w = (float)a->swapchain_extent.width;
     const float h = (float)a->swapchain_extent.height;
     const vg_rect panel = make_ui_safe_frame(w, h);
-    const vg_rect links_box = {
-        panel.x + panel.w * 0.03f,
-        panel.y + panel.h * 0.16f,
-        panel.w * 0.34f,
-        panel.h * 0.66f
-    };
-    const float btn_h = links_box.h * 0.14f;
-    const float btn_gap = links_box.h * 0.045f;
-    const float bx = links_box.x + links_box.w * 0.08f;
-    const float bw = links_box.w * 0.84f;
-    float by = links_box.y + links_box.h - btn_h - links_box.h * 0.08f;
-    const int targets[5] = {
+    const vg_rect links_box = {panel.x + panel.w * 0.005f, panel.y + panel.h * 0.17f, panel.w * 0.19f, panel.h * 0.66f};
+    const vg_rect weap_box = {panel.x + panel.w * 0.855f, panel.y + panel.h * 0.18f, panel.w * 0.13f, panel.h * 0.64f};
+    const float btn_h = links_box.h * 0.20f;
+    const float btn_gap = links_box.h * 0.05f;
+    const float bx = links_box.x;
+    const float bw = links_box.w;
+    float by = links_box.y + links_box.h - btn_h;
+    const int targets[4] = {
         APP_SCREEN_ACOUSTICS,
         APP_SCREEN_VIDEO,
         APP_SCREEN_PLANETARIUM,
-        APP_SCREEN_CONTROLS,
-        APP_SCREEN_LEVEL_EDITOR
+        APP_SCREEN_CONTROLS
     };
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < 4; ++i) {
         const vg_rect r = {bx, by, bw, btn_h};
         if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h) {
             if (set_value) {
+                trigger_fire_test(a);
                 menu_open_screen(a, targets[i], APP_SCREEN_SHIPYARD);
                 if (targets[i] == APP_SCREEN_VIDEO) {
                     sync_video_dials_from_live_crt(a);
@@ -2190,6 +2189,24 @@ static int handle_shipyard_mouse(app* a, int mouse_x, int mouse_y, int set_value
             return 1;
         }
         by -= (btn_h + btn_gap);
+    }
+    {
+        const float icon_h = weap_box.h * 0.21f;
+        const float icon_gap = weap_box.h * 0.05f;
+        float y = weap_box.y + weap_box.h - icon_h;
+        for (int i = 0; i < 4; ++i) {
+            const vg_rect r = {weap_box.x, y, weap_box.w, icon_h};
+            if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h) {
+                if (set_value) {
+                    if (a->shipyard_weapon_selected != i) {
+                        a->shipyard_weapon_selected = i;
+                        trigger_fire_test(a);
+                    }
+                }
+                return 1;
+            }
+            y -= (icon_h + icon_gap);
+        }
     }
     return 0;
 }
@@ -2303,6 +2320,40 @@ static void init_planetarium_assets(app* a) {
         if (vg_svg_load_from_file(svg_candidates[i], &sp, &asset) == VG_OK && asset) {
             a->surveillance_svg_asset = asset;
             break;
+        }
+    }
+
+    {
+        const char* ship_candidates[] = {
+            "assets/images/ship.svg",
+            "../assets/images/ship.svg",
+            "../../assets/images/ship.svg"
+        };
+        for (size_t i = 0; i < sizeof(ship_candidates) / sizeof(ship_candidates[0]); ++i) {
+            vg_svg_asset* asset = NULL;
+            if (vg_svg_load_from_file(ship_candidates[i], &sp, &asset) == VG_OK && asset) {
+                a->shipyard_ship_svg_asset = asset;
+                break;
+            }
+        }
+    }
+    {
+        static const char* weapon_names[4] = {"shield.svg", "missile.svg", "emp.svg", "cannon.svg"};
+        for (int widx = 0; widx < 4; ++widx) {
+            char p0[128];
+            char p1[128];
+            char p2[128];
+            snprintf(p0, sizeof(p0), "assets/images/%s", weapon_names[widx]);
+            snprintf(p1, sizeof(p1), "../assets/images/%s", weapon_names[widx]);
+            snprintf(p2, sizeof(p2), "../../assets/images/%s", weapon_names[widx]);
+            const char* candidates[] = {p0, p1, p2};
+            for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); ++i) {
+                vg_svg_asset* asset = NULL;
+                if (vg_svg_load_from_file(candidates[i], &sp, &asset) == VG_OK && asset) {
+                    a->shipyard_weapon_svg_assets[widx] = asset;
+                    break;
+                }
+            }
         }
     }
 
@@ -2692,6 +2743,16 @@ static void cleanup(app* a) {
     if (a->surveillance_svg_asset) {
         vg_svg_destroy(a->surveillance_svg_asset);
         a->surveillance_svg_asset = NULL;
+    }
+    if (a->shipyard_ship_svg_asset) {
+        vg_svg_destroy(a->shipyard_ship_svg_asset);
+        a->shipyard_ship_svg_asset = NULL;
+    }
+    for (int i = 0; i < 4; ++i) {
+        if (a->shipyard_weapon_svg_assets[i]) {
+            vg_svg_destroy(a->shipyard_weapon_svg_assets[i]);
+            a->shipyard_weapon_svg_assets[i] = NULL;
+        }
     }
     SDL_Quit();
 }
@@ -4869,6 +4930,14 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .nick_w = a->nick_w,
         .nick_h = a->nick_h,
         .nick_stride = a->nick_stride,
+        .shipyard_weapon_selected = a->shipyard_weapon_selected,
+        .shipyard_ship_svg_asset = a->shipyard_ship_svg_asset,
+        .shipyard_weapon_svg_assets = {
+            a->shipyard_weapon_svg_assets[0],
+            a->shipyard_weapon_svg_assets[1],
+            a->shipyard_weapon_svg_assets[2],
+            a->shipyard_weapon_svg_assets[3]
+        },
         .surveillance_svg_asset = a->surveillance_svg_asset,
         .terrain_tuning_text = (a->fog_tuning_enabled &&
                                 a->fog_tuning_show &&
@@ -5161,6 +5230,7 @@ int main(void) {
     a.particle_tuning_enabled = env_flag_enabled("VTYPE_PARTICLE_TRACE");
     a.particle_tuning_show = 1;
     a.particle_bloom_enabled = 1;
+    a.shipyard_weapon_selected = 0;
     a.use_gpu_wormhole = 1;
     a.use_gpu_particles = !env_flag_enabled("VTYPE_DISABLE_GPU_PARTICLES");
     a.disable_scene_split = env_flag_enabled("VTYPE_DISABLE_SCENE_SPLIT");

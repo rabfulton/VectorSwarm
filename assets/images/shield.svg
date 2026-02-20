@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 150 150" width="150" height="150">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <g stroke="#0055aa" stroke-width="1">
+        <polygon points="20,50 50,20 100,20 130,50 130,100 100,130 50,130 20,100" stroke-dasharray="5 2"/>
+        <rect x="45" y="15" width="10" height="10" stroke="#00aaff" stroke-width="2"/>
+        <rect x="95" y="125" width="10" height="10" stroke="#00aaff" stroke-width="2"/>
+    </g>
+
+    <g stroke="#00ff55">
+        <g stroke-width="2">
+            <rect x="55" y="110" width="40" height="15" />
+            <polyline points="60,110 70,100 80,110 90,100" stroke-width="1"/> </g>
+
+        <path d="M 20,110 A 60,60 0 0,1 130,110" stroke-width="3" stroke-dasharray="15 5"/>
+        
+        <g stroke-width="1" opacity="0.8">
+            <path d="M 45,110 Q 45,50 75,30" />
+            <path d="M 105,110 Q 105,50 75,30" />
+            <line x1="75" y1="110" x2="75" y2="30" stroke-dasharray="5 5"/>
+            
+            <path d="M 30,90 Q 75,70 120,90" />
+            <path d="M 50,65 Q 75,55 100,65" />
+            
+            <circle cx="75" cy="30" r="3" fill="#00ff55"/>
+            <circle cx="45" cy="85" r="2" />
+            <circle cx="105" cy="85" r="2" />
+        </g>
+        
+        <polygon points="75,90 65,105 85,105" stroke="#00ff55" stroke-width="1" stroke-dasharray="2 2" opacity="0.5"/>
+    </g>
+  </g>
+</svg>

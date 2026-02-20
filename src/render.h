@@ -86,6 +86,9 @@ typedef struct render_metrics {
     uint32_t nick_w;
     uint32_t nick_h;
     uint32_t nick_stride;
+    int shipyard_weapon_selected;
+    const void* shipyard_ship_svg_asset;
+    const void* shipyard_weapon_svg_assets[4];
     const void* surveillance_svg_asset;
     const char* terrain_tuning_text;
     int use_gpu_terrain;

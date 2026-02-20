@@ -1699,18 +1699,58 @@ static vg_result draw_mouse_pointer(vg_context* ctx, float w, float h, const ren
     return vg_draw_pointer(ctx, VG_POINTER_ASTEROIDS, &pd);
 }
 
+static vg_result draw_lcars_text_button(
+    vg_context* ctx,
+    vg_rect rect,
+    const char* label,
+    int hover,
+    int selected,
+    float ui,
+    const palette_theme* pal,
+    const vg_stroke_style* frame,
+    const vg_stroke_style* txt
+) {
+    vg_fill_style base = make_fill(
+        selected ? 0.42f : (hover ? 0.34f : 0.22f),
+        pal->primary_dim,
+        VG_BLEND_ALPHA
+    );
+    vg_result r = vg_fill_rect(ctx, rect, &base);
+    if (r != VG_OK) {
+        return r;
+    }
+    vg_stroke_style lcars = *frame;
+    lcars.width_px = 1.1f * ui;
+    lcars.intensity = selected ? 1.3f : (hover ? 1.1f : 0.8f);
+    {
+        const vg_vec2 stripe[2] = {
+            {rect.x + rect.w * 0.02f, rect.y + rect.h * 0.06f},
+            {rect.x + rect.w * 0.98f, rect.y + rect.h * 0.06f}
+        };
+        r = vg_draw_polyline(ctx, stripe, 2, &lcars, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+    }
+    return draw_text_vector_glow(
+        ctx,
+        label,
+        (vg_vec2){rect.x + rect.w * 0.08f, rect.y + rect.h * 0.34f},
+        14.0f * ui,
+        1.0f * ui,
+        frame,
+        txt
+    );
+}
+
 static vg_result draw_shipyard_menu(vg_context* ctx, float w, float h, const render_metrics* metrics) {
     const float ui = ui_reference_scale(w, h);
     const vg_rect panel = make_ui_safe_frame(w, h);
     const palette_theme pal = get_palette_theme(metrics->palette_mode);
-    vg_stroke_style frame = make_stroke(2.0f * ui, 1.0f, pal.primary, VG_BLEND_ALPHA);
+    vg_stroke_style frame = make_stroke(1.6f * ui, 1.0f, pal.primary, VG_BLEND_ALPHA);
     vg_stroke_style txt = make_stroke(1.2f * ui, 1.0f, pal.secondary, VG_BLEND_ALPHA);
-    vg_fill_style haze = make_fill(0.30f, pal.haze, VG_BLEND_ALPHA);
+    vg_fill_style haze = make_fill(0.20f, pal.haze, VG_BLEND_ALPHA);
     vg_result r = vg_fill_rect(ctx, panel, &haze);
-    if (r != VG_OK) {
-        return r;
-    }
-    r = vg_draw_rect(ctx, panel, &frame);
     if (r != VG_OK) {
         return r;
     }
@@ -1729,7 +1769,7 @@ static vg_result draw_shipyard_menu(vg_context* ctx, float w, float h, const ren
     }
     r = draw_text_vector_glow(
         ctx,
-        "ESC BACK  ACOUSTICS  DISPLAY  PLANETARIUM  CONTROLS  LEVEL EDITOR",
+        "ESC BACK",
         (vg_vec2){panel.x + panel.w * 0.04f, panel.y + panel.h * 0.875f},
         9.8f * ui,
         0.8f * ui,
@@ -1740,42 +1780,27 @@ static vg_result draw_shipyard_menu(vg_context* ctx, float w, float h, const ren
         return r;
     }
 
-    const vg_rect links_box = {
-        panel.x + panel.w * 0.03f,
-        panel.y + panel.h * 0.16f,
-        panel.w * 0.34f,
-        panel.h * 0.66f
-    };
-    const vg_rect stats_box = {
-        panel.x + panel.w * 0.41f,
-        panel.y + panel.h * 0.16f,
-        panel.w * 0.56f,
-        panel.h * 0.66f
-    };
-    r = vg_draw_rect(ctx, links_box, &frame);
-    if (r != VG_OK) {
-        return r;
-    }
-    r = vg_draw_rect(ctx, stats_box, &frame);
-    if (r != VG_OK) {
-        return r;
-    }
+    const vg_rect links_box = {panel.x + panel.w * 0.005f, panel.y + panel.h * 0.17f, panel.w * 0.19f, panel.h * 0.66f};
+    const vg_rect ship_box = {panel.x + panel.w * 0.27f, panel.y + panel.h * 0.18f, panel.w * 0.52f, panel.h * 0.64f};
+    const vg_rect weap_box = {panel.x + panel.w * 0.855f, panel.y + panel.h * 0.18f, panel.w * 0.13f, panel.h * 0.64f};
 
     {
-        static const char* labels[5] = {
+        static const char* labels[4] = {
             "ACOUSTICS",
             "DISPLAY",
             "PLANETARIUM",
-            "CONTROLS",
-            "LEVEL EDITOR"
+            "CONTROLS"
         };
-        const float btn_h = links_box.h * 0.14f;
-        const float btn_gap = links_box.h * 0.045f;
-        const float bx = links_box.x + links_box.w * 0.08f;
-        const float bw = links_box.w * 0.84f;
-        float by = links_box.y + links_box.h - btn_h - links_box.h * 0.08f;
-        for (int i = 0; i < 5; ++i) {
-            r = vg_draw_button(ctx, (vg_rect){bx, by, bw, btn_h}, labels[i], 14.0f * ui, &frame, &txt, 0);
+        const float btn_h = links_box.h * 0.20f;
+        const float btn_gap = links_box.h * 0.05f;
+        float by = links_box.y + links_box.h - btn_h;
+        for (int i = 0; i < 4; ++i) {
+            vg_rect b = {links_box.x, by, links_box.w, btn_h};
+            const int hover =
+                metrics->mouse_in_window &&
+                metrics->mouse_x >= b.x && metrics->mouse_x <= (b.x + b.w) &&
+                metrics->mouse_y >= b.y && metrics->mouse_y <= (b.y + b.h);
+            r = draw_lcars_text_button(ctx, b, labels[i], hover, 0, ui, &pal, &frame, &txt);
             if (r != VG_OK) {
                 return r;
             }
@@ -1783,51 +1808,84 @@ static vg_result draw_shipyard_menu(vg_context* ctx, float w, float h, const ren
         }
     }
 
-    r = draw_text_vector_glow(
-        ctx,
-        "PILOT STATUS",
-        (vg_vec2){stats_box.x + stats_box.w * 0.05f, stats_box.y + stats_box.h * 0.88f},
-        12.0f * ui,
-        0.9f * ui,
-        &frame,
-        &txt
-    );
-    if (r != VG_OK) {
-        return r;
+    {
+        const vg_svg_asset* ship_svg = (const vg_svg_asset*)metrics->shipyard_ship_svg_asset;
+        if (ship_svg) {
+            vg_svg_draw_params sdp;
+            memset(&sdp, 0, sizeof(sdp));
+            sdp.dst = ship_box;
+            sdp.preserve_aspect = 1;
+            sdp.flip_y = 1;
+            sdp.fill_closed_paths = 1;
+            sdp.use_source_colors = 0;
+            sdp.fill_intensity = 0.82f;
+            sdp.stroke_intensity = 1.0f;
+            sdp.use_context_palette = 0;
+            r = vg_svg_draw(ctx, ship_svg, &sdp, &frame);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
     }
-    r = draw_text_vector_glow(
-        ctx,
-        "SORTIES FLOW THROUGH THIS HUB.",
-        (vg_vec2){stats_box.x + stats_box.w * 0.05f, stats_box.y + stats_box.h * 0.76f},
-        10.0f * ui,
-        0.8f * ui,
-        &frame,
-        &txt
-    );
-    if (r != VG_OK) {
-        return r;
+    {
+        static const char* wlabels[4] = {"SHIELD", "MISSILE", "EMP", "CANNON"};
+        const float icon_h = weap_box.h * 0.21f;
+        const float icon_gap = weap_box.h * 0.05f;
+        float y = weap_box.y + weap_box.h - icon_h;
+        for (int i = 0; i < 4; ++i) {
+            const vg_rect d = {weap_box.x, y, weap_box.w, icon_h};
+            const vg_svg_asset* weapon_svg = (const vg_svg_asset*)metrics->shipyard_weapon_svg_assets[i];
+            const int hover =
+                metrics->mouse_in_window &&
+                metrics->mouse_x >= d.x && metrics->mouse_x <= (d.x + d.w) &&
+                metrics->mouse_y >= d.y && metrics->mouse_y <= (d.y + d.h);
+            const int selected = (metrics->shipyard_weapon_selected == i) ? 1 : 0;
+            vg_fill_style bg = make_fill(selected ? 0.36f : (hover ? 0.25f : 0.14f), pal.primary_dim, VG_BLEND_ALPHA);
+            r = vg_fill_rect(ctx, d, &bg);
+            if (r != VG_OK) {
+                return r;
+            }
+            {
+                vg_stroke_style slot = frame;
+                slot.width_px = 1.3f * ui;
+                slot.intensity = selected ? 1.25f : (hover ? 1.0f : 0.72f);
+                r = vg_draw_rect(ctx, d, &slot);
+                if (r != VG_OK) {
+                    return r;
+                }
+            }
+            if (weapon_svg) {
+                vg_svg_draw_params sdp;
+                memset(&sdp, 0, sizeof(sdp));
+                sdp.dst = (vg_rect){d.x + d.w * 0.34f, d.y + d.h * 0.10f, d.w * 0.60f, d.h * 0.80f};
+                sdp.preserve_aspect = 1;
+                sdp.flip_y = 1;
+                sdp.fill_closed_paths = 1;
+                sdp.use_source_colors = 0;
+                sdp.fill_intensity = selected ? 0.96f : 0.70f;
+                sdp.stroke_intensity = selected ? 1.10f : 0.90f;
+                sdp.use_context_palette = 0;
+                r = vg_svg_draw(ctx, weapon_svg, &sdp, &frame);
+                if (r != VG_OK) {
+                    return r;
+                }
+            }
+            r = draw_text_vector_glow(
+                ctx,
+                wlabels[i],
+                (vg_vec2){d.x + d.w * 0.05f, d.y + d.h * 0.08f},
+                9.0f * ui,
+                0.7f * ui,
+                &frame,
+                &txt
+            );
+            if (r != VG_OK) {
+                return r;
+            }
+            y -= (icon_h + icon_gap);
+        }
     }
-    r = draw_text_vector_glow(
-        ctx,
-        "LOADOUT AND PROGRESSION PANELS",
-        (vg_vec2){stats_box.x + stats_box.w * 0.05f, stats_box.y + stats_box.h * 0.67f},
-        10.0f * ui,
-        0.8f * ui,
-        &frame,
-        &txt
-    );
-    if (r != VG_OK) {
-        return r;
-    }
-    return draw_text_vector_glow(
-        ctx,
-        "WILL BE WIRED HERE NEXT.",
-        (vg_vec2){stats_box.x + stats_box.w * 0.05f, stats_box.y + stats_box.h * 0.58f},
-        10.0f * ui,
-        0.8f * ui,
-        &frame,
-        &txt
-    );
+    return VG_OK;
 }
 
 static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render_metrics* metrics, float t_s) {

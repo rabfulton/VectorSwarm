@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 150 150" width="150" height="150">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <g stroke="#0055aa" stroke-width="1">
+        <polygon points="20,50 50,20 100,20 130,50 130,100 100,130 50,130 20,100" stroke-dasharray="5 2"/>
+        <rect x="45" y="15" width="10" height="10" stroke="#00aaff" stroke-width="2"/>
+        <rect x="95" y="125" width="10" height="10" stroke="#00aaff" stroke-width="2"/>
+    </g>
+
+    <g transform="translate(75, 75) rotate(135) translate(-75, -75)"> <g stroke="#ff0055" stroke-width="1" stroke-dasharray="2 2">
+             <rect x="60" y="80" width="30" height="20" /> <line x1="75" y1="80" x2="75" y2="60" />
+        </g>
+        
+        <g stroke="#ff3366" stroke-width="2.5">
+            <rect x="55" y="60" width="40" height="30" /> <path d="M 65,60 L 65,20 L 70,20 L 70,60" /> 
+            <path d="M 80,60 L 80,20 L 85,20 L 85,60" />
+            <rect x="60" y="90" width="30" height="10" /> </g>
+        
+        <g stroke="#ffaa00" stroke-width="1" stroke-dasharray="4 4">
+             <line x1="67.5" y1="20" x2="50" y2="-10" />
+             <line x1="82.5" y1="20" x2="100" y2="-10" />
+             <circle cx="50" cy="-10" r="5" /> <circle cx="100" cy="-10" r="5" /> </g>
+    </g>
+  </g>
+</svg>
