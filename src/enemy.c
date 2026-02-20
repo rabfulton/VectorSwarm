@@ -971,15 +971,36 @@ static void update_enemy_formation(game_state* g, enemy* e, float dt, float su, 
 }
 
 static void update_enemy_kamikaze(game_state* g, enemy* e, float dt, int uses_cylinder, float period) {
-    const float lead = 0.25f;
+    const float lead = 0.12f;
     const float tx = g->player.b.x + g->player.b.vx * lead;
     const float ty = g->player.b.y + g->player.b.vy * lead;
     float dir_x = uses_cylinder ? wrap_delta(tx, e->b.x, period) : (tx - e->b.x);
     float dir_y = ty - e->b.y;
+    const float dist_to_player = length2(dir_x, dir_y);
     normalize2(&dir_x, &dir_y);
+    {
+        float fx = e->facing_x;
+        float fy = e->facing_y;
+        normalize2(&fx, &fy);
+        if (fx * fx + fy * fy < 1e-6f) {
+            fx = dir_x;
+            fy = dir_y;
+        }
+        /* Keep kamikaze from drifting away forever: if far offscreen on defender levels,
+         * force a reacquire turn toward player. */
+        if (!uses_cylinder && fabsf(g->player.b.x - e->b.x) > g->world_w * 0.95f) {
+            e->state = ENEMY_STATE_KAMIKAZE_COIL;
+            e->ai_timer_s = 0.0f;
+            e->break_delay_s = 0.35f + frand01() * 0.25f;
+            e->facing_x = dir_x;
+            e->facing_y = dir_y;
+            e->kamikaze_tail = fminf(e->kamikaze_tail, 0.22f);
+            e->kamikaze_tail_start = e->kamikaze_tail;
+        }
+    }
 
     if (e->state == ENEMY_STATE_KAMIKAZE_COIL) {
-        const float turn_rate = clampf(dt * 7.4f, 0.0f, 1.0f);
+        const float turn_rate = clampf(dt * 12.0f, 0.0f, 1.0f);
         e->facing_x += (dir_x - e->facing_x) * turn_rate;
         e->facing_y += (dir_y - e->facing_y) * turn_rate;
         normalize2(&e->facing_x, &e->facing_y);
@@ -996,6 +1017,21 @@ static void update_enemy_kamikaze(game_state* g, enemy* e, float dt, int uses_cy
             e->accel * 1.05f,
             2.7f
         );
+        {
+            const float screen_x = g->world_w * 0.52f;
+            const float screen_y = g->world_h * 0.52f;
+            const int same_screen = (fabsf(uses_cylinder ? wrap_delta(g->player.b.x, e->b.x, period) : (g->player.b.x - e->b.x)) <= screen_x) &&
+                                    (fabsf(g->player.b.y - e->b.y) <= screen_y);
+            if (same_screen && e->ai_timer_s > 0.20f) {
+                const float near01 = clampf(1.0f - dist_to_player / (g->world_w * 0.60f), 0.0f, 1.0f);
+                const float lunge_rate = 0.35f + near01 * 2.05f; /* events/second */
+                const float p_dt = 1.0f - expf(-lunge_rate * fmaxf(dt, 0.0f));
+                const float facing_dot = e->facing_x * dir_x + e->facing_y * dir_y;
+                if (facing_dot > 0.55f && frand01() < p_dt) {
+                    e->ai_timer_s = e->break_delay_s;
+                }
+            }
+        }
         if (e->ai_timer_s >= e->break_delay_s) {
             e->state = ENEMY_STATE_KAMIKAZE_THRUST;
             e->ai_timer_s = 0.0f;
