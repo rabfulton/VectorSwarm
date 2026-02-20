@@ -1960,7 +1960,21 @@ static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render
         const float btn_x0 = panel.x + panel.w - (3.0f * btn_w + 2.0f * btn_gap) - panel.w * 0.04f;
         for (int i = 0; i < 3; ++i) {
             const vg_rect b = {btn_x0 + (float)i * (btn_w + btn_gap), btn_y, btn_w, btn_h};
-            r = vg_draw_button(ctx, b, labels[i], 11.0f * ui, &frame, &txt, (metrics->palette_mode == i) ? 1 : 0);
+            const int hover =
+                metrics->mouse_in_window &&
+                metrics->mouse_x >= b.x && metrics->mouse_x <= (b.x + b.w) &&
+                metrics->mouse_y >= b.y && metrics->mouse_y <= (b.y + b.h);
+            r = draw_lcars_text_button(
+                ctx,
+                b,
+                labels[i],
+                hover,
+                (metrics->palette_mode == i) ? 1 : 0,
+                ui,
+                &pal,
+                &frame,
+                &txt
+            );
             if (r != VG_OK) {
                 return r;
             }
@@ -1981,7 +1995,21 @@ static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render
             const int idx = i - 1;
             snprintf(label, sizeof(label), "%d x %d", metrics->video_res_w[idx], metrics->video_res_h[idx]);
         }
-        r = vg_draw_button(ctx, row, label, 12.0f * ui, &frame, &txt, (metrics->video_menu_selected == i) ? 1 : 0);
+        const int hover =
+            metrics->mouse_in_window &&
+            metrics->mouse_x >= row.x && metrics->mouse_x <= (row.x + row.w) &&
+            metrics->mouse_y >= row.y && metrics->mouse_y <= (row.y + row.h);
+        r = draw_lcars_text_button(
+            ctx,
+            row,
+            label,
+            hover,
+            (metrics->video_menu_selected == i) ? 1 : 0,
+            ui,
+            &pal,
+            &frame,
+            &txt
+        );
         if (r != VG_OK) {
             return r;
         }
@@ -2086,19 +2114,59 @@ static vg_result draw_controls_menu(vg_context* ctx, float w, float h, const ren
         const vg_rect ra = {table_x, table_y0 - (float)i * row_h, act_w, row_h * 0.72f};
         const vg_rect rk = {ra.x + ra.w + panel.w * 0.02f, ra.y, key_w, ra.h};
         const vg_rect rp = {rk.x + rk.w + panel.w * 0.02f, ra.y, pad_w, ra.h};
-        r = vg_draw_button(ctx, ra, metrics->controls_action_label[i], 12.0f * ui, &frame, &txt, 0);
+        const int hover_a = metrics->mouse_in_window &&
+                            metrics->mouse_x >= ra.x && metrics->mouse_x <= (ra.x + ra.w) &&
+                            metrics->mouse_y >= ra.y && metrics->mouse_y <= (ra.y + ra.h);
+        const int hover_k = metrics->mouse_in_window &&
+                            metrics->mouse_x >= rk.x && metrics->mouse_x <= (rk.x + rk.w) &&
+                            metrics->mouse_y >= rk.y && metrics->mouse_y <= (rk.y + rk.h);
+        const int hover_p = metrics->mouse_in_window &&
+                            metrics->mouse_x >= rp.x && metrics->mouse_x <= (rp.x + rp.w) &&
+                            metrics->mouse_y >= rp.y && metrics->mouse_y <= (rp.y + rp.h);
+        r = draw_lcars_text_button(ctx, ra, metrics->controls_action_label[i], hover_a, 0, ui, &pal, &frame, &txt);
         if (r != VG_OK) return r;
-        r = vg_draw_button(ctx, rk, metrics->controls_key_label[i], 12.0f * ui, &frame, &txt,
-                           (metrics->controls_selected == i && metrics->controls_selected_column == 0) ? 1 : 0);
+        r = draw_lcars_text_button(
+            ctx,
+            rk,
+            metrics->controls_key_label[i],
+            hover_k,
+            (metrics->controls_selected == i && metrics->controls_selected_column == 0) ? 1 : 0,
+            ui,
+            &pal,
+            &frame,
+            &txt
+        );
         if (r != VG_OK) return r;
-        r = vg_draw_button(ctx, rp, metrics->controls_pad_label[i], 12.0f * ui, &frame, &txt,
-                           (metrics->controls_selected == i && metrics->controls_selected_column == 1) ? 1 : 0);
+        r = draw_lcars_text_button(
+            ctx,
+            rp,
+            metrics->controls_pad_label[i],
+            hover_p,
+            (metrics->controls_selected == i && metrics->controls_selected_column == 1) ? 1 : 0,
+            ui,
+            &pal,
+            &frame,
+            &txt
+        );
         if (r != VG_OK) return r;
     }
     {
         const int row = CONTROL_ACTION_COUNT_RENDER;
         const vg_rect rt = {table_x, table_y0 - (float)row * row_h, act_w + panel.w * 0.02f + key_w + panel.w * 0.02f + pad_w, row_h * 0.72f};
-        r = vg_draw_button(ctx, rt, metrics->controls_use_gamepad ? "USE JOYPAD: ON" : "USE JOYPAD: OFF", 12.0f * ui, &frame, &txt, (metrics->controls_selected == row) ? 1 : 0);
+        const int hover_t = metrics->mouse_in_window &&
+                            metrics->mouse_x >= rt.x && metrics->mouse_x <= (rt.x + rt.w) &&
+                            metrics->mouse_y >= rt.y && metrics->mouse_y <= (rt.y + rt.h);
+        r = draw_lcars_text_button(
+            ctx,
+            rt,
+            metrics->controls_use_gamepad ? "USE JOYPAD: ON" : "USE JOYPAD: OFF",
+            hover_t,
+            (metrics->controls_selected == row) ? 1 : 0,
+            ui,
+            &pal,
+            &frame,
+            &txt
+        );
         if (r != VG_OK) return r;
     }
     if (metrics->controls_rebinding_action >= 0) {
