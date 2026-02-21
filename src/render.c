@@ -1301,6 +1301,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
     const int page = metrics->acoustics_page;
     const int combat_page = (page == 1);
     const int equipment_page = (page == 2);
+    const int mixtape_page = (page == 3);
     const int row_count_right = equipment_page ? 8 : (combat_page ? 8 : 6);
     const palette_theme pal = get_palette_theme(metrics->palette_mode);
 
@@ -1323,6 +1324,86 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         .color = (vg_color){pal.haze.r, pal.haze.g, pal.haze.b, 0.35f},
         .blend = VG_BLEND_ALPHA
     };
+
+    if (mixtape_page) {
+        const float v_disp = metrics->acoustics_mixtape_volume_display;
+        const float values[1] = {v_disp};
+        const float value_col_width_px = acoustics_compute_value_col_width(ui, 11.5f * ui, values, 1);
+        const acoustics_ui_layout l = make_acoustics_ui_layout(w, h, value_col_width_px, 1, 1);
+        const vg_rect page_btns[4] = {
+            {l.panel[0].x, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.14f, l.panel[0].h * 0.042f},
+            {l.panel[0].x + l.panel[0].w * 0.16f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.18f, l.panel[0].h * 0.042f},
+            {l.panel[0].x + l.panel[0].w * 0.36f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.24f, l.panel[0].h * 0.042f},
+            {l.panel[0].x + l.panel[0].w * 0.62f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.19f, l.panel[0].h * 0.042f}
+        };
+        vg_ui_slider_item vol_item[1];
+        vol_item[0].label = "MUSIC VOL";
+        vol_item[0].value_01 = metrics->acoustics_mixtape_volume_01;
+        vol_item[0].value_display = v_disp;
+        vol_item[0].selected = (metrics->acoustics_mixtape_selected == 0) ? 1 : 0;
+        const vg_ui_slider_panel_metrics sm = acoustics_scaled_slider_metrics(ui, l.value_col_width_px);
+        vg_ui_slider_panel_desc left = {
+            .rect = l.panel[0],
+            .title_line_0 = "SHIPYARD ACOUSTICS - MIXTAPE",
+            .title_line_1 = "Q/E OR PAGE BUTTONS  F PLAY  G NEXT",
+            .footer_line = NULL,
+            .items = vol_item,
+            .item_count = 1u,
+            .row_height_px = 34.0f * ui,
+            .label_size_px = 11.0f * ui,
+            .value_size_px = 11.5f * ui,
+            .value_text_x_offset_px = 0.0f,
+            .border_style = panel,
+            .text_style = text,
+            .track_style = text,
+            .knob_style = text,
+            .metrics = &sm
+        };
+        vg_result r = vg_ui_draw_slider_panel(ctx, &left);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_fill_rect(ctx, l.panel[1], &trace_panel_fill);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_draw_rect(ctx, l.panel[1], &panel);
+        if (r != VG_OK) {
+            return r;
+        }
+        {
+            const vg_rect prev_btn = {l.panel[1].x + l.panel[1].w * 0.03f, l.button[1].y, l.panel[1].w * 0.18f, l.button[1].h};
+            const vg_rect play_btn = {prev_btn.x + prev_btn.w + l.panel[1].w * 0.03f, l.button[1].y, l.panel[1].w * 0.26f, l.button[1].h};
+            const vg_rect next_btn = {play_btn.x + play_btn.w + l.panel[1].w * 0.03f, l.button[1].y, l.panel[1].w * 0.18f, l.button[1].h};
+            const char* play_label = metrics->acoustics_mixtape_playing ? "PAUSE" : "PLAY";
+            r = vg_draw_button(ctx, prev_btn, "PREV", 11.0f * ui, &panel, &text, 0);
+            if (r != VG_OK) return r;
+            r = vg_draw_button(ctx, play_btn, play_label, 11.0f * ui, &panel, &text, 0);
+            if (r != VG_OK) return r;
+            r = vg_draw_button(ctx, next_btn, "NEXT", 11.0f * ui, &panel, &text, 0);
+            if (r != VG_OK) return r;
+        }
+        {
+            char line0[96];
+            char line1[96];
+            snprintf(line0, sizeof(line0), "TRACK %d / %d",
+                (metrics->acoustics_mixtape_track_count > 0) ? (metrics->acoustics_mixtape_track_index + 1) : 0,
+                metrics->acoustics_mixtape_track_count);
+            snprintf(line1, sizeof(line1), "%s", metrics->acoustics_mixtape_track_name ? metrics->acoustics_mixtape_track_name : "NO MOD TRACKS");
+            r = draw_text_vector_glow(ctx, line0, (vg_vec2){l.panel[1].x + 12.0f * ui, l.panel[1].y + l.panel[1].h * 0.78f},
+                12.0f * ui, 0.8f * ui, &panel, &text);
+            if (r != VG_OK) return r;
+            r = draw_text_vector_glow(ctx, line1, (vg_vec2){l.panel[1].x + 12.0f * ui, l.panel[1].y + l.panel[1].h * 0.68f},
+                11.0f * ui, 0.75f * ui, &panel, &text);
+            if (r != VG_OK) return r;
+        }
+        for (int i = 0; i < 4; ++i) {
+            static const char* page_labels[4] = {"SHIP", "COMBAT", "EQUIPMENT", "MIXTAPE"};
+            r = vg_draw_button(ctx, page_btns[i], page_labels[i], 10.8f * ui, &panel, &text, (page == i) ? 1 : 0);
+            if (r != VG_OK) return r;
+        }
+        return VG_OK;
+    }
 
     vg_ui_slider_item fire_items[8];
     vg_ui_slider_item thr_items[8];
@@ -1374,10 +1455,11 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         combat_page ? ACOUSTICS_COMBAT_SLIDER_COUNT : (equipment_page ? ACOUSTICS_EQUIPMENT_SLIDER_COUNT : ACOUSTICS_SLIDER_COUNT)
     );
     const acoustics_ui_layout l = make_acoustics_ui_layout(w, h, value_col_width_px, 8, row_count_right);
-    const vg_rect page_btns[3] = {
-        {l.panel[0].x, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.15f, l.panel[0].h * 0.042f},
-        {l.panel[0].x + l.panel[0].w * 0.17f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.19f, l.panel[0].h * 0.042f},
-        {l.panel[0].x + l.panel[0].w * 0.38f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.24f, l.panel[0].h * 0.042f}
+    const vg_rect page_btns[4] = {
+        {l.panel[0].x, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.14f, l.panel[0].h * 0.042f},
+        {l.panel[0].x + l.panel[0].w * 0.16f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.18f, l.panel[0].h * 0.042f},
+        {l.panel[0].x + l.panel[0].w * 0.36f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.24f, l.panel[0].h * 0.042f},
+        {l.panel[0].x + l.panel[0].w * 0.62f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.19f, l.panel[0].h * 0.042f}
     };
     const vg_rect fire_rect = l.panel[0];
     const vg_rect thr_rect = l.panel[1];
@@ -1447,8 +1529,8 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         return r;
     }
 
-    for (int i = 0; i < 3; ++i) {
-        static const char* page_labels[3] = {"SHIP", "COMBAT", "EQUIPMENT"};
+    for (int i = 0; i < 4; ++i) {
+        static const char* page_labels[4] = {"SHIP", "COMBAT", "EQUIPMENT", "MIXTAPE"};
         r = vg_draw_button(
             ctx,
             page_btns[i],

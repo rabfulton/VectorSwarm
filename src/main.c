@@ -29,6 +29,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <dirent.h>
 
 #ifndef V_TYPE_HAS_POST_SHADERS
 #define V_TYPE_HAS_POST_SHADERS 0
@@ -36,6 +38,14 @@
 
 #ifndef V_TYPE_HAS_TERRAIN_SHADERS
 #define V_TYPE_HAS_TERRAIN_SHADERS 0
+#endif
+
+#ifndef V_TYPE_HAS_OPENMPT
+#define V_TYPE_HAS_OPENMPT 0
+#endif
+
+#if V_TYPE_HAS_OPENMPT
+#include <libopenmpt/libopenmpt.h>
 #endif
 
 #if V_TYPE_HAS_POST_SHADERS
@@ -65,6 +75,7 @@
 #define GPU_PARTICLE_MAX_INSTANCES MAX_PARTICLES
 #define TERRAIN_ROWS 24
 #define TERRAIN_COLS 70
+#define MAX_MOD_TRACKS 128
 
 enum control_action_id {
     CONTROL_ACTION_UP = 0,
@@ -167,7 +178,8 @@ enum acoustics_page_id {
     ACOUSTICS_PAGE_SYNTH = 0,
     ACOUSTICS_PAGE_COMBAT = 1,
     ACOUSTICS_PAGE_EQUIPMENT = 2,
-    ACOUSTICS_PAGE_COUNT = 3
+    ACOUSTICS_PAGE_MIXTAPE = 3,
+    ACOUSTICS_PAGE_COUNT = 4
 };
 
 typedef struct app {
@@ -300,6 +312,8 @@ typedef struct app {
     float* audio_mix_tmp_b;
     float* audio_mix_tmp_c;
     float* audio_mix_tmp_d;
+    float* audio_mix_tmp_e;
+    float* audio_mix_tmp_f;
     uint32_t audio_mix_tmp_cap;
     float scope_window[ACOUSTICS_SCOPE_SAMPLES];
     float scope_history[ACOUSTICS_SCOPE_HISTORY_SAMPLES];
@@ -324,6 +338,15 @@ typedef struct app {
     combat_sound_params explosion_sound;
     combat_sound_params shield_sound;
     combat_sound_params aux_sound;
+#if V_TYPE_HAS_OPENMPT
+    openmpt_module* mod_module;
+#endif
+    char mod_track_paths[MAX_MOD_TRACKS][PATH_MAX];
+    int mod_track_count;
+    int mod_track_index;
+    int mod_music_playing;
+    float mod_music_volume_01;
+    int acoustics_mixtape_selected;
     uint32_t thruster_test_frames_left;
     uint32_t shield_test_frames_left;
     uint32_t aux_test_frames_left;
@@ -1286,6 +1309,190 @@ static void trigger_aux_test(app* a) {
     atomic_fetch_add_explicit(&a->pending_aux_tests, 1u, memory_order_acq_rel);
 }
 
+static const char* path_basename_const(const char* path) {
+    const char* s = path;
+    const char* p = path;
+    if (!path) {
+        return "";
+    }
+    while (*p) {
+        if (*p == '/' || *p == '\\') {
+            s = p + 1;
+        }
+        ++p;
+    }
+    return s;
+}
+
+static int has_mod_extension(const char* name) {
+    const char* ext = NULL;
+    if (!name) {
+        return 0;
+    }
+    ext = strrchr(name, '.');
+    if (!ext || !ext[1]) {
+        return 0;
+    }
+    ++ext;
+    return strcasecmp(ext, "mod") == 0 ||
+           strcasecmp(ext, "xm") == 0 ||
+           strcasecmp(ext, "s3m") == 0 ||
+           strcasecmp(ext, "it") == 0 ||
+           strcasecmp(ext, "mptm") == 0;
+}
+
+static void discover_mod_tracks(app* a) {
+    static const char* roots[] = {
+        "../assets/mods",
+        "assets/mods"
+    };
+    if (!a) {
+        return;
+    }
+    a->mod_track_count = 0;
+    for (int r = 0; r < (int)(sizeof(roots) / sizeof(roots[0])); ++r) {
+        DIR* d = opendir(roots[r]);
+        if (!d) {
+            continue;
+        }
+        struct dirent* ent = NULL;
+        while ((ent = readdir(d)) != NULL) {
+            char full[PATH_MAX];
+            if (ent->d_name[0] == '.') {
+                continue;
+            }
+            if (!has_mod_extension(ent->d_name)) {
+                continue;
+            }
+            if (a->mod_track_count >= MAX_MOD_TRACKS) {
+                break;
+            }
+            if (snprintf(full, sizeof(full), "%s/%s", roots[r], ent->d_name) >= (int)sizeof(full)) {
+                continue;
+            }
+            snprintf(a->mod_track_paths[a->mod_track_count], sizeof(a->mod_track_paths[a->mod_track_count]), "%s", full);
+            a->mod_track_count += 1;
+        }
+        closedir(d);
+        if (a->mod_track_count > 0) {
+            break;
+        }
+    }
+}
+
+#if V_TYPE_HAS_OPENMPT
+static void mod_close_locked(app* a) {
+    if (a->mod_module) {
+        openmpt_module_destroy(a->mod_module);
+        a->mod_module = NULL;
+    }
+}
+
+static int mod_load_track_locked(app* a, int track_idx, int autoplay) {
+    FILE* f = NULL;
+    uint8_t* bytes = NULL;
+    long sz = 0;
+    size_t rd = 0;
+    int error = 0;
+    const char* error_msg = NULL;
+    openmpt_module* mod = NULL;
+    if (!a || track_idx < 0 || track_idx >= a->mod_track_count) {
+        return 0;
+    }
+    f = fopen(a->mod_track_paths[track_idx], "rb");
+    if (!f) {
+        return 0;
+    }
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return 0;
+    }
+    sz = ftell(f);
+    if (sz <= 0 || fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f);
+        return 0;
+    }
+    bytes = (uint8_t*)malloc((size_t)sz);
+    if (!bytes) {
+        fclose(f);
+        return 0;
+    }
+    rd = fread(bytes, 1u, (size_t)sz, f);
+    fclose(f);
+    if (rd != (size_t)sz) {
+        free(bytes);
+        return 0;
+    }
+    mod = openmpt_module_create_from_memory2(bytes, (size_t)sz, NULL, NULL, NULL, NULL, &error, &error_msg, NULL);
+    free(bytes);
+    if (!mod) {
+        (void)error;
+        (void)error_msg;
+        return 0;
+    }
+    mod_close_locked(a);
+    a->mod_module = mod;
+    a->mod_track_index = track_idx;
+    a->mod_music_playing = autoplay ? 1 : 0;
+    openmpt_module_set_repeat_count(a->mod_module, -1);
+    return 1;
+}
+#endif
+
+static int mod_load_track(app* a, int track_idx, int autoplay) {
+#if V_TYPE_HAS_OPENMPT
+    int ok = 0;
+    if (!a || !a->audio_ready) {
+        return 0;
+    }
+    SDL_LockAudioDevice(a->audio_dev);
+    ok = mod_load_track_locked(a, track_idx, autoplay);
+    SDL_UnlockAudioDevice(a->audio_dev);
+    return ok;
+#else
+    (void)a;
+    (void)track_idx;
+    (void)autoplay;
+    return 0;
+#endif
+}
+
+static void mod_cycle_track(app* a, int dir, int autoplay) {
+    int idx = 0;
+    if (!a || a->mod_track_count <= 0) {
+        return;
+    }
+    idx = a->mod_track_index + dir;
+    while (idx < 0) idx += a->mod_track_count;
+    idx %= a->mod_track_count;
+    (void)mod_load_track(a, idx, autoplay);
+}
+
+static void mod_toggle_playback(app* a) {
+#if V_TYPE_HAS_OPENMPT
+    if (!a || !a->audio_ready) {
+        return;
+    }
+    if (a->mod_track_count <= 0) {
+        return;
+    }
+    if (!a->mod_module) {
+        (void)mod_load_track(a, a->mod_track_index, 1);
+        return;
+    }
+    SDL_LockAudioDevice(a->audio_dev);
+    a->mod_music_playing = !a->mod_music_playing;
+    if (a->mod_music_playing && a->mod_module) {
+        if (openmpt_module_get_position_seconds(a->mod_module) >= openmpt_module_get_duration_seconds(a->mod_module)) {
+            openmpt_module_set_position_seconds(a->mod_module, 0.0);
+        }
+    }
+    SDL_UnlockAudioDevice(a->audio_dev);
+#else
+    (void)a;
+#endif
+}
+
 static void apply_acoustics(app* a);
 static void trigger_fire_test(app* a);
 static void trigger_thruster_test(app* a);
@@ -1441,18 +1648,21 @@ static int handle_acoustics_ui_mouse(app* a, int mouse_x, int mouse_y, int set_v
         display_values,
         display_count
     );
-    const int row_count_right = (a->acoustics_page == ACOUSTICS_PAGE_SYNTH) ? 6 : 8;
-    const acoustics_ui_layout l = make_acoustics_ui_layout(w, h, value_col_width_px, 8, row_count_right);
-    const vg_rect page_btns[3] = {
-        {l.panel[0].x, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.15f, l.panel[0].h * 0.042f},
-        {l.panel[0].x + l.panel[0].w * 0.17f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.19f, l.panel[0].h * 0.042f},
-        {l.panel[0].x + l.panel[0].w * 0.38f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.24f, l.panel[0].h * 0.042f}
+    const int row_count_left = (a->acoustics_page == ACOUSTICS_PAGE_MIXTAPE) ? 1 : 8;
+    const int row_count_right = (a->acoustics_page == ACOUSTICS_PAGE_SYNTH) ? 6 :
+                                (a->acoustics_page == ACOUSTICS_PAGE_MIXTAPE) ? 1 : 8;
+    const acoustics_ui_layout l = make_acoustics_ui_layout(w, h, value_col_width_px, row_count_left, row_count_right);
+    const vg_rect page_btns[4] = {
+        {l.panel[0].x, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.14f, l.panel[0].h * 0.042f},
+        {l.panel[0].x + l.panel[0].w * 0.16f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.18f, l.panel[0].h * 0.042f},
+        {l.panel[0].x + l.panel[0].w * 0.36f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.24f, l.panel[0].h * 0.042f},
+        {l.panel[0].x + l.panel[0].w * 0.62f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.19f, l.panel[0].h * 0.042f}
     };
     acoustics_slot_view sv = acoustics_make_slot_view(a);
     float mx = 0.0f;
     float my = 0.0f;
     map_mouse_to_scene_coords(a, mouse_x, mouse_y, &mx, &my);
-    for (int p = 0; p < 3; ++p) {
+    for (int p = 0; p < 4; ++p) {
         const vg_rect b = page_btns[p];
         if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
             if (set_value) {
@@ -1460,6 +1670,44 @@ static int handle_acoustics_ui_mouse(app* a, int mouse_x, int mouse_y, int set_v
             }
             return 1;
         }
+    }
+    if (a->acoustics_page == ACOUSTICS_PAGE_MIXTAPE) {
+        const vg_rect prev_btn = {
+            l.panel[1].x + l.panel[1].w * 0.03f, l.button[1].y, l.panel[1].w * 0.18f, l.button[1].h
+        };
+        const vg_rect play_btn = {
+            prev_btn.x + prev_btn.w + l.panel[1].w * 0.03f, l.button[1].y, l.panel[1].w * 0.26f, l.button[1].h
+        };
+        const vg_rect next_btn = {
+            play_btn.x + play_btn.w + l.panel[1].w * 0.03f, l.button[1].y, l.panel[1].w * 0.18f, l.button[1].h
+        };
+        if (mx >= prev_btn.x && mx <= prev_btn.x + prev_btn.w && my >= prev_btn.y && my <= prev_btn.y + prev_btn.h) {
+            if (set_value) {
+                mod_cycle_track(a, -1, a->mod_music_playing ? 1 : 0);
+            }
+            return 1;
+        }
+        if (mx >= play_btn.x && mx <= play_btn.x + play_btn.w && my >= play_btn.y && my <= play_btn.y + play_btn.h) {
+            if (set_value) {
+                mod_toggle_playback(a);
+            }
+            return 1;
+        }
+        if (mx >= next_btn.x && mx <= next_btn.x + next_btn.w && my >= next_btn.y && my <= next_btn.y + next_btn.h) {
+            if (set_value) {
+                mod_cycle_track(a, +1, a->mod_music_playing ? 1 : 0);
+            }
+            return 1;
+        }
+        if (mx >= l.slider_x[0] && mx <= l.slider_x[0] + l.slider_w[0] &&
+            my >= l.row_y0[0] && my <= l.row_y0[0] + l.row_h) {
+            a->acoustics_mixtape_selected = 0;
+            if (set_value) {
+                a->mod_music_volume_01 = clampf((mx - l.slider_x[0]) / l.slider_w[0], 0.0f, 1.0f);
+            }
+            return 1;
+        }
+        return 0;
     }
     for (int p = 0; p < 2; ++p) {
         const vg_rect r = l.panel[p];
@@ -1832,6 +2080,28 @@ static void audio_callback(void* userdata, Uint8* stream, int len) {
             a->audio_mix_tmp_d,
             n
         );
+#if V_TYPE_HAS_OPENMPT
+        if (a->mod_module && a->mod_music_playing) {
+            const size_t got = openmpt_module_read_float_stereo(
+                a->mod_module,
+                (int32_t)((a->audio_have.freq > 0) ? a->audio_have.freq : 48000),
+                (size_t)n,
+                a->audio_mix_tmp_e,
+                a->audio_mix_tmp_f
+            );
+            if (got < (size_t)n) {
+                memset(a->audio_mix_tmp_e + got, 0, sizeof(float) * (n - (uint32_t)got));
+                memset(a->audio_mix_tmp_f + got, 0, sizeof(float) * (n - (uint32_t)got));
+            }
+            {
+                const float mod_gain = clampf(a->mod_music_volume_01, 0.0f, 1.0f) * 0.60f;
+                for (uint32_t i = 0; i < n; ++i) {
+                    a->audio_mix_tmp_c[i] += a->audio_mix_tmp_e[i] * mod_gain;
+                    a->audio_mix_tmp_d[i] += a->audio_mix_tmp_f[i] * mod_gain;
+                }
+            }
+        }
+#endif
         {
             const float sr = (float)((a->audio_have.freq > 0) ? a->audio_have.freq : 48000);
             const float lfo_phase0 = ((float)shield_lfo_phase_u16 / 65535.0f) * 6.2831853f;
@@ -2002,15 +2272,22 @@ static void init_teletype_audio(app* a) {
         a->audio_mix_tmp_b = (float*)calloc(a->audio_mix_tmp_cap, sizeof(float));
         a->audio_mix_tmp_c = (float*)calloc(a->audio_mix_tmp_cap, sizeof(float));
         a->audio_mix_tmp_d = (float*)calloc(a->audio_mix_tmp_cap, sizeof(float));
-        if (!a->audio_mix_tmp_a || !a->audio_mix_tmp_b || !a->audio_mix_tmp_c || !a->audio_mix_tmp_d) {
+        a->audio_mix_tmp_e = (float*)calloc(a->audio_mix_tmp_cap, sizeof(float));
+        a->audio_mix_tmp_f = (float*)calloc(a->audio_mix_tmp_cap, sizeof(float));
+        if (!a->audio_mix_tmp_a || !a->audio_mix_tmp_b || !a->audio_mix_tmp_c || !a->audio_mix_tmp_d ||
+            !a->audio_mix_tmp_e || !a->audio_mix_tmp_f) {
             free(a->audio_mix_tmp_a);
             free(a->audio_mix_tmp_b);
             free(a->audio_mix_tmp_c);
             free(a->audio_mix_tmp_d);
+            free(a->audio_mix_tmp_e);
+            free(a->audio_mix_tmp_f);
             a->audio_mix_tmp_a = NULL;
             a->audio_mix_tmp_b = NULL;
             a->audio_mix_tmp_c = NULL;
             a->audio_mix_tmp_d = NULL;
+            a->audio_mix_tmp_e = NULL;
+            a->audio_mix_tmp_f = NULL;
             wtp_instrument_free(&a->weapon_synth);
             wtp_instrument_free(&a->thruster_synth);
             SDL_CloseAudioDevice(a->audio_dev);
@@ -2023,10 +2300,14 @@ static void init_teletype_audio(app* a) {
             free(a->audio_mix_tmp_b);
             free(a->audio_mix_tmp_c);
             free(a->audio_mix_tmp_d);
+            free(a->audio_mix_tmp_e);
+            free(a->audio_mix_tmp_f);
             a->audio_mix_tmp_a = NULL;
             a->audio_mix_tmp_b = NULL;
             a->audio_mix_tmp_c = NULL;
             a->audio_mix_tmp_d = NULL;
+            a->audio_mix_tmp_e = NULL;
+            a->audio_mix_tmp_f = NULL;
             wtp_instrument_free(&a->weapon_synth);
             wtp_instrument_free(&a->thruster_synth);
             SDL_CloseAudioDevice(a->audio_dev);
@@ -2040,10 +2321,14 @@ static void init_teletype_audio(app* a) {
             free(a->audio_mix_tmp_b);
             free(a->audio_mix_tmp_c);
             free(a->audio_mix_tmp_d);
+            free(a->audio_mix_tmp_e);
+            free(a->audio_mix_tmp_f);
             a->audio_mix_tmp_a = NULL;
             a->audio_mix_tmp_b = NULL;
             a->audio_mix_tmp_c = NULL;
             a->audio_mix_tmp_d = NULL;
+            a->audio_mix_tmp_e = NULL;
+            a->audio_mix_tmp_f = NULL;
             wtp_instrument_free(&a->weapon_synth);
             wtp_instrument_free(&a->thruster_synth);
             SDL_CloseAudioDevice(a->audio_dev);
@@ -2079,6 +2364,12 @@ static void init_teletype_audio(app* a) {
         atomic_store_explicit(&a->audio_spatial_read, 0u, memory_order_release);
         atomic_store_explicit(&a->audio_spatial_write, 0u, memory_order_release);
         memset(a->combat_voices, 0, sizeof(a->combat_voices));
+#if V_TYPE_HAS_OPENMPT
+        a->mod_module = NULL;
+#endif
+        a->mod_music_playing = 0;
+        a->mod_track_count = 0;
+        a->mod_track_index = 0;
         SDL_PauseAudioDevice(a->audio_dev, 0);
         a->audio_ready = 1;
     } else {
@@ -2838,6 +3129,12 @@ static void cleanup(app* a) {
     }
     if (a->audio_dev != 0) {
         SDL_PauseAudioDevice(a->audio_dev, 1);
+#if V_TYPE_HAS_OPENMPT
+        if (a->mod_module) {
+            openmpt_module_destroy(a->mod_module);
+            a->mod_module = NULL;
+        }
+#endif
         wtp_ringbuffer_free(&a->beep_rb);
         wtp_ringbuffer_free(&a->scope_rb);
         wtp_instrument_free(&a->weapon_synth);
@@ -2846,10 +3143,14 @@ static void cleanup(app* a) {
         free(a->audio_mix_tmp_b);
         free(a->audio_mix_tmp_c);
         free(a->audio_mix_tmp_d);
+        free(a->audio_mix_tmp_e);
+        free(a->audio_mix_tmp_f);
         a->audio_mix_tmp_a = NULL;
         a->audio_mix_tmp_b = NULL;
         a->audio_mix_tmp_c = NULL;
         a->audio_mix_tmp_d = NULL;
+        a->audio_mix_tmp_e = NULL;
+        a->audio_mix_tmp_f = NULL;
         SDL_CloseAudioDevice(a->audio_dev);
         a->audio_dev = 0;
     }
@@ -5129,6 +5430,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .acoustics_page = a->acoustics_page,
         .acoustics_combat_selected = a->acoustics_combat_selected,
         .acoustics_equipment_selected = a->acoustics_equipment_selected,
+        .acoustics_mixtape_selected = a->acoustics_mixtape_selected,
         .acoustics_fire_slot_selected = a->acoustics_fire_slot_selected,
         .acoustics_thr_slot_selected = a->acoustics_thr_slot_selected,
         .planetarium_system = app_planetarium_system(a),
@@ -5237,6 +5539,16 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
     for (int i = 0; i < ACOUST_EQUIP_SLIDER_COUNT; ++i) {
         metrics.acoustics_equipment_value_01[i] = a->acoustics_equipment_value_01[i];
         metrics.acoustics_equipment_display[i] = acoustics_equipment_value_to_ui_display(i, a->acoustics_equipment_value_01[i]);
+    }
+    metrics.acoustics_mixtape_volume_01 = a->mod_music_volume_01;
+    metrics.acoustics_mixtape_volume_display = a->mod_music_volume_01;
+    metrics.acoustics_mixtape_track_index = a->mod_track_index;
+    metrics.acoustics_mixtape_track_count = a->mod_track_count;
+    metrics.acoustics_mixtape_playing = a->mod_music_playing;
+    if (a->mod_track_count > 0 && a->mod_track_index >= 0 && a->mod_track_index < a->mod_track_count) {
+        metrics.acoustics_mixtape_track_name = path_basename_const(a->mod_track_paths[a->mod_track_index]);
+    } else {
+        metrics.acoustics_mixtape_track_name = "NO MOD TRACKS";
     }
     for (int i = 0; i < ACOUSTICS_SCOPE_SAMPLES; ++i) {
         metrics.acoustics_scope[i] = a->scope_window[i];
@@ -5517,6 +5829,12 @@ int main(void) {
     }
     srand((unsigned int)SDL_GetTicks());
     init_teletype_audio(&a);
+    a.mod_music_volume_01 = 0.65f;
+    a.acoustics_mixtape_selected = 0;
+    discover_mod_tracks(&a);
+    if (a.audio_ready && a.mod_track_count > 0) {
+        (void)mod_load_track(&a, 0, 1);
+    }
     snprintf(a.acoustics_slots_path, sizeof(a.acoustics_slots_path), "%s", resolve_acoustics_slots_path());
     {
         acoustics_slot_view sv = acoustics_make_slot_view(&a);
@@ -5761,9 +6079,12 @@ int main(void) {
                         } else if (a.acoustics_page == ACOUSTICS_PAGE_COMBAT) {
                             acoustics_capture_current_to_selected_combat_slot_view(&sv, 1);
                             acoustics_capture_current_to_selected_combat_slot_view(&sv, 0);
-                        } else {
+                        } else if (a.acoustics_page == ACOUSTICS_PAGE_EQUIPMENT) {
                             acoustics_capture_current_to_selected_equipment_slot_view(&sv, 1);
                             acoustics_capture_current_to_selected_equipment_slot_view(&sv, 0);
+                        } else {
+                            set_tty_message(&a, "mixtape settings are live");
+                            continue;
                         }
                         if (acoustics_save_slots_view(&sv, a.acoustics_slots_path)) {
                             set_tty_message(&a, "acoustics slots saved");
@@ -5777,6 +6098,8 @@ int main(void) {
                             trigger_enemy_fire_test(&a);
                         } else if (a.acoustics_page == ACOUSTICS_PAGE_EQUIPMENT) {
                             trigger_shield_test(&a);
+                        } else if (a.acoustics_page == ACOUSTICS_PAGE_MIXTAPE) {
+                            mod_toggle_playback(&a);
                         } else {
                             trigger_fire_test(&a);
                         }
@@ -5789,6 +6112,8 @@ int main(void) {
                         trigger_explosion_test(&a);
                     } else if (a.acoustics_page == ACOUSTICS_PAGE_EQUIPMENT) {
                         trigger_aux_test(&a);
+                    } else if (a.acoustics_page == ACOUSTICS_PAGE_MIXTAPE) {
+                        mod_cycle_track(&a, +1, a.mod_music_playing ? 1 : 0);
                     } else {
                         trigger_thruster_test(&a);
                     }
@@ -5873,6 +6198,8 @@ int main(void) {
                     } else if (a.acoustics_page == ACOUSTICS_PAGE_EQUIPMENT) {
                         a.acoustics_equipment_selected =
                             (a.acoustics_equipment_selected + ACOUST_EQUIP_SLIDER_COUNT - 1) % ACOUST_EQUIP_SLIDER_COUNT;
+                    } else if (a.acoustics_page == ACOUSTICS_PAGE_MIXTAPE) {
+                        a.acoustics_mixtape_selected = 0;
                     } else {
                         a.acoustics_selected = (a.acoustics_selected + ACOUSTICS_SLIDER_COUNT - 1) % ACOUSTICS_SLIDER_COUNT;
                     }
@@ -5881,6 +6208,8 @@ int main(void) {
                         a.acoustics_combat_selected = (a.acoustics_combat_selected + 1) % ACOUST_COMBAT_SLIDER_COUNT;
                     } else if (a.acoustics_page == ACOUSTICS_PAGE_EQUIPMENT) {
                         a.acoustics_equipment_selected = (a.acoustics_equipment_selected + 1) % ACOUST_EQUIP_SLIDER_COUNT;
+                    } else if (a.acoustics_page == ACOUSTICS_PAGE_MIXTAPE) {
+                        a.acoustics_mixtape_selected = 0;
                     } else {
                         a.acoustics_selected = (a.acoustics_selected + 1) % ACOUSTICS_SLIDER_COUNT;
                     }
@@ -5890,6 +6219,8 @@ int main(void) {
                         v = &a.acoustics_combat_value_01[a.acoustics_combat_selected];
                     } else if (a.acoustics_page == ACOUSTICS_PAGE_EQUIPMENT) {
                         v = &a.acoustics_equipment_value_01[a.acoustics_equipment_selected];
+                    } else if (a.acoustics_page == ACOUSTICS_PAGE_MIXTAPE) {
+                        v = &a.mod_music_volume_01;
                     } else {
                         v = &a.acoustics_value_01[a.acoustics_selected];
                     }
@@ -5901,6 +6232,8 @@ int main(void) {
                         v = &a.acoustics_combat_value_01[a.acoustics_combat_selected];
                     } else if (a.acoustics_page == ACOUSTICS_PAGE_EQUIPMENT) {
                         v = &a.acoustics_equipment_value_01[a.acoustics_equipment_selected];
+                    } else if (a.acoustics_page == ACOUSTICS_PAGE_MIXTAPE) {
+                        v = &a.mod_music_volume_01;
                     } else {
                         v = &a.acoustics_value_01[a.acoustics_selected];
                     }
