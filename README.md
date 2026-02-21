@@ -42,5 +42,5 @@ This game is still in development. You can use the arrow keys and spacebar/left 
 ## AMA with Commander Nick
 ### What are the green squiggly lines at the bottom of the screen?
 Space hills. Anymore dumb questions...
-### Is there any truth to the rumours that this game is a recruitment tool for an intergalatic spaceforce?
+### Is there any truth to the rumours that this game is a recruitment tool for an intergalactic spaceforce?
 I can neither confirm nor deny that.
