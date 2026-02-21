@@ -11,11 +11,12 @@ VectorSwarm is an in-development side-scrolling vector space shooter written in 
 ## Features
 
 - Vivid monochromatic graphics with different phospher choices!
-- Multiple level styles, including `Defender`, `Enemy Radar`, `Event Horizon` and who could forget `High Plains Drifter`
-- Momentum-based 2D ship control (horizontal + vertical thrust with inertia) and elastic camera tracking
+- Pointless missions
+- Momentum-based 2D ship control
 - Your very own shipyard to tune your craft to perfection
 - Procedural enemy waves with formation, swarm, and kamikaze behaviors
-- Teletype wave announcements, in-game synth-driven weapon/thruster sound design, and acoustics tuning UI
+- Teletype wave announcements
+- In-game synth-driven sound design and acoustics tuning UI
 
 ## Install
 
@@ -34,8 +35,12 @@ Run:
 ./build/VectorSwarm
 ```
 
-This game is still in development. You can use the arrow keys and spacebar to control the ship. `n` will load the next level. The number keys `1` through `5` will access various settings screens and `l` will open the level editor. Expect new releases often.
+## Usage
+ 
+This game is still in development. You can use the arrow keys and spacebar/left control to pilot the ship. `n` will load the next level. The number keys `1` through `5` will access various settings screens and `l` will open the level editor. Expect new releases often.
 
 ## AMA with Commander Nick
 ### What are the green squiggly lines at the bottom of the screen?
 Space hills. Anymore dumb questions...
+### Is there any truth to the rumours that this game is a recruitment tool for an intergalatic spaceforce?
+I can neither confirm nor deny that.

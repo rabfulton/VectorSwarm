@@ -1,4 +1,5 @@
 #include "enemy.h"
+#include "death_teletype_messages.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -203,6 +204,17 @@ static void apply_player_hit(game_state* g, float impact_x, float impact_y, floa
     g->lives -= 1;
     if (g->lives < 0) {
         g->lives = 0;
+    }
+    if (g->lives == 0) {
+        const size_t n = death_teletype_message_count();
+        if (n > 0) {
+            const size_t idx = (size_t)(rand() % (int)n);
+            const char* msg = death_teletype_message_at(idx);
+            if (msg && msg[0] != '\0') {
+                g->wave_announce_pending = 1;
+                snprintf(g->wave_announce_text, sizeof(g->wave_announce_text), "%s", msg);
+            }
+        }
     }
 }
 
