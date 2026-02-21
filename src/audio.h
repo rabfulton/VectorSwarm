@@ -197,7 +197,8 @@ void audio_spawn_combat_voice(
     uint32_t* rng_state,
     const audio_spatial_event* ev,
     const combat_sound_params* enemy_fire_sound,
-    const combat_sound_params* explosion_sound
+    const combat_sound_params* explosion_sound,
+    const combat_sound_params* emp_sound
 );
 
 void audio_render_combat_voices(

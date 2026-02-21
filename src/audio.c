@@ -172,8 +172,9 @@ float acoustics_equipment_value_to_display(int id, float t01) {
         case ACOUST_EQUIP_AUX_LEVEL:
             return lerpf(0.02f, 0.90f, t);
         case ACOUST_EQUIP_SHIELD_PITCH:
-        case ACOUST_EQUIP_AUX_PITCH:
             return lerpf(30.0f, 240.0f, t);
+        case ACOUST_EQUIP_AUX_PITCH:
+            return lerpf(30.0f, 1000.0f, t);
         case ACOUST_EQUIP_SHIELD_ATTACK:
         case ACOUST_EQUIP_AUX_ATTACK:
             return lerpf(1.0f, 220.0f, t);
@@ -899,9 +900,10 @@ void audio_spawn_combat_voice(
     uint32_t* rng_state,
     const audio_spatial_event* ev,
     const combat_sound_params* enemy_fire_sound,
-    const combat_sound_params* explosion_sound
+    const combat_sound_params* explosion_sound,
+    const combat_sound_params* emp_sound
 ) {
-    if (!voices || voice_count <= 0 || !rng_state || !ev || !enemy_fire_sound || !explosion_sound) {
+    if (!voices || voice_count <= 0 || !rng_state || !ev || !enemy_fire_sound || !explosion_sound || !emp_sound) {
         return;
     }
 
@@ -919,6 +921,9 @@ void audio_spawn_combat_voice(
     } else if (type == GAME_AUDIO_EVENT_EXPLOSION) {
         p = explosion_sound;
         limit = 10;
+    } else if (type == GAME_AUDIO_EVENT_EMP) {
+        p = emp_sound;
+        limit = 6;
     } else {
         return;
     }
@@ -960,7 +965,7 @@ void audio_spawn_combat_voice(
 
     audio_combat_voice* v = &voices[free_i];
     const float jitter = (audio_rand01_from_state(rng_state) - 0.5f) *
-                         ((type == GAME_AUDIO_EVENT_EXPLOSION) ? 0.18f : 0.08f);
+                         ((type == GAME_AUDIO_EVENT_EXPLOSION || type == GAME_AUDIO_EVENT_EMP) ? 0.18f : 0.08f);
     v->active = 1;
     v->type = (uint8_t)type;
     v->waveform = (uint8_t)clampf(floorf(p->waveform + 0.5f), 0.0f, 4.0f);
@@ -971,8 +976,8 @@ void audio_spawn_combat_voice(
     v->attack_s = fmaxf(0.0001f, p->attack_ms * 0.001f);
     v->decay_s = fmaxf(0.005f, p->decay_ms * 0.001f);
     v->noise_mix = clampf(p->noise_mix, 0.0f, 1.0f);
-    v->fm_depth_hz = (type == GAME_AUDIO_EVENT_EXPLOSION) ? fmaxf(0.0f, p->fm_depth_hz) : 0.0f;
-    v->fm_rate_hz = (type == GAME_AUDIO_EVENT_EXPLOSION) ? fmaxf(0.0f, p->fm_rate_hz) : 0.0f;
+    v->fm_depth_hz = (type == GAME_AUDIO_EVENT_EXPLOSION || type == GAME_AUDIO_EVENT_EMP) ? fmaxf(0.0f, p->fm_depth_hz) : 0.0f;
+    v->fm_rate_hz = (type == GAME_AUDIO_EVENT_EXPLOSION || type == GAME_AUDIO_EVENT_EMP) ? fmaxf(0.0f, p->fm_rate_hz) : 0.0f;
     v->fm_phase = audio_rand01_from_state(rng_state) * 6.28318530718f;
     v->cutoff_hz = fmaxf(40.0f, p->cutoff_hz);
     v->resonance = clampf(p->resonance, 0.0f, 0.99f);
@@ -1019,7 +1024,7 @@ void audio_render_combat_voices(
             }
 
             float freq = v->freq_hz;
-            if (v->type == GAME_AUDIO_EVENT_EXPLOSION) {
+            if (v->type == GAME_AUDIO_EVENT_EXPLOSION || v->type == GAME_AUDIO_EVENT_EMP) {
                 const float down = clampf((t / (v->decay_s + v->attack_s + 0.001f)), 0.0f, 1.0f);
                 freq *= (1.0f - 0.55f * down);
                 if (v->fm_depth_hz > 0.0f) {

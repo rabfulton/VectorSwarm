@@ -588,7 +588,7 @@ static void trigger_emp_blast(game_state* g) {
         g->emp_effect_y = g->player.b.y;
         g->emp_primary_radius = primary_radius;
         g->emp_blast_radius = blast_radius;
-        game_push_audio_event(g, GAME_AUDIO_EVENT_EXPLOSION, g->emp_effect_x, g->emp_effect_y);
+        game_push_audio_event(g, GAME_AUDIO_EVENT_EMP, g->emp_effect_x, g->emp_effect_y);
     }
 }
 

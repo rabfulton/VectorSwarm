@@ -173,7 +173,8 @@ typedef struct searchlight {
 typedef enum game_audio_event_type {
     GAME_AUDIO_EVENT_ENEMY_FIRE = 1,
     GAME_AUDIO_EVENT_EXPLOSION = 2,
-    GAME_AUDIO_EVENT_SEARCHLIGHT_FIRE = 3
+    GAME_AUDIO_EVENT_SEARCHLIGHT_FIRE = 3,
+    GAME_AUDIO_EVENT_EMP = 4
 } game_audio_event_type;
 
 typedef struct game_audio_event {

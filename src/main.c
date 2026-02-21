@@ -1302,11 +1302,11 @@ static void trigger_shield_test(app* a) {
     atomic_fetch_add_explicit(&a->pending_shield_tests, 1u, memory_order_acq_rel);
 }
 
-static void trigger_aux_test(app* a) {
+static void trigger_emp_test(app* a) {
     if (!a || !a->audio_ready) {
         return;
     }
-    atomic_fetch_add_explicit(&a->pending_aux_tests, 1u, memory_order_acq_rel);
+    (void)audio_spatial_enqueue(a, (uint8_t)GAME_AUDIO_EVENT_EMP, 0.0f, 1.0f);
 }
 
 static const char* path_basename_const(const char* path) {
@@ -1499,7 +1499,7 @@ static void trigger_thruster_test(app* a);
 static void trigger_enemy_fire_test(app* a);
 static void trigger_explosion_test(app* a);
 static void trigger_shield_test(app* a);
-static void trigger_aux_test(app* a);
+static void trigger_emp_test(app* a);
 static int create_swapchain(app* a);
 static int create_render_passes(app* a);
 static int create_offscreen_targets(app* a);
@@ -1728,7 +1728,7 @@ static int handle_acoustics_ui_mouse(app* a, int mouse_x, int mouse_y, int set_v
                         if (p == 0) {
                             trigger_shield_test(a);
                         } else {
-                            trigger_aux_test(a);
+                            trigger_emp_test(a);
                         }
                     } else {
                         if (p == 0) {
@@ -2032,7 +2032,7 @@ static void audio_callback(void* userdata, Uint8* stream, int len) {
         &ev
     )) {
         audio_spawn_combat_voice(
-            a->combat_voices, AUDIO_COMBAT_VOICE_COUNT, &a->audio_rng, &ev, &a->enemy_fire_sound, &a->explosion_sound
+            a->combat_voices, AUDIO_COMBAT_VOICE_COUNT, &a->audio_rng, &ev, &a->enemy_fire_sound, &a->explosion_sound, &a->aux_sound
         );
     }
     for (uint32_t i = 0; i < enemy_fire_tests; ++i) {
@@ -2040,7 +2040,7 @@ static void audio_callback(void* userdata, Uint8* stream, int len) {
         ev.pan = 0.0f;
         ev.gain = 1.0f;
         audio_spawn_combat_voice(
-            a->combat_voices, AUDIO_COMBAT_VOICE_COUNT, &a->audio_rng, &ev, &a->enemy_fire_sound, &a->explosion_sound
+            a->combat_voices, AUDIO_COMBAT_VOICE_COUNT, &a->audio_rng, &ev, &a->enemy_fire_sound, &a->explosion_sound, &a->aux_sound
         );
     }
     for (uint32_t i = 0; i < explosion_tests; ++i) {
@@ -2048,7 +2048,7 @@ static void audio_callback(void* userdata, Uint8* stream, int len) {
         ev.pan = 0.0f;
         ev.gain = 1.0f;
         audio_spawn_combat_voice(
-            a->combat_voices, AUDIO_COMBAT_VOICE_COUNT, &a->audio_rng, &ev, &a->enemy_fire_sound, &a->explosion_sound
+            a->combat_voices, AUDIO_COMBAT_VOICE_COUNT, &a->audio_rng, &ev, &a->enemy_fire_sound, &a->explosion_sound, &a->aux_sound
         );
     }
 
@@ -6111,7 +6111,7 @@ int main(void) {
                     if (a.acoustics_page == ACOUSTICS_PAGE_COMBAT) {
                         trigger_explosion_test(&a);
                     } else if (a.acoustics_page == ACOUSTICS_PAGE_EQUIPMENT) {
-                        trigger_aux_test(&a);
+                        trigger_emp_test(&a);
                     } else if (a.acoustics_page == ACOUSTICS_PAGE_MIXTAPE) {
                         mod_cycle_track(&a, +1, a.mod_music_playing ? 1 : 0);
                     } else {

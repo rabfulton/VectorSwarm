@@ -1488,7 +1488,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
     };
     vg_ui_slider_panel_desc thr = fire;
     thr.rect = thr_rect;
-    thr.title_line_0 = equipment_page ? "SHIPYARD ACOUSTICS - AUX" : (combat_page ? "SHIPYARD ACOUSTICS - EXPLOSION" : "SHIPYARD ACOUSTICS - THRUST");
+    thr.title_line_0 = equipment_page ? "SHIPYARD ACOUSTICS - EMP" : (combat_page ? "SHIPYARD ACOUSTICS - EXPLOSION" : "SHIPYARD ACOUSTICS - THRUST");
     thr.items = thr_items;
     thr.item_count = (size_t)row_count_right;
 
@@ -1547,7 +1547,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
 
     {
         const char* fire_test = equipment_page ? "TEST SHIELD" : (combat_page ? "TEST ENEMY" : "TEST FIRE");
-        const char* thr_test = equipment_page ? "TEST AUX" : (combat_page ? "TEST BOOM" : "TEST THRUST");
+        const char* thr_test = equipment_page ? "TEST EMP" : (combat_page ? "TEST BOOM" : "TEST THRUST");
         r = vg_draw_button(ctx, fire_btn, fire_test, 11.5f * ui, &panel, &text, 0);
         if (r != VG_OK) {
             return r;
@@ -1681,7 +1681,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         }
         r = draw_text_vector_glow(
             ctx,
-            equipment_page ? "AUX PREVIEW" : (combat_page ? "EXPLOSION PREVIEW" : "OSCILLOSCOPE"),
+            equipment_page ? "EMP PREVIEW" : (combat_page ? "EXPLOSION PREVIEW" : "OSCILLOSCOPE"),
             (vg_vec2){thr_display.x + 8.0f * ui, thr_display.y + thr_display.h - 16.0f * ui},
             10.5f * ui,
             0.7f * ui,
