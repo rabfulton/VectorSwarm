@@ -196,7 +196,7 @@ static void emit_explosion(game_state* g, float x, float y, float bias_vx, float
 }
 
 static void apply_player_hit(game_state* g, float impact_x, float impact_y, float impact_vx, float impact_vy, float su) {
-    if (!g || g->lives <= 0) {
+    if (!g || g->lives <= 0 || g->shield_active) {
         return;
     }
     emit_explosion(g, impact_x, impact_y, impact_vx, impact_vy, 48, su);
@@ -204,6 +204,48 @@ static void apply_player_hit(game_state* g, float impact_x, float impact_y, floa
     if (g->lives < 0) {
         g->lives = 0;
     }
+}
+
+static int shield_deflect_body(
+    const game_state* g,
+    body* b,
+    float obj_radius,
+    float impulse,
+    int uses_cylinder,
+    float period
+) {
+    float dx, dy, dist_sq_v, hit_r, dist, nx, ny, vn;
+    if (!g || !b || !g->shield_active) {
+        return 0;
+    }
+    dx = uses_cylinder ? wrap_delta(b->x, g->player.b.x, period) : (b->x - g->player.b.x);
+    dy = b->y - g->player.b.y;
+    hit_r = fmaxf(g->shield_radius, 1.0f) + fmaxf(obj_radius, 0.0f);
+    dist_sq_v = dx * dx + dy * dy;
+    if (dist_sq_v > hit_r * hit_r) {
+        return 0;
+    }
+    dist = sqrtf(fmaxf(dist_sq_v, 1.0e-8f));
+    nx = (dist > 1.0e-4f) ? (dx / dist) : 1.0f;
+    ny = (dist > 1.0e-4f) ? (dy / dist) : 0.0f;
+
+    /* Push outside the shield surface immediately so collisions feel snappy. */
+    if (uses_cylinder) {
+        b->x = g->player.b.x + nx * (hit_r + 2.0f);
+        b->y = g->player.b.y + ny * (hit_r + 2.0f);
+    } else {
+        b->x = g->player.b.x + nx * (hit_r + 2.0f);
+        b->y = g->player.b.y + ny * (hit_r + 2.0f);
+    }
+
+    vn = b->vx * nx + b->vy * ny;
+    if (vn < 0.0f) {
+        b->vx -= 2.0f * vn * nx;
+        b->vy -= 2.0f * vn * ny;
+    }
+    b->vx += nx * impulse;
+    b->vy += ny * impulse;
+    return 1;
 }
 
 static void emit_enemy_debris(game_state* g, const enemy* e, float impact_vx, float impact_vy) {
@@ -1410,8 +1452,12 @@ void enemy_update_system(
             }
         }
         if (g->lives > 0) {
+            if (g->shield_active) {
+                (void)shield_deflect_body(g, &e->b, e->radius, 580.0f * su, uses_cylinder, period);
+            }
             const float hit_r = e->radius + 14.0f * su;
-            if (!player_hit_this_frame &&
+            if (!g->shield_active &&
+                !player_hit_this_frame &&
                 dist_sq_level(uses_cylinder, period, e->b.x, e->b.y, g->player.b.x, g->player.b.y) <= hit_r * hit_r) {
                 emit_enemy_debris(g, e, g->player.b.vx, g->player.b.vy);
                 e->active = 0;
@@ -1440,6 +1486,12 @@ void enemy_update_system(
             }
         } else if (fabsf(b->b.x - g->camera_x) > g->world_w * 1.35f) {
             b->active = 0;
+            continue;
+        }
+        if (g->shield_active) {
+            if (shield_deflect_body(g, &b->b, b->radius + 2.0f * su, 760.0f * su, uses_cylinder, period)) {
+                b->ttl_s = fmaxf(b->ttl_s, 0.06f);
+            }
             continue;
         }
         if (g->lives > 0 && !player_hit_this_frame) {

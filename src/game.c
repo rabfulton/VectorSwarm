@@ -375,6 +375,8 @@ static int set_level_index(game_state* g, int index) {
     g->camera_vx = 0.0f;
     g->camera_x = g->player.b.x;
     g->camera_y = g->world_h * 0.5f;
+    g->shield_radius = 52.0f * su;
+    g->shield_active = 0;
     apply_level_runtime_config(g);
     return 1;
 }
@@ -583,10 +585,12 @@ void game_init(game_state* g, float world_w, float world_h) {
     g->lives = 3;
     g->weapon_level = 1;
     g->alt_weapon_equipped = PLAYER_ALT_WEAPON_SHIELD;
-    g->alt_weapon_ammo[PLAYER_ALT_WEAPON_SHIELD] = 3;
+    g->alt_weapon_ammo[PLAYER_ALT_WEAPON_SHIELD] = 20;
     g->alt_weapon_ammo[PLAYER_ALT_WEAPON_MISSILE] = 8;
     g->alt_weapon_ammo[PLAYER_ALT_WEAPON_EMP] = 5;
     g->alt_weapon_ammo[PLAYER_ALT_WEAPON_REAR_GUN] = 180;
+    g->shield_time_remaining_s = 20.0f;
+    g->shield_active = 0;
     const float su = gameplay_ui_scale(g);
     g->player.b.x = 170.0f * su;
     g->player.b.y = world_h * 0.5f;
@@ -594,6 +598,7 @@ void game_init(game_state* g, float world_w, float world_h) {
     g->player.drag = 4.1f;
     g->player.max_speed = 760.0f * su;
     g->player.facing_x = 1.0f;
+    g->shield_radius = 52.0f * su;
     g->camera_x = g->player.b.x;
     g->camera_y = world_h * 0.5f;
     g->level_style = LEVEL_STYLE_DEFENDER;
@@ -635,6 +640,7 @@ void game_set_world_size(game_state* g, float world_w, float world_h) {
         g->player.b.y = g->world_h;
     }
     g->camera_y = g->world_h * 0.5f;
+    g->shield_radius = 52.0f * gameplay_ui_scale(g);
     apply_level_runtime_config(g);
 }
 
@@ -733,12 +739,22 @@ static int game_update_player(game_state* g, float dt, const game_input* in, flo
 }
 
 static void game_update_player_weapons(game_state* g, float dt, const game_input* in) {
+    const int shield_equipped = (g->alt_weapon_equipped == PLAYER_ALT_WEAPON_SHIELD);
+    const int shield_held = shield_equipped && in->secondary_fire && (g->shield_time_remaining_s > 0.0f);
     emit_thruster(g, dt);
     if (g->fire_cooldown_s > 0.0f) {
         g->fire_cooldown_s -= dt;
     }
     if (g->secondary_fire_cooldown_s > 0.0f) {
         g->secondary_fire_cooldown_s -= dt;
+    }
+    g->shield_active = shield_held ? 1 : 0;
+    if (g->shield_active) {
+        g->shield_time_remaining_s -= dt;
+        if (g->shield_time_remaining_s <= 0.0f) {
+            g->shield_time_remaining_s = 0.0f;
+            g->shield_active = 0;
+        }
     }
     if (g->score >= 3000) {
         g->weapon_level = 3;
@@ -748,12 +764,15 @@ static void game_update_player_weapons(game_state* g, float dt, const game_input
         g->weapon_level = 1;
     }
     g->weapon_heat = clampf(g->weapon_heat - dt * 0.58f, 0.0f, 1.0f);
-    if (g->lives > 0 && in->fire && g->fire_cooldown_s <= 0.0f) {
+    if (g->lives > 0 && !g->shield_active && in->fire && g->fire_cooldown_s <= 0.0f) {
         spawn_bullet(g);
         g->fire_cooldown_s = 0.095f;
         g->weapon_heat = clampf(g->weapon_heat + 0.09f, 0.0f, 1.0f);
     }
-    if (g->lives > 0 && in->secondary_fire && g->secondary_fire_cooldown_s <= 0.0f) {
+    if (g->lives > 0 &&
+        !shield_equipped &&
+        in->secondary_fire &&
+        g->secondary_fire_cooldown_s <= 0.0f) {
         spawn_secondary_bullet(g);
     }
 }
@@ -1023,6 +1042,9 @@ void game_set_alt_weapon(game_state* g, int weapon_id) {
         return;
     }
     g->alt_weapon_equipped = clampi(weapon_id, 0, PLAYER_ALT_WEAPON_COUNT - 1);
+    if (g->alt_weapon_equipped != PLAYER_ALT_WEAPON_SHIELD) {
+        g->shield_active = 0;
+    }
 }
 
 int game_get_alt_weapon(const game_state* g) {
@@ -1037,5 +1059,8 @@ int game_get_alt_weapon_ammo(const game_state* g, int weapon_id) {
         return 0;
     }
     weapon_id = clampi(weapon_id, 0, PLAYER_ALT_WEAPON_COUNT - 1);
+    if (weapon_id == PLAYER_ALT_WEAPON_SHIELD) {
+        return (int)ceilf(fmaxf(g->shield_time_remaining_s, 0.0f));
+    }
     return g->alt_weapon_ammo[weapon_id];
 }

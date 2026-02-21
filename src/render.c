@@ -1889,7 +1889,7 @@ static vg_result draw_shipyard_menu(vg_context* ctx, float w, float h, const ren
                 r = draw_text_vector_glow(
                     ctx,
                     ammo,
-                    (vg_vec2){d.x + d.w * 0.05f, d.y + d.h * 0.84f},
+                    (vg_vec2){d.x + d.w * 0.05f, d.y + d.h * 0.22f},
                     10.2f * ui,
                     0.78f * ui,
                     &frame,
@@ -4464,6 +4464,51 @@ static vg_result draw_player_ship(
     return draw_ship_thruster(ctx, p, thruster_fill);
 }
 
+static vg_result draw_player_shield(
+    vg_context* ctx,
+    float x,
+    float y,
+    float base_radius,
+    float t_s,
+    const vg_fill_style* glow_fill,
+    const vg_stroke_style* ring_style
+) {
+    const float pulse = 0.5f + 0.5f * sinf(t_s * 8.6f);
+    const float rr = base_radius * (0.97f + pulse * 0.08f);
+    vg_fill_style f0 = *glow_fill;
+    vg_fill_style f1 = *glow_fill;
+    vg_stroke_style rs = *ring_style;
+
+    f0.intensity *= 0.22f + pulse * 0.12f;
+    f1.intensity *= 0.30f + pulse * 0.12f;
+    rs.intensity *= 0.82f + pulse * 0.36f;
+
+    vg_result r = vg_fill_circle(ctx, (vg_vec2){x, y}, rr * 1.20f, &f0, 36);
+    if (r != VG_OK) {
+        return r;
+    }
+    r = vg_fill_circle(ctx, (vg_vec2){x, y}, rr * 0.96f, &f1, 30);
+    if (r != VG_OK) {
+        return r;
+    }
+    return vg_draw_polyline(
+        ctx,
+        (vg_vec2[]){
+            {x + rr, y},
+            {x + rr * 0.707f, y + rr * 0.707f},
+            {x, y + rr},
+            {x - rr * 0.707f, y + rr * 0.707f},
+            {x - rr, y},
+            {x - rr * 0.707f, y - rr * 0.707f},
+            {x, y - rr},
+            {x + rr * 0.707f, y - rr * 0.707f}
+        },
+        8,
+        &rs,
+        1
+    );
+}
+
 static vg_result draw_enemy_glyph(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
     float fx = e->facing_x;
     float fy = e->facing_y;
@@ -4583,6 +4628,17 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
     const vg_stroke_style bullet_style = make_stroke(2.6f, 1.0f * intensity_scale, (vg_color){1.0f, 0.9f, 0.55f, 1.0f}, VG_BLEND_ALPHA);
     const vg_stroke_style enemy_style = make_stroke(2.5f, 1.0f * intensity_scale, (vg_color){1.0f, 0.3f, 0.3f, 1.0f}, VG_BLEND_ALPHA);
     const vg_fill_style thruster_fill = make_fill(1.0f * intensity_scale, pal.thruster, VG_BLEND_ADDITIVE);
+    const vg_fill_style shield_glow = make_fill(
+        0.50f * intensity_scale,
+        (vg_color){pal.secondary.r, pal.secondary.g, pal.secondary.b, 0.15f},
+        VG_BLEND_ADDITIVE
+    );
+    const vg_stroke_style shield_ring = make_stroke(
+        1.8f,
+        1.0f * intensity_scale,
+        (vg_color){pal.secondary.r, pal.secondary.g, pal.secondary.b, 0.88f},
+        VG_BLEND_ALPHA
+    );
 
     const float main_line_width = 1.5f;
     const vg_color streak_color = (vg_color){0.56f, 0.80f, 1.0f, 0.28f};
@@ -4793,15 +4849,31 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         if (g->lives > 0) {
             game_state gp = *g;
             gp.player.b = g->player.b;
+            float player_depth = 1.0f;
             {
                 float d = 0.0f;
                 const vg_vec2 pp = project_cylinder_point(g, g->player.b.x, g->player.b.y, &d);
                 gp.player.b.x = pp.x;
                 gp.player.b.y = pp.y;
+                player_depth = d;
             }
             r = draw_player_ship(ctx, &gp, &ship_style, &thruster_fill);
             if (r != VG_OK) {
                 return r;
+            }
+            if (g->shield_active && g->shield_time_remaining_s > 0.0f) {
+                r = draw_player_shield(
+                    ctx,
+                    gp.player.b.x,
+                    gp.player.b.y,
+                    g->shield_radius * (0.45f + player_depth * 0.90f),
+                    g->t,
+                    &shield_glow,
+                    &shield_ring
+                );
+                if (r != VG_OK) {
+                    return r;
+                }
             }
         }
 
@@ -5202,6 +5274,21 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         if (r != VG_OK) {
             (void)vg_transform_pop(ctx);
             return r;
+        }
+        if (g->shield_active && g->shield_time_remaining_s > 0.0f) {
+            r = draw_player_shield(
+                ctx,
+                g->player.b.x,
+                g->player.b.y,
+                g->shield_radius,
+                g->t,
+                &shield_glow,
+                &shield_ring
+            );
+            if (r != VG_OK) {
+                (void)vg_transform_pop(ctx);
+                return r;
+            }
         }
     }
 

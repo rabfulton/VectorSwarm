@@ -265,6 +265,9 @@ typedef struct game_state {
     float exit_portal_x;
     float exit_portal_y;
     float exit_portal_radius;
+    float shield_time_remaining_s;
+    int shield_active;
+    float shield_radius;
     int alt_weapon_equipped; /* enum player_alt_weapon_id */
     int alt_weapon_ammo[PLAYER_ALT_WEAPON_COUNT];
 } game_state;
