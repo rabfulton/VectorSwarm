@@ -377,6 +377,11 @@ static int set_level_index(game_state* g, int index) {
     g->camera_y = g->world_h * 0.5f;
     g->shield_radius = 52.0f * su;
     g->shield_active = 0;
+    g->emp_effect_active = 0;
+    g->emp_effect_t = 0.0f;
+    g->emp_effect_duration_s = 0.0f;
+    g->emp_primary_radius = 0.0f;
+    g->emp_blast_radius = 0.0f;
     apply_level_runtime_config(g);
     return 1;
 }
@@ -549,6 +554,60 @@ static void spawn_secondary_bullet(game_state* g) {
     }
 }
 
+static void trigger_emp_blast(game_state* g) {
+    if (!g || g->lives <= 0) {
+        return;
+    }
+    if (g->alt_weapon_equipped != PLAYER_ALT_WEAPON_EMP) {
+        return;
+    }
+    if (g->alt_weapon_ammo[PLAYER_ALT_WEAPON_EMP] <= 0) {
+        return;
+    }
+    {
+        const float screen_ref = fminf(g->world_w, g->world_h);
+        const float su = gameplay_ui_scale(g);
+        const float primary_radius = screen_ref * 0.15f;
+        const float blast_radius = screen_ref * 0.30f;
+        const float blast_impulse = 2200.0f * su;
+        enemy_apply_emp(
+            g,
+            primary_radius,
+            blast_radius,
+            blast_impulse,
+            su,
+            level_uses_cylinder(g),
+            cylinder_period(g)
+        );
+        g->alt_weapon_ammo[PLAYER_ALT_WEAPON_EMP] -= 1;
+        g->secondary_fire_cooldown_s = 0.85f;
+        g->emp_effect_active = 1;
+        g->emp_effect_t = 0.0f;
+        g->emp_effect_duration_s = 0.34f;
+        g->emp_effect_x = g->player.b.x;
+        g->emp_effect_y = g->player.b.y;
+        g->emp_primary_radius = primary_radius;
+        g->emp_blast_radius = blast_radius;
+        game_push_audio_event(g, GAME_AUDIO_EVENT_EXPLOSION, g->emp_effect_x, g->emp_effect_y);
+    }
+}
+
+static void use_secondary_weapon(game_state* g) {
+    if (!g) {
+        return;
+    }
+    switch (g->alt_weapon_equipped) {
+        case PLAYER_ALT_WEAPON_REAR_GUN:
+            spawn_secondary_bullet(g);
+            break;
+        case PLAYER_ALT_WEAPON_EMP:
+            trigger_emp_blast(g);
+            break;
+        default:
+            break;
+    }
+}
+
 static enemy_bullet* spawn_enemy_bullet_at(
     game_state* g,
     float ox,
@@ -591,6 +650,13 @@ void game_init(game_state* g, float world_w, float world_h) {
     g->alt_weapon_ammo[PLAYER_ALT_WEAPON_REAR_GUN] = 180;
     g->shield_time_remaining_s = 20.0f;
     g->shield_active = 0;
+    g->emp_effect_active = 0;
+    g->emp_effect_t = 0.0f;
+    g->emp_effect_duration_s = 0.0f;
+    g->emp_effect_x = 0.0f;
+    g->emp_effect_y = 0.0f;
+    g->emp_primary_radius = 0.0f;
+    g->emp_blast_radius = 0.0f;
     const float su = gameplay_ui_scale(g);
     g->player.b.x = 170.0f * su;
     g->player.b.y = world_h * 0.5f;
@@ -756,6 +822,13 @@ static void game_update_player_weapons(game_state* g, float dt, const game_input
             g->shield_active = 0;
         }
     }
+    if (g->emp_effect_active) {
+        g->emp_effect_t += dt;
+        if (g->emp_effect_t >= g->emp_effect_duration_s) {
+            g->emp_effect_active = 0;
+            g->emp_effect_t = 0.0f;
+        }
+    }
     if (g->score >= 3000) {
         g->weapon_level = 3;
     } else if (g->score >= 1200) {
@@ -773,7 +846,7 @@ static void game_update_player_weapons(game_state* g, float dt, const game_input
         !shield_equipped &&
         in->secondary_fire &&
         g->secondary_fire_cooldown_s <= 0.0f) {
-        spawn_secondary_bullet(g);
+        use_secondary_weapon(g);
     }
 }
 

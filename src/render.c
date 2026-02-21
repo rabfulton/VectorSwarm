@@ -4629,6 +4629,101 @@ static vg_result draw_player_shield(
     );
 }
 
+static vg_result draw_emp_blast(
+    vg_context* ctx,
+    const game_state* g,
+    const palette_theme* pal,
+    float intensity_scale,
+    int uses_cylinder
+) {
+    if (!g || !g->emp_effect_active || g->emp_effect_duration_s <= 0.0f) {
+        return VG_OK;
+    }
+    const float t01 = clampf(g->emp_effect_t / fmaxf(g->emp_effect_duration_s, 0.001f), 0.0f, 1.0f);
+    const float fade = 1.0f - t01;
+    const float pulse = 0.82f + 0.18f * sinf((g->emp_effect_t / fmaxf(g->emp_effect_duration_s, 0.001f)) * 18.0f);
+    const float r_primary = g->emp_primary_radius * (0.18f + 0.82f * t01);
+    const float r_blast = g->emp_blast_radius * (0.12f + 0.88f * t01);
+    const vg_color emp_col = (vg_color){pal->primary_dim.r, pal->primary_dim.g, pal->primary_dim.b, 1.0f};
+    vg_fill_style flash = make_fill(
+        0.36f * fade * intensity_scale,
+        (vg_color){pal->secondary.r, pal->secondary.g, pal->secondary.b, 0.55f * fade},
+        VG_BLEND_ADDITIVE
+    );
+    vg_stroke_style ring0 = make_stroke(
+        2.4f,
+        (1.20f + pulse * 0.34f) * fade * intensity_scale,
+        (vg_color){emp_col.r, emp_col.g, emp_col.b, 0.88f},
+        VG_BLEND_ADDITIVE
+    );
+    vg_stroke_style ring1 = make_stroke(
+        1.7f,
+        (0.92f + pulse * 0.22f) * fade * intensity_scale,
+        (vg_color){emp_col.r, emp_col.g, emp_col.b, 0.66f},
+        VG_BLEND_ALPHA
+    );
+    vg_result r = VG_OK;
+    const int segs = 56;
+    vg_vec2 pts[56];
+    vg_vec2 pts2[56];
+
+    if (!uses_cylinder) {
+        r = vg_fill_circle(ctx, (vg_vec2){g->emp_effect_x, g->emp_effect_y}, r_primary * (0.12f + 0.25f * fade), &flash, 22);
+        if (r != VG_OK) {
+            return r;
+        }
+        for (int i = 0; i < segs; ++i) {
+            const float a = ((float)i / (float)segs) * 6.2831853f;
+            const float ca = cosf(a);
+            const float sa = sinf(a);
+            pts[i] = (vg_vec2){g->emp_effect_x + ca * r_primary, g->emp_effect_y + sa * r_primary};
+            pts2[i] = (vg_vec2){g->emp_effect_x + ca * r_blast, g->emp_effect_y + sa * r_blast};
+        }
+    } else {
+        float depth = 0.0f;
+        const vg_vec2 cp = project_cylinder_point(g, g->emp_effect_x, g->emp_effect_y, &depth);
+        r = vg_fill_circle(ctx, cp, r_primary * (0.08f + 0.12f * fade) * (0.35f + depth * 0.85f), &flash, 18);
+        if (r != VG_OK) {
+            return r;
+        }
+        for (int i = 0; i < segs; ++i) {
+            const float a = ((float)i / (float)segs) * 6.2831853f;
+            const float ca = cosf(a);
+            const float sa = sinf(a);
+            pts[i] = project_cylinder_point(
+                g,
+                g->emp_effect_x + ca * r_primary,
+                g->emp_effect_y + sa * r_primary,
+                NULL
+            );
+            pts2[i] = project_cylinder_point(
+                g,
+                g->emp_effect_x + ca * r_blast,
+                g->emp_effect_y + sa * r_blast,
+                NULL
+            );
+        }
+    }
+
+    r = vg_draw_polyline(ctx, pts, segs, &ring0, 1);
+    if (r != VG_OK) {
+        return r;
+    }
+    r = vg_draw_polyline(ctx, pts, segs, &ring1, 1);
+    if (r != VG_OK) {
+        return r;
+    }
+    ring0.width_px *= 0.92f;
+    ring0.intensity *= 0.78f;
+    ring1.width_px *= 0.88f;
+    ring1.intensity *= 0.72f;
+    r = vg_draw_polyline(ctx, pts2, segs, &ring0, 1);
+    if (r != VG_OK) {
+        return r;
+    }
+    return vg_draw_polyline(ctx, pts2, segs, &ring1, 1);
+}
+
 static vg_result draw_enemy_glyph(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
     float fx = e->facing_x;
     float fy = e->facing_y;
@@ -4994,6 +5089,12 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
                 if (r != VG_OK) {
                     return r;
                 }
+            }
+        }
+        if (g->emp_effect_active) {
+            r = draw_emp_blast(ctx, g, &pal, intensity_scale, 1);
+            if (r != VG_OK) {
+                return r;
             }
         }
 
@@ -5409,6 +5510,13 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
                 (void)vg_transform_pop(ctx);
                 return r;
             }
+        }
+    }
+    if (g->emp_effect_active) {
+        r = draw_emp_blast(ctx, g, &pal, intensity_scale, 0);
+        if (r != VG_OK) {
+            (void)vg_transform_pop(ctx);
+            return r;
         }
     }
 

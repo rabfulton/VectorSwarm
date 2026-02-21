@@ -1426,6 +1426,17 @@ void enemy_update_system(
         } else {
             update_enemy_formation(g, e, dt, su, uses_cylinder, period);
         }
+        if (e->emp_push_time_s > 0.0f) {
+            const float emp_push01 = clampf(e->emp_push_time_s / 1.10f, 0.0f, 1.0f);
+            e->b.ax += e->emp_push_ax * emp_push01;
+            e->b.ay += e->emp_push_ay * emp_push01;
+            e->emp_push_time_s -= dt;
+            if (e->emp_push_time_s < 0.0f) {
+                e->emp_push_time_s = 0.0f;
+                e->emp_push_ax = 0.0f;
+                e->emp_push_ay = 0.0f;
+            }
+        }
         integrate_body(&e->b, dt);
         {
             const float v = length2(e->b.vx, e->b.vy);
@@ -1433,6 +1444,9 @@ void enemy_update_system(
             if (e->archetype == ENEMY_ARCH_KAMIKAZE &&
                 (e->state == ENEMY_STATE_KAMIKAZE_THRUST || e->state == ENEMY_STATE_KAMIKAZE_STRIKE)) {
                 speed_cap *= 1.95f * fmaxf(e->kamikaze_thrust_scale, 0.1f);
+            }
+            if (e->emp_push_time_s > 0.0f) {
+                speed_cap *= 2.40f;
             }
             if (v > speed_cap) {
                 const float s = speed_cap / v;
@@ -1557,6 +1571,97 @@ void enemy_update_system(
         if (!uses_cylinder && fabsf(d->b.x - g->camera_x) > g->world_w * 1.4f) {
             d->active = 0;
             continue;
+        }
+    }
+}
+
+void enemy_apply_emp(
+    game_state* g,
+    float primary_radius,
+    float blast_radius,
+    float blast_accel,
+    float su,
+    int uses_cylinder,
+    float period
+) {
+    if (!g || primary_radius <= 0.0f || blast_radius <= 0.0f) {
+        return;
+    }
+    if (blast_radius < primary_radius) {
+        blast_radius = primary_radius;
+    }
+
+    const float primary_sq = primary_radius * primary_radius;
+    const float blast_sq = blast_radius * blast_radius;
+    const float px = g->player.b.x;
+    const float py = g->player.b.y;
+
+    for (size_t i = 0; i < MAX_ENEMIES; ++i) {
+        enemy* e = &g->enemies[i];
+        if (!e->active) {
+            continue;
+        }
+        const float dx = uses_cylinder ? wrap_delta(e->b.x, px, period) : (e->b.x - px);
+        const float dy = e->b.y - py;
+        const float d2 = dx * dx + dy * dy;
+        if (d2 <= primary_sq) {
+            emit_enemy_debris(g, e, e->b.vx, e->b.vy);
+            emit_explosion(g, e->b.x, e->b.y, e->b.vx, e->b.vy, 26, su);
+            e->active = 0;
+            g->kills += 1;
+            g->score += 100;
+            continue;
+        }
+        if (d2 <= blast_sq) {
+            const float d = sqrtf(fmaxf(d2, 1.0e-6f));
+            float nx = dx / d;
+            float ny = dy / d;
+            if (d <= 1.0e-3f) {
+                nx = (frand01() < 0.5f) ? -1.0f : 1.0f;
+                ny = frands1() * 0.25f;
+            }
+            {
+                const float t = 1.0f - clampf((d - primary_radius) / fmaxf(blast_radius - primary_radius, 1.0f), 0.0f, 1.0f);
+                const float impulse = blast_accel * (0.80f + 0.85f * t);
+                const float push_duration_s = 1.10f;
+                e->b.vx += nx * (impulse * 0.48f);
+                e->b.vy += ny * (impulse * 0.48f);
+                e->emp_push_ax += nx * (impulse * 3.20f);
+                e->emp_push_ay += ny * (impulse * 3.20f);
+                if (e->emp_push_time_s < push_duration_s) {
+                    e->emp_push_time_s = push_duration_s;
+                }
+            }
+        }
+    }
+
+    for (size_t i = 0; i < MAX_ENEMY_BULLETS; ++i) {
+        enemy_bullet* b = &g->enemy_bullets[i];
+        if (!b->active) {
+            continue;
+        }
+        const float dx = uses_cylinder ? wrap_delta(b->b.x, px, period) : (b->b.x - px);
+        const float dy = b->b.y - py;
+        const float d2 = dx * dx + dy * dy;
+        if (d2 <= primary_sq) {
+            b->active = 0;
+            continue;
+        }
+        if (d2 <= blast_sq) {
+            const float d = sqrtf(fmaxf(d2, 1.0e-6f));
+            float nx = dx / d;
+            float ny = dy / d;
+            if (d <= 1.0e-3f) {
+                nx = (frand01() < 0.5f) ? -1.0f : 1.0f;
+                ny = frands1() * 0.25f;
+            }
+            {
+                const float t = 1.0f - clampf((d - primary_radius) / fmaxf(blast_radius - primary_radius, 1.0f), 0.0f, 1.0f);
+                const float impulse = blast_accel * (0.85f + 0.80f * t);
+                b->b.vx += nx * impulse;
+                b->b.vy += ny * impulse;
+                b->ttl_s = fmaxf(b->ttl_s, 0.25f);
+            }
         }
     }
 }

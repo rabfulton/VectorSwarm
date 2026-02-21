@@ -115,6 +115,9 @@ typedef struct enemy {
     float kamikaze_strike_x;
     float kamikaze_strike_y;
     int kamikaze_is_turning;
+    float emp_push_ax;
+    float emp_push_ay;
+    float emp_push_time_s;
     float lane_dir;
     float home_y;
     int formation_kind;
@@ -268,6 +271,13 @@ typedef struct game_state {
     float shield_time_remaining_s;
     int shield_active;
     float shield_radius;
+    int emp_effect_active;
+    float emp_effect_t;
+    float emp_effect_duration_s;
+    float emp_effect_x;
+    float emp_effect_y;
+    float emp_primary_radius;
+    float emp_blast_radius;
     int alt_weapon_equipped; /* enum player_alt_weapon_id */
     int alt_weapon_ammo[PLAYER_ALT_WEAPON_COUNT];
 } game_state;
