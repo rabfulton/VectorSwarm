@@ -1921,7 +1921,9 @@ static vg_result draw_shipyard_menu(vg_context* ctx, float w, float h, const ren
                 metrics->mouse_in_window &&
                 metrics->mouse_x >= b.x && metrics->mouse_x <= (b.x + b.w) &&
                 metrics->mouse_y >= b.y && metrics->mouse_y <= (b.y + b.h);
-            r = draw_lcars_text_button(ctx, b, labels[i], hover, 0, ui, &pal, &frame, &txt);
+            const int nav_selected =
+                (metrics->shipyard_nav_column == 0 && metrics->shipyard_link_selected == i) ? 1 : 0;
+            r = draw_lcars_text_button(ctx, b, labels[i], hover, nav_selected, ui, &pal, &frame, &txt);
             if (r != VG_OK) {
                 return r;
             }

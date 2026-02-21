@@ -403,6 +403,13 @@ typedef struct app {
     int thruster_note_on;
     int current_system_index;
     int shipyard_weapon_selected;
+    int shipyard_nav_column; /* 0=left links, 1=weapon column */
+    int shipyard_link_selected; /* 0..3 top-to-bottom */
+    int shipyard_prev_up;
+    int shipyard_prev_down;
+    int shipyard_prev_left;
+    int shipyard_prev_right;
+    int shipyard_prev_fire;
     int controls_selected;
     int controls_selected_column; /* 0=keyboard, 1=joypad */
     int controls_rebinding_action; /* -1 when idle */
@@ -2646,6 +2653,100 @@ static int handle_controls_menu_mouse(app* a, int mouse_x, int mouse_y, int set_
     return 0;
 }
 
+static void shipyard_open_link(app* a, int link_idx) {
+    static const int targets[4] = {
+        APP_SCREEN_ACOUSTICS,
+        APP_SCREEN_VIDEO,
+        APP_SCREEN_PLANETARIUM,
+        APP_SCREEN_CONTROLS
+    };
+    if (!a) {
+        return;
+    }
+    if (link_idx < 0) {
+        link_idx = 0;
+    }
+    if (link_idx > 3) {
+        link_idx = 3;
+    }
+    trigger_fire_test(a);
+    menu_open_screen(a, targets[link_idx], APP_SCREEN_SHIPYARD);
+    if (targets[link_idx] == APP_SCREEN_VIDEO) {
+        sync_video_dials_from_live_crt(a);
+    } else if (targets[link_idx] == APP_SCREEN_PLANETARIUM) {
+        sync_planetarium_marquee(a);
+        announce_planetarium_selection(a);
+    } else if (targets[link_idx] == APP_SCREEN_CONTROLS) {
+        controls_refresh_labels(a);
+    }
+}
+
+static void shipyard_select_weapon(app* a, int weapon_idx) {
+    if (!a) {
+        return;
+    }
+    if (weapon_idx < 0) {
+        weapon_idx = 0;
+    }
+    if (weapon_idx >= PLAYER_ALT_WEAPON_COUNT) {
+        weapon_idx = PLAYER_ALT_WEAPON_COUNT - 1;
+    }
+    if (a->shipyard_weapon_selected != weapon_idx) {
+        a->shipyard_weapon_selected = weapon_idx;
+        sync_shipyard_weapon_to_game(a);
+    }
+}
+
+static void handle_shipyard_controls(app* a, const game_input* in) {
+    if (!a || !in || a->menu.current != APP_SCREEN_SHIPYARD) {
+        return;
+    }
+    const int up_pressed = in->up && !a->shipyard_prev_up;
+    const int down_pressed = in->down && !a->shipyard_prev_down;
+    const int left_pressed = in->left && !a->shipyard_prev_left;
+    const int right_pressed = in->right && !a->shipyard_prev_right;
+    const int fire_pressed = in->fire && !a->shipyard_prev_fire;
+
+    if (left_pressed) {
+        a->shipyard_nav_column = 0;
+    } else if (right_pressed) {
+        a->shipyard_nav_column = 1;
+    }
+    if (up_pressed) {
+        if (a->shipyard_nav_column == 0) {
+            a->shipyard_link_selected = (a->shipyard_link_selected + 3) % 4;
+        } else {
+            a->shipyard_weapon_selected =
+                (a->shipyard_weapon_selected + PLAYER_ALT_WEAPON_COUNT - 1) % PLAYER_ALT_WEAPON_COUNT;
+        }
+    }
+    if (down_pressed) {
+        if (a->shipyard_nav_column == 0) {
+            a->shipyard_link_selected = (a->shipyard_link_selected + 1) % 4;
+        } else {
+            a->shipyard_weapon_selected = (a->shipyard_weapon_selected + 1) % PLAYER_ALT_WEAPON_COUNT;
+        }
+    }
+    if (fire_pressed) {
+        if (a->shipyard_nav_column == 0) {
+            shipyard_open_link(a, a->shipyard_link_selected);
+        } else {
+            trigger_fire_test(a);
+            shipyard_select_weapon(a, a->shipyard_weapon_selected);
+            a->shipyard_nav_column = 0;
+        }
+    } else if (a->shipyard_nav_column == 1 && (up_pressed || down_pressed)) {
+        /* Immediate live-preview while navigating weapon column. */
+        shipyard_select_weapon(a, a->shipyard_weapon_selected);
+    }
+
+    a->shipyard_prev_up = in->up ? 1 : 0;
+    a->shipyard_prev_down = in->down ? 1 : 0;
+    a->shipyard_prev_left = in->left ? 1 : 0;
+    a->shipyard_prev_right = in->right ? 1 : 0;
+    a->shipyard_prev_fire = in->fire ? 1 : 0;
+}
+
 static int handle_shipyard_mouse(app* a, int mouse_x, int mouse_y, int set_value) {
     if (!a || a->menu.current != APP_SCREEN_SHIPYARD) {
         return 0;
@@ -2663,26 +2764,13 @@ static int handle_shipyard_mouse(app* a, int mouse_x, int mouse_y, int set_value
     const float bx = links_box.x;
     const float bw = links_box.w;
     float by = links_box.y + links_box.h - btn_h;
-    const int targets[4] = {
-        APP_SCREEN_ACOUSTICS,
-        APP_SCREEN_VIDEO,
-        APP_SCREEN_PLANETARIUM,
-        APP_SCREEN_CONTROLS
-    };
     for (int i = 0; i < 4; ++i) {
         const vg_rect r = {bx, by, bw, btn_h};
         if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h) {
             if (set_value) {
-                trigger_fire_test(a);
-                menu_open_screen(a, targets[i], APP_SCREEN_SHIPYARD);
-                if (targets[i] == APP_SCREEN_VIDEO) {
-                    sync_video_dials_from_live_crt(a);
-                } else if (targets[i] == APP_SCREEN_PLANETARIUM) {
-                    sync_planetarium_marquee(a);
-                    announce_planetarium_selection(a);
-                } else if (targets[i] == APP_SCREEN_CONTROLS) {
-                    controls_refresh_labels(a);
-                }
+                a->shipyard_nav_column = 0;
+                a->shipyard_link_selected = i;
+                shipyard_open_link(a, i);
             }
             return 1;
         }
@@ -2696,11 +2784,10 @@ static int handle_shipyard_mouse(app* a, int mouse_x, int mouse_y, int set_value
             const vg_rect r = {weap_box.x, y, weap_box.w, icon_h};
             if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h) {
                 if (set_value) {
-                    if (a->shipyard_weapon_selected != i) {
-                        a->shipyard_weapon_selected = i;
-                        sync_shipyard_weapon_to_game(a);
-                        trigger_fire_test(a);
-                    }
+                    a->shipyard_nav_column = 1;
+                    a->shipyard_weapon_selected = i;
+                    trigger_fire_test(a);
+                    shipyard_select_weapon(a, i);
                 }
                 return 1;
             }
@@ -5442,6 +5529,8 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .nick_h = a->nick_h,
         .nick_stride = a->nick_stride,
         .shipyard_weapon_selected = a->shipyard_weapon_selected,
+        .shipyard_nav_column = a->shipyard_nav_column,
+        .shipyard_link_selected = a->shipyard_link_selected,
         .shipyard_weapon_ammo = {
             game_get_alt_weapon_ammo(&a->game, 0),
             game_get_alt_weapon_ammo(&a->game, 1),
@@ -5805,6 +5894,13 @@ int main(void) {
     a.wave_tty_visible[0] = '\0';
     a.current_system_index = 0;
     a.planetarium_selected = 0;
+    a.shipyard_nav_column = 0;
+    a.shipyard_link_selected = 0;
+    a.shipyard_prev_up = 0;
+    a.shipyard_prev_down = 0;
+    a.shipyard_prev_left = 0;
+    a.shipyard_prev_right = 0;
+    a.shipyard_prev_fire = 0;
     a.controls_gamepad = NULL;
     a.controls_gamepad_instance = -1;
     controls_set_defaults(&a);
@@ -6371,29 +6467,38 @@ int main(void) {
         const uint8_t* keys = SDL_GetKeyboardState(NULL);
         game_input in;
         memset(&in, 0, sizeof(in));
+        in.up = keys[a.controls_key_scancode[CONTROL_ACTION_UP]] ? 1 : 0;
+        in.down = keys[a.controls_key_scancode[CONTROL_ACTION_DOWN]] ? 1 : 0;
+        in.left = keys[a.controls_key_scancode[CONTROL_ACTION_LEFT]] ? 1 : 0;
+        in.right = keys[a.controls_key_scancode[CONTROL_ACTION_RIGHT]] ? 1 : 0;
+        in.fire = keys[a.controls_key_scancode[CONTROL_ACTION_PRIMARY_FIRE]] ? 1 : 0;
+        in.secondary_fire = keys[a.controls_key_scancode[CONTROL_ACTION_SECONDARY_FIRE]] ? 1 : 0;
+        if (a.controls_use_gamepad && a.controls_gamepad) {
+            const int axis_deadzone = 8000;
+            const Sint16 lx = SDL_GameControllerGetAxis(a.controls_gamepad, SDL_CONTROLLER_AXIS_LEFTX);
+            const Sint16 ly = SDL_GameControllerGetAxis(a.controls_gamepad, SDL_CONTROLLER_AXIS_LEFTY);
+            if (lx > axis_deadzone) in.right = 1;
+            if (lx < -axis_deadzone) in.left = 1;
+            if (ly > axis_deadzone) in.down = 1;
+            if (ly < -axis_deadzone) in.up = 1;
+            in.up |= SDL_GameControllerGetButton(a.controls_gamepad, (SDL_GameControllerButton)a.controls_pad_button[CONTROL_ACTION_UP]) ? 1 : 0;
+            in.down |= SDL_GameControllerGetButton(a.controls_gamepad, (SDL_GameControllerButton)a.controls_pad_button[CONTROL_ACTION_DOWN]) ? 1 : 0;
+            in.left |= SDL_GameControllerGetButton(a.controls_gamepad, (SDL_GameControllerButton)a.controls_pad_button[CONTROL_ACTION_LEFT]) ? 1 : 0;
+            in.right |= SDL_GameControllerGetButton(a.controls_gamepad, (SDL_GameControllerButton)a.controls_pad_button[CONTROL_ACTION_RIGHT]) ? 1 : 0;
+            in.fire |= SDL_GameControllerGetButton(a.controls_gamepad, (SDL_GameControllerButton)a.controls_pad_button[CONTROL_ACTION_PRIMARY_FIRE]) ? 1 : 0;
+            in.secondary_fire |= SDL_GameControllerGetButton(a.controls_gamepad, (SDL_GameControllerButton)a.controls_pad_button[CONTROL_ACTION_SECONDARY_FIRE]) ? 1 : 0;
+        }
         if (!controls_ui_active(&a)) {
-            in.up = keys[a.controls_key_scancode[CONTROL_ACTION_UP]] ? 1 : 0;
-            in.down = keys[a.controls_key_scancode[CONTROL_ACTION_DOWN]] ? 1 : 0;
-            in.left = keys[a.controls_key_scancode[CONTROL_ACTION_LEFT]] ? 1 : 0;
-            in.right = keys[a.controls_key_scancode[CONTROL_ACTION_RIGHT]] ? 1 : 0;
-            in.fire = keys[a.controls_key_scancode[CONTROL_ACTION_PRIMARY_FIRE]] ? 1 : 0;
-            in.secondary_fire = keys[a.controls_key_scancode[CONTROL_ACTION_SECONDARY_FIRE]] ? 1 : 0;
-            if (a.controls_use_gamepad && a.controls_gamepad) {
-                const int axis_deadzone = 8000;
-                const Sint16 lx = SDL_GameControllerGetAxis(a.controls_gamepad, SDL_CONTROLLER_AXIS_LEFTX);
-                const Sint16 ly = SDL_GameControllerGetAxis(a.controls_gamepad, SDL_CONTROLLER_AXIS_LEFTY);
-                if (lx > axis_deadzone) in.right = 1;
-                if (lx < -axis_deadzone) in.left = 1;
-                if (ly > axis_deadzone) in.down = 1;
-                if (ly < -axis_deadzone) in.up = 1;
-                in.up |= SDL_GameControllerGetButton(a.controls_gamepad, (SDL_GameControllerButton)a.controls_pad_button[CONTROL_ACTION_UP]) ? 1 : 0;
-                in.down |= SDL_GameControllerGetButton(a.controls_gamepad, (SDL_GameControllerButton)a.controls_pad_button[CONTROL_ACTION_DOWN]) ? 1 : 0;
-                in.left |= SDL_GameControllerGetButton(a.controls_gamepad, (SDL_GameControllerButton)a.controls_pad_button[CONTROL_ACTION_LEFT]) ? 1 : 0;
-                in.right |= SDL_GameControllerGetButton(a.controls_gamepad, (SDL_GameControllerButton)a.controls_pad_button[CONTROL_ACTION_RIGHT]) ? 1 : 0;
-                in.fire |= SDL_GameControllerGetButton(a.controls_gamepad, (SDL_GameControllerButton)a.controls_pad_button[CONTROL_ACTION_PRIMARY_FIRE]) ? 1 : 0;
-                in.secondary_fire |= SDL_GameControllerGetButton(a.controls_gamepad, (SDL_GameControllerButton)a.controls_pad_button[CONTROL_ACTION_SECONDARY_FIRE]) ? 1 : 0;
-            }
             in.restart = restart_pressed;
+        }
+        if (a.menu.current == APP_SCREEN_SHIPYARD) {
+            handle_shipyard_controls(&a, &in);
+        } else {
+            a.shipyard_prev_up = 0;
+            a.shipyard_prev_down = 0;
+            a.shipyard_prev_left = 0;
+            a.shipyard_prev_right = 0;
+            a.shipyard_prev_fire = 0;
         }
 
         uint64_t now = SDL_GetPerformanceCounter();

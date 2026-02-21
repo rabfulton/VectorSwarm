@@ -98,6 +98,8 @@ typedef struct render_metrics {
     uint32_t nick_h;
     uint32_t nick_stride;
     int shipyard_weapon_selected;
+    int shipyard_nav_column; /* 0=left links, 1=weapon column */
+    int shipyard_link_selected; /* 0..3 top-to-bottom */
     int shipyard_weapon_ammo[PLAYER_ALT_WEAPON_COUNT];
     const void* shipyard_ship_svg_asset;
     const void* shipyard_weapon_svg_assets[4];
