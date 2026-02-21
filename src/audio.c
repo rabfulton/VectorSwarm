@@ -165,6 +165,65 @@ float acoustics_combat_value_to_ui_display(int id, float t01) {
     }
 }
 
+float acoustics_equipment_value_to_display(int id, float t01) {
+    const float t = clampf(t01, 0.0f, 1.0f);
+    switch (id) {
+        case ACOUST_EQUIP_SHIELD_LEVEL:
+        case ACOUST_EQUIP_AUX_LEVEL:
+            return lerpf(0.02f, 0.90f, t);
+        case ACOUST_EQUIP_SHIELD_PITCH:
+        case ACOUST_EQUIP_AUX_PITCH:
+            return lerpf(30.0f, 240.0f, t);
+        case ACOUST_EQUIP_SHIELD_ATTACK:
+        case ACOUST_EQUIP_AUX_ATTACK:
+            return lerpf(1.0f, 220.0f, t);
+        case ACOUST_EQUIP_SHIELD_RELEASE:
+        case ACOUST_EQUIP_AUX_RELEASE:
+            return lerpf(10.0f, 1800.0f, t);
+        case ACOUST_EQUIP_SHIELD_NOISE:
+        case ACOUST_EQUIP_AUX_NOISE:
+            return t;
+        case ACOUST_EQUIP_SHIELD_FM_DEPTH:
+        case ACOUST_EQUIP_AUX_FM_DEPTH:
+            return lerpf(0.0f, 320.0f, t);
+        case ACOUST_EQUIP_SHIELD_FM_RATE:
+        case ACOUST_EQUIP_AUX_FM_RATE:
+            return lerpf(0.5f, 120.0f, t);
+        case ACOUST_EQUIP_SHIELD_CUTOFF:
+        case ACOUST_EQUIP_AUX_CUTOFF:
+            return lerpf(80.0f, 5200.0f, t);
+        default:
+            return t;
+    }
+}
+
+float acoustics_equipment_value_to_ui_display(int id, float t01) {
+    const float v = acoustics_equipment_value_to_display(id, t01);
+    switch (id) {
+        case ACOUST_EQUIP_SHIELD_LEVEL:
+        case ACOUST_EQUIP_AUX_LEVEL:
+        case ACOUST_EQUIP_SHIELD_NOISE:
+        case ACOUST_EQUIP_AUX_NOISE:
+            return round_to(v, 0.01f);
+        case ACOUST_EQUIP_SHIELD_PITCH:
+        case ACOUST_EQUIP_AUX_PITCH:
+        case ACOUST_EQUIP_SHIELD_ATTACK:
+        case ACOUST_EQUIP_AUX_ATTACK:
+        case ACOUST_EQUIP_SHIELD_RELEASE:
+        case ACOUST_EQUIP_AUX_RELEASE:
+        case ACOUST_EQUIP_SHIELD_FM_DEPTH:
+        case ACOUST_EQUIP_AUX_FM_DEPTH:
+        case ACOUST_EQUIP_SHIELD_FM_RATE:
+        case ACOUST_EQUIP_AUX_FM_RATE:
+            return round_to(v, 1.0f);
+        case ACOUST_EQUIP_SHIELD_CUTOFF:
+        case ACOUST_EQUIP_AUX_CUTOFF:
+            return round_to(v * 0.001f, 0.01f);
+        default:
+            return round_to(v, 0.01f);
+    }
+}
+
 void acoustics_defaults_init(float out_values_01[ACOUSTICS_SLIDER_COUNT]) {
     if (!out_values_01) {
         return;
@@ -207,6 +266,29 @@ void acoustics_combat_defaults_init(float out_values_01[ACOUST_COMBAT_SLIDER_COU
     out_values_01[ACOUST_COMBAT_EXP_PANW] = 0.90f;
 }
 
+void acoustics_equipment_defaults_init(float out_values_01[ACOUST_EQUIP_SLIDER_COUNT]) {
+    if (!out_values_01) {
+        return;
+    }
+    out_values_01[ACOUST_EQUIP_SHIELD_LEVEL] = 0.54f;
+    out_values_01[ACOUST_EQUIP_SHIELD_PITCH] = 0.32f;
+    out_values_01[ACOUST_EQUIP_SHIELD_ATTACK] = 0.08f;
+    out_values_01[ACOUST_EQUIP_SHIELD_RELEASE] = 0.22f;
+    out_values_01[ACOUST_EQUIP_SHIELD_NOISE] = 0.34f;
+    out_values_01[ACOUST_EQUIP_SHIELD_FM_DEPTH] = 0.26f;
+    out_values_01[ACOUST_EQUIP_SHIELD_FM_RATE] = 0.16f;
+    out_values_01[ACOUST_EQUIP_SHIELD_CUTOFF] = 0.28f;
+
+    out_values_01[ACOUST_EQUIP_AUX_LEVEL] = 0.42f;
+    out_values_01[ACOUST_EQUIP_AUX_PITCH] = 0.40f;
+    out_values_01[ACOUST_EQUIP_AUX_ATTACK] = 0.05f;
+    out_values_01[ACOUST_EQUIP_AUX_RELEASE] = 0.18f;
+    out_values_01[ACOUST_EQUIP_AUX_NOISE] = 0.50f;
+    out_values_01[ACOUST_EQUIP_AUX_FM_DEPTH] = 0.20f;
+    out_values_01[ACOUST_EQUIP_AUX_FM_RATE] = 0.12f;
+    out_values_01[ACOUST_EQUIP_AUX_CUTOFF] = 0.30f;
+}
+
 static int file_exists_readable(const char* path) {
     if (!path || path[0] == '\0') {
         return 0;
@@ -235,23 +317,31 @@ const char* resolve_acoustics_slots_path(void) {
 
 void acoustics_slot_defaults_view(acoustics_slot_view* v) {
     if (!v || !v->fire_slot_selected || !v->thr_slot_selected || !v->enemy_slot_selected || !v->exp_slot_selected ||
+        !v->shield_slot_selected || !v->aux_slot_selected ||
         !v->fire_slot_defined || !v->thr_slot_defined || !v->enemy_slot_defined || !v->exp_slot_defined ||
-        !v->fire_slots || !v->thr_slots || !v->enemy_slots || !v->exp_slots ||
-        !v->value_01 || !v->combat_value_01) {
+        !v->shield_slot_defined || !v->aux_slot_defined ||
+        !v->fire_slots || !v->thr_slots || !v->enemy_slots || !v->exp_slots || !v->shield_slots || !v->aux_slots ||
+        !v->value_01 || !v->combat_value_01 || !v->equipment_value_01) {
         return;
     }
     *v->fire_slot_selected = 0;
     *v->thr_slot_selected = 0;
     *v->enemy_slot_selected = 0;
     *v->exp_slot_selected = 0;
+    *v->shield_slot_selected = 0;
+    *v->aux_slot_selected = 0;
     memset(v->fire_slot_defined, 0, ACOUSTICS_SLOT_COUNT * sizeof(v->fire_slot_defined[0]));
     memset(v->thr_slot_defined, 0, ACOUSTICS_SLOT_COUNT * sizeof(v->thr_slot_defined[0]));
     memset(v->enemy_slot_defined, 0, ACOUSTICS_SLOT_COUNT * sizeof(v->enemy_slot_defined[0]));
     memset(v->exp_slot_defined, 0, ACOUSTICS_SLOT_COUNT * sizeof(v->exp_slot_defined[0]));
+    memset(v->shield_slot_defined, 0, ACOUSTICS_SLOT_COUNT * sizeof(v->shield_slot_defined[0]));
+    memset(v->aux_slot_defined, 0, ACOUSTICS_SLOT_COUNT * sizeof(v->aux_slot_defined[0]));
     memset(v->fire_slots, 0, ACOUSTICS_SLOT_COUNT * sizeof(v->fire_slots[0]));
     memset(v->thr_slots, 0, ACOUSTICS_SLOT_COUNT * sizeof(v->thr_slots[0]));
     memset(v->enemy_slots, 0, ACOUSTICS_SLOT_COUNT * sizeof(v->enemy_slots[0]));
     memset(v->exp_slots, 0, ACOUSTICS_SLOT_COUNT * sizeof(v->exp_slots[0]));
+    memset(v->shield_slots, 0, ACOUSTICS_SLOT_COUNT * sizeof(v->shield_slots[0]));
+    memset(v->aux_slots, 0, ACOUSTICS_SLOT_COUNT * sizeof(v->aux_slots[0]));
     for (int i = 0; i < 8; ++i) {
         v->fire_slots[0][i] = v->value_01[i];
     }
@@ -264,10 +354,18 @@ void acoustics_slot_defaults_view(acoustics_slot_view* v) {
     for (int i = 0; i < 8; ++i) {
         v->exp_slots[0][i] = v->combat_value_01[8 + i];
     }
+    for (int i = 0; i < 8; ++i) {
+        v->shield_slots[0][i] = v->equipment_value_01[i];
+    }
+    for (int i = 0; i < 8; ++i) {
+        v->aux_slots[0][i] = v->equipment_value_01[8 + i];
+    }
     v->fire_slot_defined[0] = 1u;
     v->thr_slot_defined[0] = 1u;
     v->enemy_slot_defined[0] = 1u;
     v->exp_slot_defined[0] = 1u;
+    v->shield_slot_defined[0] = 1u;
+    v->aux_slot_defined[0] = 1u;
 }
 
 void acoustics_capture_current_to_selected_slot_view(acoustics_slot_view* v, int is_fire) {
@@ -322,6 +420,34 @@ void acoustics_capture_current_to_selected_combat_slot_view(acoustics_slot_view*
     v->exp_slot_defined[s] = 1u;
 }
 
+void acoustics_capture_current_to_selected_equipment_slot_view(acoustics_slot_view* v, int is_shield) {
+    if (!v || !v->equipment_value_01 || !v->shield_slots || !v->aux_slots ||
+        !v->shield_slot_defined || !v->aux_slot_defined || !v->shield_slot_selected || !v->aux_slot_selected) {
+        return;
+    }
+    if (is_shield) {
+        const int s = *v->shield_slot_selected;
+        if (s < 0 || s >= ACOUSTICS_SLOT_COUNT) {
+            return;
+        }
+        for (int i = 0; i < 8; ++i) {
+            v->shield_slots[s][i] = v->equipment_value_01[i];
+        }
+        v->shield_slot_defined[s] = 1u;
+        return;
+    }
+    {
+        const int s = *v->aux_slot_selected;
+        if (s < 0 || s >= ACOUSTICS_SLOT_COUNT) {
+            return;
+        }
+        for (int i = 0; i < 8; ++i) {
+            v->aux_slots[s][i] = v->equipment_value_01[8 + i];
+        }
+        v->aux_slot_defined[s] = 1u;
+    }
+}
+
 void acoustics_load_slot_to_current_view(acoustics_slot_view* v, int is_fire, int slot_idx) {
     if (!v || !v->value_01 || !v->fire_slots || !v->thr_slots || !v->fire_slot_defined || !v->thr_slot_defined ||
         slot_idx < 0 || slot_idx >= ACOUSTICS_SLOT_COUNT) {
@@ -366,26 +492,55 @@ void acoustics_load_combat_slot_to_current_view(acoustics_slot_view* v, int is_e
     }
 }
 
+void acoustics_load_equipment_slot_to_current_view(acoustics_slot_view* v, int is_shield, int slot_idx) {
+    if (!v || !v->equipment_value_01 || !v->shield_slots || !v->aux_slots ||
+        !v->shield_slot_defined || !v->aux_slot_defined || slot_idx < 0 || slot_idx >= ACOUSTICS_SLOT_COUNT) {
+        return;
+    }
+    if (is_shield) {
+        if (!v->shield_slot_defined[slot_idx]) {
+            return;
+        }
+        for (int i = 0; i < 8; ++i) {
+            v->equipment_value_01[i] = v->shield_slots[slot_idx][i];
+        }
+        return;
+    }
+    if (!v->aux_slot_defined[slot_idx]) {
+        return;
+    }
+    for (int i = 0; i < 8; ++i) {
+        v->equipment_value_01[8 + i] = v->aux_slots[slot_idx][i];
+    }
+}
+
 int acoustics_save_slots_view(const acoustics_slot_view* v, const char* path) {
     if (!v || !path || !v->fire_slot_selected || !v->thr_slot_selected || !v->enemy_slot_selected || !v->exp_slot_selected ||
+        !v->shield_slot_selected || !v->aux_slot_selected ||
         !v->fire_slot_defined || !v->thr_slot_defined || !v->enemy_slot_defined || !v->exp_slot_defined ||
-        !v->fire_slots || !v->thr_slots || !v->enemy_slots || !v->exp_slots || !v->combat_value_01) {
+        !v->shield_slot_defined || !v->aux_slot_defined ||
+        !v->fire_slots || !v->thr_slots || !v->enemy_slots || !v->exp_slots || !v->shield_slots || !v->aux_slots ||
+        !v->combat_value_01 || !v->equipment_value_01) {
         return 0;
     }
     FILE* f = fopen(path, "w");
     if (!f) {
         return 0;
     }
-    fprintf(f, "version=3\n");
+    fprintf(f, "version=4\n");
     fprintf(f, "fsel=%d\n", *v->fire_slot_selected);
     fprintf(f, "tsel=%d\n", *v->thr_slot_selected);
     fprintf(f, "cfsel=%d\n", *v->enemy_slot_selected);
     fprintf(f, "ctsel=%d\n", *v->exp_slot_selected);
+    fprintf(f, "esel=%d\n", *v->shield_slot_selected);
+    fprintf(f, "atsel=%d\n", *v->aux_slot_selected);
     for (int s = 0; s < ACOUSTICS_SLOT_COUNT; ++s) {
         fprintf(f, "fd%d=%d\n", s, v->fire_slot_defined[s] ? 1 : 0);
         fprintf(f, "td%d=%d\n", s, v->thr_slot_defined[s] ? 1 : 0);
         fprintf(f, "cfd%d=%d\n", s, v->enemy_slot_defined[s] ? 1 : 0);
         fprintf(f, "ctd%d=%d\n", s, v->exp_slot_defined[s] ? 1 : 0);
+        fprintf(f, "ed%d=%d\n", s, v->shield_slot_defined[s] ? 1 : 0);
+        fprintf(f, "atd%d=%d\n", s, v->aux_slot_defined[s] ? 1 : 0);
         for (int i = 0; i < 8; ++i) {
             fprintf(f, "fv%d_%d=%.9f\n", s, i, v->fire_slots[s][i]);
         }
@@ -398,9 +553,18 @@ int acoustics_save_slots_view(const acoustics_slot_view* v, const char* path) {
         for (int i = 0; i < 8; ++i) {
             fprintf(f, "ctv%d_%d=%.9f\n", s, i, v->exp_slots[s][i]);
         }
+        for (int i = 0; i < 8; ++i) {
+            fprintf(f, "ev%d_%d=%.9f\n", s, i, v->shield_slots[s][i]);
+        }
+        for (int i = 0; i < 8; ++i) {
+            fprintf(f, "atv%d_%d=%.9f\n", s, i, v->aux_slots[s][i]);
+        }
     }
     for (int i = 0; i < ACOUST_COMBAT_SLIDER_COUNT; ++i) {
         fprintf(f, "cv%d=%.9f\n", i, v->combat_value_01[i]);
+    }
+    for (int i = 0; i < ACOUST_EQUIP_SLIDER_COUNT; ++i) {
+        fprintf(f, "evc%d=%.9f\n", i, v->equipment_value_01[i]);
     }
     fclose(f);
     return 1;
@@ -408,8 +572,11 @@ int acoustics_save_slots_view(const acoustics_slot_view* v, const char* path) {
 
 int acoustics_load_slots_view(acoustics_slot_view* v, const char* path) {
     if (!v || !path || !v->fire_slot_selected || !v->thr_slot_selected || !v->enemy_slot_selected || !v->exp_slot_selected ||
+        !v->shield_slot_selected || !v->aux_slot_selected ||
         !v->fire_slot_defined || !v->thr_slot_defined || !v->enemy_slot_defined || !v->exp_slot_defined ||
-        !v->fire_slots || !v->thr_slots || !v->enemy_slots || !v->exp_slots || !v->combat_value_01 || !v->value_01) {
+        !v->shield_slot_defined || !v->aux_slot_defined ||
+        !v->fire_slots || !v->thr_slots || !v->enemy_slots || !v->exp_slots || !v->shield_slots || !v->aux_slots ||
+        !v->combat_value_01 || !v->equipment_value_01 || !v->value_01) {
         return 0;
     }
     FILE* f = fopen(path, "r");
@@ -440,6 +607,14 @@ int acoustics_load_slots_view(acoustics_slot_view* v, const char* path) {
             *v->exp_slot_selected = (int)clampf(value, 0.0f, (float)(ACOUSTICS_SLOT_COUNT - 1));
             continue;
         }
+        if (strcmp(key, "esel") == 0) {
+            *v->shield_slot_selected = (int)clampf(value, 0.0f, (float)(ACOUSTICS_SLOT_COUNT - 1));
+            continue;
+        }
+        if (strcmp(key, "atsel") == 0) {
+            *v->aux_slot_selected = (int)clampf(value, 0.0f, (float)(ACOUSTICS_SLOT_COUNT - 1));
+            continue;
+        }
         int s = 0;
         int i = 0;
         if (sscanf(key, "fd%d", &s) == 1 && s >= 0 && s < ACOUSTICS_SLOT_COUNT) {
@@ -456,6 +631,14 @@ int acoustics_load_slots_view(acoustics_slot_view* v, const char* path) {
         }
         if (sscanf(key, "ctd%d", &s) == 1 && s >= 0 && s < ACOUSTICS_SLOT_COUNT) {
             v->exp_slot_defined[s] = (value >= 0.5f) ? 1u : 0u;
+            continue;
+        }
+        if (sscanf(key, "ed%d", &s) == 1 && s >= 0 && s < ACOUSTICS_SLOT_COUNT) {
+            v->shield_slot_defined[s] = (value >= 0.5f) ? 1u : 0u;
+            continue;
+        }
+        if (sscanf(key, "atd%d", &s) == 1 && s >= 0 && s < ACOUSTICS_SLOT_COUNT) {
+            v->aux_slot_defined[s] = (value >= 0.5f) ? 1u : 0u;
             continue;
         }
         if (sscanf(key, "fv%d_%d", &s, &i) == 2 && s >= 0 && s < ACOUSTICS_SLOT_COUNT && i >= 0 && i < 8) {
@@ -489,6 +672,14 @@ int acoustics_load_slots_view(acoustics_slot_view* v, const char* path) {
             v->exp_slots[s][i] = clampf(value, 0.0f, 1.0f);
             continue;
         }
+        if (sscanf(key, "ev%d_%d", &s, &i) == 2 && s >= 0 && s < ACOUSTICS_SLOT_COUNT && i >= 0 && i < 8) {
+            v->shield_slots[s][i] = clampf(value, 0.0f, 1.0f);
+            continue;
+        }
+        if (sscanf(key, "atv%d_%d", &s, &i) == 2 && s >= 0 && s < ACOUSTICS_SLOT_COUNT && i >= 0 && i < 8) {
+            v->aux_slots[s][i] = clampf(value, 0.0f, 1.0f);
+            continue;
+        }
         if (sscanf(key, "cv%d", &i) == 1 && i >= 0) {
             if (version >= 3) {
                 if (i < ACOUST_COMBAT_SLIDER_COUNT) {
@@ -514,18 +705,24 @@ int acoustics_load_slots_view(acoustics_slot_view* v, const char* path) {
             }
             continue;
         }
+        if (sscanf(key, "evc%d", &i) == 1 && i >= 0 && i < ACOUST_EQUIP_SLIDER_COUNT) {
+            v->equipment_value_01[i] = clampf(value, 0.0f, 1.0f);
+            continue;
+        }
     }
     fclose(f);
     acoustics_load_slot_to_current_view(v, 1, *v->fire_slot_selected);
     acoustics_load_slot_to_current_view(v, 0, *v->thr_slot_selected);
     acoustics_load_combat_slot_to_current_view(v, 1, *v->enemy_slot_selected);
     acoustics_load_combat_slot_to_current_view(v, 0, *v->exp_slot_selected);
+    acoustics_load_equipment_slot_to_current_view(v, 1, *v->shield_slot_selected);
+    acoustics_load_equipment_slot_to_current_view(v, 0, *v->aux_slot_selected);
     return 1;
 }
 
 void acoustics_apply_locked(acoustics_runtime_view* v) {
-    if (!v || !v->value_01 || !v->combat_value_01 || !v->weapon_synth || !v->thruster_synth ||
-        !v->enemy_fire_sound || !v->explosion_sound) {
+    if (!v || !v->value_01 || !v->combat_value_01 || !v->equipment_value_01 || !v->weapon_synth || !v->thruster_synth ||
+        !v->enemy_fire_sound || !v->explosion_sound || !v->shield_sound || !v->aux_sound) {
         return;
     }
     const int fire_wave_idx = (int)floorf(clampf(v->value_01[ACOUST_FIRE_WAVE], 0.0f, 1.0f) * 4.0f + 0.5f);
@@ -614,6 +811,40 @@ void acoustics_apply_locked(acoustics_runtime_view* v) {
         acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_FM_RATE, v->combat_value_01[ACOUST_COMBAT_EXP_FM_RATE]);
     v->explosion_sound->pan_width =
         acoustics_combat_value_to_display(ACOUST_COMBAT_EXP_PANW, v->combat_value_01[ACOUST_COMBAT_EXP_PANW]);
+
+    v->shield_sound->level =
+        acoustics_equipment_value_to_display(ACOUST_EQUIP_SHIELD_LEVEL, v->equipment_value_01[ACOUST_EQUIP_SHIELD_LEVEL]);
+    v->shield_sound->pitch_hz =
+        acoustics_equipment_value_to_display(ACOUST_EQUIP_SHIELD_PITCH, v->equipment_value_01[ACOUST_EQUIP_SHIELD_PITCH]);
+    v->shield_sound->attack_ms =
+        acoustics_equipment_value_to_display(ACOUST_EQUIP_SHIELD_ATTACK, v->equipment_value_01[ACOUST_EQUIP_SHIELD_ATTACK]);
+    v->shield_sound->decay_ms =
+        acoustics_equipment_value_to_display(ACOUST_EQUIP_SHIELD_RELEASE, v->equipment_value_01[ACOUST_EQUIP_SHIELD_RELEASE]);
+    v->shield_sound->noise_mix =
+        acoustics_equipment_value_to_display(ACOUST_EQUIP_SHIELD_NOISE, v->equipment_value_01[ACOUST_EQUIP_SHIELD_NOISE]);
+    v->shield_sound->fm_depth_hz =
+        acoustics_equipment_value_to_display(ACOUST_EQUIP_SHIELD_FM_DEPTH, v->equipment_value_01[ACOUST_EQUIP_SHIELD_FM_DEPTH]);
+    v->shield_sound->fm_rate_hz =
+        acoustics_equipment_value_to_display(ACOUST_EQUIP_SHIELD_FM_RATE, v->equipment_value_01[ACOUST_EQUIP_SHIELD_FM_RATE]);
+    v->shield_sound->cutoff_hz =
+        acoustics_equipment_value_to_display(ACOUST_EQUIP_SHIELD_CUTOFF, v->equipment_value_01[ACOUST_EQUIP_SHIELD_CUTOFF]);
+
+    v->aux_sound->level =
+        acoustics_equipment_value_to_display(ACOUST_EQUIP_AUX_LEVEL, v->equipment_value_01[ACOUST_EQUIP_AUX_LEVEL]);
+    v->aux_sound->pitch_hz =
+        acoustics_equipment_value_to_display(ACOUST_EQUIP_AUX_PITCH, v->equipment_value_01[ACOUST_EQUIP_AUX_PITCH]);
+    v->aux_sound->attack_ms =
+        acoustics_equipment_value_to_display(ACOUST_EQUIP_AUX_ATTACK, v->equipment_value_01[ACOUST_EQUIP_AUX_ATTACK]);
+    v->aux_sound->decay_ms =
+        acoustics_equipment_value_to_display(ACOUST_EQUIP_AUX_RELEASE, v->equipment_value_01[ACOUST_EQUIP_AUX_RELEASE]);
+    v->aux_sound->noise_mix =
+        acoustics_equipment_value_to_display(ACOUST_EQUIP_AUX_NOISE, v->equipment_value_01[ACOUST_EQUIP_AUX_NOISE]);
+    v->aux_sound->fm_depth_hz =
+        acoustics_equipment_value_to_display(ACOUST_EQUIP_AUX_FM_DEPTH, v->equipment_value_01[ACOUST_EQUIP_AUX_FM_DEPTH]);
+    v->aux_sound->fm_rate_hz =
+        acoustics_equipment_value_to_display(ACOUST_EQUIP_AUX_FM_RATE, v->equipment_value_01[ACOUST_EQUIP_AUX_FM_RATE]);
+    v->aux_sound->cutoff_hz =
+        acoustics_equipment_value_to_display(ACOUST_EQUIP_AUX_CUTOFF, v->equipment_value_01[ACOUST_EQUIP_AUX_CUTOFF]);
 }
 
 int audio_spatial_enqueue_ring(

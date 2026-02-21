@@ -166,7 +166,8 @@ typedef struct terrain_tuning {
 enum acoustics_page_id {
     ACOUSTICS_PAGE_SYNTH = 0,
     ACOUSTICS_PAGE_COMBAT = 1,
-    ACOUSTICS_PAGE_COUNT = 2
+    ACOUSTICS_PAGE_EQUIPMENT = 2,
+    ACOUSTICS_PAGE_COUNT = 3
 };
 
 typedef struct app {
@@ -309,7 +310,11 @@ typedef struct app {
     atomic_uint pending_thruster_tests;
     atomic_uint pending_enemy_fire_tests;
     atomic_uint pending_explosion_tests;
+    atomic_uint pending_shield_tests;
+    atomic_uint pending_aux_tests;
     atomic_int thrust_gate;
+    atomic_int shield_gate;
+    atomic_uint shield_lfo_phase_u16;
     atomic_int audio_weapon_level;
     atomic_uint audio_spatial_read;
     atomic_uint audio_spatial_write;
@@ -317,7 +322,19 @@ typedef struct app {
     audio_combat_voice combat_voices[AUDIO_COMBAT_VOICE_COUNT];
     combat_sound_params enemy_fire_sound;
     combat_sound_params explosion_sound;
+    combat_sound_params shield_sound;
+    combat_sound_params aux_sound;
     uint32_t thruster_test_frames_left;
+    uint32_t shield_test_frames_left;
+    uint32_t aux_test_frames_left;
+    float shield_phase;
+    float shield_fm_phase;
+    float shield_env;
+    float shield_lp;
+    float aux_phase;
+    float aux_fm_phase;
+    float aux_env;
+    float aux_lp;
     int force_clear_frames;
     int show_crt_ui;
     int show_fps_counter;
@@ -336,22 +353,30 @@ typedef struct app {
     int acoustics_selected;
     int acoustics_page;
     int acoustics_combat_selected;
+    int acoustics_equipment_selected;
     int acoustics_fire_slot_selected;
     int acoustics_thr_slot_selected;
     int acoustics_enemy_slot_selected;
     int acoustics_exp_slot_selected;
+    int acoustics_shield_slot_selected;
+    int acoustics_aux_slot_selected;
     uint8_t acoustics_fire_slot_defined[ACOUSTICS_SLOT_COUNT];
     uint8_t acoustics_thr_slot_defined[ACOUSTICS_SLOT_COUNT];
     uint8_t acoustics_enemy_slot_defined[ACOUSTICS_SLOT_COUNT];
     uint8_t acoustics_exp_slot_defined[ACOUSTICS_SLOT_COUNT];
+    uint8_t acoustics_shield_slot_defined[ACOUSTICS_SLOT_COUNT];
+    uint8_t acoustics_aux_slot_defined[ACOUSTICS_SLOT_COUNT];
     float acoustics_fire_slots[ACOUSTICS_SLOT_COUNT][8];
     float acoustics_thr_slots[ACOUSTICS_SLOT_COUNT][6];
     float acoustics_enemy_slots[ACOUSTICS_SLOT_COUNT][8];
     float acoustics_exp_slots[ACOUSTICS_SLOT_COUNT][8];
+    float acoustics_shield_slots[ACOUSTICS_SLOT_COUNT][8];
+    float acoustics_aux_slots[ACOUSTICS_SLOT_COUNT][8];
     char acoustics_slots_path[PATH_MAX];
     int acoustics_mouse_drag;
     float acoustics_value_01[ACOUSTICS_SLIDER_COUNT];
     float acoustics_combat_value_01[ACOUST_COMBAT_SLIDER_COUNT];
+    float acoustics_equipment_value_01[ACOUST_EQUIP_SLIDER_COUNT];
     int thruster_note_on;
     int current_system_index;
     int shipyard_weapon_selected;
@@ -1247,11 +1272,27 @@ static void trigger_explosion_test(app* a) {
     atomic_fetch_add_explicit(&a->pending_explosion_tests, 1u, memory_order_acq_rel);
 }
 
+static void trigger_shield_test(app* a) {
+    if (!a || !a->audio_ready) {
+        return;
+    }
+    atomic_fetch_add_explicit(&a->pending_shield_tests, 1u, memory_order_acq_rel);
+}
+
+static void trigger_aux_test(app* a) {
+    if (!a || !a->audio_ready) {
+        return;
+    }
+    atomic_fetch_add_explicit(&a->pending_aux_tests, 1u, memory_order_acq_rel);
+}
+
 static void apply_acoustics(app* a);
 static void trigger_fire_test(app* a);
 static void trigger_thruster_test(app* a);
 static void trigger_enemy_fire_test(app* a);
 static void trigger_explosion_test(app* a);
+static void trigger_shield_test(app* a);
+static void trigger_aux_test(app* a);
 static int create_swapchain(app* a);
 static int create_render_passes(app* a);
 static int create_offscreen_targets(app* a);
@@ -1294,6 +1335,13 @@ static void acoustics_combat_defaults(app* a) {
     acoustics_combat_defaults_init(a->acoustics_combat_value_01);
 }
 
+static void acoustics_equipment_defaults(app* a) {
+    if (!a) {
+        return;
+    }
+    acoustics_equipment_defaults_init(a->acoustics_equipment_value_01);
+}
+
 static acoustics_slot_view acoustics_make_slot_view(app* a) {
     acoustics_slot_view v;
     memset(&v, 0, sizeof(v));
@@ -1304,16 +1352,23 @@ static acoustics_slot_view acoustics_make_slot_view(app* a) {
     v.thr_slot_selected = &a->acoustics_thr_slot_selected;
     v.enemy_slot_selected = &a->acoustics_enemy_slot_selected;
     v.exp_slot_selected = &a->acoustics_exp_slot_selected;
+    v.shield_slot_selected = &a->acoustics_shield_slot_selected;
+    v.aux_slot_selected = &a->acoustics_aux_slot_selected;
     v.fire_slot_defined = a->acoustics_fire_slot_defined;
     v.thr_slot_defined = a->acoustics_thr_slot_defined;
     v.enemy_slot_defined = a->acoustics_enemy_slot_defined;
     v.exp_slot_defined = a->acoustics_exp_slot_defined;
+    v.shield_slot_defined = a->acoustics_shield_slot_defined;
+    v.aux_slot_defined = a->acoustics_aux_slot_defined;
     v.fire_slots = a->acoustics_fire_slots;
     v.thr_slots = a->acoustics_thr_slots;
     v.enemy_slots = a->acoustics_enemy_slots;
     v.exp_slots = a->acoustics_exp_slots;
+    v.shield_slots = a->acoustics_shield_slots;
+    v.aux_slots = a->acoustics_aux_slots;
     v.value_01 = a->acoustics_value_01;
     v.combat_value_01 = a->acoustics_combat_value_01;
+    v.equipment_value_01 = a->acoustics_equipment_value_01;
     return v;
 }
 
@@ -1325,10 +1380,13 @@ static void apply_acoustics(app* a) {
     acoustics_runtime_view v = {
         .value_01 = a->acoustics_value_01,
         .combat_value_01 = a->acoustics_combat_value_01,
+        .equipment_value_01 = a->acoustics_equipment_value_01,
         .weapon_synth = &a->weapon_synth,
         .thruster_synth = &a->thruster_synth,
         .enemy_fire_sound = &a->enemy_fire_sound,
-        .explosion_sound = &a->explosion_sound
+        .explosion_sound = &a->explosion_sound,
+        .shield_sound = &a->shield_sound,
+        .aux_sound = &a->aux_sound
     };
     acoustics_apply_locked(&v);
     SDL_UnlockAudioDevice(a->audio_dev);
@@ -1360,12 +1418,17 @@ static int handle_acoustics_ui_mouse(app* a, int mouse_x, int mouse_y, int set_v
     const float w = (float)a->swapchain_extent.width;
     const float h = (float)a->swapchain_extent.height;
     const float ui = ui_reference_scale(w, h);
-    float display_values[ACOUSTICS_SLIDER_COUNT];
+    float display_values[ACOUST_EQUIP_SLIDER_COUNT];
     int display_count = ACOUSTICS_SLIDER_COUNT;
     if (a->acoustics_page == ACOUSTICS_PAGE_COMBAT) {
         display_count = ACOUST_COMBAT_SLIDER_COUNT;
         for (int i = 0; i < display_count; ++i) {
             display_values[i] = acoustics_combat_value_to_ui_display(i, a->acoustics_combat_value_01[i]);
+        }
+    } else if (a->acoustics_page == ACOUSTICS_PAGE_EQUIPMENT) {
+        display_count = ACOUST_EQUIP_SLIDER_COUNT;
+        for (int i = 0; i < display_count; ++i) {
+            display_values[i] = acoustics_equipment_value_to_ui_display(i, a->acoustics_equipment_value_01[i]);
         }
     } else {
         for (int i = 0; i < display_count; ++i) {
@@ -1378,17 +1441,25 @@ static int handle_acoustics_ui_mouse(app* a, int mouse_x, int mouse_y, int set_v
         display_values,
         display_count
     );
-    const acoustics_ui_layout l = make_acoustics_ui_layout(w, h, value_col_width_px, (a->acoustics_page == ACOUSTICS_PAGE_COMBAT) ? 8 : 8, (a->acoustics_page == ACOUSTICS_PAGE_COMBAT) ? 8 : 6);
-    const vg_rect page_btn = acoustics_page_toggle_button_rect(w, h);
+    const int row_count_right = (a->acoustics_page == ACOUSTICS_PAGE_SYNTH) ? 6 : 8;
+    const acoustics_ui_layout l = make_acoustics_ui_layout(w, h, value_col_width_px, 8, row_count_right);
+    const vg_rect page_btns[3] = {
+        {l.panel[0].x, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.15f, l.panel[0].h * 0.042f},
+        {l.panel[0].x + l.panel[0].w * 0.17f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.19f, l.panel[0].h * 0.042f},
+        {l.panel[0].x + l.panel[0].w * 0.38f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.24f, l.panel[0].h * 0.042f}
+    };
     acoustics_slot_view sv = acoustics_make_slot_view(a);
     float mx = 0.0f;
     float my = 0.0f;
     map_mouse_to_scene_coords(a, mouse_x, mouse_y, &mx, &my);
-    if (mx >= page_btn.x && mx <= page_btn.x + page_btn.w && my >= page_btn.y && my <= page_btn.y + page_btn.h) {
-        if (set_value) {
-            a->acoustics_page = (a->acoustics_page + 1) % ACOUSTICS_PAGE_COUNT;
+    for (int p = 0; p < 3; ++p) {
+        const vg_rect b = page_btns[p];
+        if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
+            if (set_value) {
+                a->acoustics_page = p;
+            }
+            return 1;
         }
-        return 1;
     }
     for (int p = 0; p < 2; ++p) {
         const vg_rect r = l.panel[p];
@@ -1404,6 +1475,12 @@ static int handle_acoustics_ui_mouse(app* a, int mouse_x, int mouse_y, int set_v
                             trigger_enemy_fire_test(a);
                         } else {
                             trigger_explosion_test(a);
+                        }
+                    } else if (a->acoustics_page == ACOUSTICS_PAGE_EQUIPMENT) {
+                        if (p == 0) {
+                            trigger_shield_test(a);
+                        } else {
+                            trigger_aux_test(a);
                         }
                     } else {
                         if (p == 0) {
@@ -1422,8 +1499,10 @@ static int handle_acoustics_ui_mouse(app* a, int mouse_x, int mouse_y, int set_v
                 if (set_value) {
                     if (a->acoustics_page == ACOUSTICS_PAGE_SYNTH) {
                         acoustics_capture_current_to_selected_slot_view(&sv, (p == 0) ? 1 : 0);
-                    } else {
+                    } else if (a->acoustics_page == ACOUSTICS_PAGE_COMBAT) {
                         acoustics_capture_current_to_selected_combat_slot_view(&sv, (p == 0) ? 1 : 0);
+                    } else {
+                        acoustics_capture_current_to_selected_equipment_slot_view(&sv, (p == 0) ? 1 : 0);
                     }
                     (void)acoustics_save_slots_view(&sv, a->acoustics_slots_path);
                 }
@@ -1444,7 +1523,7 @@ static int handle_acoustics_ui_mouse(app* a, int mouse_x, int mouse_y, int set_v
                             acoustics_load_slot_to_current_view(&sv, 0, s);
                             apply_acoustics(a);
                         }
-                    } else {
+                    } else if (a->acoustics_page == ACOUSTICS_PAGE_COMBAT) {
                         if (p == 0) {
                             a->acoustics_enemy_slot_selected = s;
                             acoustics_load_combat_slot_to_current_view(&sv, 1, s);
@@ -1452,6 +1531,16 @@ static int handle_acoustics_ui_mouse(app* a, int mouse_x, int mouse_y, int set_v
                         } else {
                             a->acoustics_exp_slot_selected = s;
                             acoustics_load_combat_slot_to_current_view(&sv, 0, s);
+                            apply_acoustics(a);
+                        }
+                    } else {
+                        if (p == 0) {
+                            a->acoustics_shield_slot_selected = s;
+                            acoustics_load_equipment_slot_to_current_view(&sv, 1, s);
+                            apply_acoustics(a);
+                        } else {
+                            a->acoustics_aux_slot_selected = s;
+                            acoustics_load_equipment_slot_to_current_view(&sv, 0, s);
                             apply_acoustics(a);
                         }
                     }
@@ -1479,12 +1568,22 @@ static int handle_acoustics_ui_mouse(app* a, int mouse_x, int mouse_y, int set_v
                         apply_acoustics(a);
                     }
                 }
-            } else {
+            } else if (a->acoustics_page == ACOUSTICS_PAGE_SYNTH) {
                 a->acoustics_selected = idx;
                 if (set_value) {
                     const float t = clampf((mx - sx0) / l.slider_w[p], 0.0f, 1.0f);
                     a->acoustics_value_01[idx] = t;
                     apply_acoustics(a);
+                }
+            } else {
+                const int eidx = (p == 0) ? row : (8 + row);
+                if (eidx >= 0 && eidx < ACOUST_EQUIP_SLIDER_COUNT) {
+                    a->acoustics_equipment_selected = eidx;
+                    if (set_value) {
+                        const float t = clampf((mx - sx0) / l.slider_w[p], 0.0f, 1.0f);
+                        a->acoustics_equipment_value_01[eidx] = t;
+                        apply_acoustics(a);
+                    }
                 }
             }
         }
@@ -1623,12 +1722,24 @@ static void audio_callback(void* userdata, Uint8* stream, int len) {
     uint32_t thruster_tests = atomic_exchange_explicit(&a->pending_thruster_tests, 0u, memory_order_acq_rel);
     uint32_t enemy_fire_tests = atomic_exchange_explicit(&a->pending_enemy_fire_tests, 0u, memory_order_acq_rel);
     uint32_t explosion_tests = atomic_exchange_explicit(&a->pending_explosion_tests, 0u, memory_order_acq_rel);
+    uint32_t shield_tests = atomic_exchange_explicit(&a->pending_shield_tests, 0u, memory_order_acq_rel);
+    uint32_t aux_tests = atomic_exchange_explicit(&a->pending_aux_tests, 0u, memory_order_acq_rel);
     const int weapon_level = atomic_load_explicit(&a->audio_weapon_level, memory_order_acquire);
     const int thrust_gate = atomic_load_explicit(&a->thrust_gate, memory_order_acquire);
+    const int shield_gate = atomic_load_explicit(&a->shield_gate, memory_order_acquire);
+    const uint32_t shield_lfo_phase_u16 = atomic_load_explicit(&a->shield_lfo_phase_u16, memory_order_acquire);
     if (thruster_tests > 0) {
         a->thruster_test_frames_left = a->audio_have.freq / 3u;
     }
+    if (shield_tests > 0) {
+        a->shield_test_frames_left = a->audio_have.freq;
+    }
+    if (aux_tests > 0) {
+        a->aux_test_frames_left = a->audio_have.freq / 2u;
+    }
     const int thruster_effective_gate = thrust_gate || (a->thruster_test_frames_left > 0u);
+    const int shield_effective_gate = shield_gate || (a->shield_test_frames_left > 0u);
+    const int aux_effective_gate = (a->aux_test_frames_left > 0u);
 
     if (thruster_effective_gate && !a->thruster_note_on) {
         const float thr_hz = acoustics_value_to_display(ACOUST_THR_PITCH, a->acoustics_value_01[ACOUST_THR_PITCH]);
@@ -1721,6 +1832,61 @@ static void audio_callback(void* userdata, Uint8* stream, int len) {
             a->audio_mix_tmp_d,
             n
         );
+        {
+            const float sr = (float)((a->audio_have.freq > 0) ? a->audio_have.freq : 48000);
+            const float lfo_phase0 = ((float)shield_lfo_phase_u16 / 65535.0f) * 6.2831853f;
+            const float lfo_inc = 8.6f / sr;
+            const float shield_attack_s = fmaxf(0.001f, a->shield_sound.attack_ms * 0.001f);
+            const float shield_release_s = fmaxf(0.001f, a->shield_sound.decay_ms * 0.001f);
+            const float shield_cutoff = fmaxf(80.0f, a->shield_sound.cutoff_hz);
+            const float shield_alpha = clampf((6.2831853f * shield_cutoff) / sr, 0.0f, 1.0f);
+            const float aux_attack_s = fmaxf(0.001f, a->aux_sound.attack_ms * 0.001f);
+            const float aux_release_s = fmaxf(0.001f, a->aux_sound.decay_ms * 0.001f);
+            const float aux_cutoff = fmaxf(80.0f, a->aux_sound.cutoff_hz);
+            const float aux_alpha = clampf((6.2831853f * aux_cutoff) / sr, 0.0f, 1.0f);
+
+            for (uint32_t i = 0; i < n; ++i) {
+                const float lfo = 0.5f + 0.5f * sinf(lfo_phase0 + lfo_inc * (float)(off + i));
+
+                if (shield_effective_gate) {
+                    a->shield_env += (1.0f - a->shield_env) * (1.0f - expf(-1.0f / (sr * shield_attack_s)));
+                } else {
+                    a->shield_env *= expf(-1.0f / (sr * shield_release_s));
+                }
+                const float shield_base_hz = fmaxf(20.0f, a->shield_sound.pitch_hz);
+                const float shield_fm_hz = fmaxf(0.1f, a->shield_sound.fm_rate_hz);
+                a->shield_fm_phase += 6.2831853f * shield_fm_hz / sr;
+                if (a->shield_fm_phase > 6.2831853f) a->shield_fm_phase -= 6.2831853f;
+                const float shield_fm = sinf(a->shield_fm_phase) * a->shield_sound.fm_depth_hz;
+                a->shield_phase += 6.2831853f * (shield_base_hz + shield_fm) / sr;
+                if (a->shield_phase > 6.2831853f) a->shield_phase -= 6.2831853f;
+                float shield_s = sinf(a->shield_phase);
+                shield_s += (audio_rand01_from_state(&a->audio_rng) * 2.0f - 1.0f) * a->shield_sound.noise_mix;
+                a->shield_lp += (shield_s - a->shield_lp) * shield_alpha;
+                const float shield_amp = a->shield_sound.level * (0.65f + 0.35f * lfo) * a->shield_env;
+                const float shield_out = a->shield_lp * shield_amp;
+
+                if (aux_effective_gate) {
+                    a->aux_env += (1.0f - a->aux_env) * (1.0f - expf(-1.0f / (sr * aux_attack_s)));
+                } else {
+                    a->aux_env *= expf(-1.0f / (sr * aux_release_s));
+                }
+                const float aux_base_hz = fmaxf(20.0f, a->aux_sound.pitch_hz);
+                const float aux_fm_hz = fmaxf(0.1f, a->aux_sound.fm_rate_hz);
+                a->aux_fm_phase += 6.2831853f * aux_fm_hz / sr;
+                if (a->aux_fm_phase > 6.2831853f) a->aux_fm_phase -= 6.2831853f;
+                const float aux_fm = sinf(a->aux_fm_phase) * a->aux_sound.fm_depth_hz;
+                a->aux_phase += 6.2831853f * (aux_base_hz + aux_fm) / sr;
+                if (a->aux_phase > 6.2831853f) a->aux_phase -= 6.2831853f;
+                float aux_s = sinf(a->aux_phase);
+                aux_s += (audio_rand01_from_state(&a->audio_rng) * 2.0f - 1.0f) * a->aux_sound.noise_mix;
+                a->aux_lp += (aux_s - a->aux_lp) * aux_alpha;
+                const float aux_out = a->aux_lp * a->aux_sound.level * a->aux_env;
+
+                a->audio_mix_tmp_c[i] += shield_out + aux_out;
+                a->audio_mix_tmp_d[i] += shield_out + aux_out;
+            }
+        }
         for (uint32_t i = 0; i < n; ++i) {
             const float mono = a->audio_mix_tmp_a[i] + a->audio_mix_tmp_b[i];
             float l = mono + a->audio_mix_tmp_c[i];
@@ -1745,6 +1911,20 @@ static void audio_callback(void* userdata, Uint8* stream, int len) {
                 a->thruster_test_frames_left -= n;
             } else {
                 a->thruster_test_frames_left = 0u;
+            }
+        }
+        if (a->shield_test_frames_left > 0u) {
+            if (a->shield_test_frames_left > n) {
+                a->shield_test_frames_left -= n;
+            } else {
+                a->shield_test_frames_left = 0u;
+            }
+        }
+        if (a->aux_test_frames_left > 0u) {
+            if (a->aux_test_frames_left > n) {
+                a->aux_test_frames_left -= n;
+            } else {
+                a->aux_test_frames_left = 0u;
             }
         }
     }
@@ -1875,12 +2055,26 @@ static void init_teletype_audio(app* a) {
         a->thruster_note_id = 5000001;
         a->thruster_note_on = 0;
         a->thruster_test_frames_left = 0u;
+        a->shield_test_frames_left = 0u;
+        a->aux_test_frames_left = 0u;
+        a->shield_phase = 0.0f;
+        a->shield_fm_phase = 0.0f;
+        a->shield_env = 0.0f;
+        a->shield_lp = 0.0f;
+        a->aux_phase = 0.0f;
+        a->aux_fm_phase = 0.0f;
+        a->aux_env = 0.0f;
+        a->aux_lp = 0.0f;
         a->audio_rng = 0xC0DEF00Du;
         atomic_store_explicit(&a->pending_fire_events, 0u, memory_order_release);
         atomic_store_explicit(&a->pending_thruster_tests, 0u, memory_order_release);
         atomic_store_explicit(&a->pending_enemy_fire_tests, 0u, memory_order_release);
         atomic_store_explicit(&a->pending_explosion_tests, 0u, memory_order_release);
+        atomic_store_explicit(&a->pending_shield_tests, 0u, memory_order_release);
+        atomic_store_explicit(&a->pending_aux_tests, 0u, memory_order_release);
         atomic_store_explicit(&a->thrust_gate, 0, memory_order_release);
+        atomic_store_explicit(&a->shield_gate, 0, memory_order_release);
+        atomic_store_explicit(&a->shield_lfo_phase_u16, 0u, memory_order_release);
         atomic_store_explicit(&a->audio_weapon_level, 1, memory_order_release);
         atomic_store_explicit(&a->audio_spatial_read, 0u, memory_order_release);
         atomic_store_explicit(&a->audio_spatial_write, 0u, memory_order_release);
@@ -4934,6 +5128,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .acoustics_selected = a->acoustics_selected,
         .acoustics_page = a->acoustics_page,
         .acoustics_combat_selected = a->acoustics_combat_selected,
+        .acoustics_equipment_selected = a->acoustics_equipment_selected,
         .acoustics_fire_slot_selected = a->acoustics_fire_slot_selected,
         .acoustics_thr_slot_selected = a->acoustics_thr_slot_selected,
         .planetarium_system = app_planetarium_system(a),
@@ -5003,6 +5198,9 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         if (a->acoustics_page == ACOUSTICS_PAGE_COMBAT) {
             metrics.acoustics_fire_slot_defined[i] = a->acoustics_enemy_slot_defined[i] ? 1 : 0;
             metrics.acoustics_thr_slot_defined[i] = a->acoustics_exp_slot_defined[i] ? 1 : 0;
+        } else if (a->acoustics_page == ACOUSTICS_PAGE_EQUIPMENT) {
+            metrics.acoustics_fire_slot_defined[i] = a->acoustics_shield_slot_defined[i] ? 1 : 0;
+            metrics.acoustics_thr_slot_defined[i] = a->acoustics_aux_slot_defined[i] ? 1 : 0;
         } else {
             metrics.acoustics_fire_slot_defined[i] = a->acoustics_fire_slot_defined[i] ? 1 : 0;
             metrics.acoustics_thr_slot_defined[i] = a->acoustics_thr_slot_defined[i] ? 1 : 0;
@@ -5021,6 +5219,9 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
     if (a->acoustics_page == ACOUSTICS_PAGE_COMBAT) {
         metrics.acoustics_fire_slot_selected = a->acoustics_enemy_slot_selected;
         metrics.acoustics_thr_slot_selected = a->acoustics_exp_slot_selected;
+    } else if (a->acoustics_page == ACOUSTICS_PAGE_EQUIPMENT) {
+        metrics.acoustics_fire_slot_selected = a->acoustics_shield_slot_selected;
+        metrics.acoustics_thr_slot_selected = a->acoustics_aux_slot_selected;
     } else {
         metrics.acoustics_fire_slot_selected = a->acoustics_fire_slot_selected;
         metrics.acoustics_thr_slot_selected = a->acoustics_thr_slot_selected;
@@ -5032,6 +5233,10 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
     for (int i = 0; i < ACOUSTICS_COMBAT_SLIDER_COUNT; ++i) {
         metrics.acoustics_combat_value_01[i] = a->acoustics_combat_value_01[i];
         metrics.acoustics_combat_display[i] = acoustics_combat_value_to_ui_display(i, a->acoustics_combat_value_01[i]);
+    }
+    for (int i = 0; i < ACOUST_EQUIP_SLIDER_COUNT; ++i) {
+        metrics.acoustics_equipment_value_01[i] = a->acoustics_equipment_value_01[i];
+        metrics.acoustics_equipment_display[i] = acoustics_equipment_value_to_ui_display(i, a->acoustics_equipment_value_01[i]);
     }
     for (int i = 0; i < ACOUSTICS_SCOPE_SAMPLES; ++i) {
         metrics.acoustics_scope[i] = a->scope_window[i];
@@ -5282,6 +5487,7 @@ int main(void) {
     a.acoustics_selected = 0;
     a.acoustics_page = ACOUSTICS_PAGE_SYNTH;
     a.acoustics_combat_selected = 0;
+    a.acoustics_equipment_selected = 0;
     a.acoustics_mouse_drag = 0;
     a.wave_tty_text[0] = '\0';
     a.wave_tty_visible[0] = '\0';
@@ -5299,6 +5505,7 @@ int main(void) {
     }
     acoustics_defaults(&a);
     acoustics_combat_defaults(&a);
+    acoustics_equipment_defaults(&a);
     {
         acoustics_slot_view sv = acoustics_make_slot_view(&a);
         acoustics_slot_defaults_view(&sv);
@@ -5546,13 +5753,18 @@ int main(void) {
                         }
                     }
                 } else if (menu_is_screen(&a.menu, APP_SCREEN_ACOUSTICS) && ev.key.keysym.sym == SDLK_s) {
-                    if (a.acoustics_page == ACOUSTICS_PAGE_SYNTH) {
-                        acoustics_slot_view sv = acoustics_make_slot_view(&a);
-                        acoustics_capture_current_to_selected_slot_view(&sv, 1);
-                        acoustics_capture_current_to_selected_slot_view(&sv, 0);
-                    }
                     {
                         acoustics_slot_view sv = acoustics_make_slot_view(&a);
+                        if (a.acoustics_page == ACOUSTICS_PAGE_SYNTH) {
+                            acoustics_capture_current_to_selected_slot_view(&sv, 1);
+                            acoustics_capture_current_to_selected_slot_view(&sv, 0);
+                        } else if (a.acoustics_page == ACOUSTICS_PAGE_COMBAT) {
+                            acoustics_capture_current_to_selected_combat_slot_view(&sv, 1);
+                            acoustics_capture_current_to_selected_combat_slot_view(&sv, 0);
+                        } else {
+                            acoustics_capture_current_to_selected_equipment_slot_view(&sv, 1);
+                            acoustics_capture_current_to_selected_equipment_slot_view(&sv, 0);
+                        }
                         if (acoustics_save_slots_view(&sv, a.acoustics_slots_path)) {
                             set_tty_message(&a, "acoustics slots saved");
                         } else {
@@ -5563,6 +5775,8 @@ int main(void) {
                     if (menu_is_screen(&a.menu, APP_SCREEN_ACOUSTICS)) {
                         if (a.acoustics_page == ACOUSTICS_PAGE_COMBAT) {
                             trigger_enemy_fire_test(&a);
+                        } else if (a.acoustics_page == ACOUSTICS_PAGE_EQUIPMENT) {
+                            trigger_shield_test(&a);
                         } else {
                             trigger_fire_test(&a);
                         }
@@ -5573,6 +5787,8 @@ int main(void) {
                 } else if (menu_is_screen(&a.menu, APP_SCREEN_ACOUSTICS) && ev.key.keysym.sym == SDLK_g) {
                     if (a.acoustics_page == ACOUSTICS_PAGE_COMBAT) {
                         trigger_explosion_test(&a);
+                    } else if (a.acoustics_page == ACOUSTICS_PAGE_EQUIPMENT) {
+                        trigger_aux_test(&a);
                     } else {
                         trigger_thruster_test(&a);
                     }
@@ -5654,25 +5870,40 @@ int main(void) {
                     if (a.acoustics_page == ACOUSTICS_PAGE_COMBAT) {
                         a.acoustics_combat_selected =
                             (a.acoustics_combat_selected + ACOUST_COMBAT_SLIDER_COUNT - 1) % ACOUST_COMBAT_SLIDER_COUNT;
+                    } else if (a.acoustics_page == ACOUSTICS_PAGE_EQUIPMENT) {
+                        a.acoustics_equipment_selected =
+                            (a.acoustics_equipment_selected + ACOUST_EQUIP_SLIDER_COUNT - 1) % ACOUST_EQUIP_SLIDER_COUNT;
                     } else {
                         a.acoustics_selected = (a.acoustics_selected + ACOUSTICS_SLIDER_COUNT - 1) % ACOUSTICS_SLIDER_COUNT;
                     }
                 } else if (menu_is_screen(&a.menu, APP_SCREEN_ACOUSTICS) && ev.key.keysym.sym == SDLK_DOWN) {
                     if (a.acoustics_page == ACOUSTICS_PAGE_COMBAT) {
                         a.acoustics_combat_selected = (a.acoustics_combat_selected + 1) % ACOUST_COMBAT_SLIDER_COUNT;
+                    } else if (a.acoustics_page == ACOUSTICS_PAGE_EQUIPMENT) {
+                        a.acoustics_equipment_selected = (a.acoustics_equipment_selected + 1) % ACOUST_EQUIP_SLIDER_COUNT;
                     } else {
                         a.acoustics_selected = (a.acoustics_selected + 1) % ACOUSTICS_SLIDER_COUNT;
                     }
                 } else if (menu_is_screen(&a.menu, APP_SCREEN_ACOUSTICS) && ev.key.keysym.sym == SDLK_LEFT) {
-                    float* v = (a.acoustics_page == ACOUSTICS_PAGE_COMBAT) ?
-                        &a.acoustics_combat_value_01[a.acoustics_combat_selected] :
-                        &a.acoustics_value_01[a.acoustics_selected];
+                    float* v = NULL;
+                    if (a.acoustics_page == ACOUSTICS_PAGE_COMBAT) {
+                        v = &a.acoustics_combat_value_01[a.acoustics_combat_selected];
+                    } else if (a.acoustics_page == ACOUSTICS_PAGE_EQUIPMENT) {
+                        v = &a.acoustics_equipment_value_01[a.acoustics_equipment_selected];
+                    } else {
+                        v = &a.acoustics_value_01[a.acoustics_selected];
+                    }
                     *v = clampf(*v - 0.02f, 0.0f, 1.0f);
                     apply_acoustics(&a);
                 } else if (menu_is_screen(&a.menu, APP_SCREEN_ACOUSTICS) && ev.key.keysym.sym == SDLK_RIGHT) {
-                    float* v = (a.acoustics_page == ACOUSTICS_PAGE_COMBAT) ?
-                        &a.acoustics_combat_value_01[a.acoustics_combat_selected] :
-                        &a.acoustics_value_01[a.acoustics_selected];
+                    float* v = NULL;
+                    if (a.acoustics_page == ACOUSTICS_PAGE_COMBAT) {
+                        v = &a.acoustics_combat_value_01[a.acoustics_combat_selected];
+                    } else if (a.acoustics_page == ACOUSTICS_PAGE_EQUIPMENT) {
+                        v = &a.acoustics_equipment_value_01[a.acoustics_equipment_selected];
+                    } else {
+                        v = &a.acoustics_value_01[a.acoustics_selected];
+                    }
                     *v = clampf(*v + 0.02f, 0.0f, 1.0f);
                     apply_acoustics(&a);
                 } else if (a.show_crt_ui && ev.key.keysym.sym == SDLK_UP) {
@@ -5846,6 +6077,13 @@ int main(void) {
             const int thrust_on = (!controls_ui_active(&a)) &&
                                   (in.left || in.right || in.up || in.down) && (a.game.lives > 0);
             atomic_store_explicit(&a.thrust_gate, thrust_on ? 1 : 0, memory_order_release);
+            atomic_store_explicit(&a.shield_gate, a.game.shield_active ? 1 : 0, memory_order_release);
+            {
+                const float t_s = (float)SDL_GetTicks() * 0.001f;
+                const float phase01 = fmodf((t_s * 8.6f) / 6.2831853f, 1.0f);
+                const uint32_t u16 = (uint32_t)clampf(phase01 * 65535.0f, 0.0f, 65535.0f);
+                atomic_store_explicit(&a.shield_lfo_phase_u16, u16, memory_order_release);
+            }
         }
         if (a.audio_ready) {
             const int fire_events = game_pop_fire_sfx_count(&a.game);

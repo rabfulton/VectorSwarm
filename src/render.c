@@ -1292,7 +1292,16 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
     static const char* combat_exp_labels[8] = {
         "LEVEL", "PITCH HZ", "ATTACK MS", "DECAY MS", "NOISE MIX", "FM DEPTH", "FM RATE", "PAN WIDTH"
     };
-    const int combat_page = (metrics->acoustics_page != 0);
+    static const char* equip_shield_labels[8] = {
+        "LEVEL", "PITCH HZ", "ATTACK MS", "RELEASE MS", "NOISE MIX", "FM DEPTH", "FM RATE", "CUTOFF KHZ"
+    };
+    static const char* equip_aux_labels[8] = {
+        "LEVEL", "PITCH HZ", "ATTACK MS", "RELEASE MS", "NOISE MIX", "FM DEPTH", "FM RATE", "CUTOFF KHZ"
+    };
+    const int page = metrics->acoustics_page;
+    const int combat_page = (page == 1);
+    const int equipment_page = (page == 2);
+    const int row_count_right = equipment_page ? 8 : (combat_page ? 8 : 6);
     const palette_theme pal = get_palette_theme(metrics->palette_mode);
 
     const float ui = ui_reference_scale(w, h);
@@ -1330,7 +1339,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
             thr_items[i].value_display = metrics->acoustics_combat_display[8 + i];
             thr_items[i].selected = (metrics->acoustics_combat_selected == (8 + i)) ? 1 : 0;
         }
-    } else {
+    } else if (!equipment_page) {
         for (int i = 0; i < 8; ++i) {
             fire_items[i].label = synth_fire_labels[i];
             fire_items[i].value_01 = metrics->acoustics_value_01[i];
@@ -1343,16 +1352,33 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
             thr_items[i].value_display = metrics->acoustics_display[8 + i];
             thr_items[i].selected = (metrics->acoustics_selected == (8 + i)) ? 1 : 0;
         }
+    } else {
+        for (int i = 0; i < 8; ++i) {
+            fire_items[i].label = equip_shield_labels[i];
+            fire_items[i].value_01 = metrics->acoustics_equipment_value_01[i];
+            fire_items[i].value_display = metrics->acoustics_equipment_display[i];
+            fire_items[i].selected = (metrics->acoustics_equipment_selected == i) ? 1 : 0;
+        }
+        for (int i = 0; i < 8; ++i) {
+            thr_items[i].label = equip_aux_labels[i];
+            thr_items[i].value_01 = metrics->acoustics_equipment_value_01[8 + i];
+            thr_items[i].value_display = metrics->acoustics_equipment_display[8 + i];
+            thr_items[i].selected = (metrics->acoustics_equipment_selected == (8 + i)) ? 1 : 0;
+        }
     }
 
     const float value_col_width_px = acoustics_compute_value_col_width(
         ui,
         11.5f * ui,
-        combat_page ? metrics->acoustics_combat_display : metrics->acoustics_display,
-        combat_page ? ACOUSTICS_COMBAT_SLIDER_COUNT : ACOUSTICS_SLIDER_COUNT
+        combat_page ? metrics->acoustics_combat_display : (equipment_page ? metrics->acoustics_equipment_display : metrics->acoustics_display),
+        combat_page ? ACOUSTICS_COMBAT_SLIDER_COUNT : (equipment_page ? ACOUSTICS_EQUIPMENT_SLIDER_COUNT : ACOUSTICS_SLIDER_COUNT)
     );
-    const acoustics_ui_layout l = make_acoustics_ui_layout(w, h, value_col_width_px, combat_page ? 8 : 8, combat_page ? 8 : 6);
-    const vg_rect page_btn = acoustics_page_toggle_button_rect(w, h);
+    const acoustics_ui_layout l = make_acoustics_ui_layout(w, h, value_col_width_px, 8, row_count_right);
+    const vg_rect page_btns[3] = {
+        {l.panel[0].x, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.15f, l.panel[0].h * 0.042f},
+        {l.panel[0].x + l.panel[0].w * 0.17f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.19f, l.panel[0].h * 0.042f},
+        {l.panel[0].x + l.panel[0].w * 0.38f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.24f, l.panel[0].h * 0.042f}
+    };
     const vg_rect fire_rect = l.panel[0];
     const vg_rect thr_rect = l.panel[1];
     const vg_rect fire_btn = l.button[0];
@@ -1363,11 +1389,11 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
 
     vg_ui_slider_panel_desc fire = {
         .rect = fire_rect,
-        .title_line_0 = combat_page ? "SHIPYARD ACOUSTICS - ENEMY FIRE" : "SHIPYARD ACOUSTICS - FIRE",
-        .title_line_1 = combat_page ? "Q/E SWITCH PAGE  ARROWS OR MOUSE TO TUNE" : "Q/E SWITCH PAGE  ARROWS OR MOUSE TO TUNE",
+        .title_line_0 = equipment_page ? "SHIPYARD ACOUSTICS - SHIELD" : (combat_page ? "SHIPYARD ACOUSTICS - ENEMY FIRE" : "SHIPYARD ACOUSTICS - FIRE"),
+        .title_line_1 = "Q/E OR PAGE BUTTONS  ARROWS OR MOUSE TO TUNE",
         .footer_line = NULL,
         .items = fire_items,
-        .item_count = combat_page ? 8u : 8u,
+        .item_count = 8u,
         .row_height_px = 34.0f * ui,
         .label_size_px = 11.0f * ui,
         .value_size_px = 11.5f * ui,
@@ -1380,9 +1406,9 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
     };
     vg_ui_slider_panel_desc thr = fire;
     thr.rect = thr_rect;
-    thr.title_line_0 = combat_page ? "SHIPYARD ACOUSTICS - EXPLOSION" : "SHIPYARD ACOUSTICS - THRUST";
+    thr.title_line_0 = equipment_page ? "SHIPYARD ACOUSTICS - AUX" : (combat_page ? "SHIPYARD ACOUSTICS - EXPLOSION" : "SHIPYARD ACOUSTICS - THRUST");
     thr.items = thr_items;
-    thr.item_count = combat_page ? 8u : 6u;
+    thr.item_count = (size_t)row_count_right;
 
     vg_ui_slider_panel_layout fire_layout;
     vg_ui_slider_panel_layout thr_layout;
@@ -1421,33 +1447,16 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         return r;
     }
 
-    {
-        vg_stroke_style header_active = text;
-        header_active.intensity *= 1.18f;
-        const char* page_label = combat_page ? "COMBAT" : "SHIP";
-        const float page_size = 18.0f * ui;
-        const float y = fmaxf(fire_rect.y + fire_rect.h + 14.0f * ui, page_btn.y + page_btn.h * 0.5f + 2.0f * ui);
-        r = draw_text_vector_glow(
-            ctx,
-            page_label,
-            (vg_vec2){fire_rect.x, y},
-            page_size,
-            0.78f * ui,
-            &panel,
-            &header_active
-        );
-        if (r != VG_OK) {
-            return r;
-        }
-
+    for (int i = 0; i < 3; ++i) {
+        static const char* page_labels[3] = {"SHIP", "COMBAT", "EQUIPMENT"};
         r = vg_draw_button(
             ctx,
-            page_btn,
-            combat_page ? "GO SHIP PAGE" : "GO COMBAT PAGE",
+            page_btns[i],
+            page_labels[i],
             10.8f * ui,
             &panel,
             &text,
-            0
+            (page == i) ? 1 : 0
         );
         if (r != VG_OK) {
             return r;
@@ -1455,11 +1464,13 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
     }
 
     {
-        r = vg_draw_button(ctx, fire_btn, combat_page ? "TEST ENEMY" : "TEST FIRE", 11.5f * ui, &panel, &text, 0);
+        const char* fire_test = equipment_page ? "TEST SHIELD" : (combat_page ? "TEST ENEMY" : "TEST FIRE");
+        const char* thr_test = equipment_page ? "TEST AUX" : (combat_page ? "TEST BOOM" : "TEST THRUST");
+        r = vg_draw_button(ctx, fire_btn, fire_test, 11.5f * ui, &panel, &text, 0);
         if (r != VG_OK) {
             return r;
         }
-        r = vg_draw_button(ctx, thr_btn, combat_page ? "TEST BOOM" : "TEST THRUST", 11.5f * ui, &panel, &text, 0);
+        r = vg_draw_button(ctx, thr_btn, thr_test, 11.5f * ui, &panel, &text, 0);
         if (r != VG_OK) {
             return r;
         }
@@ -1519,7 +1530,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         }
         r = draw_text_vector_glow(
             ctx,
-            combat_page ? "ENEMY SHOT PREVIEW" : "ENV + PITCH SWEEP",
+            equipment_page ? "SHIELD PREVIEW" : (combat_page ? "ENEMY SHOT PREVIEW" : "ENV + PITCH SWEEP"),
             (vg_vec2){fire_display.x + 8.0f * ui, fire_display.y + fire_display.h - 16.0f * ui},
             10.5f * ui,
             0.7f * ui,
@@ -1533,11 +1544,11 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         enum { FIRE_TRACE_SAMPLES = 96 };
         vg_vec2 amp_line[FIRE_TRACE_SAMPLES];
         vg_vec2 pitch_line[FIRE_TRACE_SAMPLES];
-        const float* fire_preview = combat_page ? metrics->acoustics_combat_display : metrics->acoustics_display;
+        const float* fire_preview = combat_page ? metrics->acoustics_combat_display : (equipment_page ? metrics->acoustics_equipment_display : metrics->acoustics_display);
         const float a_ms = fire_preview[2];
-        const float d_ms = fire_preview[3];
-        const float sweep_st = fire_preview[6];
-        const float sweep_d_ms = fire_preview[7];
+        const float d_ms = fire_preview[3] + (equipment_page ? fire_preview[3] : 0.0f);
+        const float sweep_st = equipment_page ? (fire_preview[5] / 60.0f) : fire_preview[6];
+        const float sweep_d_ms = equipment_page ? (1000.0f / fmaxf(0.1f, fire_preview[6])) : fire_preview[7];
         for (int i = 0; i < FIRE_TRACE_SAMPLES; ++i) {
             const float t = (float)i / (float)(FIRE_TRACE_SAMPLES - 1);
             const float x = fire_display.x + 8.0f * ui + (fire_display.w - 16.0f * ui) * t;
@@ -1588,7 +1599,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         }
         r = draw_text_vector_glow(
             ctx,
-            combat_page ? "EXPLOSION PREVIEW" : "OSCILLOSCOPE",
+            equipment_page ? "AUX PREVIEW" : (combat_page ? "EXPLOSION PREVIEW" : "OSCILLOSCOPE"),
             (vg_vec2){thr_display.x + 8.0f * ui, thr_display.y + thr_display.h - 16.0f * ui},
             10.5f * ui,
             0.7f * ui,
@@ -1612,61 +1623,88 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
             return r;
         }
 
-        static float scope_hold[ACOUSTICS_SCOPE_SAMPLES] = {0.0f};
-        static float scope_smooth[ACOUSTICS_SCOPE_SAMPLES] = {0.0f};
-        static int scope_init = 0;
-        if (!scope_init) {
-            for (int i = 0; i < ACOUSTICS_SCOPE_SAMPLES; ++i) {
-                const float s0 = metrics->acoustics_scope[i];
-                scope_hold[i] = s0;
-                scope_smooth[i] = s0;
+        if (equipment_page) {
+            enum { AUX_TRACE_SAMPLES = 96 };
+            vg_vec2 aux_line[AUX_TRACE_SAMPLES];
+            const float* aux_preview = &metrics->acoustics_equipment_display[8];
+            const float rate_hz = fmaxf(0.10f, aux_preview[6]);
+            const float noise = clampf(aux_preview[4], 0.0f, 1.0f);
+            for (int i = 0; i < AUX_TRACE_SAMPLES; ++i) {
+                const float t = (float)i / (float)(AUX_TRACE_SAMPLES - 1);
+                const float x = thr_display.x + 8.0f * ui + (thr_display.w - 16.0f * ui) * t;
+                const float lfo = sinf(6.2831853f * rate_hz * t);
+                const float y_norm = 0.5f + 0.32f * lfo * (1.0f - 0.5f * noise);
+                aux_line[i] = (vg_vec2){x, thr_display.y + 8.0f * ui + y_norm * (thr_display.h - 20.0f * ui)};
             }
-            scope_init = 1;
-        }
-        const float dt = clampf(metrics->dt, 0.001f, 0.10f);
-        const float hold_decay = expf(-dt / 0.30f);
-        const float smooth_alpha = 1.0f - expf(-dt / 0.040f);
+            r = draw_beam_trace(
+                ctx,
+                aux_line,
+                AUX_TRACE_SAMPLES,
+                &text,
+                (vg_color){0.55f, 1.0f, 1.0f, 1.0f},
+                1.45f * ui,
+                1.08f
+            );
+            if (r != VG_OK) {
+                return r;
+            }
+        } else {
+            static float scope_hold[ACOUSTICS_SCOPE_SAMPLES] = {0.0f};
+            static float scope_smooth[ACOUSTICS_SCOPE_SAMPLES] = {0.0f};
+            static int scope_init = 0;
+            if (!scope_init) {
+                for (int i = 0; i < ACOUSTICS_SCOPE_SAMPLES; ++i) {
+                    const float s0 = metrics->acoustics_scope[i];
+                    scope_hold[i] = s0;
+                    scope_smooth[i] = s0;
+                }
+                scope_init = 1;
+            }
+            const float dt = clampf(metrics->dt, 0.001f, 0.10f);
+            const float hold_decay = expf(-dt / 0.30f);
+            const float smooth_alpha = 1.0f - expf(-dt / 0.040f);
 
-        vg_vec2 scope_line[ACOUSTICS_SCOPE_SAMPLES];
-        vg_vec2 scope_hold_line[ACOUSTICS_SCOPE_SAMPLES];
-        for (int i = 0; i < ACOUSTICS_SCOPE_SAMPLES; ++i) {
-            const float t = (float)i / (float)(ACOUSTICS_SCOPE_SAMPLES - 1);
-            const float x = thr_display.x + 8.0f * ui + (thr_display.w - 16.0f * ui) * t;
-            const float s = clampf(metrics->acoustics_scope[i], -1.0f, 1.0f);
-            scope_smooth[i] += (s - scope_smooth[i]) * smooth_alpha;
-            if (fabsf(scope_smooth[i]) > fabsf(scope_hold[i])) {
-                scope_hold[i] = scope_smooth[i];
-            } else {
-                scope_hold[i] *= hold_decay;
+            vg_vec2 scope_line[ACOUSTICS_SCOPE_SAMPLES];
+            vg_vec2 scope_hold_line[ACOUSTICS_SCOPE_SAMPLES];
+            for (int i = 0; i < ACOUSTICS_SCOPE_SAMPLES; ++i) {
+                const float t = (float)i / (float)(ACOUSTICS_SCOPE_SAMPLES - 1);
+                const float x = thr_display.x + 8.0f * ui + (thr_display.w - 16.0f * ui) * t;
+                const float s = clampf(metrics->acoustics_scope[i], -1.0f, 1.0f);
+                scope_smooth[i] += (s - scope_smooth[i]) * smooth_alpha;
+                if (fabsf(scope_smooth[i]) > fabsf(scope_hold[i])) {
+                    scope_hold[i] = scope_smooth[i];
+                } else {
+                    scope_hold[i] *= hold_decay;
+                }
+                const float y_core = thr_display.y + thr_display.h * 0.5f + scope_smooth[i] * (thr_display.h * 0.35f);
+                const float y_hold = thr_display.y + thr_display.h * 0.5f + scope_hold[i] * (thr_display.h * 0.35f);
+                scope_line[i] = (vg_vec2){x, y_core};
+                scope_hold_line[i] = (vg_vec2){x, y_hold};
             }
-            const float y_core = thr_display.y + thr_display.h * 0.5f + scope_smooth[i] * (thr_display.h * 0.35f);
-            const float y_hold = thr_display.y + thr_display.h * 0.5f + scope_hold[i] * (thr_display.h * 0.35f);
-            scope_line[i] = (vg_vec2){x, y_core};
-            scope_hold_line[i] = (vg_vec2){x, y_hold};
-        }
-        r = draw_beam_trace(
-            ctx,
-            scope_hold_line,
-            ACOUSTICS_SCOPE_SAMPLES,
-            &text,
-            (vg_color){0.35f, 0.80f, 1.0f, 0.95f},
-            1.9f * ui,
-            0.62f
-        );
-        if (r != VG_OK) {
-            return r;
-        }
-        r = draw_beam_trace(
-            ctx,
-            scope_line,
-            ACOUSTICS_SCOPE_SAMPLES,
-            &text,
-            (vg_color){0.55f, 1.0f, 1.0f, 1.0f},
-            1.4f * ui,
-            1.10f
-        );
-        if (r != VG_OK) {
-            return r;
+            r = draw_beam_trace(
+                ctx,
+                scope_hold_line,
+                ACOUSTICS_SCOPE_SAMPLES,
+                &text,
+                (vg_color){0.35f, 0.80f, 1.0f, 0.95f},
+                1.9f * ui,
+                0.62f
+            );
+            if (r != VG_OK) {
+                return r;
+            }
+            r = draw_beam_trace(
+                ctx,
+                scope_line,
+                ACOUSTICS_SCOPE_SAMPLES,
+                &text,
+                (vg_color){0.55f, 1.0f, 1.0f, 1.0f},
+                1.4f * ui,
+                1.10f
+            );
+            if (r != VG_OK) {
+                return r;
+            }
         }
     }
     return VG_OK;

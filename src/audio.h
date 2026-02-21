@@ -93,14 +93,37 @@ enum acoustics_combat_slider_id {
     ACOUST_COMBAT_SLIDER_COUNT = 16
 };
 
+enum acoustics_equipment_slider_id {
+    ACOUST_EQUIP_SHIELD_LEVEL = 0,
+    ACOUST_EQUIP_SHIELD_PITCH = 1,
+    ACOUST_EQUIP_SHIELD_ATTACK = 2,
+    ACOUST_EQUIP_SHIELD_RELEASE = 3,
+    ACOUST_EQUIP_SHIELD_NOISE = 4,
+    ACOUST_EQUIP_SHIELD_FM_DEPTH = 5,
+    ACOUST_EQUIP_SHIELD_FM_RATE = 6,
+    ACOUST_EQUIP_SHIELD_CUTOFF = 7,
+    ACOUST_EQUIP_AUX_LEVEL = 8,
+    ACOUST_EQUIP_AUX_PITCH = 9,
+    ACOUST_EQUIP_AUX_ATTACK = 10,
+    ACOUST_EQUIP_AUX_RELEASE = 11,
+    ACOUST_EQUIP_AUX_NOISE = 12,
+    ACOUST_EQUIP_AUX_FM_DEPTH = 13,
+    ACOUST_EQUIP_AUX_FM_RATE = 14,
+    ACOUST_EQUIP_AUX_CUTOFF = 15,
+    ACOUST_EQUIP_SLIDER_COUNT = 16
+};
+
 float audio_rand01_from_state(uint32_t* state);
 
 float acoustics_value_to_display(int id, float t01);
 float acoustics_value_to_ui_display(int id, float t01);
 float acoustics_combat_value_to_display(int id, float t01);
 float acoustics_combat_value_to_ui_display(int id, float t01);
+float acoustics_equipment_value_to_display(int id, float t01);
+float acoustics_equipment_value_to_ui_display(int id, float t01);
 void acoustics_defaults_init(float out_values_01[ACOUSTICS_SLIDER_COUNT]);
 void acoustics_combat_defaults_init(float out_values_01[ACOUST_COMBAT_SLIDER_COUNT]);
+void acoustics_equipment_defaults_init(float out_values_01[ACOUST_EQUIP_SLIDER_COUNT]);
 const char* resolve_acoustics_slots_path(void);
 
 typedef struct acoustics_slot_view {
@@ -108,33 +131,45 @@ typedef struct acoustics_slot_view {
     int* thr_slot_selected;
     int* enemy_slot_selected;
     int* exp_slot_selected;
+    int* shield_slot_selected;
+    int* aux_slot_selected;
     uint8_t* fire_slot_defined;
     uint8_t* thr_slot_defined;
     uint8_t* enemy_slot_defined;
     uint8_t* exp_slot_defined;
+    uint8_t* shield_slot_defined;
+    uint8_t* aux_slot_defined;
     float (*fire_slots)[8];
     float (*thr_slots)[6];
     float (*enemy_slots)[8];
     float (*exp_slots)[8];
+    float (*shield_slots)[8];
+    float (*aux_slots)[8];
     float* value_01;
     float* combat_value_01;
+    float* equipment_value_01;
 } acoustics_slot_view;
 
 typedef struct acoustics_runtime_view {
     float* value_01;
     float* combat_value_01;
+    float* equipment_value_01;
     wtp_instrument_t* weapon_synth;
     wtp_instrument_t* thruster_synth;
     combat_sound_params* enemy_fire_sound;
     combat_sound_params* explosion_sound;
+    combat_sound_params* shield_sound;
+    combat_sound_params* aux_sound;
 } acoustics_runtime_view;
 
 void acoustics_apply_locked(acoustics_runtime_view* v);
 void acoustics_slot_defaults_view(acoustics_slot_view* v);
 void acoustics_capture_current_to_selected_slot_view(acoustics_slot_view* v, int is_fire);
 void acoustics_capture_current_to_selected_combat_slot_view(acoustics_slot_view* v, int is_enemy);
+void acoustics_capture_current_to_selected_equipment_slot_view(acoustics_slot_view* v, int is_shield);
 void acoustics_load_slot_to_current_view(acoustics_slot_view* v, int is_fire, int slot_idx);
 void acoustics_load_combat_slot_to_current_view(acoustics_slot_view* v, int is_enemy, int slot_idx);
+void acoustics_load_equipment_slot_to_current_view(acoustics_slot_view* v, int is_shield, int slot_idx);
 int acoustics_save_slots_view(const acoustics_slot_view* v, const char* path);
 int acoustics_load_slots_view(acoustics_slot_view* v, const char* path);
 

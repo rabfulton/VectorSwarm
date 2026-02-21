@@ -9,6 +9,7 @@
 
 #define ACOUSTICS_SLIDER_COUNT 14
 #define ACOUSTICS_COMBAT_SLIDER_COUNT 16
+#define ACOUSTICS_EQUIPMENT_SLIDER_COUNT 16
 #define ACOUSTICS_SCOPE_SAMPLES 192
 #define ACOUSTICS_SLOT_COUNT 5
 #define VIDEO_MENU_RES_COUNT 6
@@ -63,6 +64,7 @@ typedef struct render_metrics {
     int acoustics_selected;
     int acoustics_page;
     int acoustics_combat_selected;
+    int acoustics_equipment_selected;
     int acoustics_fire_slot_selected;
     int acoustics_thr_slot_selected;
     const planetary_system_def* planetarium_system;
@@ -79,6 +81,8 @@ typedef struct render_metrics {
     float acoustics_display[ACOUSTICS_SLIDER_COUNT];
     float acoustics_combat_value_01[ACOUSTICS_COMBAT_SLIDER_COUNT];
     float acoustics_combat_display[ACOUSTICS_COMBAT_SLIDER_COUNT];
+    float acoustics_equipment_value_01[ACOUSTICS_EQUIPMENT_SLIDER_COUNT];
+    float acoustics_equipment_display[ACOUSTICS_EQUIPMENT_SLIDER_COUNT];
     float acoustics_scope[ACOUSTICS_SCOPE_SAMPLES];
     int video_res_w[VIDEO_MENU_RES_COUNT];
     int video_res_h[VIDEO_MENU_RES_COUNT];
