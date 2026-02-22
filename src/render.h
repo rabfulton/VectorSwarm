@@ -108,6 +108,7 @@ typedef struct render_metrics {
     int use_gpu_terrain;
     int use_gpu_particles;
     int use_gpu_wormhole;
+    int use_gpu_radar;
     int scene_phase; /* 0=full, 1=background-only, 2=foreground-only, 3=overlay-no-clear */
     const char* level_editor_level_name;
     const char* level_editor_status_text;
@@ -150,6 +151,8 @@ typedef struct wormhole_line_vertex {
 
 size_t render_build_event_horizon_gpu_lines(const game_state* g, wormhole_line_vertex* out, size_t out_cap);
 size_t render_build_event_horizon_gpu_tris(const game_state* g, wormhole_line_vertex* out, size_t out_cap);
+size_t render_build_enemy_radar_gpu_lines(const game_state* g, wormhole_line_vertex* out, size_t out_cap);
+size_t render_build_enemy_radar_gpu_tris(const game_state* g, wormhole_line_vertex* out, size_t out_cap);
 
 vg_result render_frame(vg_context* ctx, const game_state* g, const render_metrics* metrics);
 

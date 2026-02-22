@@ -506,6 +506,235 @@ size_t render_build_event_horizon_gpu_tris(const game_state* g, wormhole_line_ve
     return count;
 }
 
+size_t render_build_enemy_radar_gpu_lines(const game_state* g, wormhole_line_vertex* out, size_t out_cap) {
+    if (!g || !out || out_cap == 0u) {
+        return 0u;
+    }
+    if (g->level_style != LEVEL_STYLE_ENEMY_RADAR) {
+        return 0u;
+    }
+
+    enum { N = 96 };
+    const float period = cylinder_period(g);
+    const float ring_y_top = g->world_h * 0.06f;
+    const float ring_y_bottom = g->world_h * 0.86f;
+    const float depth_eps = 0.0018f;
+    size_t count = 0u;
+
+    /* Bottom cylinder ring. */
+    vg_vec2 bottom[N];
+    float bottom_depth[N];
+    for (int i = 0; i < N; ++i) {
+        const float u = (float)i / (float)(N - 1);
+        const float xw = g->camera_x + (u - 0.5f) * period;
+        bottom[i] = project_cylinder_point(g, xw, ring_y_bottom, &bottom_depth[i]);
+    }
+    for (int i = 0; i < N - 1; ++i) {
+        const float z0 = clampf(bottom_depth[i] - depth_eps, 0.0f, 1.0f);
+        const float z1 = clampf(bottom_depth[i + 1] - depth_eps, 0.0f, 1.0f);
+        count = wormhole_emit_segment(
+            out, out_cap, count,
+            bottom[i].x, bottom[i].y,
+            bottom[i + 1].x, bottom[i + 1].y,
+            z0, z1, 0.92f
+        );
+        if (count + 1u >= out_cap) {
+            return count;
+        }
+    }
+
+    /* Radar plate edge built from top ring projection, then scaled out. */
+    vg_vec2 edge[N];
+    vg_vec2 radar_edge[N];
+    float edge_depth[N];
+    float cx = 0.0f;
+    float cy = 0.0f;
+    for (int i = 0; i < N; ++i) {
+        const float u = (float)i / (float)(N - 1);
+        const float xw = g->camera_x + (u - 0.5f) * period;
+        edge[i] = project_cylinder_point(g, xw, ring_y_top, &edge_depth[i]);
+        cx += edge[i].x;
+        cy += edge[i].y;
+    }
+    cx /= (float)N;
+    cy /= (float)N;
+    {
+        const float radar_scale = 1.45f;
+        for (int i = 0; i < N; ++i) {
+            radar_edge[i].x = cx + (edge[i].x - cx) * radar_scale;
+            radar_edge[i].y = cy + (edge[i].y - cy) * radar_scale;
+        }
+    }
+    const float phase_turns = repeatf(-(g->player.b.x) / fmaxf(period * 0.85f, 1.0f), 1.0f);
+    const float radar_shift = phase_turns * (float)(N - 1);
+
+    /* Concentric loops on the radar plate. */
+    for (int ring = 0; ring < 8; ++ring) {
+        const float rs = 1.0f - 0.11f * (float)ring;
+        vg_vec2 loop[N];
+        float loop_depth[N];
+        for (int i = 0; i < N - 1; ++i) {
+            const float u = (float)i + radar_shift;
+            const int i0 = wrapi((int)floorf(u), N - 1);
+            const int i1 = wrapi(i0 + 1, N - 1);
+            const float t = u - floorf(u);
+            const float ex = lerpf(radar_edge[i0].x, radar_edge[i1].x, t);
+            const float ey = lerpf(radar_edge[i0].y, radar_edge[i1].y, t);
+            loop[i].x = cx + (ex - cx) * rs;
+            loop[i].y = cy + (ey - cy) * rs;
+            loop_depth[i] = lerpf(edge_depth[i0], edge_depth[i1], t);
+        }
+        loop[N - 1] = loop[0];
+        loop_depth[N - 1] = loop_depth[0];
+        for (int i = 0; i < N - 1; ++i) {
+            const float z0 = clampf(loop_depth[i] - depth_eps * 2.0f, 0.0f, 1.0f);
+            const float z1 = clampf(loop_depth[i + 1] - depth_eps * 2.0f, 0.0f, 1.0f);
+            count = wormhole_emit_segment(
+                out, out_cap, count,
+                loop[i].x, loop[i].y,
+                loop[i + 1].x, loop[i + 1].y,
+                z0, z1, 0.88f
+            );
+            if (count + 1u >= out_cap) {
+                return count;
+            }
+        }
+    }
+
+    /* Radial spokes. */
+    for (int s = 0; s < 20; ++s) {
+        const float idxf = (float)(s * (N - 1)) / 20.0f + radar_shift;
+        const int i0 = wrapi((int)floorf(idxf), N - 1);
+        const int i1 = wrapi(i0 + 1, N - 1);
+        const float t = idxf - floorf(idxf);
+        const vg_vec2 tip = {
+            lerpf(radar_edge[i0].x, radar_edge[i1].x, t),
+            lerpf(radar_edge[i0].y, radar_edge[i1].y, t)
+        };
+        const float depth = lerpf(edge_depth[i0], edge_depth[i1], t);
+        const float z = clampf(depth - depth_eps * 3.0f, 0.0f, 1.0f);
+        count = wormhole_emit_segment(out, out_cap, count, cx, cy, tip.x, tip.y, z, z, 0.72f);
+        if (count + 1u >= out_cap) {
+            return count;
+        }
+    }
+
+    /* Sweep trail: denser and smoother to get a stronger persistence look. */
+    {
+        const float sweep = fmodf(g->t * 1.6f, 6.28318530718f);
+        for (int t = 13; t >= 0; --t) {
+            const float lag = (float)t * 0.10f;
+            const float a = sweep - lag;
+            float u = fmodf(a / 6.28318530718f + phase_turns, 1.0f);
+            if (u < 0.0f) {
+                u += 1.0f;
+            }
+            const float fi = u * (float)(N - 1);
+            const int i0 = wrapi((int)floorf(fi), N - 1);
+            const int i1 = wrapi(i0 + 1, N - 1);
+            const float ft = fi - floorf(fi);
+            const vg_vec2 tip = {
+                radar_edge[i0].x + (radar_edge[i1].x - radar_edge[i0].x) * ft,
+                radar_edge[i0].y + (radar_edge[i1].y - radar_edge[i0].y) * ft
+            };
+            const float tip_depth = edge_depth[i0] + (edge_depth[i1] - edge_depth[i0]) * ft;
+            const float trail = expf(-(float)t * 0.23f);
+            const float z = clampf(tip_depth - depth_eps * 4.0f, 0.0f, 1.0f);
+            const float fade = (0.12f + 0.88f * trail) * (0.88f + 0.12f * trail);
+            count = wormhole_emit_segment(out, out_cap, count, cx, cy, tip.x, tip.y, z, z, fade);
+            if (count + 1u >= out_cap) {
+                return count;
+            }
+        }
+    }
+
+    return count;
+}
+
+size_t render_build_enemy_radar_gpu_tris(const game_state* g, wormhole_line_vertex* out, size_t out_cap) {
+    if (!g || !out || out_cap == 0u) {
+        return 0u;
+    }
+    if (g->level_style != LEVEL_STYLE_ENEMY_RADAR) {
+        return 0u;
+    }
+
+    enum { N = 96 };
+    const float period = cylinder_period(g);
+    const float ring_y_top = g->world_h * 0.06f;
+    const float depth_eps = 0.0030f;
+    size_t count = 0u;
+
+    vg_vec2 edge[N];
+    vg_vec2 radar_edge[N];
+    float edge_depth[N];
+    float cx = 0.0f;
+    float cy = 0.0f;
+    for (int i = 0; i < N; ++i) {
+        const float u = (float)i / (float)(N - 1);
+        const float xw = g->camera_x + (u - 0.5f) * period;
+        edge[i] = project_cylinder_point(g, xw, ring_y_top, &edge_depth[i]);
+        cx += edge[i].x;
+        cy += edge[i].y;
+    }
+    cx /= (float)N;
+    cy /= (float)N;
+    {
+        const float radar_scale = 1.45f;
+        for (int i = 0; i < N; ++i) {
+            radar_edge[i].x = cx + (edge[i].x - cx) * radar_scale;
+            radar_edge[i].y = cy + (edge[i].y - cy) * radar_scale;
+        }
+    }
+
+    const float phase_turns = repeatf(-(g->player.b.x) / fmaxf(period * 0.85f, 1.0f), 1.0f);
+    const float sweep = fmodf(g->t * 1.6f, 6.28318530718f);
+
+    for (int t = 13; t >= 0; --t) {
+        const float lag = (float)t * 0.10f;
+        const float a = sweep - lag;
+        float u = fmodf(a / 6.28318530718f + phase_turns, 1.0f);
+        if (u < 0.0f) {
+            u += 1.0f;
+        }
+        const float fi = u * (float)(N - 1);
+        const float trail = expf(-(float)t * 0.22f);
+        const float du = (0.010f + 0.022f * trail) * (float)(N - 1);
+        const float f0 = fi - du;
+        const float f1 = fi + du;
+
+        const int a0 = wrapi((int)floorf(f0), N - 1);
+        const int a1 = wrapi(a0 + 1, N - 1);
+        const float at = f0 - floorf(f0);
+        const int b0 = wrapi((int)floorf(f1), N - 1);
+        const int b1 = wrapi(b0 + 1, N - 1);
+        const float bt = f1 - floorf(f1);
+        const int c0 = wrapi((int)floorf(fi), N - 1);
+        const int c1 = wrapi(c0 + 1, N - 1);
+        const float ct = fi - floorf(fi);
+
+        const vg_vec2 p0 = {
+            radar_edge[a0].x + (radar_edge[a1].x - radar_edge[a0].x) * at,
+            radar_edge[a0].y + (radar_edge[a1].y - radar_edge[a0].y) * at
+        };
+        const vg_vec2 p1 = {
+            radar_edge[b0].x + (radar_edge[b1].x - radar_edge[b0].x) * bt,
+            radar_edge[b0].y + (radar_edge[b1].y - radar_edge[b0].y) * bt
+        };
+        const float z_tip = clampf(edge_depth[c0] + (edge_depth[c1] - edge_depth[c0]) * ct - depth_eps, 0.0f, 1.0f);
+        const float fade = 0.05f + trail * 0.70f;
+
+        if (count + 3u > out_cap) {
+            return count;
+        }
+        out[count++] = (wormhole_line_vertex){cx, cy, z_tip, fade};
+        out[count++] = (wormhole_line_vertex){p0.x, p0.y, z_tip, fade};
+        out[count++] = (wormhole_line_vertex){p1.x, p1.y, z_tip, fade};
+    }
+
+    return count;
+}
+
 static float repeatf(float v, float period) {
     if (period <= 0.0f) {
         return v;
@@ -4996,7 +5225,8 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             vg_stroke_style cyl_main = land_main;
             cyl_halo.intensity *= 1.15f;
             cyl_main.intensity *= 1.20f;
-            if (!(metrics->use_gpu_wormhole && g->level_style == LEVEL_STYLE_EVENT_HORIZON)) {
+            if (!((metrics->use_gpu_wormhole && g->level_style == LEVEL_STYLE_EVENT_HORIZON) ||
+                  (metrics->use_gpu_radar && g->level_style == LEVEL_STYLE_ENEMY_RADAR))) {
                 r = draw_cylinder_wire(ctx, g, &cyl_halo, &cyl_main, g->level_style);
                 if (r != VG_OK) {
                     return r;
