@@ -1168,6 +1168,65 @@ static vg_result draw_exit_portal(
     return VG_OK;
 }
 
+static vg_result draw_asteroid_storm(
+    vg_context* ctx,
+    const game_state* g,
+    const palette_theme* pal,
+    const vg_stroke_style* land_halo,
+    const vg_stroke_style* land_main
+) {
+    static const vg_vec2 k_shape[11] = {
+        {-1.00f, -0.28f},
+        {-0.78f, -0.84f},
+        {-0.36f, -0.62f},
+        {0.04f, -0.98f},
+        {0.46f, -0.52f},
+        {0.92f, -0.34f},
+        {0.84f, 0.14f},
+        {0.58f, 0.78f},
+        {0.06f, 0.92f},
+        {-0.46f, 0.66f},
+        {-0.88f, 0.20f}
+    };
+    if (!ctx || !g || !pal || !land_halo || !land_main ||
+        !g->asteroid_storm_enabled || g->asteroid_count <= 0) {
+        return VG_OK;
+    }
+    vg_stroke_style halo = *land_halo;
+    vg_stroke_style main = *land_main;
+    halo.width_px *= 1.16f;
+    main.width_px *= 1.07f;
+    halo.intensity *= 0.78f;
+    main.intensity *= 0.92f;
+    halo.color = (vg_color){pal->primary.r, pal->primary.g, pal->primary.b, 0.58f};
+    main.color = (vg_color){pal->secondary.r, pal->secondary.g, pal->secondary.b, 0.78f};
+
+    for (int i = 0; i < g->asteroid_count && i < MAX_ASTEROIDS; ++i) {
+        const asteroid_body* a = &g->asteroids[i];
+        if (!a->active) {
+            continue;
+        }
+        const float c = cosf(a->angle);
+        const float s = sinf(a->angle);
+        vg_vec2 poly[11];
+        for (int k = 0; k < 11; ++k) {
+            const float px = k_shape[k].x * a->size;
+            const float py = k_shape[k].y * a->size;
+            poly[k].x = a->b.x + px * c - py * s;
+            poly[k].y = a->b.y + px * s + py * c;
+        }
+        vg_result r = vg_draw_polyline(ctx, poly, 11, &halo, 1);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_draw_polyline(ctx, poly, 11, &main, 1);
+        if (r != VG_OK) {
+            return r;
+        }
+    }
+    return VG_OK;
+}
+
 static vg_result draw_text_vector_glow(
     vg_context* ctx,
     const char* text,
@@ -2552,6 +2611,7 @@ static const char* level_editor_marker_name(int kind) {
         case 3: return "V WAVE";
         case 4: return "KAMIKAZE";
         case 5: return "BOID";
+        case 6: return "ASTEROID STORM";
         default: return "MARKER";
     }
 }
@@ -2562,6 +2622,9 @@ static vg_color level_editor_marker_color(const palette_theme* pal, int kind) {
     }
     if (kind == 1) {
         return (vg_color){0.95f, 0.36f, 0.36f, 1.0f};
+    }
+    if (kind == 6) {
+        return (vg_color){1.0f, 0.64f, 0.20f, 1.0f};
     }
     if (kind == 2 || kind == 3 || kind == 4 || kind == 5) {
         return (vg_color){1.0f, 0.26f, 0.26f, 1.0f};
@@ -2666,6 +2729,14 @@ static int editor_marker_properties_text(
     if (kind == 0) {
         if (n < cap) { out_labels[n] = "POS X01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
         if (n < cap) { out_labels[n] = "POS Y01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
+        return n;
+    }
+    if (kind == 6) {
+        if (n < cap) { out_labels[n] = "START X01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "DURATION S"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_a[sel]); n++; }
+        if (n < cap) { out_labels[n] = "ANGLE DEG"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_marker_b[sel]); n++; }
+        if (n < cap) { out_labels[n] = "SPEED"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_marker_c[sel]); n++; }
+        if (n < cap) { out_labels[n] = "DENSITY"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_d[sel]); n++; }
         return n;
     }
     if (kind == 2 || kind == 3 || kind == 4 || kind == 5) {
@@ -2909,7 +2980,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             if (mx01 < view_min || mx01 > view_max) {
                 continue;
             }
-            if (!enemy_spatial && (kind == 2 || kind == 3 || kind == 4 || kind == 5)) {
+            if (!enemy_spatial && (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 6)) {
                 continue;
             }
             const float vx = viewport.x + ((mx01 - view_min) / fmaxf(view_max - view_min, 1.0e-5f)) * viewport.w;
@@ -2969,6 +3040,14 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 r = draw_editor_diamond(ctx, (vg_vec2){vx + 22.0f * ui, vy + 9.0f * ui}, 16.2f * ui * glyph_scale, &mk2);
                 if (r != VG_OK) return r;
                 r = draw_editor_diamond(ctx, (vg_vec2){vx - 20.0f * ui, vy - 11.0f * ui}, 14.7f * ui * glyph_scale, &mk2);
+            } else if (kind == 6) {
+                const vg_vec2 tri[4] = {
+                    {vx - 10.0f * ui, vy - 9.0f * ui},
+                    {vx + 11.0f * ui, vy},
+                    {vx - 10.0f * ui, vy + 9.0f * ui},
+                    {vx - 10.0f * ui, vy - 9.0f * ui}
+                };
+                r = vg_draw_polyline(ctx, tri, 4, &mk, 0);
             } else {
                 r = draw_editor_diamond(ctx, (vg_vec2){vx, vy}, 19.5f * ui * glyph_scale, &mk);
             }
@@ -3045,7 +3124,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             {
                 int selected_prop = metrics->level_editor_selected_property;
                 if (selected_prop < 0) selected_prop = 0;
-                if (selected_prop > 2) selected_prop = 2;
+                if (selected_prop > 7) selected_prop = 7;
                 char row[96];
                 const vg_rect rb0 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
                 snprintf(row, sizeof(row), "WAVE MODE      %s", editor_wave_mode_name(metrics->level_editor_wave_mode));
@@ -3060,6 +3139,31 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 const vg_rect rb2 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
                 snprintf(row, sizeof(row), "LENGTH         %.1f", metrics->level_editor_level_length_screens);
                 r = vg_draw_button(ctx, rb2, row, 10.4f * ui, &frame, &text, (selected_prop == 2) ? 1 : 0);
+                if (r != VG_OK) return r;
+                ty -= 32.0f * ui;
+                const vg_rect rb3 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
+                snprintf(row, sizeof(row), "ASTEROID STORM %s", metrics->level_editor_asteroid_storm_enabled ? "ON" : "OFF");
+                r = vg_draw_button(ctx, rb3, row, 10.4f * ui, &frame, &text, (selected_prop == 3) ? 1 : 0);
+                if (r != VG_OK) return r;
+                ty -= 32.0f * ui;
+                const vg_rect rb4 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
+                snprintf(row, sizeof(row), "STORM ANGLE    %.1f", metrics->level_editor_asteroid_storm_angle_deg);
+                r = vg_draw_button(ctx, rb4, row, 10.4f * ui, &frame, &text, (selected_prop == 4) ? 1 : 0);
+                if (r != VG_OK) return r;
+                ty -= 32.0f * ui;
+                const vg_rect rb5 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
+                snprintf(row, sizeof(row), "STORM SPEED    %.1f", metrics->level_editor_asteroid_storm_speed);
+                r = vg_draw_button(ctx, rb5, row, 10.4f * ui, &frame, &text, (selected_prop == 5) ? 1 : 0);
+                if (r != VG_OK) return r;
+                ty -= 32.0f * ui;
+                const vg_rect rb6 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
+                snprintf(row, sizeof(row), "STORM DURATION %.1f", metrics->level_editor_asteroid_storm_duration_s);
+                r = vg_draw_button(ctx, rb6, row, 10.4f * ui, &frame, &text, (selected_prop == 6) ? 1 : 0);
+                if (r != VG_OK) return r;
+                ty -= 32.0f * ui;
+                const vg_rect rb7 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
+                snprintf(row, sizeof(row), "STORM DENSITY  %.2f", metrics->level_editor_asteroid_storm_density);
+                r = vg_draw_button(ctx, rb7, row, 10.4f * ui, &frame, &text, (selected_prop == 7) ? 1 : 0);
                 if (r != VG_OK) return r;
             }
             ty -= 34.0f * ui;
@@ -5647,6 +5751,13 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
 
     if (g->searchlight_count > 0) {
         r = draw_searchlights(ctx, g, &pal, intensity_scale, &land_halo, &land_main);
+        if (r != VG_OK) {
+            (void)vg_transform_pop(ctx);
+            return r;
+        }
+    }
+    if (g->asteroid_storm_enabled && g->asteroid_count > 0) {
+        r = draw_asteroid_storm(ctx, g, &pal, &land_halo, &land_main);
         if (r != VG_OK) {
             (void)vg_transform_pop(ctx);
             return r;

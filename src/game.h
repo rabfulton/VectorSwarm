@@ -13,6 +13,7 @@
 #define MAX_AUDIO_EVENTS 64
 #define MAX_SEARCHLIGHTS 4
 #define MAX_CURATED_RUNTIME 128
+#define MAX_ASTEROIDS 192
 #define PLAYER_ALT_WEAPON_COUNT 4
 
 struct leveldef_db;
@@ -215,6 +216,15 @@ typedef struct enemy_debris {
     float alpha;
 } enemy_debris;
 
+typedef struct asteroid_body {
+    int active;
+    body b;
+    float size;
+    float angle;
+    float spin_rate;
+    float radius;
+} asteroid_body;
+
 typedef struct game_input {
     int left;
     int right;
@@ -265,6 +275,19 @@ typedef struct game_state {
     game_audio_event audio_events[MAX_AUDIO_EVENTS];
     searchlight searchlights[MAX_SEARCHLIGHTS];
     int searchlight_count;
+    asteroid_body asteroids[MAX_ASTEROIDS];
+    int asteroid_count;
+    int asteroid_storm_enabled;
+    int asteroid_storm_active;
+    int asteroid_storm_completed;
+    int asteroid_storm_announced;
+    float asteroid_storm_start_x;
+    float asteroid_storm_angle_rad;
+    float asteroid_storm_speed;
+    float asteroid_storm_duration_s;
+    float asteroid_storm_density;
+    float asteroid_storm_timer_s;
+    float asteroid_storm_cooldown_s;
     int exit_portal_active;
     float exit_portal_x;
     float exit_portal_y;

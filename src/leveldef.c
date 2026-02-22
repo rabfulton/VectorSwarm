@@ -396,6 +396,18 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_level->exit_x01 = strtof(v, NULL);
                     } else if (strcmp(k, "exit_y01") == 0) {
                         cur_level->exit_y01 = strtof(v, NULL);
+                    } else if (strcmp(k, "asteroid_storm_enabled") == 0) {
+                        cur_level->asteroid_storm_enabled = atoi(v) ? 1 : 0;
+                    } else if (strcmp(k, "asteroid_storm_start_x01") == 0) {
+                        cur_level->asteroid_storm_start_x01 = strtof(v, NULL);
+                    } else if (strcmp(k, "asteroid_storm_angle_deg") == 0) {
+                        cur_level->asteroid_storm_angle_deg = strtof(v, NULL);
+                    } else if (strcmp(k, "asteroid_storm_speed") == 0) {
+                        cur_level->asteroid_storm_speed = strtof(v, NULL);
+                    } else if (strcmp(k, "asteroid_storm_duration_s") == 0) {
+                        cur_level->asteroid_storm_duration_s = strtof(v, NULL);
+                    } else if (strcmp(k, "asteroid_storm_density") == 0) {
+                        cur_level->asteroid_storm_density = strtof(v, NULL);
                     } else if (strcmp(k, "boid_cycle") == 0) {
                         char tmp[256];
                         char* save = NULL;
@@ -721,6 +733,20 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
                 fprintf(log_out, "leveldef: level %d invalid cylinder_double_swarm_chance (expected 0..1)\n", i);
             }
             ok = 0;
+        }
+        if (l->asteroid_storm_enabled) {
+            if (l->asteroid_storm_speed <= 0.0f || l->asteroid_storm_duration_s <= 0.0f || l->asteroid_storm_density <= 0.0f) {
+                if (log_out) {
+                    fprintf(log_out, "leveldef: level %d invalid asteroid storm values (speed/duration/density)\n", i);
+                }
+                ok = 0;
+            }
+            if (l->asteroid_storm_start_x01 < 0.0f) {
+                if (log_out) {
+                    fprintf(log_out, "leveldef: level %d invalid asteroid_storm_start_x01 (expected >=0)\n", i);
+                }
+                ok = 0;
+            }
         }
         if (l->default_boid_profile < 0 || l->default_boid_profile >= db->profile_count) {
             if (log_out) {

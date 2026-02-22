@@ -1,6 +1,7 @@
 #include "game.h"
 #include "enemy.h"
 #include "leveldef.h"
+#include "death_teletype_messages.h"
 
 #include <math.h>
 #include <stddef.h>
@@ -120,7 +121,10 @@ static void ensure_leveldef_loaded(void) {
 }
 
 static float gameplay_ui_scale(const game_state* g);
+static int level_uses_cylinder(const game_state* g);
 static void normalize2(float* x, float* y);
+static void integrate_body(body* b, float dt);
+static void emit_player_asteroid_explosion(game_state* g);
 static void game_push_audio_event(game_state* g, game_audio_event_type type, float x, float y);
 static enemy_bullet* spawn_enemy_bullet_at(
     game_state* g,
@@ -133,6 +137,23 @@ static enemy_bullet* spawn_enemy_bullet_at(
     float radius
 );
 static int set_level_index(game_state* g, int index);
+
+static void game_queue_death_message(game_state* g) {
+    if (!g || g->lives > 0) {
+        return;
+    }
+    const size_t n = death_teletype_message_count();
+    if (n <= 0) {
+        return;
+    }
+    const size_t idx = (size_t)(rand() % (int)n);
+    const char* msg = death_teletype_message_at(idx);
+    if (!msg || !msg[0]) {
+        return;
+    }
+    g->wave_announce_pending = 1;
+    snprintf(g->wave_announce_text, sizeof(g->wave_announce_text), "%s", msg);
+}
 
 static float dist_sq(float ax, float ay, float bx, float by) {
     const float dx = ax - bx;
@@ -300,6 +321,234 @@ static void update_searchlights(game_state* g, float dt) {
     }
 }
 
+static float asteroid_storm_speed_px(const game_state* g, float su) {
+    if (!g) {
+        return 0.0f;
+    }
+    return fmaxf(g->asteroid_storm_speed, 0.0f) * su;
+}
+
+static void asteroid_storm_basis(const game_state* g, float* dir_x, float* dir_y, float* perp_x, float* perp_y) {
+    const float ang = g ? g->asteroid_storm_angle_rad : 0.0f;
+    /* Angle points to the incoming source direction; travel is opposite it. */
+    float dx = -cosf(ang);
+    float dy = -sinf(ang);
+    normalize2(&dx, &dy);
+    if (dir_x) *dir_x = dx;
+    if (dir_y) *dir_y = dy;
+    if (perp_x) *perp_x = -dy;
+    if (perp_y) *perp_y = dx;
+}
+
+static void asteroid_storm_domain(const game_state* g, float* half_u, float* half_v) {
+    if (!g) {
+        if (half_u) *half_u = 1.0f;
+        if (half_v) *half_v = 1.0f;
+        return;
+    }
+    if (half_u) *half_u = fmaxf(g->world_w * 2.2f, 1.0f);
+    if (half_v) *half_v = fmaxf(g->world_h * 1.35f, 1.0f);
+}
+
+static int asteroid_overlap_candidate(const game_state* g, const asteroid_body* skip, float x, float y, float r) {
+    if (!g) {
+        return 0;
+    }
+    for (int i = 0; i < g->asteroid_count && i < MAX_ASTEROIDS; ++i) {
+        const asteroid_body* o = &g->asteroids[i];
+        if (!o->active || o == skip) {
+            continue;
+        }
+        const float rr = r + o->radius + 6.0f;
+        if (dist_sq(x, y, o->b.x, o->b.y) < rr * rr) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void asteroid_place_with_flow(game_state* g, asteroid_body* a, int entry_only) {
+    if (!g || !a) {
+        return;
+    }
+    const float su = gameplay_ui_scale(g);
+    const float speed = asteroid_storm_speed_px(g, su);
+    float dx = 0.0f, dy = 0.0f, px = 0.0f, py = 0.0f, hu = 0.0f, hv = 0.0f;
+    asteroid_storm_basis(g, &dx, &dy, &px, &py);
+    asteroid_storm_domain(g, &hu, &hv);
+    float best_x = g->camera_x;
+    float best_y = g->world_h * 0.5f;
+    float best_r = 0.0f;
+    int found = 0;
+    for (int tries = 0; tries < 32; ++tries) {
+        const float sz = (8.0f + frand01() * 30.0f) * su;
+        const float rr = sz * 0.90f;
+        const float u = entry_only ? (-hu - frand01() * hu * 0.16f) : (-hu + frand01() * (2.0f * hu));
+        const float v = -hv + frand01() * (2.0f * hv);
+        const float x = g->camera_x + dx * u + px * v;
+        const float y = g->world_h * 0.5f + dy * u + py * v;
+        if (!asteroid_overlap_candidate(g, a, x, y, rr)) {
+            best_x = x;
+            best_y = y;
+            best_r = rr;
+            a->size = sz;
+            found = 1;
+            break;
+        }
+        if (!found) {
+            best_x = x;
+            best_y = y;
+            best_r = rr;
+            a->size = sz;
+        }
+    }
+    a->active = 1;
+    a->b.x = best_x;
+    a->b.y = best_y;
+    a->b.vx = dx * speed;
+    a->b.vy = dy * speed;
+    a->b.ax = 0.0f;
+    a->b.ay = 0.0f;
+    a->radius = best_r;
+    a->angle = frand01() * 6.2831853f;
+    a->spin_rate = frands1() * (0.85f + frand01() * 2.30f);
+}
+
+static int asteroid_target_count(const game_state* g) {
+    if (!g || g->asteroid_storm_density <= 0.0f) {
+        return 0;
+    }
+    const float dens = clampf(g->asteroid_storm_density, 0.02f, 6.0f);
+    int n = (int)lroundf(dens * 34.0f);
+    if (n < 6) {
+        n = 6;
+    }
+    if (n > MAX_ASTEROIDS) {
+        n = MAX_ASTEROIDS;
+    }
+    return n;
+}
+
+static void configure_asteroid_storm_for_level(game_state* g) {
+    const leveldef_level* lvl;
+    if (!g) {
+        return;
+    }
+    memset(g->asteroids, 0, sizeof(g->asteroids));
+    g->asteroid_count = 0;
+    g->asteroid_storm_active = 0;
+    g->asteroid_storm_completed = 0;
+    g->asteroid_storm_announced = 0;
+    g->asteroid_storm_timer_s = 0.0f;
+    g->asteroid_storm_enabled = 0;
+    g->asteroid_storm_start_x = 0.0f;
+    g->asteroid_storm_angle_rad = 0.0f;
+    g->asteroid_storm_speed = 0.0f;
+    g->asteroid_storm_duration_s = 0.0f;
+    g->asteroid_storm_density = 0.0f;
+    if (level_uses_cylinder(g)) {
+        return;
+    }
+    lvl = current_leveldef(g);
+    if (!lvl || !lvl->asteroid_storm_enabled) {
+        return;
+    }
+    g->asteroid_storm_enabled = 1;
+    g->asteroid_storm_start_x = fmaxf(0.0f, lvl->asteroid_storm_start_x01) * g->world_w;
+    g->asteroid_storm_angle_rad = deg_to_rad(lvl->asteroid_storm_angle_deg);
+    g->asteroid_storm_speed = fmaxf(lvl->asteroid_storm_speed, 0.0f);
+    g->asteroid_storm_duration_s = fmaxf(lvl->asteroid_storm_duration_s, 0.01f);
+    g->asteroid_storm_density = fmaxf(lvl->asteroid_storm_density, 0.01f);
+    g->asteroid_count = asteroid_target_count(g);
+    g->asteroid_storm_active = (g->asteroid_storm_start_x <= g->camera_x);
+    g->asteroid_storm_completed = 0;
+    g->asteroid_storm_timer_s = g->asteroid_storm_duration_s;
+    if (g->asteroid_storm_active) {
+        for (int i = 0; i < g->asteroid_count && i < MAX_ASTEROIDS; ++i) {
+            asteroid_place_with_flow(g, &g->asteroids[i], 0);
+        }
+    }
+}
+
+static void update_asteroid_storm(game_state* g, float dt) {
+    if (!g || !g->asteroid_storm_enabled || level_uses_cylinder(g)) {
+        return;
+    }
+    if (g->asteroid_count <= 0) {
+        g->asteroid_count = asteroid_target_count(g);
+    }
+    if (!g->asteroid_storm_active && !g->asteroid_storm_completed && g->camera_x >= g->asteroid_storm_start_x) {
+        g->asteroid_storm_active = 1;
+        g->asteroid_storm_timer_s = g->asteroid_storm_duration_s;
+        g->asteroid_storm_announced = 0;
+        for (int i = 0; i < g->asteroid_count && i < MAX_ASTEROIDS; ++i) {
+            asteroid_place_with_flow(g, &g->asteroids[i], 0);
+        }
+    }
+    if (g->asteroid_storm_active) {
+        g->asteroid_storm_timer_s -= dt;
+        if (!g->asteroid_storm_announced) {
+            if (!g->wave_announce_pending) {
+                g->wave_announce_pending = 1;
+                snprintf(g->wave_announce_text, sizeof(g->wave_announce_text), "hazard alert\nasteroid storm");
+            }
+            g->asteroid_storm_announced = 1;
+        }
+        if (g->asteroid_storm_timer_s <= 0.0f) {
+            g->asteroid_storm_active = 0;
+            g->asteroid_storm_timer_s = 0.0f;
+            g->asteroid_storm_completed = 1;
+        }
+    }
+    const float player_hit_r = 18.0f * gameplay_ui_scale(g);
+    float flow_dx = 0.0f, flow_dy = 0.0f, flow_px = 0.0f, flow_py = 0.0f, flow_hu = 0.0f, flow_hv = 0.0f;
+    asteroid_storm_basis(g, &flow_dx, &flow_dy, &flow_px, &flow_py);
+    asteroid_storm_domain(g, &flow_hu, &flow_hv);
+    int player_hit_this_tick = 0;
+    for (int i = 0; i < g->asteroid_count && i < MAX_ASTEROIDS; ++i) {
+        asteroid_body* a = &g->asteroids[i];
+        if (!a->active) {
+            continue;
+        }
+        integrate_body(&a->b, dt);
+        a->angle += a->spin_rate * dt;
+        {
+            const float rx = a->b.x - g->camera_x;
+            const float ry = a->b.y - g->world_h * 0.5f;
+            const float u = rx * flow_dx + ry * flow_dy;
+            const float v = rx * flow_px + ry * flow_py;
+            if (g->asteroid_storm_active && (u > flow_hu || u < -flow_hu * 1.25f || fabsf(v) > flow_hv * 1.25f)) {
+                if (g->asteroid_storm_active) {
+                    asteroid_place_with_flow(g, a, (u > flow_hu) ? 1 : 0);
+                } else {
+                    a->active = 0;
+                }
+            } else if (!g->asteroid_storm_active) {
+                /* Post-storm: do not pop from center due horizontal camera motion.
+                 * Retire only after fully leaving vertically in travel direction. */
+                if ((flow_dy < 0.0f && a->b.y < -g->world_h * 0.22f) ||
+                    (flow_dy > 0.0f && a->b.y > g->world_h * 1.22f)) {
+                    a->active = 0;
+                }
+            }
+        }
+        if (g->lives > 0 && !g->shield_active && !player_hit_this_tick) {
+            const float rr = a->radius + player_hit_r;
+            if (dist_sq(a->b.x, a->b.y, g->player.b.x, g->player.b.y) <= rr * rr) {
+                emit_player_asteroid_explosion(g);
+                g->lives = 0;
+                game_queue_death_message(g);
+                player_hit_this_tick = 1;
+                if (g->asteroid_storm_active) {
+                    asteroid_place_with_flow(g, a, 1);
+                } else {
+                    a->active = 0;
+                }
+            }
+        }
+    }
+}
+
 static float cylinder_period(const game_state* g) {
     return fmaxf(g->world_w * 2.4f, 1.0f);
 }
@@ -348,6 +597,7 @@ static void apply_level_runtime_config(game_state* g) {
     g->curated_spawned_count = 0;
     memset(g->curated_spawned, 0, sizeof(g->curated_spawned));
     configure_searchlights_for_level(g);
+    configure_asteroid_storm_for_level(g);
     configure_exit_portal_for_level(g);
 }
 
@@ -363,6 +613,7 @@ static int set_level_index(game_state* g, int index) {
     memset(g->enemies, 0, sizeof(g->enemies));
     memset(g->particles, 0, sizeof(g->particles));
     memset(g->debris, 0, sizeof(g->debris));
+    memset(g->asteroids, 0, sizeof(g->asteroids));
     g->active_particles = 0;
     g->wave_index = 0;
     g->wave_id_alloc = 0;
@@ -382,6 +633,10 @@ static int set_level_index(game_state* g, int index) {
     g->emp_effect_duration_s = 0.0f;
     g->emp_primary_radius = 0.0f;
     g->emp_blast_radius = 0.0f;
+    g->asteroid_count = 0;
+    g->asteroid_storm_active = 0;
+    g->asteroid_storm_completed = 0;
+    g->asteroid_storm_announced = 0;
     apply_level_runtime_config(g);
     return 1;
 }
@@ -441,6 +696,51 @@ static void kill_particle(game_state* g, particle* p) {
     p->active = 0;
     if (g->active_particles > 0) {
         g->active_particles -= 1;
+    }
+}
+
+static void emit_player_asteroid_explosion(game_state* g) {
+    if (!g) {
+        return;
+    }
+    const float su = gameplay_ui_scale(g);
+    game_push_audio_event(g, GAME_AUDIO_EVENT_EXPLOSION, g->player.b.x, g->player.b.y);
+    {
+        particle* f = alloc_particle(g);
+        if (f) {
+            f->type = PARTICLE_FLASH;
+            f->b.x = g->player.b.x;
+            f->b.y = g->player.b.y;
+            f->age_s = 0.0f;
+            f->life_s = 0.22f;
+            f->size = 18.0f * su;
+            f->r = 1.0f;
+            f->g = 0.96f;
+            f->bcol = 0.72f;
+            f->a = 1.0f;
+        }
+    }
+    for (int i = 0; i < 56; ++i) {
+        particle* p = alloc_particle(g);
+        if (!p) {
+            break;
+        }
+        const float a = frand01() * 6.2831853f;
+        const float spd = (120.0f + frand01() * 420.0f) * su;
+        p->type = (frand01() < 0.7f) ? PARTICLE_POINT : PARTICLE_GEOM;
+        p->b.x = g->player.b.x + frands1() * 5.0f * su;
+        p->b.y = g->player.b.y + frands1() * 5.0f * su;
+        p->b.vx = cosf(a) * spd + g->player.b.vx * 0.25f;
+        p->b.vy = sinf(a) * spd + g->player.b.vy * 0.25f;
+        p->age_s = 0.0f;
+        p->life_s = 0.55f + frand01() * 0.65f;
+        p->size = (2.5f + frand01() * 5.2f) * su;
+        p->spin = frand01() * 6.2831853f;
+        p->spin_rate = frands1() * 10.0f;
+        p->r = 1.0f;
+        p->g = 0.56f + frand01() * 0.40f;
+        p->bcol = 0.22f + frand01() * 0.32f;
+        p->a = 1.0f;
     }
 }
 
@@ -908,6 +1208,10 @@ static void game_update_wave_spawning(game_state* g, float dt) {
         }
         return;
     }
+    /* Asteroid storm is an auto-spawn event lane: while active, pause auto wave spawning. */
+    if (g->asteroid_storm_enabled && g->asteroid_storm_active) {
+        return;
+    }
     g->wave_cooldown_s -= dt;
     if (lvl->spawn_mode == LEVELDEF_SPAWN_SEQUENCED_CLEAR) {
         if (game_enemy_count(g) <= 0 && g->wave_cooldown_s <= 0.0f) {
@@ -1003,6 +1307,7 @@ void game_update(game_state* g, float dt, const game_input* in) {
     game_update_player_weapons(g, dt, in);
     game_update_player_bullets(g, dt);
     game_update_wave_spawning(g, dt);
+    update_asteroid_storm(g, dt);
     if (g->searchlight_count > 0) {
         update_searchlights(g, dt);
     }

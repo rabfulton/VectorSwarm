@@ -173,6 +173,12 @@ typedef struct leveldef_level {
     int exit_enabled;
     float exit_x01;
     float exit_y01;
+    int asteroid_storm_enabled;
+    float asteroid_storm_start_x01;
+    float asteroid_storm_angle_deg;
+    float asteroid_storm_speed;
+    float asteroid_storm_duration_s;
+    float asteroid_storm_density;
     int boid_cycle_count;
     int boid_cycle[LEVELDEF_MAX_BOID_CYCLE];
     int wave_cycle_count;

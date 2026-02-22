@@ -15,7 +15,8 @@ enum level_editor_marker_kind {
     LEVEL_EDITOR_MARKER_WAVE_SINE = 2,
     LEVEL_EDITOR_MARKER_WAVE_V = 3,
     LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE = 4,
-    LEVEL_EDITOR_MARKER_BOID = 5
+    LEVEL_EDITOR_MARKER_BOID = 5,
+    LEVEL_EDITOR_MARKER_ASTEROID_STORM = 6
 };
 
 typedef struct level_editor_marker {
@@ -51,6 +52,11 @@ typedef struct level_editor_state {
     int level_style;
     int level_render_style;
     int level_wave_mode;
+    int level_asteroid_storm_enabled;
+    float level_asteroid_storm_angle_deg;
+    float level_asteroid_storm_speed;
+    float level_asteroid_storm_duration_s;
+    float level_asteroid_storm_density;
     char level_name[LEVEL_EDITOR_NAME_CAP];
     char status_text[LEVEL_EDITOR_STATUS_CAP];
     int entry_active;
@@ -73,6 +79,11 @@ typedef struct level_editor_state {
     float snapshot_level_length_screens;
     int snapshot_level_render_style;
     int snapshot_level_wave_mode;
+    int snapshot_level_asteroid_storm_enabled;
+    float snapshot_level_asteroid_storm_angle_deg;
+    float snapshot_level_asteroid_storm_speed;
+    float snapshot_level_asteroid_storm_duration_s;
+    float snapshot_level_asteroid_storm_density;
     char snapshot_level_name[LEVEL_EDITOR_NAME_CAP];
     int snapshot_marker_count;
     level_editor_marker snapshot_markers[LEVEL_EDITOR_MAX_MARKERS];

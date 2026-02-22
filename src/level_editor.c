@@ -127,7 +127,7 @@ static int is_wave_kind(int kind) {
 }
 
 static int is_enemy_marker_kind(int kind) {
-    return is_wave_kind(kind);
+    return is_wave_kind(kind) || kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM;
 }
 
 static int level_editor_enemy_spatial(const level_editor_state* s) {
@@ -146,6 +146,11 @@ static void level_editor_save_snapshot(level_editor_state* s) {
     s->snapshot_level_length_screens = s->level_length_screens;
     s->snapshot_level_render_style = s->level_render_style;
     s->snapshot_level_wave_mode = s->level_wave_mode;
+    s->snapshot_level_asteroid_storm_enabled = s->level_asteroid_storm_enabled;
+    s->snapshot_level_asteroid_storm_angle_deg = s->level_asteroid_storm_angle_deg;
+    s->snapshot_level_asteroid_storm_speed = s->level_asteroid_storm_speed;
+    s->snapshot_level_asteroid_storm_duration_s = s->level_asteroid_storm_duration_s;
+    s->snapshot_level_asteroid_storm_density = s->level_asteroid_storm_density;
     snprintf(s->snapshot_level_name, sizeof(s->snapshot_level_name), "%s", s->level_name);
     s->snapshot_marker_count = s->marker_count;
     if (s->snapshot_marker_count > LEVEL_EDITOR_MAX_MARKERS) {
@@ -325,6 +330,12 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
     lvl = *base;
     lvl.render_style = s->level_render_style;
     lvl.wave_mode = s->level_wave_mode;
+    lvl.asteroid_storm_enabled = s->level_asteroid_storm_enabled ? 1 : 0;
+    lvl.asteroid_storm_angle_deg = s->level_asteroid_storm_angle_deg;
+    lvl.asteroid_storm_speed = s->level_asteroid_storm_speed;
+    lvl.asteroid_storm_duration_s = s->level_asteroid_storm_duration_s;
+    lvl.asteroid_storm_density = s->level_asteroid_storm_density;
+    lvl.asteroid_storm_start_x01 = 0.0f;
 
     lvl.exit_enabled = 0;
     for (i = 0; i < s->marker_count; ++i) {
@@ -334,6 +345,13 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
             lvl.exit_x01 = m->x01 * level_len;
             lvl.exit_y01 = m->y01;
             found_exit = 1;
+        } else if (m->kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
+            lvl.asteroid_storm_enabled = 1;
+            lvl.asteroid_storm_start_x01 = m->x01 * level_len;
+            lvl.asteroid_storm_duration_s = fmaxf(m->a, 0.01f);
+            lvl.asteroid_storm_angle_deg = m->b;
+            lvl.asteroid_storm_speed = fmaxf(m->c, 1.0f);
+            lvl.asteroid_storm_density = fmaxf(m->d, 0.01f);
         }
     }
 
@@ -483,6 +501,12 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
     if (!appendf(out, out_cap, &used, "exit_enabled=%d\n", lvl.exit_enabled ? 1 : 0)) return 0;
     if (!appendf(out, out_cap, &used, "exit_x01=%.3f\n", lvl.exit_x01)) return 0;
     if (!appendf(out, out_cap, &used, "exit_y01=%.3f\n", lvl.exit_y01)) return 0;
+    if (!appendf(out, out_cap, &used, "asteroid_storm_enabled=%d\n", lvl.asteroid_storm_enabled ? 1 : 0)) return 0;
+    if (!appendf(out, out_cap, &used, "asteroid_storm_start_x01=%.3f\n", lvl.asteroid_storm_start_x01)) return 0;
+    if (!appendf(out, out_cap, &used, "asteroid_storm_angle_deg=%.3f\n", lvl.asteroid_storm_angle_deg)) return 0;
+    if (!appendf(out, out_cap, &used, "asteroid_storm_speed=%.3f\n", lvl.asteroid_storm_speed)) return 0;
+    if (!appendf(out, out_cap, &used, "asteroid_storm_duration_s=%.3f\n", lvl.asteroid_storm_duration_s)) return 0;
+    if (!appendf(out, out_cap, &used, "asteroid_storm_density=%.3f\n", lvl.asteroid_storm_density)) return 0;
 
     if (lvl.wave_mode == LEVELDEF_WAVES_BOID_ONLY) {
         if (!appendf(out, out_cap, &used, "boid_cycle=")) return 0;
@@ -556,9 +580,12 @@ static int marker_property_count(const level_editor_state* s) {
         return 0;
     }
     if (s->selected_marker < 0 || s->selected_marker >= s->marker_count) {
-        return 3; /* WAVE MODE, RENDER STYLE, LENGTH */
+        return 8; /* WAVE MODE, RENDER STYLE, LENGTH, ASTEROID STORM params */
     }
     const int kind = s->markers[s->selected_marker].kind;
+    if (kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
+        return 5; /* X, duration, angle, speed, density */
+    }
     if (kind == LEVEL_EDITOR_MARKER_SEARCHLIGHT) {
         return 6;
     }
@@ -869,7 +896,28 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
     }
 
     if (lvl->exit_enabled) {
-        push_marker(s, LEVEL_EDITOR_MARKER_EXIT, lvl->exit_x01, lvl->exit_y01, 0.0f, 0.0f, 0.0f, 0.0f);
+        push_marker(
+            s,
+            LEVEL_EDITOR_MARKER_EXIT,
+            lvl->exit_x01 / fmaxf(s->level_length_screens, 1.0f),
+            lvl->exit_y01,
+            0.0f,
+            0.0f,
+            0.0f,
+            0.0f
+        );
+    }
+    if (lvl->asteroid_storm_enabled) {
+        push_marker(
+            s,
+            LEVEL_EDITOR_MARKER_ASTEROID_STORM,
+            lvl->asteroid_storm_start_x01 / fmaxf(s->level_length_screens, 1.0f),
+            0.50f,
+            lvl->asteroid_storm_duration_s,
+            lvl->asteroid_storm_angle_deg,
+            lvl->asteroid_storm_speed,
+            lvl->asteroid_storm_density
+        );
     }
 
     for (int i = 0; i < lvl->searchlight_count; ++i) {
@@ -877,7 +925,7 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
         push_marker(
             s,
             LEVEL_EDITOR_MARKER_SEARCHLIGHT,
-            sl->anchor_x01,
+            sl->anchor_x01 / fmaxf(s->level_length_screens, 1.0f),
             sl->anchor_y01,
             sl->length_h01,
             sl->half_angle_deg,
@@ -945,6 +993,11 @@ void level_editor_init(level_editor_state* s) {
     s->level_style = LEVEL_STYLE_DEFENDER;
     s->level_render_style = LEVEL_RENDER_DEFENDER;
     s->level_wave_mode = LEVELDEF_WAVES_NORMAL;
+    s->level_asteroid_storm_enabled = 0;
+    s->level_asteroid_storm_angle_deg = 180.0f;
+    s->level_asteroid_storm_speed = 190.0f;
+    s->level_asteroid_storm_duration_s = 12.0f;
+    s->level_asteroid_storm_density = 1.0f;
     snprintf(s->level_name, sizeof(s->level_name), "%s", level_style_name(s->level_style));
     snprintf(s->status_text, sizeof(s->status_text), "ready");
     s->entry_active = 0;
@@ -992,6 +1045,11 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
         if (lvl) {
             s->level_render_style = lvl->render_style;
             s->level_wave_mode = lvl->wave_mode;
+            s->level_asteroid_storm_enabled = lvl->asteroid_storm_enabled ? 1 : 0;
+            s->level_asteroid_storm_angle_deg = lvl->asteroid_storm_angle_deg;
+            s->level_asteroid_storm_speed = lvl->asteroid_storm_speed;
+            s->level_asteroid_storm_duration_s = lvl->asteroid_storm_duration_s;
+            s->level_asteroid_storm_density = lvl->asteroid_storm_density;
         }
     }
     build_markers(s, db, style);
@@ -1278,11 +1336,11 @@ void level_editor_select_property(level_editor_state* s, int delta) {
 }
 
 const char* level_editor_selected_property_name(const level_editor_state* s) {
-    static const char* names[6] = {"X", "Y", "A", "B", "C", "D"};
+    static const char* names[8] = {"X", "Y", "A", "B", "C", "D", "E", "F"};
     if (!s) {
         return "X";
     }
-    const int idx = (s->selected_property >= 0 && s->selected_property < 6) ? s->selected_property : 0;
+    const int idx = (s->selected_property >= 0 && s->selected_property < 8) ? s->selected_property : 0;
     return names[idx];
 }
 
@@ -1328,6 +1386,26 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
                     400.0f
                 );
                 break;
+            case 3:
+                s->level_asteroid_storm_enabled = (delta >= 0.0f) ? 1 : 0;
+                break;
+            case 4:
+                s->level_asteroid_storm_angle_deg += delta * 180.0f;
+                if (s->level_asteroid_storm_angle_deg > 360.0f) {
+                    s->level_asteroid_storm_angle_deg -= 360.0f;
+                } else if (s->level_asteroid_storm_angle_deg < -360.0f) {
+                    s->level_asteroid_storm_angle_deg += 360.0f;
+                }
+                break;
+            case 5:
+                s->level_asteroid_storm_speed = clampf(s->level_asteroid_storm_speed + delta * 480.0f, 0.0f, 4000.0f);
+                break;
+            case 6:
+                s->level_asteroid_storm_duration_s = clampf(s->level_asteroid_storm_duration_s + delta * 80.0f, 0.0f, 240.0f);
+                break;
+            case 7:
+                s->level_asteroid_storm_density = clampf(s->level_asteroid_storm_density + delta * 8.0f, 0.0f, 8.0f);
+                break;
             default:
                 break;
         }
@@ -1335,6 +1413,19 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
         return;
     }
     level_editor_marker* m = &s->markers[s->selected_marker];
+
+    if (m->kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
+        switch (s->selected_property) {
+            case 0: move_marker_x(s, s->selected_marker, delta); break;
+            case 1: m->a = fmaxf(0.01f, m->a + delta * 60.0f); break;
+            case 2: m->b += delta * 180.0f; break;
+            case 3: m->c = clampf(m->c + delta * 480.0f, 1.0f, 4000.0f); break;
+            case 4: m->d = clampf(m->d + delta * 6.0f, 0.01f, 8.0f); break;
+            default: break;
+        }
+        s->dirty = 1;
+        return;
+    }
 
     if (m->kind == LEVEL_EDITOR_MARKER_SEARCHLIGHT) {
         switch (s->selected_property) {
@@ -1504,6 +1595,11 @@ int level_editor_revert(level_editor_state* s) {
     s->level_length_screens = s->snapshot_level_length_screens;
     s->level_render_style = s->snapshot_level_render_style;
     s->level_wave_mode = s->snapshot_level_wave_mode;
+    s->level_asteroid_storm_enabled = s->snapshot_level_asteroid_storm_enabled;
+    s->level_asteroid_storm_angle_deg = s->snapshot_level_asteroid_storm_angle_deg;
+    s->level_asteroid_storm_speed = s->snapshot_level_asteroid_storm_speed;
+    s->level_asteroid_storm_duration_s = s->snapshot_level_asteroid_storm_duration_s;
+    s->level_asteroid_storm_density = s->snapshot_level_asteroid_storm_density;
     s->level_style = level_style_from_render_style(s->level_render_style);
     snprintf(s->level_name, sizeof(s->level_name), "%s", s->snapshot_level_name);
     s->marker_count = s->snapshot_marker_count;
@@ -1534,6 +1630,11 @@ void level_editor_new_blank(level_editor_state* s) {
     s->snapshot_valid = 0;
     s->dirty = 1;
     s->level_style = level_style_from_render_style(s->level_render_style);
+    s->level_asteroid_storm_enabled = 0;
+    s->level_asteroid_storm_angle_deg = 180.0f;
+    s->level_asteroid_storm_speed = 190.0f;
+    s->level_asteroid_storm_duration_s = 12.0f;
+    s->level_asteroid_storm_density = 1.0f;
     snprintf(s->level_name, sizeof(s->level_name), "untitled");
     snprintf(s->status_text, sizeof(s->status_text), "new level");
 }
