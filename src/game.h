@@ -15,6 +15,7 @@
 #define MAX_CURATED_RUNTIME 128
 #define MAX_ASTEROIDS 192
 #define ASTEROID_EMITTERS 64
+#define MAX_MINES 256
 #define PLAYER_ALT_WEAPON_COUNT 4
 
 struct leveldef_db;
@@ -226,6 +227,15 @@ typedef struct asteroid_body {
     float radius;
 } asteroid_body;
 
+typedef struct mine {
+    int active;
+    body b;
+    float radius;
+    float angle;
+    float spin_rate;
+    int hp;
+} mine;
+
 typedef struct game_input {
     int left;
     int right;
@@ -296,6 +306,8 @@ typedef struct game_state {
     float asteroid_storm_cooldown_s;
     int asteroid_storm_emitter_cursor;
     float asteroid_storm_emitter_cd[ASTEROID_EMITTERS];
+    mine mines[MAX_MINES];
+    int mine_count;
     int exit_portal_active;
     float exit_portal_x;
     float exit_portal_y;
@@ -303,6 +315,9 @@ typedef struct game_state {
     float shield_time_remaining_s;
     int shield_active;
     float shield_radius;
+    float mine_push_ax;
+    float mine_push_ay;
+    float mine_push_time_s;
     int emp_effect_active;
     float emp_effect_t;
     float emp_effect_duration_s;

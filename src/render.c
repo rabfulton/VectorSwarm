@@ -1234,6 +1234,85 @@ static vg_result draw_asteroid_storm(
     return VG_OK;
 }
 
+static vg_result draw_minefields(
+    vg_context* ctx,
+    const game_state* g,
+    const palette_theme* pal,
+    const vg_stroke_style* land_halo,
+    const vg_stroke_style* land_main
+) {
+    if (!ctx || !g || !pal || !land_halo || !land_main || g->mine_count <= 0) {
+        return VG_OK;
+    }
+    vg_stroke_style halo = *land_halo;
+    vg_stroke_style main = *land_main;
+    halo.width_px *= 1.14f;
+    main.width_px *= 1.08f;
+    halo.intensity *= 0.95f;
+    main.intensity *= 1.05f;
+    halo.color = (vg_color){pal->primary.r, pal->primary.g, pal->primary.b, 0.62f};
+    main.color = (vg_color){pal->secondary.r, pal->secondary.g, pal->secondary.b, 0.90f};
+    vg_color fill_c = pal->primary_dim;
+    fill_c.a = fminf(fill_c.a, 0.30f);
+    const vg_fill_style fill = make_fill(0.75f, fill_c, VG_BLEND_ALPHA);
+    for (int i = 0; i < g->mine_count && i < MAX_MINES; ++i) {
+        const mine* m = &g->mines[i];
+        if (!m->active) {
+            continue;
+        }
+        vg_vec2 hex[7];
+        const float c = cosf(m->angle);
+        const float s = sinf(m->angle);
+        const float r = m->radius;
+        for (int k = 0; k < 6; ++k) {
+            const float a = ((float)k / 6.0f) * 6.2831853f;
+            const float px = cosf(a) * r;
+            const float py = sinf(a) * r;
+            hex[k].x = m->b.x + px * c - py * s;
+            hex[k].y = m->b.y + px * s + py * c;
+        }
+        hex[6] = hex[0];
+        vg_result vr = vg_fill_convex(ctx, hex, 6, &fill);
+        if (vr != VG_OK) {
+            return vr;
+        }
+        for (int k = 0; k < 6; ++k) {
+            const int k1 = (k + 1) % 6;
+            const float mx = (hex[k].x + hex[k1].x) * 0.5f;
+            const float my = (hex[k].y + hex[k1].y) * 0.5f;
+            float nx = mx - m->b.x;
+            float ny = my - m->b.y;
+            const float nl = sqrtf(nx * nx + ny * ny);
+            if (nl > 1e-4f) {
+                nx /= nl;
+                ny /= nl;
+            }
+            const vg_vec2 spike[3] = {
+                {hex[k].x, hex[k].y},
+                {mx + nx * (r * 0.68f), my + ny * (r * 0.68f)},
+                {hex[k1].x, hex[k1].y}
+            };
+            vr = vg_draw_polyline(ctx, spike, 3, &halo, 0);
+            if (vr != VG_OK) {
+                return vr;
+            }
+            vr = vg_draw_polyline(ctx, spike, 3, &main, 0);
+            if (vr != VG_OK) {
+                return vr;
+            }
+        }
+        vr = vg_draw_polyline(ctx, hex, 7, &halo, 0);
+        if (vr != VG_OK) {
+            return vr;
+        }
+        vr = vg_draw_polyline(ctx, hex, 7, &main, 0);
+        if (vr != VG_OK) {
+            return vr;
+        }
+    }
+    return VG_OK;
+}
+
 static vg_result draw_text_vector_glow(
     vg_context* ctx,
     const char* text,
@@ -2619,6 +2698,7 @@ static const char* level_editor_marker_name(int kind) {
         case 4: return "KAMIKAZE";
         case 5: return "BOID";
         case 6: return "ASTEROID STORM";
+        case 7: return "MINEFIELD";
         default: return "MARKER";
     }
 }
@@ -2632,6 +2712,9 @@ static vg_color level_editor_marker_color(const palette_theme* pal, int kind) {
     }
     if (kind == 6) {
         return (vg_color){1.0f, 0.64f, 0.20f, 1.0f};
+    }
+    if (kind == 7) {
+        return (vg_color){1.0f, 0.46f, 0.22f, 1.0f};
     }
     if (kind == 2 || kind == 3 || kind == 4 || kind == 5) {
         return (vg_color){1.0f, 0.26f, 0.26f, 1.0f};
@@ -2753,6 +2836,12 @@ static int editor_marker_properties_text(
         if (n < cap) { out_labels[n] = "DENSITY"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_d[sel]); n++; }
         return n;
     }
+    if (kind == 7) {
+        if (n < cap) { out_labels[n] = "POS X01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "POS Y01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "COUNT"; snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_a[sel]); n++; }
+        return n;
+    }
     if (kind == 2 || kind == 3 || kind == 4 || kind == 5) {
         const int event_item = (metrics->level_editor_marker_track[sel] == 1);
         if (n < cap) { out_labels[n] = "TYPE"; snprintf(out_values[n], 32, "%s", editor_wave_type_name(kind)); n++; }
@@ -2834,6 +2923,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     const vg_rect swarm_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 54.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
     const vg_rect watcher_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 106.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
     const vg_rect asteroid_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 158.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
+    const vg_rect mine_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 210.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
     char level_name_disp[96];
     const int enemy_spatial =
         (metrics->level_editor_wave_mode == LEVELDEF_WAVES_CURATED &&
@@ -2901,6 +2991,8 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     if (r != VG_OK) return r;
     r = vg_draw_button(ctx, asteroid_btn, "ASTEROID", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 6 ? 1 : 0);
     if (r != VG_OK) return r;
+    r = vg_draw_button(ctx, mine_btn, "MINEFIELD", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 7 ? 1 : 0);
+    if (r != VG_OK) return r;
     {
         vg_stroke_style icon = frame;
         icon.width_px = 1.2f * ui;
@@ -2937,6 +3029,23 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             r = vg_fill_circle(ctx, (vg_vec2){asteroid_btn.x + 18.0f * ui, asteroid_btn.y + asteroid_btn.h * 0.50f}, 4.8f * ui, &af, 20);
         }
         if (r != VG_OK) return r;
+        {
+            vg_stroke_style ms = icon;
+            r = vg_draw_polyline(
+                ctx,
+                (vg_vec2[]){
+                    {mine_btn.x + 12.0f * ui, mine_btn.y + mine_btn.h * 0.48f},
+                    {mine_btn.x + 20.0f * ui, mine_btn.y + mine_btn.h * 0.68f},
+                    {mine_btn.x + 28.0f * ui, mine_btn.y + mine_btn.h * 0.48f},
+                    {mine_btn.x + 20.0f * ui, mine_btn.y + mine_btn.h * 0.28f},
+                    {mine_btn.x + 12.0f * ui, mine_btn.y + mine_btn.h * 0.48f}
+                },
+                5,
+                &ms,
+                0
+            );
+            if (r != VG_OK) return r;
+        }
     }
 
     {
@@ -3126,6 +3235,15 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                     {vx - 10.0f * ui, vy - 9.0f * ui}
                 };
                 r = vg_draw_polyline(ctx, tri, 4, &mk, 0);
+            } else if (kind == 7) {
+                const float rr = 14.0f * ui * glyph_scale;
+                vg_vec2 hex[7];
+                for (int k = 0; k < 6; ++k) {
+                    const float a = ((float)k / 6.0f) * 6.2831853f;
+                    hex[k] = (vg_vec2){vx + cosf(a) * rr, vy + sinf(a) * rr};
+                }
+                hex[6] = hex[0];
+                r = vg_draw_polyline(ctx, hex, 7, &mk, 0);
             } else {
                 r = draw_editor_diamond(ctx, (vg_vec2){vx, vy}, 19.5f * ui * glyph_scale, &mk);
             }
@@ -3261,7 +3379,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     );
     if (r != VG_OK) return r;
     if (metrics->level_editor_drag_active &&
-        (metrics->level_editor_drag_kind == 5 || metrics->level_editor_drag_kind == 1 || metrics->level_editor_drag_kind == 6)) {
+        (metrics->level_editor_drag_kind == 5 || metrics->level_editor_drag_kind == 1 || metrics->level_editor_drag_kind == 6 || metrics->level_editor_drag_kind == 7)) {
         vg_stroke_style gs = frame;
         gs.intensity = 1.2f;
         gs.color = level_editor_marker_color(&pal, metrics->level_editor_drag_kind);
@@ -3274,6 +3392,15 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 .blend = VG_BLEND_ALPHA
             };
             r = vg_fill_circle(ctx, (vg_vec2){metrics->level_editor_drag_x, metrics->level_editor_drag_y}, 6.0f * ui, &af, 20);
+        } else if (metrics->level_editor_drag_kind == 7) {
+            const float rr = 8.0f * ui;
+            vg_vec2 hex[7];
+            for (int k = 0; k < 6; ++k) {
+                const float a = ((float)k / 6.0f) * 6.2831853f;
+                hex[k] = (vg_vec2){metrics->level_editor_drag_x + cosf(a) * rr, metrics->level_editor_drag_y + sinf(a) * rr};
+            }
+            hex[6] = hex[0];
+            r = vg_draw_polyline(ctx, hex, 7, &gs, 0);
         } else {
             r = draw_editor_diamond(ctx, (vg_vec2){metrics->level_editor_drag_x, metrics->level_editor_drag_y}, 7.0f * ui, &gs);
         }
@@ -5843,6 +5970,13 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
     }
     if (g->asteroid_storm_enabled && g->asteroid_count > 0) {
         r = draw_asteroid_storm(ctx, g, &pal, &land_halo, &land_main);
+        if (r != VG_OK) {
+            (void)vg_transform_pop(ctx);
+            return r;
+        }
+    }
+    if (g->mine_count > 0) {
+        r = draw_minefields(ctx, g, &pal, &land_halo, &land_main);
         if (r != VG_OK) {
             (void)vg_transform_pop(ctx);
             return r;

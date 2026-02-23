@@ -16,7 +16,8 @@ enum level_editor_marker_kind {
     LEVEL_EDITOR_MARKER_WAVE_V = 3,
     LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE = 4,
     LEVEL_EDITOR_MARKER_BOID = 5,
-    LEVEL_EDITOR_MARKER_ASTEROID_STORM = 6
+    LEVEL_EDITOR_MARKER_ASTEROID_STORM = 6,
+    LEVEL_EDITOR_MARKER_MINEFIELD = 7
 };
 
 enum level_editor_marker_track {
@@ -56,6 +57,7 @@ typedef struct level_editor_layout {
     vg_rect swarm_button;
     vg_rect watcher_button;
     vg_rect asteroid_button;
+    vg_rect mine_button;
 } level_editor_layout;
 
 typedef struct level_editor_state {

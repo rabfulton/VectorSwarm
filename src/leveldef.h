@@ -10,6 +10,7 @@
 #define LEVELDEF_WEAPON_COUNT 3
 #define LEVELDEF_MAX_DISCOVERED_LEVELS 128
 #define LEVELDEF_MAX_EVENTS 64
+#define LEVELDEF_MAX_MINEFIELDS 32
 
 enum leveldef_wave_mode {
     LEVELDEF_WAVES_NORMAL = 0,
@@ -91,6 +92,12 @@ typedef struct leveldef_searchlight {
     float projectile_radius;
     float aim_jitter_deg;
 } leveldef_searchlight;
+
+typedef struct leveldef_minefield {
+    float anchor_x01;
+    float anchor_y01;
+    int count;
+} leveldef_minefield;
 
 typedef struct leveldef_combat_tuning {
     struct {
@@ -208,6 +215,8 @@ typedef struct leveldef_level {
     leveldef_curated_enemy curated[LEVELDEF_MAX_BOID_CYCLE * 8];
     int searchlight_count;
     leveldef_searchlight searchlights[MAX_SEARCHLIGHTS];
+    int minefield_count;
+    leveldef_minefield minefields[LEVELDEF_MAX_MINEFIELDS];
 } leveldef_level;
 
 typedef struct leveldef_db {

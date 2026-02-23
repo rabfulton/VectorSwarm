@@ -250,6 +250,47 @@ static int parse_searchlight(leveldef_level* lvl, const char* value, FILE* log_o
     return 1;
 }
 
+static int parse_minefield(leveldef_level* lvl, const char* value, FILE* log_out) {
+    char buf[192];
+    char* tok;
+    char* save = NULL;
+    const int expected = 3;
+    char* fields[3];
+    int i = 0;
+    leveldef_minefield mf;
+
+    if (!lvl || !value || lvl->minefield_count >= LEVELDEF_MAX_MINEFIELDS) {
+        return 0;
+    }
+    memset(&mf, 0, sizeof(mf));
+    strncpy(buf, value, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    tok = strtok_r(buf, ",", &save);
+    while (tok && i < expected) {
+        fields[i++] = trim(tok);
+        tok = strtok_r(NULL, ",", &save);
+    }
+    if (i != expected) {
+        if (log_out) {
+            fprintf(log_out, "leveldef: minefield expects %d fields, got %d\n", expected, i);
+        }
+        return 0;
+    }
+
+    mf.anchor_x01 = strtof(fields[0], NULL);
+    mf.anchor_y01 = strtof(fields[1], NULL);
+    mf.count = (int)strtol(fields[2], NULL, 10);
+    if (mf.count <= 0) {
+        if (log_out) {
+            fprintf(log_out, "leveldef: minefield count must be > 0\n");
+        }
+        return 0;
+    }
+    lvl->minefields[lvl->minefield_count++] = mf;
+    return 1;
+}
+
 static int parse_curated_enemy(leveldef_level* lvl, const char* value, FILE* log_out) {
     char buf[320];
     char* tok;
@@ -396,6 +437,7 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                     if (sid >= 0 && sid < LEVEL_STYLE_COUNT) {
                         cur_level = &db->levels[sid];
                         cur_level->searchlight_count = 0;
+                        cur_level->minefield_count = 0;
                         cur_level->curated_count = 0;
                         cur_level->boid_cycle_count = 0;
                         cur_level->wave_cycle_count = 0;
@@ -564,6 +606,8 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_level->kamikaze.radius_max = strtof(v, NULL);
                     } else if (strcmp(k, "searchlight") == 0) {
                         (void)parse_searchlight(cur_level, v, log_out);
+                    } else if (strcmp(k, "minefield") == 0) {
+                        (void)parse_minefield(cur_level, v, log_out);
                     } else if (strcmp(k, "curated_enemy") == 0) {
                         (void)parse_curated_enemy(cur_level, v, log_out);
                     }
@@ -870,6 +914,22 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
                     ok = 0;
                     break;
                 }
+            }
+        }
+        if (l->minefield_count < 0 || l->minefield_count > LEVELDEF_MAX_MINEFIELDS) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid minefield_count\n", i);
+            }
+            ok = 0;
+        }
+        for (int m = 0; m < l->minefield_count; ++m) {
+            const leveldef_minefield* mf = &l->minefields[m];
+            if (mf->count <= 0 || mf->anchor_x01 < 0.0f || mf->anchor_y01 < 0.0f || mf->anchor_y01 > 1.0f) {
+                if (log_out) {
+                    fprintf(log_out, "leveldef: level %d invalid minefield entry\n", i);
+                }
+                ok = 0;
+                break;
             }
         }
     }

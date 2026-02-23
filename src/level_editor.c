@@ -239,6 +239,9 @@ static float marker_pick_radius01(int kind) {
     if (kind == LEVEL_EDITOR_MARKER_EXIT) {
         return 0.11f;
     }
+    if (kind == LEVEL_EDITOR_MARKER_MINEFIELD) {
+        return 0.12f;
+    }
     return 0.08f;
 }
 
@@ -337,6 +340,14 @@ static const char* curated_kind_name(int kind) {
     if (kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) return "kamikaze";
     if (kind == LEVEL_EDITOR_MARKER_BOID) return "boid";
     return "sine";
+}
+
+static const char* marker_kind_name(int kind) {
+    if (kind == LEVEL_EDITOR_MARKER_EXIT) return "exit";
+    if (kind == LEVEL_EDITOR_MARKER_SEARCHLIGHT) return "searchlight";
+    if (kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) return "asteroid_storm";
+    if (kind == LEVEL_EDITOR_MARKER_MINEFIELD) return "minefield";
+    return "marker";
 }
 
 static const char* render_style_file_base(int render_style) {
@@ -457,6 +468,18 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
         lvl.searchlights[searchlight_n++] = sl;
     }
     lvl.searchlight_count = searchlight_n;
+    lvl.minefield_count = 0;
+    for (i = 0; i < s->marker_count && lvl.minefield_count < LEVELDEF_MAX_MINEFIELDS; ++i) {
+        const level_editor_marker* m = &s->markers[i];
+        leveldef_minefield mf;
+        if (m->kind != LEVEL_EDITOR_MARKER_MINEFIELD || m->track != LEVEL_EDITOR_TRACK_SPATIAL) {
+            continue;
+        }
+        mf.anchor_x01 = m->x01 * level_len;
+        mf.anchor_y01 = m->y01;
+        mf.count = (int)lroundf(fmaxf(m->a, 1.0f));
+        lvl.minefields[lvl.minefield_count++] = mf;
+    }
 
     for (i = 0; i < s->marker_count; ++i) {
         const level_editor_marker* m = &s->markers[i];
@@ -601,6 +624,7 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
     if (!appendf(out, out_cap, &used, "# anchor_x01,anchor_y01,length_h01,half_angle_deg,sweep_center_deg,sweep_amplitude_deg,\n")) return 0;
     if (!appendf(out, out_cap, &used, "# sweep_speed,sweep_phase_deg,sweep_motion,source_type,source_radius,clear_grace_s,\n")) return 0;
     if (!appendf(out, out_cap, &used, "# fire_interval_s,projectile_speed,projectile_ttl_s,projectile_radius,aim_jitter_deg\n")) return 0;
+    if (!appendf(out, out_cap, &used, "# minefield CSV fields: anchor_x01,anchor_y01,count\n")) return 0;
     if (!appendf(out, out_cap, &used, "[level %s]\n", style_header_name(s->level_style))) return 0;
     if (!appendf(out, out_cap, &used, "render_style=%s\n", render_style_name(lvl.render_style))) return 0;
     if (!appendf(out, out_cap, &used, "wave_mode=%s\n", wave_mode_name(lvl.wave_mode))) return 0;
@@ -696,6 +720,17 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
             searchlight_source_name(sl->source_type), sl->source_radius, sl->clear_grace_s, sl->fire_interval_s,
             sl->projectile_speed, sl->projectile_ttl_s, sl->projectile_radius, sl->aim_jitter_deg)) return 0;
     }
+    for (i = 0; i < lvl.minefield_count; ++i) {
+        const leveldef_minefield* mf = &lvl.minefields[i];
+        if (!appendf(
+                out,
+                out_cap,
+                &used,
+                "minefield=%.3f,%.3f,%d\n",
+                mf->anchor_x01,
+                mf->anchor_y01,
+                mf->count)) return 0;
+    }
 
     return 1;
 }
@@ -713,6 +748,9 @@ static int marker_property_count(const level_editor_state* s) {
     }
     if (kind == LEVEL_EDITOR_MARKER_SEARCHLIGHT) {
         return 6;
+    }
+    if (kind == LEVEL_EDITOR_MARKER_MINEFIELD) {
+        return 3;
     }
     if (kind == LEVEL_EDITOR_MARKER_EXIT) {
         return 2;
@@ -1001,6 +1039,12 @@ void level_editor_compute_layout(float w, float h, level_editor_layout* out) {
         out->entities.w - 16.0f * ui,
         42.0f * ui
     };
+    out->mine_button = (vg_rect){
+        out->entities.x + 8.0f * ui,
+        out->entities.y + out->entities.h - 210.0f * ui,
+        out->entities.w - 16.0f * ui,
+        42.0f * ui
+    };
 
     const float len_screens = 1.0f;
     const float window_w = out->timeline_track.w / len_screens;
@@ -1080,6 +1124,22 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
             sl->half_angle_deg,
             sl->sweep_speed,
             sl->sweep_amplitude_deg
+        );
+    }
+    for (int i = 0; i < lvl->minefield_count; ++i) {
+        const leveldef_minefield* mf = &lvl->minefields[i];
+        push_marker(
+            s,
+            LEVEL_EDITOR_MARKER_MINEFIELD,
+            LEVEL_EDITOR_TRACK_SPATIAL,
+            1,
+            0.0f,
+            mf->anchor_x01 / fmaxf(s->level_length_screens, 1.0f),
+            mf->anchor_y01,
+            (float)mf->count,
+            0.0f,
+            0.0f,
+            0.0f
         );
     }
 
@@ -1301,10 +1361,13 @@ static void add_marker_at_view(
         push_marker(s, LEVEL_EDITOR_MARKER_BOID, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, x01, y01, 12.0f, 190.0f, 90.0f, 0.0f);
     } else if (kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
         push_marker(s, LEVEL_EDITOR_MARKER_ASTEROID_STORM, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, x01, y01, 10.0f, 30.0f, 520.0f, 1.3f);
+    } else if (kind == LEVEL_EDITOR_MARKER_MINEFIELD) {
+        push_marker(s, LEVEL_EDITOR_MARKER_MINEFIELD, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, x01, y01, 12.0f, 0.0f, 0.0f, 0.0f);
     }
     s->selected_marker = s->marker_count - 1;
     s->selected_property = 0;
     s->dirty = 1;
+    snprintf(s->status_text, sizeof(s->status_text), "added %s", marker_kind_name(kind));
 }
 
 static void add_marker_at_timeline(level_editor_state* s, int kind, float x01) {
@@ -1335,6 +1398,7 @@ static void add_marker_at_timeline(level_editor_state* s, int kind, float x01) {
     s->selected_marker = s->marker_count - 1;
     s->selected_property = 0;
     s->dirty = 1;
+    snprintf(s->status_text, sizeof(s->status_text), "added %s", marker_kind_name(kind));
 }
 
 int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_y, float w, float h, int mouse_down, int mouse_pressed) {
@@ -1402,6 +1466,14 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
             s->entity_tool_selected = LEVEL_EDITOR_MARKER_ASTEROID_STORM;
             s->entity_drag_active = 1;
             s->entity_drag_kind = LEVEL_EDITOR_MARKER_ASTEROID_STORM;
+            s->entity_drag_x = mouse_x;
+            s->entity_drag_y = mouse_y;
+            return 1;
+        }
+        if (point_in_rect(mouse_x, mouse_y, l.mine_button)) {
+            s->entity_tool_selected = LEVEL_EDITOR_MARKER_MINEFIELD;
+            s->entity_drag_active = 1;
+            s->entity_drag_kind = LEVEL_EDITOR_MARKER_MINEFIELD;
             s->entity_drag_x = mouse_x;
             s->entity_drag_y = mouse_y;
             return 1;
@@ -1491,7 +1563,8 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
                     s->selected_marker = -1;
                 } else if (s->entity_tool_selected == LEVEL_EDITOR_MARKER_BOID ||
                            s->entity_tool_selected == LEVEL_EDITOR_MARKER_SEARCHLIGHT ||
-                           s->entity_tool_selected == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
+                           s->entity_tool_selected == LEVEL_EDITOR_MARKER_ASTEROID_STORM ||
+                           s->entity_tool_selected == LEVEL_EDITOR_MARKER_MINEFIELD) {
                     add_marker_at_view(s, s->entity_tool_selected, mx01, my01);
                 } else {
                     s->selected_marker = -1;
@@ -1675,6 +1748,16 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             case 3: m->b += delta * 20.0f; break;
             case 4: m->c += delta * 5.0f; break;
             case 5: m->d += delta * 20.0f; break;
+            default: break;
+        }
+        s->dirty = 1;
+        return;
+    }
+    if (m->kind == LEVEL_EDITOR_MARKER_MINEFIELD) {
+        switch (s->selected_property) {
+            case 0: move_marker_x(s, s->selected_marker, delta); break;
+            case 1: m->y01 = clampf(m->y01 + delta, 0.0f, 1.0f); break;
+            case 2: m->a = clampf(m->a + delta * 24.0f, 1.0f, 128.0f); break;
             default: break;
         }
         s->dirty = 1;

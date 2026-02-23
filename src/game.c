@@ -122,8 +122,11 @@ static void ensure_leveldef_loaded(void) {
 
 static float gameplay_ui_scale(const game_state* g);
 static int level_uses_cylinder(const game_state* g);
+static float length2(float x, float y);
 static void normalize2(float* x, float* y);
+static void steer_to_velocity(body* b, float target_vx, float target_vy, float accel, float damping);
 static void integrate_body(body* b, float dt);
+static void explode_mine(game_state* g, mine* m, float impact_vx, float impact_vy);
 static void emit_player_asteroid_explosion(game_state* g);
 static void game_push_audio_event(game_state* g, game_audio_event_type type, float x, float y);
 static enemy_bullet* spawn_enemy_bullet_at(
@@ -137,6 +140,10 @@ static enemy_bullet* spawn_enemy_bullet_at(
     float radius
 );
 static int set_level_index(game_state* g, int index);
+
+static void configure_minefields_for_level(game_state* g);
+static void update_minefields(game_state* g, float dt);
+static void minefield_apply_emp(game_state* g, float radius);
 
 static void game_queue_death_message(game_state* g) {
     if (!g || g->lives > 0) {
@@ -159,6 +166,37 @@ static float dist_sq(float ax, float ay, float bx, float by) {
     const float dx = ax - bx;
     const float dy = ay - by;
     return dx * dx + dy * dy;
+}
+
+typedef struct mine_tuning {
+    float activation_distance;
+    float detonation_distance;
+    float size;
+    float drift_speed;
+    float drift_accel;
+    float max_speed;
+    float push_impulse;
+    float push_accel;
+    float push_duration_s;
+    float emp_fx_radius;
+} mine_tuning;
+
+static mine_tuning mine_tuning_for(const game_state* g) {
+    const float screen_ref = fminf(g->world_w, g->world_h);
+    const float su = gameplay_ui_scale(g);
+    mine_tuning t = {
+        .activation_distance = screen_ref * 0.50f,
+        .detonation_distance = screen_ref * 0.052f,
+        .size = 16.0f * su,
+        .drift_speed = 180.0f * su,
+        .drift_accel = 7.2f,
+        .max_speed = 260.0f * su,
+        .push_impulse = 980.0f * su,
+        .push_accel = 4200.0f * su,
+        .push_duration_s = 0.42f,
+        .emp_fx_radius = screen_ref * 0.09f
+    };
+    return t;
 }
 
 static float deg_to_rad(float d) {
@@ -629,6 +667,168 @@ static void update_asteroid_storm(game_state* g, float dt) {
     }
 }
 
+static void configure_minefields_for_level(game_state* g) {
+    if (!g) {
+        return;
+    }
+    memset(g->mines, 0, sizeof(g->mines));
+    g->mine_count = 0;
+    if (level_uses_cylinder(g)) {
+        return;
+    }
+    const leveldef_level* lvl = current_leveldef(g);
+    if (!lvl || lvl->minefield_count <= 0) {
+        return;
+    }
+    const float su = gameplay_ui_scale(g);
+    const float field_w = g->world_w;
+    const float field_h = g->world_h * 0.62f;
+    const mine_tuning tune = mine_tuning_for(g);
+    for (int fi = 0; fi < lvl->minefield_count; ++fi) {
+        const leveldef_minefield* mf = &lvl->minefields[fi];
+        const float cx = mf->anchor_x01 * g->world_w;
+        const float cy = mf->anchor_y01 * g->world_h;
+        const int count = clampi(mf->count, 1, MAX_MINES);
+        for (int k = 0; k < count && g->mine_count < MAX_MINES; ++k) {
+            mine* m = &g->mines[g->mine_count++];
+            int placed = 0;
+            for (int tries = 0; tries < 20; ++tries) {
+                const float rr = tune.size;
+                const float px = cx + (frands1() * 0.5f) * field_w;
+                const float py = cy + (frands1() * 0.5f) * field_h;
+                int overlap = 0;
+                for (int j = 0; j < g->mine_count - 1; ++j) {
+                    const mine* o = &g->mines[j];
+                    if (!o->active) {
+                        continue;
+                    }
+                    const float dr = rr + o->radius + 4.0f * su;
+                    if (dist_sq(px, py, o->b.x, o->b.y) < dr * dr) {
+                        overlap = 1;
+                        break;
+                    }
+                }
+                if (overlap) {
+                    continue;
+                }
+                memset(m, 0, sizeof(*m));
+                m->active = 1;
+                m->b.x = px;
+                m->b.y = py;
+                m->radius = rr;
+                m->angle = frand01() * 6.2831853f;
+                m->spin_rate = frands1() * (0.8f + frand01() * 2.4f);
+                m->hp = 10;
+                placed = 1;
+                break;
+            }
+            if (!placed) {
+                memset(m, 0, sizeof(*m));
+            }
+        }
+    }
+}
+
+static void minefield_apply_emp(game_state* g, float radius) {
+    if (!g || radius <= 0.0f) {
+        return;
+    }
+    const float rr2 = radius * radius;
+    for (int i = 0; i < g->mine_count && i < MAX_MINES; ++i) {
+        mine* m = &g->mines[i];
+        if (!m->active) {
+            continue;
+        }
+        if (dist_sq(m->b.x, m->b.y, g->player.b.x, g->player.b.y) <= rr2) {
+            explode_mine(g, m, 0.0f, 0.0f);
+        }
+    }
+}
+
+static void update_minefields(game_state* g, float dt) {
+    if (!g || g->mine_count <= 0) {
+        return;
+    }
+    const mine_tuning t = mine_tuning_for(g);
+    const float act2 = t.activation_distance * t.activation_distance;
+    const float det2 = t.detonation_distance * t.detonation_distance;
+    const float su = gameplay_ui_scale(g);
+
+    for (int i = 0; i < g->mine_count && i < MAX_MINES; ++i) {
+        mine* m = &g->mines[i];
+        if (!m->active) {
+            continue;
+        }
+        float dx = g->player.b.x - m->b.x;
+        float dy = g->player.b.y - m->b.y;
+        const float d2 = dx * dx + dy * dy;
+        if (d2 <= act2) {
+            normalize2(&dx, &dy);
+            steer_to_velocity(&m->b, dx * t.drift_speed, dy * t.drift_speed, t.drift_accel, 1.05f);
+        } else {
+            steer_to_velocity(&m->b, 0.0f, 0.0f, t.drift_accel, 2.25f);
+        }
+        integrate_body(&m->b, dt);
+        {
+            const float speed = length2(m->b.vx, m->b.vy);
+            if (speed > t.max_speed) {
+                const float s = t.max_speed / speed;
+                m->b.vx *= s;
+                m->b.vy *= s;
+            }
+        }
+        m->angle += m->spin_rate * dt;
+
+        /* Bullet impacts: mine takes 10 hits. */
+        for (size_t bi = 0; bi < MAX_BULLETS; ++bi) {
+            bullet* b = &g->bullets[bi];
+            if (!b->active) {
+                continue;
+            }
+            if (dist_sq(b->b.x, b->b.y, m->b.x, m->b.y) <= m->radius * m->radius) {
+                b->active = 0;
+                m->hp -= 1;
+                if (m->hp <= 0) {
+                    explode_mine(g, m, b->b.vx, b->b.vy);
+                    g->kills += 1;
+                    g->score += 120;
+                }
+                break;
+            }
+        }
+        if (!m->active) {
+            continue;
+        }
+
+        if (d2 <= det2) {
+            float nx = g->player.b.x - m->b.x;
+            float ny = g->player.b.y - m->b.y;
+            if (nx * nx + ny * ny < 1.0e-6f) {
+                nx = (frand01() < 0.5f) ? -1.0f : 1.0f;
+                ny = frands1() * 0.25f;
+            }
+            normalize2(&nx, &ny);
+            g->player.b.vx += nx * t.push_impulse;
+            g->player.b.vy += ny * t.push_impulse;
+            g->mine_push_ax = nx * t.push_accel;
+            g->mine_push_ay = ny * t.push_accel;
+            if (g->mine_push_time_s < t.push_duration_s) {
+                g->mine_push_time_s = t.push_duration_s;
+            }
+            if (!g->shield_active && g->lives > 0) {
+                g->lives -= 1;
+                if (g->lives < 0) {
+                    g->lives = 0;
+                }
+                if (g->lives == 0) {
+                    game_queue_death_message(g);
+                }
+            }
+            explode_mine(g, m, g->player.b.vx, g->player.b.vy);
+        }
+    }
+}
+
 static float cylinder_period(const game_state* g) {
     return fmaxf(g->world_w * 2.4f, 1.0f);
 }
@@ -682,6 +882,7 @@ static void apply_level_runtime_config(game_state* g) {
     g->curated_spawned_count = 0;
     memset(g->curated_spawned, 0, sizeof(g->curated_spawned));
     configure_searchlights_for_level(g);
+    configure_minefields_for_level(g);
     configure_asteroid_storm_for_level(g);
     configure_exit_portal_for_level(g);
 }
@@ -699,6 +900,7 @@ static int set_level_index(game_state* g, int index) {
     memset(g->particles, 0, sizeof(g->particles));
     memset(g->debris, 0, sizeof(g->debris));
     memset(g->asteroids, 0, sizeof(g->asteroids));
+    memset(g->mines, 0, sizeof(g->mines));
     g->active_particles = 0;
     g->wave_index = 0;
     g->wave_id_alloc = 0;
@@ -712,6 +914,9 @@ static int set_level_index(game_state* g, int index) {
     g->camera_x = g->player.b.x;
     g->camera_y = g->world_h * 0.5f;
     g->shield_radius = 52.0f * su;
+    g->mine_push_ax = 0.0f;
+    g->mine_push_ay = 0.0f;
+    g->mine_push_time_s = 0.0f;
     g->shield_active = 0;
     g->emp_effect_active = 0;
     g->emp_effect_t = 0.0f;
@@ -719,6 +924,7 @@ static int set_level_index(game_state* g, int index) {
     g->emp_primary_radius = 0.0f;
     g->emp_blast_radius = 0.0f;
     g->asteroid_count = 0;
+    g->mine_count = 0;
     g->asteroid_storm_active = 0;
     g->asteroid_storm_completed = 0;
     g->asteroid_storm_announced = 0;
@@ -752,6 +958,11 @@ static void normalize2(float* x, float* y) {
         *x /= l;
         *y /= l;
     }
+}
+
+static void steer_to_velocity(body* b, float target_vx, float target_vy, float accel, float damping) {
+    b->ax = (target_vx - b->vx) * accel - b->vx * damping;
+    b->ay = (target_vy - b->vy) * accel - b->vy * damping;
 }
 
 static void integrate_body(body* b, float dt) {
@@ -827,6 +1038,84 @@ static void emit_player_asteroid_explosion(game_state* g) {
         p->bcol = 0.22f + frand01() * 0.32f;
         p->a = 1.0f;
     }
+}
+
+static void emit_mine_debris(game_state* g, float x, float y, float radius, float impact_vx, float impact_vy) {
+    if (!g) {
+        return;
+    }
+    const float su = gameplay_ui_scale(g);
+    for (int seg = 0; seg < 12; ++seg) {
+        for (size_t i = 0; i < MAX_ENEMY_DEBRIS; ++i) {
+            enemy_debris* d = &g->debris[i];
+            if (d->active) {
+                continue;
+            }
+            const float a = ((float)seg / 12.0f) * 6.2831853f;
+            d->active = 1;
+            d->half_len = radius * 0.36f;
+            d->angle = a;
+            d->spin_rate = frands1() * (5.0f + 7.0f * frand01());
+            d->b.x = x + cosf(a) * radius * 0.30f;
+            d->b.y = y + sinf(a) * radius * 0.30f;
+            d->b.vx = cosf(a) * (82.0f + frand01() * 190.0f) * su + impact_vx * 0.18f;
+            d->b.vy = sinf(a) * (82.0f + frand01() * 190.0f) * su + impact_vy * 0.18f;
+            d->b.ax = -d->b.vx * 0.16f;
+            d->b.ay = -220.0f;
+            d->age_s = 0.0f;
+            d->life_s = 1.5f + frand01() * 0.95f;
+            d->alpha = 1.0f;
+            break;
+        }
+    }
+}
+
+static void trigger_emp_visual_at(game_state* g, float x, float y, float radius) {
+    if (!g) {
+        return;
+    }
+    g->emp_effect_active = 1;
+    g->emp_effect_t = 0.0f;
+    g->emp_effect_duration_s = 0.24f;
+    g->emp_effect_x = x;
+    g->emp_effect_y = y;
+    g->emp_primary_radius = radius * 0.52f;
+    g->emp_blast_radius = radius;
+}
+
+static void explode_mine(game_state* g, mine* m, float impact_vx, float impact_vy) {
+    if (!g || !m || !m->active) {
+        return;
+    }
+    const float su = gameplay_ui_scale(g);
+    const float x = m->b.x;
+    const float y = m->b.y;
+    game_push_audio_event(g, GAME_AUDIO_EVENT_EMP, x, y);
+    trigger_emp_visual_at(g, x, y, mine_tuning_for(g).emp_fx_radius);
+    emit_mine_debris(g, x, y, m->radius, impact_vx, impact_vy);
+    for (int i = 0; i < 22; ++i) {
+        particle* p = alloc_particle(g);
+        if (!p) {
+            break;
+        }
+        const float a = frand01() * 6.2831853f;
+        const float spd = (75.0f + frand01() * 220.0f) * su;
+        p->type = (frand01() < 0.65f) ? PARTICLE_POINT : PARTICLE_GEOM;
+        p->b.x = x + frands1() * 5.0f * su;
+        p->b.y = y + frands1() * 5.0f * su;
+        p->b.vx = cosf(a) * spd + impact_vx * 0.2f;
+        p->b.vy = sinf(a) * spd + impact_vy * 0.2f;
+        p->age_s = 0.0f;
+        p->life_s = 0.45f + frand01() * 0.55f;
+        p->size = (2.2f + frand01() * 4.0f) * su;
+        p->spin = frand01() * 6.2831853f;
+        p->spin_rate = frands1() * 9.0f;
+        p->r = 1.0f;
+        p->g = 0.82f + frand01() * 0.18f;
+        p->bcol = 0.38f + frand01() * 0.28f;
+        p->a = 1.0f;
+    }
+    m->active = 0;
 }
 
 static void game_push_audio_event(game_state* g, game_audio_event_type type, float x, float y) {
@@ -964,6 +1253,7 @@ static void trigger_emp_blast(game_state* g) {
             level_uses_cylinder(g),
             cylinder_period(g)
         );
+        minefield_apply_emp(g, blast_radius);
         g->alt_weapon_ammo[PLAYER_ALT_WEAPON_EMP] -= 1;
         g->secondary_fire_cooldown_s = 0.85f;
         g->emp_effect_active = 1;
@@ -1159,6 +1449,17 @@ static int game_update_player(game_state* g, float dt, const game_input* in, flo
 
     g->player.b.ax = input_x * g->player.thrust - g->player.b.vx * g->player.drag;
     g->player.b.ay = input_y * g->player.thrust - g->player.b.vy * g->player.drag;
+    if (g->mine_push_time_s > 0.0f) {
+        const float decay = clampf(g->mine_push_time_s / 0.42f, 0.0f, 1.0f);
+        g->player.b.ax += g->mine_push_ax * decay;
+        g->player.b.ay += g->mine_push_ay * decay;
+        g->mine_push_time_s -= dt;
+        if (g->mine_push_time_s <= 0.0f) {
+            g->mine_push_time_s = 0.0f;
+            g->mine_push_ax = 0.0f;
+            g->mine_push_ay = 0.0f;
+        }
+    }
     integrate_body(&g->player.b, dt);
 
     const float speed = length2(g->player.b.vx, g->player.b.vy);
@@ -1470,6 +1771,7 @@ void game_update(game_state* g, float dt, const game_input* in) {
         update_searchlights(g, dt);
     }
     enemy_update_system(g, &g_leveldef, dt, su, level_uses_cylinder(g), cylinder_period(g));
+    update_minefields(g, dt);
     game_update_particles(g, dt);
     game_update_camera(g, dt);
 }
