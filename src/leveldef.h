@@ -9,6 +9,7 @@
 #define LEVELDEF_MAX_BOID_CYCLE 8
 #define LEVELDEF_WEAPON_COUNT 3
 #define LEVELDEF_MAX_DISCOVERED_LEVELS 128
+#define LEVELDEF_MAX_EVENTS 64
 
 enum leveldef_wave_mode {
     LEVELDEF_WAVES_NORMAL = 0,
@@ -26,8 +27,23 @@ enum leveldef_wave_pattern_id {
     LEVELDEF_WAVE_SINE_SNAKE = 0,
     LEVELDEF_WAVE_V_FORMATION = 1,
     LEVELDEF_WAVE_SWARM = 2,
-    LEVELDEF_WAVE_KAMIKAZE = 3
+    LEVELDEF_WAVE_KAMIKAZE = 3,
+    LEVELDEF_WAVE_ASTEROID_STORM = 4
 };
+
+enum leveldef_event_kind {
+    LEVELDEF_EVENT_WAVE_SINE = 0,
+    LEVELDEF_EVENT_WAVE_V = 1,
+    LEVELDEF_EVENT_WAVE_SWARM = 2,
+    LEVELDEF_EVENT_WAVE_KAMIKAZE = 3,
+    LEVELDEF_EVENT_ASTEROID_STORM = 4
+};
+
+typedef struct leveldef_event_entry {
+    int kind;      /* enum leveldef_event_kind */
+    int order;     /* 1-based event order */
+    float delay_s; /* delay after previous event ends */
+} leveldef_event_entry;
 
 typedef struct leveldef_boid_profile {
     char name[32];
@@ -183,6 +199,8 @@ typedef struct leveldef_level {
     int boid_cycle[LEVELDEF_MAX_BOID_CYCLE];
     int wave_cycle_count;
     int wave_cycle[LEVELDEF_MAX_BOID_CYCLE];
+    int event_count;
+    leveldef_event_entry events[LEVELDEF_MAX_EVENTS];
     leveldef_wave_sine_tuning sine;
     leveldef_wave_v_tuning v;
     leveldef_wave_kamikaze_tuning kamikaze;

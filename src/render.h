@@ -132,6 +132,9 @@ typedef struct render_metrics {
     float level_editor_marker_x01[LEVEL_EDITOR_MAX_MARKERS];
     float level_editor_marker_y01[LEVEL_EDITOR_MAX_MARKERS];
     int level_editor_marker_kind[LEVEL_EDITOR_MAX_MARKERS];
+    int level_editor_marker_track[LEVEL_EDITOR_MAX_MARKERS];
+    int level_editor_marker_order[LEVEL_EDITOR_MAX_MARKERS];
+    float level_editor_marker_delay_s[LEVEL_EDITOR_MAX_MARKERS];
     float level_editor_marker_a[LEVEL_EDITOR_MAX_MARKERS];
     float level_editor_marker_b[LEVEL_EDITOR_MAX_MARKERS];
     float level_editor_marker_c[LEVEL_EDITOR_MAX_MARKERS];

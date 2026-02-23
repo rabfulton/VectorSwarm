@@ -814,6 +814,8 @@ void enemy_spawn_next_wave(
                     spawn_wave_swarm_profile(g, db, wave_id_2, profile_id, -dir, bidirectional_spawns, su);
                 }
             }
+        } else if (pattern == LEVELDEF_WAVE_ASTEROID_STORM) {
+            announce_wave(g, "asteroid storm");
         } else {
             announce_wave(g, "kamikaze crash wing");
             spawn_wave_kamikaze(g, db, lvl, wave_id, bidirectional_spawns, su);

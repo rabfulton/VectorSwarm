@@ -2732,7 +2732,14 @@ static int editor_marker_properties_text(
         return n;
     }
     if (kind == 6) {
-        if (n < cap) { out_labels[n] = "START X01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
+        const int event_item = (metrics->level_editor_marker_track[sel] == 1);
+        if (event_item) {
+            if (n < cap) { out_labels[n] = "ORDER"; snprintf(out_values[n], 32, "%d", metrics->level_editor_marker_order[sel]); n++; }
+            if (n < cap) { out_labels[n] = "DELAY S"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_delay_s[sel]); n++; }
+        } else {
+            if (n < cap) { out_labels[n] = "POS X01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
+            if (n < cap) { out_labels[n] = "POS Y01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
+        }
         if (n < cap) { out_labels[n] = "DURATION S"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_a[sel]); n++; }
         if (n < cap) { out_labels[n] = "ANGLE DEG"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_marker_b[sel]); n++; }
         if (n < cap) { out_labels[n] = "SPEED"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_marker_c[sel]); n++; }
@@ -2740,9 +2747,15 @@ static int editor_marker_properties_text(
         return n;
     }
     if (kind == 2 || kind == 3 || kind == 4 || kind == 5) {
+        const int event_item = (metrics->level_editor_marker_track[sel] == 1);
         if (n < cap) { out_labels[n] = "TYPE"; snprintf(out_values[n], 32, "%s", editor_wave_type_name(kind)); n++; }
-        if (n < cap) { out_labels[n] = "POS X01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
-        if (n < cap) { out_labels[n] = "POS Y01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
+        if (event_item) {
+            if (n < cap) { out_labels[n] = "ORDER"; snprintf(out_values[n], 32, "%d", metrics->level_editor_marker_order[sel]); n++; }
+            if (n < cap) { out_labels[n] = "DELAY S"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_delay_s[sel]); n++; }
+        } else {
+            if (n < cap) { out_labels[n] = "POS X01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
+            if (n < cap) { out_labels[n] = "POS Y01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
+        }
         if (n < cap) { out_labels[n] = "COUNT"; snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_a[sel]); n++; }
         if (n < cap) {
             out_labels[n] = (kind == 2 || kind == 3) ? "FORMATION AMP" : "MAX SPEED";
@@ -2754,6 +2767,7 @@ static int editor_marker_properties_text(
             snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_c[sel]);
             n++;
         }
+        if (!event_item && n < cap) { out_labels[n] = "DELAY S"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_delay_s[sel]); n++; }
         return n;
     }
 
@@ -2806,11 +2820,13 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     const vg_rect prev_btn = {controls_x, m + timeline_h - row_h, nav_w, row_h};
     const vg_rect next_btn = {name_box.x + name_box.w + name_gap, name_box.y, nav_w, row_h};
     const vg_rect load_btn = {controls_x, m, controls_w * 0.48f, row_h};
-    const vg_rect new_btn = {controls_x, m + row_h + 8.0f * ui, controls_w * 0.48f, row_h};
+    const vg_rect del_btn = {controls_x, m + row_h + 8.0f * ui, controls_w * 0.48f, row_h};
+    const vg_rect new_btn = {controls_x, m + (row_h + 8.0f * ui) * 2.0f, controls_w * 0.48f, row_h};
     const vg_rect save_new_btn = {controls_x + controls_w * 0.52f, m + row_h + 8.0f * ui, controls_w * 0.48f, row_h};
     const vg_rect save_btn = {controls_x + controls_w * 0.52f, m, controls_w * 0.48f, row_h};
     const vg_rect swarm_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 54.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
     const vg_rect watcher_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 106.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
+    const vg_rect asteroid_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 158.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
     char level_name_disp[96];
     const int enemy_spatial =
         (metrics->level_editor_wave_mode == LEVELDEF_WAVES_CURATED &&
@@ -2858,6 +2874,8 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
 
     r = vg_draw_button(ctx, load_btn, "REVERT", 10.6f * ui, &frame, &text, 0);
     if (r != VG_OK) return r;
+    r = vg_draw_button(ctx, del_btn, "DELETE", 10.6f * ui, &frame, &text, 0);
+    if (r != VG_OK) return r;
     r = vg_draw_button(ctx, new_btn, "NEW", 11.0f * ui, &frame, &text, 0);
     if (r != VG_OK) return r;
     r = vg_draw_button(ctx, save_btn, "SAVE", 11.0f * ui, &frame, &text, 0);
@@ -2873,6 +2891,8 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     r = vg_draw_button(ctx, swarm_btn, "SWARM", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 5 ? 1 : 0);
     if (r != VG_OK) return r;
     r = vg_draw_button(ctx, watcher_btn, "WATCHER", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 1 ? 1 : 0);
+    if (r != VG_OK) return r;
+    r = vg_draw_button(ctx, asteroid_btn, "ASTEROID", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 6 ? 1 : 0);
     if (r != VG_OK) return r;
     {
         vg_stroke_style icon = frame;
@@ -2900,6 +2920,15 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
         r = draw_editor_diamond(ctx, (vg_vec2){swarm_btn.x + 24.0f * ui, swarm_btn.y + swarm_btn.h * 0.40f}, 3.5f * ui, &icon);
         if (r != VG_OK) return r;
         r = draw_editor_diamond(ctx, (vg_vec2){watcher_btn.x + 18.0f * ui, watcher_btn.y + watcher_btn.h * 0.50f}, 5.0f * ui, &icon);
+        if (r != VG_OK) return r;
+        {
+            vg_fill_style af = {
+                .intensity = 0.90f,
+                .color = (vg_color){icon.color.r, icon.color.g, icon.color.b, 0.80f},
+                .blend = VG_BLEND_ALPHA
+            };
+            r = vg_fill_circle(ctx, (vg_vec2){asteroid_btn.x + 18.0f * ui, asteroid_btn.y + asteroid_btn.h * 0.50f}, 4.8f * ui, &af, 20);
+        }
         if (r != VG_OK) return r;
     }
 
@@ -2949,10 +2978,25 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
         const float view_max = (start_screen + 1.0f) / len_screens;
         const int marker_n = metrics->level_editor_marker_count;
         const int selected = metrics->level_editor_selected_marker;
+        int event_n = 0;
+        if (!enemy_spatial) {
+            for (int i = 0; i < marker_n && i < LEVEL_EDITOR_MAX_MARKERS; ++i) {
+                const int kind_i = metrics->level_editor_marker_kind[i];
+                const int track_i = metrics->level_editor_marker_track[i];
+                const int is_enemy_i = (kind_i == 2 || kind_i == 3 || kind_i == 4 || kind_i == 5 || kind_i == 6);
+                const int event_item_i = is_enemy_i && (track_i == 1 || kind_i != 6);
+                if (event_item_i) {
+                    event_n += 1;
+                }
+            }
+        }
         for (int i = 0; i < marker_n && i < LEVEL_EDITOR_MAX_MARKERS; ++i) {
             const float mx01 = clampf(metrics->level_editor_marker_x01[i], 0.0f, 1.0f);
             const float my01 = clampf(metrics->level_editor_marker_y01[i], 0.0f, 1.0f);
             const int kind = metrics->level_editor_marker_kind[i];
+            const int track = metrics->level_editor_marker_track[i];
+            const int is_enemy = (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 6);
+            const int event_item = is_enemy && (track == 1 || kind != 6);
             const vg_color c = level_editor_marker_color(&pal, kind);
 
             vg_stroke_style mk = frame;
@@ -2960,27 +3004,54 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             mk.color = c;
             mk.intensity = (i == selected) ? 1.45f : 1.0f;
 
-            const float tx = timeline_track.x + mx01 * timeline_track.w;
+            float tx = timeline_track.x + mx01 * timeline_track.w;
             const vg_vec2 tick[2] = {
                 {tx, timeline_track.y + 2.0f * ui},
                 {tx, timeline_track.y + timeline_track.h - 2.0f * ui}
             };
-            if (enemy_spatial || kind == 0 || kind == 1) {
+            if (enemy_spatial || !event_item) {
                 r = vg_draw_polyline(ctx, tick, 2, &mk, 0);
                 if (r != VG_OK) return r;
             } else {
-                const vg_vec2 etick[2] = {
-                    {tx, timeline_enemy_track.y + 2.0f * ui},
-                    {tx, timeline_enemy_track.y + timeline_enemy_track.h - 2.0f * ui}
+                int rank = 0;
+                for (int j = 0; j < marker_n && j < LEVEL_EDITOR_MAX_MARKERS; ++j) {
+                    const int kind_j = metrics->level_editor_marker_kind[j];
+                    const int track_j = metrics->level_editor_marker_track[j];
+                    const int is_enemy_j = (kind_j == 2 || kind_j == 3 || kind_j == 4 || kind_j == 5 || kind_j == 6);
+                    const int event_item_j = is_enemy_j && (track_j == 1 || kind_j != 6);
+                    if (!event_item_j) {
+                        continue;
+                    }
+                    const int oj = metrics->level_editor_marker_order[j];
+                    const int oi = metrics->level_editor_marker_order[i];
+                    if (oj < oi || (oj == oi && j < i)) {
+                        rank += 1;
+                    }
+                }
+                const float slot_w = (event_n > 0) ? (timeline_enemy_track.w / (float)event_n) : timeline_enemy_track.w;
+                tx = timeline_enemy_track.x + ((float)rank + 0.5f) * slot_w;
+                const float bw = fmaxf(10.0f * ui, slot_w - 2.0f * ui);
+                const vg_rect block = {
+                    tx - bw * 0.5f,
+                    timeline_enemy_track.y + 2.0f * ui,
+                    bw,
+                    timeline_enemy_track.h - 4.0f * ui
                 };
-                r = vg_draw_polyline(ctx, etick, 2, &mk, 0);
+                vg_fill_style bf = {
+                    .intensity = 0.32f,
+                    .color = (vg_color){c.r, c.g, c.b, 0.38f},
+                    .blend = VG_BLEND_ALPHA
+                };
+                r = vg_fill_rect(ctx, block, &bf);
+                if (r != VG_OK) return r;
+                r = vg_draw_rect(ctx, block, &mk);
                 if (r != VG_OK) return r;
             }
 
             if (mx01 < view_min || mx01 > view_max) {
                 continue;
             }
-            if (!enemy_spatial && (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 6)) {
+            if (!enemy_spatial && event_item) {
                 continue;
             }
             const float vx = viewport.x + ((mx01 - view_min) / fmaxf(view_max - view_min, 1.0e-5f)) * viewport.w;
@@ -3183,12 +3254,19 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     );
     if (r != VG_OK) return r;
     if (metrics->level_editor_drag_active &&
-        (metrics->level_editor_drag_kind == 5 || metrics->level_editor_drag_kind == 1)) {
+        (metrics->level_editor_drag_kind == 5 || metrics->level_editor_drag_kind == 1 || metrics->level_editor_drag_kind == 6)) {
         vg_stroke_style gs = frame;
         gs.intensity = 1.2f;
-        gs.color = level_editor_marker_color(&pal, metrics->level_editor_drag_kind == 1 ? 1 : 5);
+        gs.color = level_editor_marker_color(&pal, metrics->level_editor_drag_kind);
         if (metrics->level_editor_drag_kind == 1) {
             r = draw_editor_diamond(ctx, (vg_vec2){metrics->level_editor_drag_x, metrics->level_editor_drag_y}, 10.0f * ui, &gs);
+        } else if (metrics->level_editor_drag_kind == 6) {
+            vg_fill_style af = {
+                .intensity = 0.90f,
+                .color = (vg_color){gs.color.r, gs.color.g, gs.color.b, 0.75f},
+                .blend = VG_BLEND_ALPHA
+            };
+            r = vg_fill_circle(ctx, (vg_vec2){metrics->level_editor_drag_x, metrics->level_editor_drag_y}, 6.0f * ui, &af, 20);
         } else {
             r = draw_editor_diamond(ctx, (vg_vec2){metrics->level_editor_drag_x, metrics->level_editor_drag_y}, 7.0f * ui, &gs);
         }

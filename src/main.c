@@ -2889,6 +2889,12 @@ static int handle_level_editor_mouse(app* a, int mouse_x, int mouse_y, int mouse
     } else if (action == 7) {
         level_editor_new_blank(&a->level_editor);
         set_tty_message(a, "level editor: new");
+    } else if (action == 8) {
+        if (level_editor_delete_selected(&a->level_editor)) {
+            set_tty_message(a, "level editor: deleted");
+        } else {
+            set_tty_message(a, "level editor: nothing selected");
+        }
     } else if (action == 4) {
         const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
         if (level_editor_cycle_level(&a->level_editor, db, -1)) {
@@ -6003,6 +6009,9 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         metrics.level_editor_marker_x01[i] = a->level_editor.markers[i].x01;
         metrics.level_editor_marker_y01[i] = a->level_editor.markers[i].y01;
         metrics.level_editor_marker_kind[i] = a->level_editor.markers[i].kind;
+        metrics.level_editor_marker_track[i] = a->level_editor.markers[i].track;
+        metrics.level_editor_marker_order[i] = a->level_editor.markers[i].order;
+        metrics.level_editor_marker_delay_s[i] = a->level_editor.markers[i].delay_s;
         metrics.level_editor_marker_a[i] = a->level_editor.markers[i].a;
         metrics.level_editor_marker_b[i] = a->level_editor.markers[i].b;
         metrics.level_editor_marker_c[i] = a->level_editor.markers[i].c;

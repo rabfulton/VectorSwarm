@@ -138,6 +138,67 @@ static int level_editor_enemy_spatial(const level_editor_state* s) {
             s->level_render_style == LEVEL_RENDER_DEFENDER);
 }
 
+static int marker_is_event_item(const level_editor_state* s, const level_editor_marker* m) {
+    if (!s || !m) {
+        return 0;
+    }
+    if (!is_enemy_marker_kind(m->kind)) {
+        return 0;
+    }
+    if (m->track == LEVEL_EDITOR_TRACK_EVENT) {
+        return 1;
+    }
+    if (m->kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
+        return 0;
+    }
+    return !level_editor_enemy_spatial(s);
+}
+
+static int next_event_order(const level_editor_state* s) {
+    int max_order = 0;
+    if (!s) {
+        return 1;
+    }
+    for (int i = 0; i < s->marker_count; ++i) {
+        const level_editor_marker* m = &s->markers[i];
+        if (!marker_is_event_item(s, m)) {
+            continue;
+        }
+        if (m->order > max_order) {
+            max_order = m->order;
+        }
+    }
+    return max_order + 1;
+}
+
+static int event_item_count(const level_editor_state* s) {
+    int n = 0;
+    if (!s) {
+        return 0;
+    }
+    for (int i = 0; i < s->marker_count; ++i) {
+        if (marker_is_event_item(s, &s->markers[i])) {
+            n++;
+        }
+    }
+    return n;
+}
+
+static void shift_event_orders(level_editor_state* s, int from_order) {
+    if (!s) {
+        return;
+    }
+    for (int i = 0; i < s->marker_count; ++i) {
+        level_editor_marker* m = &s->markers[i];
+        if (!marker_is_event_item(s, m)) {
+            continue;
+        }
+        if (m->order >= from_order) {
+            m->order += 1;
+        }
+    }
+}
+
 static void level_editor_save_snapshot(level_editor_state* s) {
     if (!s) {
         return;
@@ -189,6 +250,11 @@ typedef struct wave_marker_ref {
 static int compare_wave_marker_ref(const void* a, const void* b) {
     const wave_marker_ref* wa = (const wave_marker_ref*)a;
     const wave_marker_ref* wb = (const wave_marker_ref*)b;
+    if (wa->marker.track == LEVEL_EDITOR_TRACK_EVENT &&
+        wb->marker.track == LEVEL_EDITOR_TRACK_EVENT) {
+        if (wa->marker.order < wb->marker.order) return -1;
+        if (wa->marker.order > wb->marker.order) return 1;
+    }
     if (wa->x01 < wb->x01) return -1;
     if (wa->x01 > wb->x01) return 1;
     return 0;
@@ -243,6 +309,7 @@ static const char* wave_pattern_name(int p) {
         case LEVELDEF_WAVE_V_FORMATION: return "v_formation";
         case LEVELDEF_WAVE_SWARM: return "swarm";
         case LEVELDEF_WAVE_KAMIKAZE: return "kamikaze";
+        case LEVELDEF_WAVE_ASTEROID_STORM: return "asteroid_storm";
         default: return "sine_snake";
     }
 }
@@ -330,7 +397,9 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
     lvl = *base;
     lvl.render_style = s->level_render_style;
     lvl.wave_mode = s->level_wave_mode;
-    lvl.asteroid_storm_enabled = s->level_asteroid_storm_enabled ? 1 : 0;
+    /* Spatial asteroid storms are source-of-truth from spatial markers only.
+       Event-lane storms are serialized as event entries, not this flag. */
+    lvl.asteroid_storm_enabled = 0;
     lvl.asteroid_storm_angle_deg = s->level_asteroid_storm_angle_deg;
     lvl.asteroid_storm_speed = s->level_asteroid_storm_speed;
     lvl.asteroid_storm_duration_s = s->level_asteroid_storm_duration_s;
@@ -345,7 +414,8 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
             lvl.exit_x01 = m->x01 * level_len;
             lvl.exit_y01 = m->y01;
             found_exit = 1;
-        } else if (m->kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
+        } else if (m->kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM &&
+                   m->track == LEVEL_EDITOR_TRACK_SPATIAL) {
             lvl.asteroid_storm_enabled = 1;
             lvl.asteroid_storm_start_x01 = m->x01 * level_len;
             lvl.asteroid_storm_duration_s = fmaxf(m->a, 0.01f);
@@ -390,7 +460,7 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
 
     for (i = 0; i < s->marker_count; ++i) {
         const level_editor_marker* m = &s->markers[i];
-        if (!is_wave_kind(m->kind) || wave_n >= LEVEL_EDITOR_MAX_MARKERS) {
+        if (!marker_is_event_item(s, m) || wave_n >= LEVEL_EDITOR_MAX_MARKERS) {
             continue;
         }
         waves[wave_n].x01 = m->x01;
@@ -399,6 +469,35 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
     }
     if (wave_n > 1) {
         qsort(waves, (size_t)wave_n, sizeof(waves[0]), compare_wave_marker_ref);
+    }
+    lvl.event_count = 0;
+    if (lvl.wave_mode != LEVELDEF_WAVES_CURATED) {
+        for (i = 0; i < wave_n && lvl.event_count < LEVELDEF_MAX_EVENTS; ++i) {
+            const level_editor_marker* m = &waves[i].marker;
+            leveldef_event_entry ev;
+            if (m->kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
+                ev.kind = LEVELDEF_EVENT_ASTEROID_STORM;
+                ev.order = (m->order > 0) ? m->order : (lvl.event_count + 1);
+                ev.delay_s = fmaxf(m->delay_s, 0.0f);
+            } else if (m->kind == LEVEL_EDITOR_MARKER_WAVE_V) {
+                ev.kind = LEVELDEF_EVENT_WAVE_V;
+                ev.order = (m->order > 0) ? m->order : (lvl.event_count + 1);
+                ev.delay_s = fmaxf(m->delay_s, 0.0f);
+            } else if (m->kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
+                ev.kind = LEVELDEF_EVENT_WAVE_KAMIKAZE;
+                ev.order = (m->order > 0) ? m->order : (lvl.event_count + 1);
+                ev.delay_s = fmaxf(m->delay_s, 0.0f);
+            } else if (m->kind == LEVEL_EDITOR_MARKER_BOID) {
+                ev.kind = LEVELDEF_EVENT_WAVE_SWARM;
+                ev.order = (m->order > 0) ? m->order : (lvl.event_count + 1);
+                ev.delay_s = fmaxf(m->delay_s, 0.0f);
+            } else {
+                ev.kind = LEVELDEF_EVENT_WAVE_SINE;
+                ev.order = (m->order > 0) ? m->order : (lvl.event_count + 1);
+                ev.delay_s = fmaxf(m->delay_s, 0.0f);
+            }
+            lvl.events[lvl.event_count++] = ev;
+        }
     }
 
     if (lvl.wave_mode == LEVELDEF_WAVES_CURATED) {
@@ -434,6 +533,22 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
         }
     } else {
         int cycle_n = 0;
+        if (lvl.event_count > 0) {
+            for (i = 0; i < lvl.event_count && cycle_n < LEVELDEF_MAX_BOID_CYCLE; ++i) {
+                if (lvl.events[i].kind == LEVELDEF_EVENT_WAVE_V) {
+                    lvl.wave_cycle[cycle_n++] = LEVELDEF_WAVE_V_FORMATION;
+                } else if (lvl.events[i].kind == LEVELDEF_EVENT_WAVE_KAMIKAZE) {
+                    lvl.wave_cycle[cycle_n++] = LEVELDEF_WAVE_KAMIKAZE;
+                } else if (lvl.events[i].kind == LEVELDEF_EVENT_WAVE_SWARM) {
+                    lvl.wave_cycle[cycle_n++] = LEVELDEF_WAVE_SWARM;
+                } else if (lvl.events[i].kind == LEVELDEF_EVENT_ASTEROID_STORM) {
+                    lvl.wave_cycle[cycle_n++] = LEVELDEF_WAVE_ASTEROID_STORM;
+                } else {
+                    lvl.wave_cycle[cycle_n++] = LEVELDEF_WAVE_SINE_SNAKE;
+                }
+            }
+            lvl.wave_cycle_count = cycle_n;
+        } else {
         int idx = 0;
         for (i = 0; i < wave_n && cycle_n < LEVELDEF_MAX_BOID_CYCLE; ++i) {
             const level_editor_marker* m = &waves[i].marker;
@@ -476,10 +591,12 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
                 lvl.kamikaze.accel = m->c;
             }
         }
+        }
     }
 
     if (!appendf(out, out_cap, &used, "# LevelDef v1\n")) return 0;
-    if (!appendf(out, out_cap, &used, "# wave_cycle tokens: sine_snake,v_formation,swarm,kamikaze\n")) return 0;
+    if (!appendf(out, out_cap, &used, "# wave_cycle tokens: sine_snake,v_formation,swarm,kamikaze,asteroid_storm\n")) return 0;
+    if (!appendf(out, out_cap, &used, "# event fields: kind,order,delay_s\n")) return 0;
     if (!appendf(out, out_cap, &used, "# searchlight CSV fields:\n")) return 0;
     if (!appendf(out, out_cap, &used, "# anchor_x01,anchor_y01,length_h01,half_angle_deg,sweep_center_deg,sweep_amplitude_deg,\n")) return 0;
     if (!appendf(out, out_cap, &used, "# sweep_speed,sweep_phase_deg,sweep_motion,source_type,source_radius,clear_grace_s,\n")) return 0;
@@ -528,6 +645,14 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
             if (!appendf(out, out_cap, &used, "%s%s", (i > 0) ? "," : "", wave_pattern_name(lvl.wave_cycle[i]))) return 0;
         }
         if (!appendf(out, out_cap, &used, "\n")) return 0;
+    }
+    if (lvl.event_count > 0) {
+        static const char* names[] = {"sine", "v", "swarm", "kamikaze", "asteroid"};
+        for (i = 0; i < lvl.event_count; ++i) {
+            const int ek = lvl.events[i].kind;
+            const char* en = (ek >= 0 && ek <= 4) ? names[ek] : "sine";
+            if (!appendf(out, out_cap, &used, "event=%s,%d,%.3f\n", en, lvl.events[i].order, lvl.events[i].delay_s)) return 0;
+        }
     }
 
     if (!appendf(out, out_cap, &used, "sine.count=%d\n", lvl.sine.count)) return 0;
@@ -584,7 +709,7 @@ static int marker_property_count(const level_editor_state* s) {
     }
     const int kind = s->markers[s->selected_marker].kind;
     if (kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
-        return 5; /* X, duration, angle, speed, density */
+        return 6; /* event: ORDER,DELAY,DUR,ANGLE,SPEED,DENSITY | spatial: X,Y,DUR,ANGLE,SPEED,DENSITY */
     }
     if (kind == LEVEL_EDITOR_MARKER_SEARCHLIGHT) {
         return 6;
@@ -593,7 +718,7 @@ static int marker_property_count(const level_editor_state* s) {
         return 2;
     }
     if (is_wave_kind(kind)) {
-        return 6; /* TYPE, X, Y, A, B, C */
+        return marker_is_event_item(s, &s->markers[s->selected_marker]) ? 6 : 7; /* event: TYPE,ORDER,DELAY,A,B,C | spatial: TYPE,X,Y,A,B,C,DELAY */
     }
     return 2;
 }
@@ -754,12 +879,15 @@ static void clear_markers(level_editor_state* s) {
     s->selected_marker = -1;
 }
 
-static void push_marker(level_editor_state* s, int kind, float x01, float y01, float a, float b, float c, float d) {
+static void push_marker(level_editor_state* s, int kind, int track, int order, float delay_s, float x01, float y01, float a, float b, float c, float d) {
     if (!s || s->marker_count >= LEVEL_EDITOR_MAX_MARKERS) {
         return;
     }
     level_editor_marker* m = &s->markers[s->marker_count++];
     m->kind = kind;
+    m->track = track;
+    m->order = (order > 0) ? order : 1;
+    m->delay_s = fmaxf(delay_s, 0.0f);
     m->x01 = clampf(x01, 0.0f, 1.0f);
     m->y01 = clampf(y01, 0.0f, 1.0f);
     m->a = a;
@@ -831,9 +959,15 @@ void level_editor_compute_layout(float w, float h, level_editor_layout* out) {
         controls_w * 0.48f,
         row_h
     };
-    out->new_button = (vg_rect){
+    out->delete_button = (vg_rect){
         controls_x,
         m + row_h + 8.0f * ui,
+        controls_w * 0.48f,
+        row_h
+    };
+    out->new_button = (vg_rect){
+        controls_x,
+        m + (row_h + 8.0f * ui) * 2.0f,
         controls_w * 0.48f,
         row_h
     };
@@ -858,6 +992,12 @@ void level_editor_compute_layout(float w, float h, level_editor_layout* out) {
     out->watcher_button = (vg_rect){
         out->entities.x + 8.0f * ui,
         out->entities.y + out->entities.h - 106.0f * ui,
+        out->entities.w - 16.0f * ui,
+        42.0f * ui
+    };
+    out->asteroid_button = (vg_rect){
+        out->entities.x + 8.0f * ui,
+        out->entities.y + out->entities.h - 158.0f * ui,
         out->entities.w - 16.0f * ui,
         42.0f * ui
     };
@@ -899,6 +1039,9 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
         push_marker(
             s,
             LEVEL_EDITOR_MARKER_EXIT,
+            LEVEL_EDITOR_TRACK_SPATIAL,
+            1,
+            0.0f,
             lvl->exit_x01 / fmaxf(s->level_length_screens, 1.0f),
             lvl->exit_y01,
             0.0f,
@@ -911,6 +1054,9 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
         push_marker(
             s,
             LEVEL_EDITOR_MARKER_ASTEROID_STORM,
+            LEVEL_EDITOR_TRACK_SPATIAL,
+            1,
+            0.0f,
             lvl->asteroid_storm_start_x01 / fmaxf(s->level_length_screens, 1.0f),
             0.50f,
             lvl->asteroid_storm_duration_s,
@@ -925,6 +1071,9 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
         push_marker(
             s,
             LEVEL_EDITOR_MARKER_SEARCHLIGHT,
+            LEVEL_EDITOR_TRACK_SPATIAL,
+            1,
+            0.0f,
             sl->anchor_x01 / fmaxf(s->level_length_screens, 1.0f),
             sl->anchor_y01,
             sl->length_h01,
@@ -946,6 +1095,9 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
             push_marker(
                 s,
                 ce->kind,
+                LEVEL_EDITOR_TRACK_SPATIAL,
+                1,
+                0.0f,
                 ce->x01 / fmaxf(s->level_length_screens, 1.0f),
                 ce->y01,
                 ce->a,
@@ -953,6 +1105,27 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
                 ce->c,
                 0.0f
             );
+        }
+    } else if (lvl->event_count > 0) {
+        float cursor = 0.0f;
+        for (int i = 0; i < lvl->event_count; ++i) {
+            const leveldef_event_entry* ev = &lvl->events[i];
+            cursor += fmaxf(ev->delay_s, 0.0f);
+            {
+                const float x01 = clampf(cursor / fmaxf(s->level_length_screens, 1.0f), 0.0f, 1.0f);
+                if (ev->kind == LEVELDEF_EVENT_ASTEROID_STORM) {
+                    push_marker(s, LEVEL_EDITOR_MARKER_ASTEROID_STORM, LEVEL_EDITOR_TRACK_EVENT, ev->order, ev->delay_s, x01, 0.5f, lvl->asteroid_storm_duration_s, lvl->asteroid_storm_angle_deg, lvl->asteroid_storm_speed, lvl->asteroid_storm_density);
+                } else if (ev->kind == LEVELDEF_EVENT_WAVE_V) {
+                    push_marker(s, LEVEL_EDITOR_MARKER_WAVE_V, LEVEL_EDITOR_TRACK_EVENT, ev->order, ev->delay_s, x01, lvl->v.home_y01, lvl->v.count, lvl->v.form_amp, lvl->v.max_speed, 0.0f);
+                } else if (ev->kind == LEVELDEF_EVENT_WAVE_KAMIKAZE) {
+                    push_marker(s, LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE, LEVEL_EDITOR_TRACK_EVENT, ev->order, ev->delay_s, x01, 0.5f, lvl->kamikaze.count, lvl->kamikaze.max_speed, lvl->kamikaze.accel, 0.0f);
+                } else if (ev->kind == LEVELDEF_EVENT_WAVE_SWARM) {
+                    const leveldef_boid_profile* p = leveldef_get_boid_profile(db, lvl->default_boid_profile);
+                    push_marker(s, LEVEL_EDITOR_MARKER_BOID, LEVEL_EDITOR_TRACK_EVENT, ev->order, ev->delay_s, x01, p ? p->spawn_y01 : 0.5f, p ? p->count : 12.0f, p ? p->max_speed : 190.0f, p ? p->accel : 90.0f, 0.0f);
+                } else {
+                    push_marker(s, LEVEL_EDITOR_MARKER_WAVE_SINE, LEVEL_EDITOR_TRACK_EVENT, ev->order, ev->delay_s, x01, lvl->sine.home_y01, lvl->sine.count, lvl->sine.form_amp, lvl->sine.max_speed, 0.0f);
+                }
+            }
         }
     } else if (lvl->wave_mode == LEVELDEF_WAVES_BOID_ONLY) {
         for (int i = 0; i < lvl->boid_cycle_count; ++i) {
@@ -963,7 +1136,7 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
             }
             const float wave_base = ((float)i / slots) * (s->level_length_screens - 1.0f);
             const float x01 = (wave_base + p->spawn_x01) / s->level_length_screens;
-            push_marker(s, LEVEL_EDITOR_MARKER_BOID, x01, p->spawn_y01, p->count, p->max_speed, p->accel, 0.0f);
+            push_marker(s, LEVEL_EDITOR_MARKER_BOID, LEVEL_EDITOR_TRACK_EVENT, i + 1, 0.0f, x01, p->spawn_y01, p->count, p->max_speed, p->accel, 0.0f);
         }
     } else {
         for (int i = 0; i < lvl->wave_cycle_count; ++i) {
@@ -971,13 +1144,16 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
             const float wave_base = ((float)i / slots) * (s->level_length_screens - 1.0f);
             if (pattern == LEVELDEF_WAVE_SINE_SNAKE) {
                 const float x01 = (wave_base + lvl->sine.start_x01) / s->level_length_screens;
-                push_marker(s, LEVEL_EDITOR_MARKER_WAVE_SINE, x01, lvl->sine.home_y01, lvl->sine.count, lvl->sine.form_amp, lvl->sine.max_speed, 0.0f);
+                push_marker(s, LEVEL_EDITOR_MARKER_WAVE_SINE, LEVEL_EDITOR_TRACK_EVENT, i + 1, 0.0f, x01, lvl->sine.home_y01, lvl->sine.count, lvl->sine.form_amp, lvl->sine.max_speed, 0.0f);
             } else if (pattern == LEVELDEF_WAVE_V_FORMATION) {
                 const float x01 = (wave_base + lvl->v.start_x01) / s->level_length_screens;
-                push_marker(s, LEVEL_EDITOR_MARKER_WAVE_V, x01, lvl->v.home_y01, lvl->v.count, lvl->v.form_amp, lvl->v.max_speed, 0.0f);
+                push_marker(s, LEVEL_EDITOR_MARKER_WAVE_V, LEVEL_EDITOR_TRACK_EVENT, i + 1, 0.0f, x01, lvl->v.home_y01, lvl->v.count, lvl->v.form_amp, lvl->v.max_speed, 0.0f);
             } else if (pattern == LEVELDEF_WAVE_KAMIKAZE) {
                 const float x01 = (wave_base + lvl->kamikaze.start_x01) / s->level_length_screens;
-                push_marker(s, LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE, x01, 0.50f, lvl->kamikaze.count, lvl->kamikaze.max_speed, lvl->kamikaze.accel, 0.0f);
+                push_marker(s, LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE, LEVEL_EDITOR_TRACK_EVENT, i + 1, 0.0f, x01, 0.50f, lvl->kamikaze.count, lvl->kamikaze.max_speed, lvl->kamikaze.accel, 0.0f);
+            } else if (pattern == LEVELDEF_WAVE_ASTEROID_STORM) {
+                const float x01 = (float)(i + 1) / fmaxf((float)(lvl->wave_cycle_count + 1), 1.0f);
+                push_marker(s, LEVEL_EDITOR_MARKER_ASTEROID_STORM, LEVEL_EDITOR_TRACK_EVENT, i + 1, 0.0f, x01, 0.50f, lvl->asteroid_storm_duration_s, lvl->asteroid_storm_angle_deg, lvl->asteroid_storm_speed, lvl->asteroid_storm_density);
             }
         }
     }
@@ -1040,7 +1216,17 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
                                    (lvl->wave_mode == LEVELDEF_WAVES_CURATED) ? lvl->curated_count :
                                    lvl->wave_cycle_count) : 0;
         const float cycle_len = fmaxf(8.0f, 6.0f + (float)cycle_n * 1.2f);
-        const float data_len = lvl ? fmaxf(1.0f, lvl->exit_x01 + 0.75f) : cycle_len;
+        float data_len = lvl ? fmaxf(1.0f, lvl->exit_x01 + 0.75f) : cycle_len;
+        if (lvl) {
+            data_len = fmaxf(data_len, lvl->asteroid_storm_start_x01 + 1.0f);
+            if (lvl->event_count > 0) {
+                float sum = 0.0f;
+                for (int i = 0; i < lvl->event_count; ++i) {
+                    sum += fmaxf(lvl->events[i].delay_s, 0.0f);
+                }
+                data_len = fmaxf(data_len, sum + 1.0f);
+            }
+        }
         s->level_length_screens = fmaxf(cycle_len, data_len);
         if (lvl) {
             s->level_render_style = lvl->render_style;
@@ -1110,9 +1296,11 @@ static void add_marker_at_view(
     const float x01 = view_min + clampf(view_x01, 0.0f, 1.0f) * fmaxf(view_max - view_min, 1.0e-6f);
     const float y01 = clampf(view_y01, 0.0f, 1.0f);
     if (kind == LEVEL_EDITOR_MARKER_SEARCHLIGHT) {
-        push_marker(s, LEVEL_EDITOR_MARKER_SEARCHLIGHT, x01, y01, 0.36f, 12.0f, 1.2f, 45.0f);
+        push_marker(s, LEVEL_EDITOR_MARKER_SEARCHLIGHT, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, x01, y01, 0.36f, 12.0f, 1.2f, 45.0f);
     } else if (kind == LEVEL_EDITOR_MARKER_BOID) {
-        push_marker(s, LEVEL_EDITOR_MARKER_BOID, x01, y01, 12.0f, 190.0f, 90.0f, 0.0f);
+        push_marker(s, LEVEL_EDITOR_MARKER_BOID, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, x01, y01, 12.0f, 190.0f, 90.0f, 0.0f);
+    } else if (kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
+        push_marker(s, LEVEL_EDITOR_MARKER_ASTEROID_STORM, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, x01, y01, 10.0f, 30.0f, 520.0f, 1.3f);
     }
     s->selected_marker = s->marker_count - 1;
     s->selected_property = 0;
@@ -1124,16 +1312,25 @@ static void add_marker_at_timeline(level_editor_state* s, int kind, float x01) {
         return;
     }
     const float cx = clampf(x01, 0.0f, 1.0f);
-    if (kind == LEVEL_EDITOR_MARKER_BOID) {
-        push_marker(s, LEVEL_EDITOR_MARKER_BOID, cx, 0.50f, 12.0f, 190.0f, 90.0f, 0.0f);
-    } else if (kind == LEVEL_EDITOR_MARKER_WAVE_SINE) {
-        push_marker(s, LEVEL_EDITOR_MARKER_WAVE_SINE, cx, 0.50f, 10.0f, 92.0f, 285.0f, 0.0f);
-    } else if (kind == LEVEL_EDITOR_MARKER_WAVE_V) {
-        push_marker(s, LEVEL_EDITOR_MARKER_WAVE_V, cx, 0.55f, 11.0f, 10.0f, 295.0f, 0.0f);
-    } else if (kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
-        push_marker(s, LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE, cx, 0.50f, 9.0f, 360.0f, 9.0f, 0.0f);
-    } else {
-        return;
+    {
+        const int n = event_item_count(s);
+        int ord = (int)floorf(cx * (float)(n + 1)) + 1;
+        if (ord < 1) ord = 1;
+        if (ord > n + 1) ord = n + 1;
+        shift_event_orders(s, ord);
+        if (kind == LEVEL_EDITOR_MARKER_BOID) {
+            push_marker(s, LEVEL_EDITOR_MARKER_BOID, LEVEL_EDITOR_TRACK_EVENT, ord, 0.0f, cx, 0.50f, 12.0f, 190.0f, 90.0f, 0.0f);
+        } else if (kind == LEVEL_EDITOR_MARKER_WAVE_SINE) {
+            push_marker(s, LEVEL_EDITOR_MARKER_WAVE_SINE, LEVEL_EDITOR_TRACK_EVENT, ord, 0.0f, cx, 0.50f, 10.0f, 92.0f, 285.0f, 0.0f);
+        } else if (kind == LEVEL_EDITOR_MARKER_WAVE_V) {
+            push_marker(s, LEVEL_EDITOR_MARKER_WAVE_V, LEVEL_EDITOR_TRACK_EVENT, ord, 0.0f, cx, 0.55f, 11.0f, 10.0f, 295.0f, 0.0f);
+        } else if (kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
+            push_marker(s, LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE, LEVEL_EDITOR_TRACK_EVENT, ord, 0.0f, cx, 0.50f, 9.0f, 360.0f, 9.0f, 0.0f);
+        } else if (kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
+            push_marker(s, LEVEL_EDITOR_MARKER_ASTEROID_STORM, LEVEL_EDITOR_TRACK_EVENT, ord, 5.0f, cx, 0.50f, 10.0f, 30.0f, 520.0f, 1.3f);
+        } else {
+            return;
+        }
     }
     s->selected_marker = s->marker_count - 1;
     s->selected_property = 0;
@@ -1160,6 +1357,10 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
         if (point_in_rect(mouse_x, mouse_y, l.load_button)) {
             s->entry_active = 0;
             return 2;
+        }
+        if (point_in_rect(mouse_x, mouse_y, l.delete_button)) {
+            s->entry_active = 0;
+            return 8;
         }
         if (point_in_rect(mouse_x, mouse_y, l.new_button)) {
             s->entry_active = 0;
@@ -1197,31 +1398,57 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
             s->entity_drag_y = mouse_y;
             return 1;
         }
+        if (point_in_rect(mouse_x, mouse_y, l.asteroid_button)) {
+            s->entity_tool_selected = LEVEL_EDITOR_MARKER_ASTEROID_STORM;
+            s->entity_drag_active = 1;
+            s->entity_drag_kind = LEVEL_EDITOR_MARKER_ASTEROID_STORM;
+            s->entity_drag_x = mouse_x;
+            s->entity_drag_y = mouse_y;
+            return 1;
+        }
         if (point_in_rect(mouse_x, mouse_y, l.timeline_window) || point_in_rect(mouse_x, mouse_y, l.timeline_track)) {
             s->timeline_drag = 1;
         }
         if (!level_editor_enemy_spatial(s) && point_in_rect(mouse_x, mouse_y, l.timeline_enemy_track)) {
-            const float tx01 = clampf((mouse_x - l.timeline_enemy_track.x) / fmaxf(l.timeline_enemy_track.w, 1.0f), 0.0f, 1.0f);
+            const int n = event_item_count(s);
+            const float slot_w = (n > 0) ? (l.timeline_enemy_track.w / (float)n) : l.timeline_enemy_track.w;
+            const int slot = (n > 0)
+                ? (int)clampf(floorf((mouse_x - l.timeline_enemy_track.x) / fmaxf(slot_w, 1.0f)), 0.0f, (float)(n - 1))
+                : 0;
             int best = -1;
-            float best_dx = 1.0e9f;
+            int rank = 0;
             for (int i = 0; i < s->marker_count; ++i) {
-                if (!is_enemy_marker_kind(s->markers[i].kind)) {
+                level_editor_marker* mi = &s->markers[i];
+                if (!marker_is_event_item(s, mi)) {
                     continue;
                 }
-                const float dx = fabsf(s->markers[i].x01 - tx01);
-                if (dx < best_dx) {
-                    best_dx = dx;
+                rank = 0;
+                for (int j = 0; j < s->marker_count; ++j) {
+                    level_editor_marker* mj = &s->markers[j];
+                    if (!marker_is_event_item(s, mj)) {
+                        continue;
+                    }
+                    if (mj->order < mi->order || (mj->order == mi->order && j < i)) {
+                        rank += 1;
+                    }
+                }
+                if (rank == slot) {
                     best = i;
+                    break;
                 }
             }
-            if (best >= 0 && best_dx < 0.03f) {
+            if (best >= 0) {
                 s->selected_marker = best;
                 s->selected_property = 0;
                 return 1;
             }
-            if (s->entity_tool_selected == LEVEL_EDITOR_MARKER_BOID) {
-                add_marker_at_timeline(s, LEVEL_EDITOR_MARKER_BOID, tx01);
-                return 1;
+            {
+                const float tx01 = clampf((mouse_x - l.timeline_enemy_track.x) / fmaxf(l.timeline_enemy_track.w, 1.0f), 0.0f, 1.0f);
+                if (s->entity_tool_selected == LEVEL_EDITOR_MARKER_BOID ||
+                    s->entity_tool_selected == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
+                    add_marker_at_timeline(s, s->entity_tool_selected, tx01);
+                    return 1;
+                }
             }
         }
 
@@ -1236,7 +1463,7 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
             float best_d2 = 1.0e9f;
             for (int i = 0; i < s->marker_count; ++i) {
                 const level_editor_marker* m = &s->markers[i];
-                if (!level_editor_enemy_spatial(s) && is_enemy_marker_kind(m->kind)) {
+                if (!level_editor_enemy_spatial(s) && marker_is_event_item(s, m)) {
                     continue;
                 }
                 if (m->x01 < view_min || m->x01 > view_max) {
@@ -1262,7 +1489,9 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
             } else {
                 if (!level_editor_enemy_spatial(s) && s->entity_tool_selected == LEVEL_EDITOR_MARKER_BOID) {
                     s->selected_marker = -1;
-                } else if (s->entity_tool_selected == LEVEL_EDITOR_MARKER_BOID || s->entity_tool_selected == LEVEL_EDITOR_MARKER_SEARCHLIGHT) {
+                } else if (s->entity_tool_selected == LEVEL_EDITOR_MARKER_BOID ||
+                           s->entity_tool_selected == LEVEL_EDITOR_MARKER_SEARCHLIGHT ||
+                           s->entity_tool_selected == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
                     add_marker_at_view(s, s->entity_tool_selected, mx01, my01);
                 } else {
                     s->selected_marker = -1;
@@ -1306,6 +1535,9 @@ int level_editor_handle_mouse_release(level_editor_state* s, float mouse_x, floa
         const float mx01 = (mouse_x - l.viewport.x) / fmaxf(l.viewport.w, 1.0f);
         const float my01 = (mouse_y - l.viewport.y) / fmaxf(l.viewport.h, 1.0f);
         add_marker_at_view(s, s->entity_drag_kind, mx01, my01);
+    } else if (point_in_rect(mouse_x, mouse_y, l.timeline_enemy_track)) {
+        const float tx01 = clampf((mouse_x - l.timeline_enemy_track.x) / fmaxf(l.timeline_enemy_track.w, 1.0f), 0.0f, 1.0f);
+        add_marker_at_timeline(s, s->entity_drag_kind, tx01);
     }
     s->entity_drag_active = 0;
     s->entity_drag_kind = 0;
@@ -1415,12 +1647,20 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
     level_editor_marker* m = &s->markers[s->selected_marker];
 
     if (m->kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
+        const int ev_item = marker_is_event_item(s, m);
         switch (s->selected_property) {
-            case 0: move_marker_x(s, s->selected_marker, delta); break;
-            case 1: m->a = fmaxf(0.01f, m->a + delta * 60.0f); break;
-            case 2: m->b += delta * 180.0f; break;
-            case 3: m->c = clampf(m->c + delta * 480.0f, 1.0f, 4000.0f); break;
-            case 4: m->d = clampf(m->d + delta * 6.0f, 0.01f, 8.0f); break;
+            case 0:
+                if (ev_item) m->order = (int)fmaxf(1.0f, (float)m->order + ((delta >= 0.0f) ? 1.0f : -1.0f));
+                else move_marker_x(s, s->selected_marker, delta);
+                break;
+            case 1:
+                if (ev_item) m->delay_s = fmaxf(0.0f, m->delay_s + delta * 20.0f);
+                else m->y01 = clampf(m->y01 + delta, 0.0f, 1.0f);
+                break;
+            case 2: m->a = fmaxf(0.01f, m->a + delta * 60.0f); break;
+            case 3: m->b += delta * 180.0f; break;
+            case 4: m->c = clampf(m->c + delta * 480.0f, 1.0f, 4000.0f); break;
+            case 5: m->d = clampf(m->d + delta * 6.0f, 0.01f, 8.0f); break;
             default: break;
         }
         s->dirty = 1;
@@ -1452,15 +1692,23 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
     }
 
     if (is_wave_kind(m->kind)) {
+        const int ev_item = marker_is_event_item(s, m);
         switch (s->selected_property) {
             case 0:
                 m->kind = cycle_wave_kind(m->kind, (delta >= 0.0f) ? 1 : -1);
                 break;
-            case 1: move_marker_x(s, s->selected_marker, delta); break;
-            case 2: m->y01 = clampf(m->y01 + delta, 0.0f, 1.0f); break;
+            case 1:
+                if (ev_item) m->order = (int)fmaxf(1.0f, (float)m->order + ((delta >= 0.0f) ? 1.0f : -1.0f));
+                else move_marker_x(s, s->selected_marker, delta);
+                break;
+            case 2:
+                if (ev_item) m->delay_s = fmaxf(0.0f, m->delay_s + delta * 20.0f);
+                else m->y01 = clampf(m->y01 + delta, 0.0f, 1.0f);
+                break;
             case 3: m->a += delta * 80.0f; break;
             case 4: m->b += delta * 30.0f; break;
             case 5: m->c += delta * 30.0f; break;
+            case 6: m->delay_s = fmaxf(0.0f, m->delay_s + delta * 40.0f); break;
             default: break;
         }
         s->dirty = 1;
@@ -1637,4 +1885,36 @@ void level_editor_new_blank(level_editor_state* s) {
     s->level_asteroid_storm_density = 1.0f;
     snprintf(s->level_name, sizeof(s->level_name), "untitled");
     snprintf(s->status_text, sizeof(s->status_text), "new level");
+}
+
+int level_editor_delete_selected(level_editor_state* s) {
+    if (!s || s->selected_marker < 0 || s->selected_marker >= s->marker_count) {
+        return 0;
+    }
+    const level_editor_marker removed = s->markers[s->selected_marker];
+    for (int i = s->selected_marker; i + 1 < s->marker_count; ++i) {
+        s->markers[i] = s->markers[i + 1];
+    }
+    s->marker_count -= 1;
+    if (s->selected_marker >= s->marker_count) {
+        s->selected_marker = s->marker_count - 1;
+    }
+    if (s->selected_marker < 0) {
+        s->selected_property = 0;
+    } else {
+        const int prop_n = marker_property_count(s);
+        if (s->selected_property >= prop_n) {
+            s->selected_property = (prop_n > 0) ? (prop_n - 1) : 0;
+        }
+    }
+    if (removed.track == LEVEL_EDITOR_TRACK_EVENT && removed.order > 0) {
+        for (int i = 0; i < s->marker_count; ++i) {
+            level_editor_marker* m = &s->markers[i];
+            if (m->track == LEVEL_EDITOR_TRACK_EVENT && m->order > removed.order) {
+                m->order -= 1;
+            }
+        }
+    }
+    s->dirty = 1;
+    return 1;
 }

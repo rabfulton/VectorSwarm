@@ -275,6 +275,11 @@ typedef struct game_state {
     game_audio_event audio_events[MAX_AUDIO_EVENTS];
     searchlight searchlights[MAX_SEARCHLIGHTS];
     int searchlight_count;
+    int auto_event_mode;
+    int auto_event_index;
+    int auto_event_running;
+    int auto_event_running_kind;
+    float auto_event_delay_s;
     asteroid_body asteroids[MAX_ASTEROIDS];
     int asteroid_count;
     int asteroid_storm_enabled;

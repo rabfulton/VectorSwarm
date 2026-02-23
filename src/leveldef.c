@@ -46,6 +46,19 @@ static int wave_pattern_from_name(const char* name) {
     if (strcmp(name, "v_formation") == 0) return LEVELDEF_WAVE_V_FORMATION;
     if (strcmp(name, "swarm") == 0) return LEVELDEF_WAVE_SWARM;
     if (strcmp(name, "kamikaze") == 0) return LEVELDEF_WAVE_KAMIKAZE;
+    if (strcmp(name, "asteroid") == 0 || strcmp(name, "asteroid_storm") == 0) return LEVELDEF_WAVE_ASTEROID_STORM;
+    return -1;
+}
+
+static int event_kind_from_name(const char* name) {
+    if (!name) {
+        return -1;
+    }
+    if (strcmp(name, "sine") == 0 || strcmp(name, "sine_snake") == 0) return LEVELDEF_EVENT_WAVE_SINE;
+    if (strcmp(name, "v") == 0 || strcmp(name, "v_formation") == 0) return LEVELDEF_EVENT_WAVE_V;
+    if (strcmp(name, "swarm") == 0 || strcmp(name, "boid") == 0) return LEVELDEF_EVENT_WAVE_SWARM;
+    if (strcmp(name, "kamikaze") == 0) return LEVELDEF_EVENT_WAVE_KAMIKAZE;
+    if (strcmp(name, "asteroid") == 0 || strcmp(name, "asteroid_storm") == 0) return LEVELDEF_EVENT_ASTEROID_STORM;
     return -1;
 }
 
@@ -107,6 +120,14 @@ static int has_suffix(const char* s, const char* suffix) {
     lx = strlen(suffix);
     if (ls < lx) return 0;
     return strcmp(s + ls - lx, suffix) == 0;
+}
+
+static int cmp_event_order(const void* a, const void* b) {
+    const leveldef_event_entry* ea = (const leveldef_event_entry*)a;
+    const leveldef_event_entry* eb = (const leveldef_event_entry*)b;
+    if (ea->order < eb->order) return -1;
+    if (ea->order > eb->order) return 1;
+    return 0;
 }
 
 static int cmp_strptr(const void* a, const void* b) {
@@ -273,6 +294,48 @@ static int parse_curated_enemy(leveldef_level* lvl, const char* value, FILE* log
     return 1;
 }
 
+static int parse_event_entry(leveldef_level* lvl, const char* value, FILE* log_out) {
+    char buf[192];
+    char* tok;
+    char* save = NULL;
+    char* fields[3];
+    int i = 0;
+    leveldef_event_entry ev;
+    if (!lvl || !value || lvl->event_count >= LEVELDEF_MAX_EVENTS) {
+        return 0;
+    }
+    memset(&ev, 0, sizeof(ev));
+    strncpy(buf, value, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    tok = strtok_r(buf, ",", &save);
+    while (tok && i < 3) {
+        fields[i++] = trim(tok);
+        tok = strtok_r(NULL, ",", &save);
+    }
+    if (i != 2 && i != 3) {
+        if (log_out) {
+            fprintf(log_out, "leveldef: event expects 2 or 3 fields, got %d\n", i);
+        }
+        return 0;
+    }
+    ev.kind = event_kind_from_name(fields[0]);
+    if (i == 3) {
+        ev.order = (int)strtol(fields[1], NULL, 10);
+        ev.delay_s = strtof(fields[2], NULL);
+    } else {
+        ev.order = lvl->event_count + 1;
+        ev.delay_s = strtof(fields[1], NULL);
+    }
+    if (ev.kind < 0) {
+        if (log_out) {
+            fprintf(log_out, "leveldef: invalid event kind '%s'\n", fields[0]);
+        }
+        return 0;
+    }
+    lvl->events[lvl->event_count++] = ev;
+    return 1;
+}
+
 static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out) {
     FILE* f;
     char line[640];
@@ -336,6 +399,7 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_level->curated_count = 0;
                         cur_level->boid_cycle_count = 0;
                         cur_level->wave_cycle_count = 0;
+                        cur_level->event_count = 0;
                     } else if (log_out) {
                         fprintf(log_out, "leveldef: unknown level '%s'\n", name);
                     }
@@ -434,6 +498,8 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                             cur_level->wave_cycle[cur_level->wave_cycle_count++] = wave_pattern_from_name(trim(tok));
                             tok = strtok_r(NULL, ",", &save);
                         }
+                    } else if (strcmp(k, "event") == 0) {
+                        (void)parse_event_entry(cur_level, v, log_out);
                     } else if (strcmp(k, "sine.count") == 0) {
                         cur_level->sine.count = atoi(v);
                     } else if (strcmp(k, "sine.start_x01") == 0) {
@@ -664,6 +730,15 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
         }
     }
 
+    {
+        int li;
+        for (li = 0; li < LEVEL_STYLE_COUNT; ++li) {
+            leveldef_level* l = &db->levels[li];
+            if (l->event_count > 1) {
+                qsort(l->events, (size_t)l->event_count, sizeof(l->events[0]), cmp_event_order);
+            }
+        }
+    }
     fclose(f);
     return 1;
 }
@@ -779,6 +854,18 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
                 if (l->wave_cycle[j] < 0) {
                     if (log_out) {
                         fprintf(log_out, "leveldef: level %d has invalid wave_cycle token\n", i);
+                    }
+                    ok = 0;
+                    break;
+                }
+            }
+        }
+        if (l->event_count > 0) {
+            int j;
+            for (j = 0; j < l->event_count; ++j) {
+                if (l->events[j].kind < 0 || l->events[j].kind > LEVELDEF_EVENT_ASTEROID_STORM || l->events[j].order <= 0 || l->events[j].delay_s < 0.0f) {
+                    if (log_out) {
+                        fprintf(log_out, "leveldef: level %d has invalid event entry\n", i);
                     }
                     ok = 0;
                     break;

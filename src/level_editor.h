@@ -19,8 +19,16 @@ enum level_editor_marker_kind {
     LEVEL_EDITOR_MARKER_ASTEROID_STORM = 6
 };
 
+enum level_editor_marker_track {
+    LEVEL_EDITOR_TRACK_SPATIAL = 0,
+    LEVEL_EDITOR_TRACK_EVENT = 1
+};
+
 typedef struct level_editor_marker {
     int kind;
+    int track; /* enum level_editor_marker_track */
+    int order; /* 1-based order for event-track items */
+    float delay_s; /* event delay after previous event ends */
     float x01; /* normalized over full level length */
     float y01; /* normalized screen-space anchor */
     float a;
@@ -38,6 +46,7 @@ typedef struct level_editor_layout {
     vg_rect timeline_enemy_track;
     vg_rect timeline_window;
     vg_rect load_button;
+    vg_rect delete_button;
     vg_rect save_button;
     vg_rect new_button;
     vg_rect save_new_button;
@@ -46,6 +55,7 @@ typedef struct level_editor_layout {
     vg_rect next_button;
     vg_rect swarm_button;
     vg_rect watcher_button;
+    vg_rect asteroid_button;
 } level_editor_layout;
 
 typedef struct level_editor_state {
@@ -105,5 +115,6 @@ int level_editor_save_current(level_editor_state* s, const leveldef_db* db, char
 int level_editor_save_new(level_editor_state* s, const leveldef_db* db, char* out_path, size_t out_path_cap);
 int level_editor_revert(level_editor_state* s);
 void level_editor_new_blank(level_editor_state* s);
+int level_editor_delete_selected(level_editor_state* s);
 
 #endif

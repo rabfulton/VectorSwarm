@@ -477,7 +477,10 @@ static void update_asteroid_storm(game_state* g, float dt) {
     if (g->asteroid_count <= 0) {
         g->asteroid_count = asteroid_target_count(g);
     }
-    if (!g->asteroid_storm_active && !g->asteroid_storm_completed && g->camera_x >= g->asteroid_storm_start_x) {
+    if (!g->auto_event_mode &&
+        !g->asteroid_storm_active &&
+        !g->asteroid_storm_completed &&
+        g->camera_x >= g->asteroid_storm_start_x) {
         g->asteroid_storm_active = 1;
         g->asteroid_storm_timer_s = g->asteroid_storm_duration_s;
         g->asteroid_storm_announced = 0;
@@ -594,6 +597,11 @@ static void apply_level_runtime_config(game_state* g) {
     }
     g->render_style = lvl->render_style;
     g->wave_cooldown_s = lvl->wave_cooldown_initial_s;
+    g->auto_event_mode = (lvl->event_count > 0) ? 1 : 0;
+    g->auto_event_index = 0;
+    g->auto_event_running = 0;
+    g->auto_event_running_kind = -1;
+    g->auto_event_delay_s = (lvl->event_count > 0) ? fmaxf(lvl->events[0].delay_s, 0.0f) : 0.0f;
     g->curated_spawned_count = 0;
     memset(g->curated_spawned, 0, sizeof(g->curated_spawned));
     configure_searchlights_for_level(g);
@@ -1207,6 +1215,79 @@ static void game_update_wave_spawning(game_state* g, float dt) {
             }
         }
         return;
+    }
+    if (g->auto_event_mode && lvl->event_count > 0) {
+        if (g->auto_event_running) {
+            if (g->auto_event_running_kind == LEVELDEF_EVENT_ASTEROID_STORM) {
+                if (!g->asteroid_storm_active) {
+                    g->auto_event_running = 0;
+                    g->auto_event_index = (g->auto_event_index + 1) % lvl->event_count;
+                    g->auto_event_delay_s = fmaxf(lvl->events[g->auto_event_index].delay_s, 0.0f);
+                }
+            } else {
+                if (game_enemy_count(g) <= 0) {
+                    g->auto_event_running = 0;
+                    g->auto_event_index = (g->auto_event_index + 1) % lvl->event_count;
+                    g->auto_event_delay_s = fmaxf(lvl->events[g->auto_event_index].delay_s, 0.0f);
+                }
+            }
+            return;
+        }
+        if (g->auto_event_delay_s > 0.0f) {
+            g->auto_event_delay_s -= dt;
+            if (g->auto_event_delay_s > 0.0f) {
+                return;
+            }
+        }
+        {
+            const int ev_kind = lvl->events[g->auto_event_index].kind;
+            if (ev_kind == LEVELDEF_EVENT_ASTEROID_STORM) {
+                /* Event-lane storms must initialize their own runtime state even when
+                   spatial storm triggering is disabled for this level. */
+                g->asteroid_storm_enabled = 1;
+                g->asteroid_storm_angle_rad = deg_to_rad(lvl->asteroid_storm_angle_deg);
+                g->asteroid_storm_speed = fmaxf(lvl->asteroid_storm_speed, 0.0f);
+                g->asteroid_storm_duration_s = fmaxf(lvl->asteroid_storm_duration_s, 0.01f);
+                g->asteroid_storm_density = fmaxf(lvl->asteroid_storm_density, 0.01f);
+                if (g->asteroid_count <= 0) {
+                    g->asteroid_count = asteroid_target_count(g);
+                }
+                g->asteroid_storm_completed = 0;
+                g->asteroid_storm_active = 1;
+                g->asteroid_storm_timer_s = g->asteroid_storm_duration_s;
+                g->asteroid_storm_announced = 0;
+                for (int i = 0; i < g->asteroid_count && i < MAX_ASTEROIDS; ++i) {
+                    asteroid_place_with_flow(g, &g->asteroids[i], 0);
+                }
+                g->auto_event_running = 1;
+                g->auto_event_running_kind = ev_kind;
+                return;
+            } else {
+                leveldef_level one = *lvl;
+                one.wave_mode = LEVELDEF_WAVES_NORMAL;
+                one.wave_cycle_count = 1;
+                if (ev_kind == LEVELDEF_EVENT_WAVE_SINE) {
+                    one.wave_cycle[0] = LEVELDEF_WAVE_SINE_SNAKE;
+                } else if (ev_kind == LEVELDEF_EVENT_WAVE_V) {
+                    one.wave_cycle[0] = LEVELDEF_WAVE_V_FORMATION;
+                } else if (ev_kind == LEVELDEF_EVENT_WAVE_SWARM) {
+                    one.wave_cycle[0] = LEVELDEF_WAVE_SWARM;
+                } else {
+                    one.wave_cycle[0] = LEVELDEF_WAVE_KAMIKAZE;
+                }
+                enemy_spawn_next_wave(
+                    g,
+                    &g_leveldef,
+                    &one,
+                    gameplay_ui_scale(g),
+                    level_uses_cylinder(g),
+                    cylinder_period(g)
+                );
+                g->auto_event_running = 1;
+                g->auto_event_running_kind = ev_kind;
+                return;
+            }
+        }
     }
     /* Asteroid storm is an auto-spawn event lane: while active, pause auto wave spawning. */
     if (g->asteroid_storm_enabled && g->asteroid_storm_active) {
