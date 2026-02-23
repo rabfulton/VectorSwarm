@@ -14,6 +14,7 @@
 #define MAX_SEARCHLIGHTS 4
 #define MAX_CURATED_RUNTIME 128
 #define MAX_ASTEROIDS 192
+#define ASTEROID_EMITTERS 64
 #define PLAYER_ALT_WEAPON_COUNT 4
 
 struct leveldef_db;
@@ -293,6 +294,8 @@ typedef struct game_state {
     float asteroid_storm_density;
     float asteroid_storm_timer_s;
     float asteroid_storm_cooldown_s;
+    int asteroid_storm_emitter_cursor;
+    float asteroid_storm_emitter_cd[ASTEROID_EMITTERS];
     int exit_portal_active;
     float exit_portal_x;
     float exit_portal_y;

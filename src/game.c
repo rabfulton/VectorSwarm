@@ -328,29 +328,26 @@ static float asteroid_storm_speed_px(const game_state* g, float su) {
     return fmaxf(g->asteroid_storm_speed, 0.0f) * su;
 }
 
-static void asteroid_storm_basis(const game_state* g, float* dir_x, float* dir_y, float* perp_x, float* perp_y) {
-    const float ang = g ? g->asteroid_storm_angle_rad : 0.0f;
-    /* Angle points to the incoming source direction; travel is opposite it. */
-    float dx = -cosf(ang);
-    float dy = -sinf(ang);
-    normalize2(&dx, &dy);
-    if (dir_x) *dir_x = dx;
-    if (dir_y) *dir_y = dy;
-    if (perp_x) *perp_x = -dy;
-    if (perp_y) *perp_y = dx;
-}
+static int asteroid_target_count(const game_state* g);
 
-static void asteroid_storm_domain(const game_state* g, float* half_u, float* half_v) {
+static void asteroid_storm_velocity_local(const game_state* g, float* out_vx, float* out_vy) {
+    if (out_vx) *out_vx = 0.0f;
+    if (out_vy) *out_vy = 0.0f;
     if (!g) {
-        if (half_u) *half_u = 1.0f;
-        if (half_v) *half_v = 1.0f;
         return;
     }
-    if (half_u) *half_u = fmaxf(g->world_w * 2.2f, 1.0f);
-    if (half_v) *half_v = fmaxf(g->world_h * 1.35f, 1.0f);
+    /* Angle is the tilt from vertical-down. Positive means drift left (from top-right). */
+    const float ang = g->asteroid_storm_angle_rad;
+    float dx = -sinf(ang);
+    float dy = -cosf(ang);
+    normalize2(&dx, &dy);
+    const float su = gameplay_ui_scale(g);
+    const float speed = asteroid_storm_speed_px(g, su);
+    if (out_vx) *out_vx = dx * speed;
+    if (out_vy) *out_vy = dy * speed;
 }
 
-static int asteroid_overlap_candidate(const game_state* g, const asteroid_body* skip, float x, float y, float r) {
+static int asteroid_overlap_candidate_world(const game_state* g, const asteroid_body* skip, float x, float y, float r) {
     if (!g) {
         return 0;
     }
@@ -367,51 +364,106 @@ static int asteroid_overlap_candidate(const game_state* g, const asteroid_body* 
     return 0;
 }
 
-static void asteroid_place_with_flow(game_state* g, asteroid_body* a, int entry_only) {
-    if (!g || !a) {
+static void asteroid_clear_bodies(game_state* g) {
+    if (!g) {
+        return;
+    }
+    for (int i = 0; i < MAX_ASTEROIDS; ++i) {
+        g->asteroids[i].active = 0;
+    }
+}
+
+static int asteroid_active_count(const game_state* g) {
+    int n = 0;
+    if (!g) {
+        return 0;
+    }
+    for (int i = 0; i < g->asteroid_count && i < MAX_ASTEROIDS; ++i) {
+        if (g->asteroids[i].active) {
+            ++n;
+        }
+    }
+    return n;
+}
+
+static asteroid_body* asteroid_find_inactive_slot(game_state* g) {
+    if (!g) {
+        return NULL;
+    }
+    for (int i = 0; i < g->asteroid_count && i < MAX_ASTEROIDS; ++i) {
+        if (!g->asteroids[i].active) {
+            return &g->asteroids[i];
+        }
+    }
+    return NULL;
+}
+
+static void asteroid_storm_reset_emitters(game_state* g) {
+    if (!g) {
         return;
     }
     const float su = gameplay_ui_scale(g);
-    const float speed = asteroid_storm_speed_px(g, su);
-    float dx = 0.0f, dy = 0.0f, px = 0.0f, py = 0.0f, hu = 0.0f, hv = 0.0f;
-    asteroid_storm_basis(g, &dx, &dy, &px, &py);
-    asteroid_storm_domain(g, &hu, &hv);
-    float best_x = g->camera_x;
-    float best_y = g->world_h * 0.5f;
-    float best_r = 0.0f;
-    int found = 0;
-    for (int tries = 0; tries < 32; ++tries) {
+    const float pad = 72.0f * su;
+    float vx = 0.0f, vy = 0.0f;
+    asteroid_storm_velocity_local(g, &vx, &vy);
+    const float vy_abs = fmaxf(fabsf(vy), 1.0f);
+    const float lifetime_s = (g->world_h + 2.0f * pad) / vy_abs;
+    const float target_visible = (float)asteroid_target_count(g);
+    const float spawn_rate_total = target_visible / fmaxf(lifetime_s, 0.25f);
+    const float spawn_rate_per = spawn_rate_total / (float)ASTEROID_EMITTERS;
+    const float base_interval = 1.0f / fmaxf(spawn_rate_per, 0.001f);
+
+    g->asteroid_storm_emitter_cursor = (int)(frand01() * (float)ASTEROID_EMITTERS) % ASTEROID_EMITTERS;
+    for (int i = 0; i < ASTEROID_EMITTERS; ++i) {
+        /* Randomize initial phases so we don't get visible spawn rows. */
+        g->asteroid_storm_emitter_cd[i] = frand01() * base_interval;
+    }
+}
+
+static int asteroid_try_spawn_inflow_world(game_state* g, asteroid_body* a) {
+    if (!g || !a) {
+        return 0;
+    }
+    const float su = gameplay_ui_scale(g);
+    const float half_w = g->world_w * 0.5f;
+    const float pad = 72.0f * su;
+    const int emitter_n = ASTEROID_EMITTERS;
+    const float x_min = g->camera_x - half_w - pad;
+    const float x_max = g->camera_x + half_w + pad;
+    const float y_top = g->world_h + pad;
+    float vx = 0.0f, vy = 0.0f;
+    asteroid_storm_velocity_local(g, &vx, &vy);
+    if (vy >= -1e-3f) {
+        return 0;
+    }
+
+    for (int tries = 0; tries < 12; ++tries) {
         const float sz = (8.0f + frand01() * 30.0f) * su;
         const float rr = sz * 0.90f;
-        const float u = entry_only ? (-hu - frand01() * hu * 0.16f) : (-hu + frand01() * (2.0f * hu));
-        const float v = -hv + frand01() * (2.0f * hv);
-        const float x = g->camera_x + dx * u + px * v;
-        const float y = g->world_h * 0.5f + dy * u + py * v;
-        if (!asteroid_overlap_candidate(g, a, x, y, rr)) {
-            best_x = x;
-            best_y = y;
-            best_r = rr;
-            a->size = sz;
-            found = 1;
-            break;
+        const int cursor = (g->asteroid_storm_emitter_cursor + tries) % emitter_n;
+        const float cell_w = (x_max - x_min) / (float)emitter_n;
+        const float sx = (x_min + (cursor + 0.5f) * cell_w) + frands1() * (cell_w * 0.45f);
+        const float sy = y_top + frand01() * (pad * 0.85f);
+        if (asteroid_overlap_candidate_world(g, a, sx, sy, rr)) {
+            continue;
         }
-        if (!found) {
-            best_x = x;
-            best_y = y;
-            best_r = rr;
-            a->size = sz;
-        }
+        g->asteroid_storm_emitter_cursor = (cursor + 1) % emitter_n;
+        a->active = 1;
+        a->b.x = sx;
+        a->b.y = sy;
+        /* Small per-asteroid speed variation avoids visible "lanes" while keeping direction consistent. */
+        const float spd = (0.90f + 0.20f * frand01());
+        a->b.vx = vx * spd;
+        a->b.vy = vy * spd;
+        a->b.ax = 0.0f;
+        a->b.ay = 0.0f;
+        a->size = sz;
+        a->radius = rr;
+        a->angle = frand01() * 6.2831853f;
+        a->spin_rate = frands1() * (0.85f + frand01() * 2.30f);
+        return 1;
     }
-    a->active = 1;
-    a->b.x = best_x;
-    a->b.y = best_y;
-    a->b.vx = dx * speed;
-    a->b.vy = dy * speed;
-    a->b.ax = 0.0f;
-    a->b.ay = 0.0f;
-    a->radius = best_r;
-    a->angle = frand01() * 6.2831853f;
-    a->spin_rate = frands1() * (0.85f + frand01() * 2.30f);
+    return 0;
 }
 
 static int asteroid_target_count(const game_state* g) {
@@ -446,6 +498,8 @@ static void configure_asteroid_storm_for_level(game_state* g) {
     g->asteroid_storm_speed = 0.0f;
     g->asteroid_storm_duration_s = 0.0f;
     g->asteroid_storm_density = 0.0f;
+    g->asteroid_storm_emitter_cursor = 0;
+    memset(g->asteroid_storm_emitter_cd, 0, sizeof(g->asteroid_storm_emitter_cd));
     if (level_uses_cylinder(g)) {
         return;
     }
@@ -463,11 +517,8 @@ static void configure_asteroid_storm_for_level(game_state* g) {
     g->asteroid_storm_active = (g->asteroid_storm_start_x <= g->camera_x);
     g->asteroid_storm_completed = 0;
     g->asteroid_storm_timer_s = g->asteroid_storm_duration_s;
-    if (g->asteroid_storm_active) {
-        for (int i = 0; i < g->asteroid_count && i < MAX_ASTEROIDS; ++i) {
-            asteroid_place_with_flow(g, &g->asteroids[i], 0);
-        }
-    }
+    g->asteroid_storm_cooldown_s = 0.0f; /* spawn accumulator */
+    asteroid_storm_reset_emitters(g);
 }
 
 static void update_asteroid_storm(game_state* g, float dt) {
@@ -481,12 +532,12 @@ static void update_asteroid_storm(game_state* g, float dt) {
         !g->asteroid_storm_active &&
         !g->asteroid_storm_completed &&
         g->camera_x >= g->asteroid_storm_start_x) {
+        asteroid_clear_bodies(g);
         g->asteroid_storm_active = 1;
         g->asteroid_storm_timer_s = g->asteroid_storm_duration_s;
         g->asteroid_storm_announced = 0;
-        for (int i = 0; i < g->asteroid_count && i < MAX_ASTEROIDS; ++i) {
-            asteroid_place_with_flow(g, &g->asteroids[i], 0);
-        }
+        g->asteroid_storm_cooldown_s = 0.0f;
+        asteroid_storm_reset_emitters(g);
     }
     if (g->asteroid_storm_active) {
         g->asteroid_storm_timer_s -= dt;
@@ -503,10 +554,46 @@ static void update_asteroid_storm(game_state* g, float dt) {
             g->asteroid_storm_completed = 1;
         }
     }
-    const float player_hit_r = 18.0f * gameplay_ui_scale(g);
-    float flow_dx = 0.0f, flow_dy = 0.0f, flow_px = 0.0f, flow_py = 0.0f, flow_hu = 0.0f, flow_hv = 0.0f;
-    asteroid_storm_basis(g, &flow_dx, &flow_dy, &flow_px, &flow_py);
-    asteroid_storm_domain(g, &flow_hu, &flow_hv);
+    const float su = gameplay_ui_scale(g);
+    const float player_hit_r = 18.0f * su;
+    const float half_w = g->world_w * 0.5f;
+    const float pad = 72.0f * su;
+    const float x_min = g->camera_x - half_w - pad;
+    const float x_max = g->camera_x + half_w + pad;
+    const float y_min = -pad;
+    const float y_max = g->world_h + pad;
+    float vx = 0.0f, vy = 0.0f;
+    asteroid_storm_velocity_local(g, &vx, &vy);
+
+    /* Independent top-edge emitters: randomized cooldown per emitter. */
+    if (g->asteroid_storm_active && vy < -1e-3f) {
+        const int target = g->asteroid_count;
+        int active_now = asteroid_active_count(g);
+        int spawn_budget = 5;
+        const int start = g->asteroid_storm_emitter_cursor % ASTEROID_EMITTERS;
+        for (int step = 0; step < ASTEROID_EMITTERS && spawn_budget > 0 && active_now < target; ++step) {
+            const int ei = (start + step) % ASTEROID_EMITTERS;
+            g->asteroid_storm_emitter_cd[ei] -= dt;
+            if (g->asteroid_storm_emitter_cd[ei] > 0.0f) {
+                continue;
+            }
+            asteroid_body* slot = asteroid_find_inactive_slot(g);
+            if (!slot) {
+                break;
+            }
+            if (asteroid_try_spawn_inflow_world(g, slot)) {
+                active_now += 1;
+                spawn_budget -= 1;
+                /* New randomized cooldown: each emitter is its own Poisson-ish source. */
+                const float base = 0.08f + 0.32f / fmaxf(g->asteroid_storm_density, 0.05f);
+                g->asteroid_storm_emitter_cd[ei] = base * (0.6f + 1.2f * frand01());
+            } else {
+                /* Try again soon. */
+                g->asteroid_storm_emitter_cd[ei] = 0.02f;
+            }
+        }
+        g->asteroid_storm_emitter_cursor = (start + 1) % ASTEROID_EMITTERS;
+    }
     int player_hit_this_tick = 0;
     for (int i = 0; i < g->asteroid_count && i < MAX_ASTEROIDS; ++i) {
         asteroid_body* a = &g->asteroids[i];
@@ -515,25 +602,9 @@ static void update_asteroid_storm(game_state* g, float dt) {
         }
         integrate_body(&a->b, dt);
         a->angle += a->spin_rate * dt;
-        {
-            const float rx = a->b.x - g->camera_x;
-            const float ry = a->b.y - g->world_h * 0.5f;
-            const float u = rx * flow_dx + ry * flow_dy;
-            const float v = rx * flow_px + ry * flow_py;
-            if (g->asteroid_storm_active && (u > flow_hu || u < -flow_hu * 1.25f || fabsf(v) > flow_hv * 1.25f)) {
-                if (g->asteroid_storm_active) {
-                    asteroid_place_with_flow(g, a, (u > flow_hu) ? 1 : 0);
-                } else {
-                    a->active = 0;
-                }
-            } else if (!g->asteroid_storm_active) {
-                /* Post-storm: do not pop from center due horizontal camera motion.
-                 * Retire only after fully leaving vertically in travel direction. */
-                if ((flow_dy < 0.0f && a->b.y < -g->world_h * 0.22f) ||
-                    (flow_dy > 0.0f && a->b.y > g->world_h * 1.22f)) {
-                    a->active = 0;
-                }
-            }
+        if (a->b.y > y_max || a->b.y < y_min || a->b.x < x_min || a->b.x > x_max) {
+            a->active = 0;
+            continue;
         }
         if (g->lives > 0 && !g->shield_active && !player_hit_this_tick) {
             const float rr = a->radius + player_hit_r;
@@ -542,11 +613,7 @@ static void update_asteroid_storm(game_state* g, float dt) {
                 g->lives = 0;
                 game_queue_death_message(g);
                 player_hit_this_tick = 1;
-                if (g->asteroid_storm_active) {
-                    asteroid_place_with_flow(g, a, 1);
-                } else {
-                    a->active = 0;
-                }
+                a->active = 0;
             }
         }
     }
@@ -1244,6 +1311,7 @@ static void game_update_wave_spawning(game_state* g, float dt) {
             if (ev_kind == LEVELDEF_EVENT_ASTEROID_STORM) {
                 /* Event-lane storms must initialize their own runtime state even when
                    spatial storm triggering is disabled for this level. */
+                asteroid_clear_bodies(g);
                 g->asteroid_storm_enabled = 1;
                 g->asteroid_storm_angle_rad = deg_to_rad(lvl->asteroid_storm_angle_deg);
                 g->asteroid_storm_speed = fmaxf(lvl->asteroid_storm_speed, 0.0f);
@@ -1256,9 +1324,8 @@ static void game_update_wave_spawning(game_state* g, float dt) {
                 g->asteroid_storm_active = 1;
                 g->asteroid_storm_timer_s = g->asteroid_storm_duration_s;
                 g->asteroid_storm_announced = 0;
-                for (int i = 0; i < g->asteroid_count && i < MAX_ASTEROIDS; ++i) {
-                    asteroid_place_with_flow(g, &g->asteroids[i], 0);
-                }
+                g->asteroid_storm_cooldown_s = 0.0f;
+                asteroid_storm_reset_emitters(g);
                 g->auto_event_running = 1;
                 g->auto_event_running_kind = ev_kind;
                 return;
