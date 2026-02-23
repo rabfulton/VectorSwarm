@@ -1719,7 +1719,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         vg_ui_slider_panel_desc left = {
             .rect = l.panel[0],
             .title_line_0 = "SHIPYARD ACOUSTICS - MIXTAPE",
-            .title_line_1 = "Q/E OR PAGE BUTTONS  F PLAY  G NEXT",
+            .title_line_1 = "UP DOWN SELECT  LEFT RIGHT FOCUS  FIRE ADD REMOVE",
             .footer_line = NULL,
             .items = vol_item,
             .item_count = 1u,
@@ -1741,35 +1741,120 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         if (r != VG_OK) {
             return r;
         }
+        {
+            const vg_svg_asset* tape_svg = (const vg_svg_asset*)metrics->acoustics_tape_svg_asset;
+            if (tape_svg) {
+                vg_svg_draw_params sdp;
+                memset(&sdp, 0, sizeof(sdp));
+                sdp.dst = l.panel[1];
+                sdp.preserve_aspect = 1;
+                sdp.flip_y = 1;
+                sdp.fill_closed_paths = 1;
+                sdp.use_source_colors = 0;
+                sdp.fill_intensity = 0.13f;
+                sdp.stroke_intensity = 0.25f;
+                sdp.use_context_palette = 0;
+                r = vg_transform_push(ctx);
+                if (r != VG_OK) {
+                    return r;
+                }
+                vg_transform_translate(ctx, l.panel[1].x + l.panel[1].w * 0.5f, l.panel[1].y + l.panel[1].h * 0.5f);
+                vg_transform_rotate(ctx, 3.14159265f);
+                vg_transform_translate(ctx, -(l.panel[1].x + l.panel[1].w * 0.5f), -(l.panel[1].y + l.panel[1].h * 0.5f));
+                r = vg_svg_draw(ctx, tape_svg, &sdp, &panel);
+                {
+                    vg_result pop_r = vg_transform_pop(ctx);
+                    if (r == VG_OK && pop_r != VG_OK) {
+                        r = pop_r;
+                    }
+                }
+                if (r != VG_OK) {
+                    return r;
+                }
+            }
+        }
         r = vg_draw_rect(ctx, l.panel[1], &panel);
         if (r != VG_OK) {
             return r;
         }
         {
-            const vg_rect prev_btn = {l.panel[1].x + l.panel[1].w * 0.03f, l.button[1].y, l.panel[1].w * 0.18f, l.button[1].h};
-            const vg_rect play_btn = {prev_btn.x + prev_btn.w + l.panel[1].w * 0.03f, l.button[1].y, l.panel[1].w * 0.26f, l.button[1].h};
-            const vg_rect next_btn = {play_btn.x + play_btn.w + l.panel[1].w * 0.03f, l.button[1].y, l.panel[1].w * 0.18f, l.button[1].h};
-            const char* play_label = metrics->acoustics_mixtape_playing ? "PAUSE" : "PLAY";
-            r = vg_draw_button(ctx, prev_btn, "PREV", 11.0f * ui, &panel, &text, 0);
+            const char* top_left = "LIBRARY";
+            const char* top_right = "PLAYLIST";
+            vg_stroke_style title_frame = panel;
+            vg_stroke_style title_text = text;
+            title_frame.width_px = 1.85f * ui;
+            title_frame.intensity = 1.22f;
+            title_text.width_px = 1.60f * ui;
+            title_text.intensity = 1.28f;
+            title_text.color = (vg_color){
+                fminf(1.0f, pal.secondary.r * 1.08f),
+                fminf(1.0f, pal.secondary.g * 1.08f),
+                fminf(1.0f, pal.secondary.b * 1.08f),
+                1.0f
+            };
+            const float top_margin = 30.0f * ui;
+            const float side_margin = 30.0f * ui;
+            const float title_y_left = l.panel[0].y + l.panel[0].h - top_margin;
+            const float title_y_right = l.panel[1].y + l.panel[1].h - top_margin;
+            r = draw_text_vector_glow(ctx, top_left, (vg_vec2){l.panel[0].x + side_margin, title_y_left},
+                14.8f * ui, 1.02f * ui, &title_frame, &title_text);
             if (r != VG_OK) return r;
-            r = vg_draw_button(ctx, play_btn, play_label, 11.0f * ui, &panel, &text, 0);
-            if (r != VG_OK) return r;
-            r = vg_draw_button(ctx, next_btn, "NEXT", 11.0f * ui, &panel, &text, 0);
+            r = draw_text_vector_glow(ctx, top_right, (vg_vec2){l.panel[1].x + side_margin, title_y_right},
+                14.8f * ui, 1.02f * ui, &title_frame, &title_text);
             if (r != VG_OK) return r;
         }
         {
-            char line0[96];
-            char line1[96];
-            snprintf(line0, sizeof(line0), "TRACK %d / %d",
-                (metrics->acoustics_mixtape_track_count > 0) ? (metrics->acoustics_mixtape_track_index + 1) : 0,
-                metrics->acoustics_mixtape_track_count);
-            snprintf(line1, sizeof(line1), "%s", metrics->acoustics_mixtape_track_name ? metrics->acoustics_mixtape_track_name : "NO MOD TRACKS");
-            r = draw_text_vector_glow(ctx, line0, (vg_vec2){l.panel[1].x + 12.0f * ui, l.panel[1].y + l.panel[1].h * 0.78f},
-                12.0f * ui, 0.8f * ui, &panel, &text);
-            if (r != VG_OK) return r;
-            r = draw_text_vector_glow(ctx, line1, (vg_vec2){l.panel[1].x + 12.0f * ui, l.panel[1].y + l.panel[1].h * 0.68f},
-                11.0f * ui, 0.75f * ui, &panel, &text);
-            if (r != VG_OK) return r;
+            const float row_h = 19.0f * ui;
+            const float list_size = 12.2f * ui;
+            const float list_spacing = 0.90f * ui;
+            const float side_margin = 30.0f * ui;
+            const float list_top_y = l.panel[0].y + l.panel[0].h - 74.0f * ui;
+            const float list_bot_y = l.panel[0].y + 30.0f * ui;
+            const int max_rows = (int)((list_top_y - list_bot_y) / row_h);
+            int start_left = 0;
+            int start_right = 0;
+            if (metrics->acoustics_mixtape_track_index >= max_rows && max_rows > 0) {
+                start_left = metrics->acoustics_mixtape_track_index - (max_rows - 1);
+            }
+            if (metrics->acoustics_mixtape_playlist_selected >= max_rows && max_rows > 0) {
+                start_right = metrics->acoustics_mixtape_playlist_selected - (max_rows - 1);
+            }
+            for (int row = 0; row < max_rows; ++row) {
+                const float y = list_top_y - (float)row * row_h;
+                const int li = start_left + row;
+                if (li < metrics->acoustics_mixtape_track_count && li < MIXTAPE_MAX_TRACKS) {
+                    vg_stroke_style lt = text;
+                    vg_stroke_style lp = panel;
+                    if (li == metrics->acoustics_mixtape_track_index) {
+                        lt.intensity = 1.20f;
+                        lp.intensity = 1.15f;
+                    } else {
+                        lt.intensity = 0.82f;
+                        lp.intensity = 0.78f;
+                    }
+                    r = draw_text_vector_glow(ctx, metrics->acoustics_mixtape_track_labels[li], (vg_vec2){l.panel[0].x + side_margin, y},
+                        list_size, list_spacing, &lp, &lt);
+                    if (r != VG_OK) return r;
+                }
+                const int ri = start_right + row;
+                if (ri < metrics->acoustics_mixtape_playlist_count) {
+                    const int track_idx = metrics->acoustics_mixtape_playlist_indices[ri];
+                    if (track_idx >= 0 && track_idx < metrics->acoustics_mixtape_track_count && track_idx < MIXTAPE_MAX_TRACKS) {
+                        vg_stroke_style rt = text;
+                        vg_stroke_style rp = panel;
+                        if (ri == metrics->acoustics_mixtape_playlist_selected) {
+                            rt.intensity = 1.20f;
+                            rp.intensity = 1.15f;
+                        } else {
+                            rt.intensity = 0.82f;
+                            rp.intensity = 0.78f;
+                        }
+                        r = draw_text_vector_glow(ctx, metrics->acoustics_mixtape_track_labels[track_idx], (vg_vec2){l.panel[1].x + side_margin, y},
+                            list_size, list_spacing, &rp, &rt);
+                        if (r != VG_OK) return r;
+                    }
+                }
+            }
         }
         for (int i = 0; i < 4; ++i) {
             static const char* page_labels[4] = {"SHIP", "COMBAT", "EQUIPMENT", "MIXTAPE"};

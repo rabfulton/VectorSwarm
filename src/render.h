@@ -12,6 +12,8 @@
 #define ACOUSTICS_EQUIPMENT_SLIDER_COUNT 16
 #define ACOUSTICS_SCOPE_SAMPLES 192
 #define ACOUSTICS_SLOT_COUNT 5
+#define MIXTAPE_MAX_TRACKS 128
+#define MIXTAPE_LABEL_CAP 96
 #define VIDEO_MENU_RES_COUNT 6
 #define VIDEO_MENU_DIAL_COUNT 12
 #define CONTROL_ACTION_COUNT_RENDER 6
@@ -90,6 +92,12 @@ typedef struct render_metrics {
     int acoustics_mixtape_track_count;
     int acoustics_mixtape_playing;
     const char* acoustics_mixtape_track_name;
+    int acoustics_mixtape_focus; /* 0=library(left), 1=playlist(right) */
+    int acoustics_mixtape_playlist_selected;
+    int acoustics_mixtape_playlist_count;
+    int acoustics_mixtape_playlist_indices[MIXTAPE_MAX_TRACKS];
+    char acoustics_mixtape_track_labels[MIXTAPE_MAX_TRACKS][MIXTAPE_LABEL_CAP];
+    const void* acoustics_tape_svg_asset;
     float acoustics_scope[ACOUSTICS_SCOPE_SAMPLES];
     int video_res_w[VIDEO_MENU_RES_COUNT];
     int video_res_h[VIDEO_MENU_RES_COUNT];
