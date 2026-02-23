@@ -104,6 +104,17 @@ typedef struct render_metrics {
     const void* shipyard_ship_svg_asset;
     const void* shipyard_weapon_svg_assets[4];
     const void* surveillance_svg_asset;
+    int opening_menu_selected;
+    const float* opening_ship_positions_xyz;
+    uint32_t opening_ship_vertex_count;
+    const uint32_t* opening_ship_edges;
+    uint32_t opening_ship_edge_count;
+    float opening_ship_yaw_deg;
+    float opening_ship_pitch_deg;
+    float opening_ship_roll_deg;
+    float opening_ship_scale;
+    float opening_ship_spin_rate;
+    int opening_ship_spin_axis; /* 0=yaw, 1=pitch, 2=roll */
     const char* terrain_tuning_text;
     int use_gpu_terrain;
     int use_gpu_particles;

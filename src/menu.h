@@ -8,7 +8,8 @@ enum app_screen_id {
     APP_SCREEN_VIDEO = 3,
     APP_SCREEN_PLANETARIUM = 4,
     APP_SCREEN_LEVEL_EDITOR = 5,
-    APP_SCREEN_CONTROLS = 6
+    APP_SCREEN_CONTROLS = 6,
+    APP_SCREEN_OPENING = 7
 };
 
 typedef struct menu_state {

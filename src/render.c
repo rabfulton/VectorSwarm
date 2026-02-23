@@ -2401,6 +2401,300 @@ static vg_result draw_shipyard_menu(vg_context* ctx, float w, float h, const ren
     return VG_OK;
 }
 
+static vg_result draw_opening_menu(vg_context* ctx, float w, float h, const render_metrics* metrics) {
+    const float ui = ui_reference_scale(w, h);
+    const vg_rect panel = make_ui_safe_frame(w, h);
+    const palette_theme pal = get_palette_theme(metrics->palette_mode);
+    vg_stroke_style frame = make_stroke(1.6f * ui, 1.0f, pal.primary, VG_BLEND_ALPHA);
+    vg_stroke_style txt = make_stroke(1.2f * ui, 1.0f, pal.secondary, VG_BLEND_ALPHA);
+    vg_fill_style haze = make_fill(0.16f, pal.haze, VG_BLEND_ALPHA);
+    vg_result r = vg_fill_rect(ctx, panel, &haze);
+    if (r != VG_OK) {
+        return r;
+    }
+
+    {
+        const char* title = "VECTOR SWARM";
+        const float title_size = 60.0f * ui;
+        const float title_spacing = 2.55f * ui;
+        const float title_w = vg_measure_text(title, title_size, title_spacing);
+        const float tx = (w - title_w) * 0.5f;
+        const float ty = panel.y + panel.h * 0.90f;
+        const float sweep_margin = 240.0f * ui;
+        const float sweep_span = title_w + sweep_margin * 2.0f;
+        float sweep_t = fmodf(metrics->ui_time_s * 0.22f, 1.0f);
+        if (sweep_t < 0.0f) {
+            sweep_t += 1.0f;
+        }
+        const float sweep_x = (tx - sweep_margin) + sweep_span * sweep_t;
+        const float sweep_half = 190.0f * ui;
+        const float sweep_half_blur = 265.0f * ui;
+        const float sweep_y = ty - 14.0f * ui;
+        const float sweep_h = 80.0f * ui;
+
+        /* Keep title mostly hidden outside the sweep. */
+        {
+            vg_stroke_style latent_frame = frame;
+            vg_stroke_style latent_text = txt;
+            latent_frame.width_px = 1.6f * ui;
+            latent_text.width_px = 1.1f * ui;
+            latent_frame.intensity = 0.07f;
+            latent_text.intensity = 0.06f;
+            latent_frame.color.a = 0.18f;
+            latent_text.color.a = 0.16f;
+            r = draw_text_vector_glow(
+                ctx,
+                title,
+                (vg_vec2){tx, ty},
+                title_size,
+                title_spacing,
+                &latent_frame,
+                &latent_text
+            );
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+
+        /* Sweeping reveal with symmetric falloff and a broad blur layer. */
+        {
+            const int slices = 30;
+            const float clip_w = (2.0f * sweep_half) / (float)slices;
+            for (int i = 0; i < slices; ++i) {
+                const float u = ((float)i + 0.5f) / (float)slices * 2.0f - 1.0f;
+                const float glow = expf(-u * u * 2.4f);
+                const float core = expf(-u * u * 14.0f);
+                const vg_rect clip = {
+                    (sweep_x - sweep_half) + (float)i * clip_w,
+                    sweep_y,
+                    clip_w + 1.0f,
+                    sweep_h
+                };
+                r = vg_clip_push_rect(ctx, clip);
+                if (r != VG_OK) {
+                    return r;
+                }
+                {
+                    vg_stroke_style blur_frame = frame;
+                    vg_stroke_style blur_text = txt;
+                    blur_frame.width_px = 4.8f * ui;
+                    blur_text.width_px = 3.4f * ui;
+                    blur_frame.intensity = 0.30f * glow;
+                    blur_text.intensity = 0.26f * glow;
+                    blur_frame.color.a = 0.35f * glow;
+                    blur_text.color.a = 0.30f * glow;
+                    r = draw_text_vector_glow(
+                        ctx,
+                        title,
+                        (vg_vec2){tx, ty},
+                        title_size,
+                        title_spacing,
+                        &blur_frame,
+                        &blur_text
+                    );
+                }
+                if (r == VG_OK) {
+                    vg_stroke_style lit_frame = frame;
+                    vg_stroke_style lit_text = txt;
+                    lit_frame.width_px = 2.1f * ui;
+                    lit_text.width_px = 1.45f * ui;
+                    lit_frame.intensity = 0.45f * glow + 1.35f * core;
+                    lit_text.intensity = 0.36f * glow + 1.10f * core;
+                    lit_frame.color.a = 0.60f * glow + 0.30f * core;
+                    lit_text.color.a = 0.52f * glow + 0.38f * core;
+                    lit_text.color = (vg_color){
+                        fminf(1.0f, pal.secondary.r * 1.15f),
+                        fminf(1.0f, pal.secondary.g * 1.15f),
+                        fminf(1.0f, pal.secondary.b * 1.15f),
+                        lit_text.color.a
+                    };
+                    r = draw_text_vector_glow(
+                        ctx,
+                        title,
+                        (vg_vec2){tx, ty},
+                        title_size,
+                        title_spacing,
+                        &lit_frame,
+                        &lit_text
+                    );
+                }
+                {
+                    vg_result pop_r = vg_clip_pop(ctx);
+                    if (r == VG_OK && pop_r != VG_OK) {
+                        r = pop_r;
+                    }
+                }
+                if (r != VG_OK) {
+                    return r;
+                }
+            }
+        }
+
+        /* Extra wide blur around the sweep center for strong glow bloom feel. */
+        {
+            const int slices = 18;
+            const float clip_w = (2.0f * sweep_half_blur) / (float)slices;
+            for (int i = 0; i < slices; ++i) {
+                const float u = ((float)i + 0.5f) / (float)slices * 2.0f - 1.0f;
+                const float glow = expf(-u * u * 4.2f);
+                if (glow < 0.02f) {
+                    continue;
+                }
+                const vg_rect clip = {
+                    (sweep_x - sweep_half_blur) + (float)i * clip_w,
+                    sweep_y - 5.0f * ui,
+                    clip_w + 1.0f,
+                    sweep_h + 10.0f * ui
+                };
+                r = vg_clip_push_rect(ctx, clip);
+                if (r != VG_OK) {
+                    return r;
+                }
+                vg_stroke_style bloom_frame = frame;
+                vg_stroke_style bloom_text = txt;
+                bloom_frame.width_px = 7.4f * ui;
+                bloom_text.width_px = 5.6f * ui;
+                bloom_frame.intensity = 0.14f * glow;
+                bloom_text.intensity = 0.11f * glow;
+                bloom_frame.color.a = 0.24f * glow;
+                bloom_text.color.a = 0.22f * glow;
+                r = draw_text_vector_glow(
+                    ctx,
+                    title,
+                    (vg_vec2){tx, ty},
+                    title_size,
+                    title_spacing,
+                    &bloom_frame,
+                    &bloom_text
+                );
+                {
+                    vg_result pop_r = vg_clip_pop(ctx);
+                    if (r == VG_OK && pop_r != VG_OK) {
+                        r = pop_r;
+                    }
+                }
+                if (r != VG_OK) {
+                    return r;
+                }
+            }
+        }
+    }
+
+    const vg_rect links_box = {panel.x + panel.w * 0.005f, panel.y + panel.h * 0.17f, panel.w * 0.19f, panel.h * 0.66f};
+    const vg_rect ship_box = {panel.x + panel.w * 0.24f, panel.y + panel.h * 0.10f, panel.w * 0.74f, panel.h * 0.76f};
+    {
+        static const char* labels[5] = {"ARCADE", "CAMPAIGN", "DISPLAY", "ACOUSTICS", "CONTROLS"};
+        const float btn_h = links_box.h * 0.165f;
+        const float btn_gap = links_box.h * 0.045f;
+        float by = links_box.y + links_box.h - btn_h;
+        for (int i = 0; i < 5; ++i) {
+            const vg_rect b = {links_box.x, by, links_box.w, btn_h};
+            const int hover =
+                metrics->mouse_in_window &&
+                metrics->mouse_x >= b.x && metrics->mouse_x <= (b.x + b.w) &&
+                metrics->mouse_y >= b.y && metrics->mouse_y <= (b.y + b.h);
+            const int selected = (metrics->opening_menu_selected == i) ? 1 : 0;
+            r = draw_lcars_text_button(ctx, b, labels[i], hover, selected, ui, &pal, &frame, &txt);
+            if (r != VG_OK) {
+                return r;
+            }
+            by -= (btn_h + btn_gap);
+        }
+    }
+
+    if (metrics->opening_ship_positions_xyz &&
+        metrics->opening_ship_edges &&
+        metrics->opening_ship_vertex_count > 0u &&
+        metrics->opening_ship_edge_count > 0u) {
+        const float* p = metrics->opening_ship_positions_xyz;
+        float min_x = p[0], max_x = p[0];
+        float min_y = p[1], max_y = p[1];
+        float min_z = p[2], max_z = p[2];
+        for (uint32_t i = 1u; i < metrics->opening_ship_vertex_count; ++i) {
+            const float x = p[i * 3u + 0u];
+            const float y = p[i * 3u + 1u];
+            const float z = p[i * 3u + 2u];
+            if (x < min_x) min_x = x;
+            if (x > max_x) max_x = x;
+            if (y < min_y) min_y = y;
+            if (y > max_y) max_y = y;
+            if (z < min_z) min_z = z;
+            if (z > max_z) max_z = z;
+        }
+        const float cx = 0.5f * (min_x + max_x);
+        const float cy = 0.5f * (min_y + max_y);
+        const float cz = 0.5f * (min_z + max_z);
+        const float ex = fmaxf(0.001f, max_x - min_x);
+        const float ey = fmaxf(0.001f, max_y - min_y);
+        const float ez = fmaxf(0.001f, max_z - min_z);
+        const float model_scale = 1.0f / fmaxf(ex, fmaxf(ey, ez));
+        const float deg_to_rad = 0.01745329252f;
+        float yaw = metrics->opening_ship_yaw_deg * deg_to_rad;
+        float pitch = metrics->opening_ship_pitch_deg * deg_to_rad;
+        float roll = metrics->opening_ship_roll_deg * deg_to_rad;
+        const float spin = metrics->ui_time_s * metrics->opening_ship_spin_rate;
+        if (metrics->opening_ship_spin_axis == 1) {
+            pitch += spin;
+        } else if (metrics->opening_ship_spin_axis == 2) {
+            roll += spin;
+        } else {
+            yaw += spin;
+        }
+        const float cyaw = cosf(yaw);
+        const float syaw = sinf(yaw);
+        const float cp = cosf(pitch);
+        const float sp = sinf(pitch);
+        const float cr = cosf(roll);
+        const float sr = sinf(roll);
+        const float focal = 1.8f;
+        const float z_bias = 2.9f;
+        const float draw_scale = fminf(ship_box.w, ship_box.h) * 0.84f * fmaxf(0.01f, metrics->opening_ship_scale);
+        const float sx = ship_box.x + ship_box.w * 0.54f;
+        const float sy = ship_box.y + ship_box.h * 0.52f;
+
+        vg_vec2* screen = (vg_vec2*)malloc(sizeof(vg_vec2) * (size_t)metrics->opening_ship_vertex_count);
+        if (!screen) {
+            return VG_ERROR_OUT_OF_MEMORY;
+        }
+        for (uint32_t i = 0u; i < metrics->opening_ship_vertex_count; ++i) {
+            const float lx = (p[i * 3u + 0u] - cx) * model_scale;
+            const float ly = (p[i * 3u + 1u] - cy) * model_scale;
+            const float lz = (p[i * 3u + 2u] - cz) * model_scale;
+            const float x1 = lx * cyaw - lz * syaw;
+            const float z1 = lx * syaw + lz * cyaw;
+            const float y2 = ly * cp - z1 * sp;
+            const float z2 = ly * sp + z1 * cp;
+            const float xr = x1 * cr - y2 * sr;
+            const float yr = x1 * sr + y2 * cr;
+            const float zr2 = z2 + z_bias;
+            const float invz = (zr2 > 0.1f) ? (1.0f / zr2) : 10.0f;
+            screen[i].x = sx + xr * focal * invz * draw_scale;
+            screen[i].y = sy + yr * focal * invz * draw_scale;
+        }
+
+        vg_stroke_style wire = frame;
+        wire.width_px = fmaxf(1.2f, 1.5f * ui);
+        wire.intensity = 1.1f;
+        wire.blend = VG_BLEND_ALPHA;
+        wire.color = pal.primary;
+        for (uint32_t i = 0u; i < metrics->opening_ship_edge_count; ++i) {
+            const uint32_t i0 = metrics->opening_ship_edges[i * 2u + 0u];
+            const uint32_t i1 = metrics->opening_ship_edges[i * 2u + 1u];
+            if (i0 >= metrics->opening_ship_vertex_count || i1 >= metrics->opening_ship_vertex_count) {
+                continue;
+            }
+            const vg_vec2 seg[2] = {screen[i0], screen[i1]};
+            r = vg_draw_polyline(ctx, seg, 2u, &wire, 0);
+            if (r != VG_OK) {
+                free(screen);
+                return r;
+            }
+        }
+        free(screen);
+    }
+    return VG_OK;
+}
+
 static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render_metrics* metrics, float t_s) {
     (void)t_s;
     const float ui = ui_reference_scale(w, h);
@@ -5455,6 +5749,18 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             return r;
         }
         r = draw_shipyard_menu(ctx, g->world_w, g->world_h, metrics);
+        if (r != VG_OK) {
+            return r;
+        }
+        return draw_mouse_pointer(ctx, g->world_w, g->world_h, metrics, &txt_main);
+    }
+    if (metrics->menu_screen == APP_SCREEN_OPENING) {
+        const vg_fill_style bg_opening = make_fill(1.0f, (vg_color){0.0f, 0.0f, 0.0f, 1.0f}, VG_BLEND_ALPHA);
+        vg_result r = vg_fill_rect(ctx, (vg_rect){0.0f, 0.0f, g->world_w, g->world_h}, &bg_opening);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = draw_opening_menu(ctx, g->world_w, g->world_h, metrics);
         if (r != VG_OK) {
             return r;
         }

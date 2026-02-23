@@ -1,7 +1,7 @@
 #include "menu.h"
 
 static int menu_screen_valid(int screen) {
-    return (screen >= APP_SCREEN_GAMEPLAY && screen <= APP_SCREEN_CONTROLS) ? 1 : 0;
+    return (screen >= APP_SCREEN_GAMEPLAY && screen <= APP_SCREEN_OPENING) ? 1 : 0;
 }
 
 void menu_init(menu_state* m) {
@@ -33,7 +33,7 @@ void menu_back(menu_state* m) {
     if (m->current == APP_SCREEN_GAMEPLAY) {
         return;
     }
-    if (m->current == APP_SCREEN_SHIPYARD) {
+    if (m->current == APP_SCREEN_SHIPYARD || m->current == APP_SCREEN_OPENING) {
         m->current = APP_SCREEN_GAMEPLAY;
         m->return_screen = APP_SCREEN_GAMEPLAY;
         return;
@@ -62,6 +62,9 @@ int menu_preferred_return(const menu_state* m) {
     }
     if (m->current == APP_SCREEN_SHIPYARD || m->return_screen == APP_SCREEN_SHIPYARD) {
         return APP_SCREEN_SHIPYARD;
+    }
+    if (m->current == APP_SCREEN_OPENING || m->return_screen == APP_SCREEN_OPENING) {
+        return APP_SCREEN_OPENING;
     }
     return APP_SCREEN_GAMEPLAY;
 }

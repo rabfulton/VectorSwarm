@@ -4,6 +4,7 @@
 #include "level_editor.h"
 #include "leveldef.h"
 #include "menu.h"
+#include "obj_model.h"
 #include "planetarium/planetarium_registry.h"
 #include "planetarium/planetarium_validate.h"
 #include "planetarium_propaganda.h"
@@ -446,6 +447,17 @@ typedef struct app {
     vg_svg_asset* shipyard_ship_svg_asset;
     vg_svg_asset* shipyard_weapon_svg_assets[4];
     vg_svg_asset* surveillance_svg_asset;
+    obj_wire_model opening_ship_model;
+    int opening_menu_selected;
+    int opening_prev_up;
+    int opening_prev_down;
+    int opening_prev_fire;
+    float opening_ship_yaw_deg;
+    float opening_ship_pitch_deg;
+    float opening_ship_roll_deg;
+    float opening_ship_scale;
+    float opening_ship_spin_rate;
+    int opening_ship_spin_axis; /* 0=yaw, 1=pitch, 2=roll */
     level_editor_state level_editor;
 } app;
 
@@ -2698,6 +2710,36 @@ static void shipyard_open_link(app* a, int link_idx) {
     }
 }
 
+static void opening_open_link(app* a, int link_idx) {
+    static const int targets[5] = {
+        APP_SCREEN_GAMEPLAY,
+        APP_SCREEN_GAMEPLAY,
+        APP_SCREEN_VIDEO,
+        APP_SCREEN_ACOUSTICS,
+        APP_SCREEN_CONTROLS
+    };
+    if (!a) {
+        return;
+    }
+    if (link_idx < 0) {
+        link_idx = 0;
+    }
+    if (link_idx > 4) {
+        link_idx = 4;
+    }
+    a->opening_menu_selected = link_idx;
+    if (targets[link_idx] == APP_SCREEN_GAMEPLAY) {
+        menu_open_screen(a, APP_SCREEN_GAMEPLAY, APP_SCREEN_GAMEPLAY);
+        return;
+    }
+    menu_open_screen(a, targets[link_idx], APP_SCREEN_OPENING);
+    if (targets[link_idx] == APP_SCREEN_VIDEO) {
+        sync_video_dials_from_live_crt(a);
+    } else if (targets[link_idx] == APP_SCREEN_CONTROLS) {
+        controls_refresh_labels(a);
+    }
+}
+
 static void shipyard_select_weapon(app* a, int weapon_idx) {
     if (!a) {
         return;
@@ -2764,6 +2806,27 @@ static void handle_shipyard_controls(app* a, const game_input* in) {
     a->shipyard_prev_fire = in->fire ? 1 : 0;
 }
 
+static void handle_opening_controls(app* a, const game_input* in) {
+    if (!a || !in || a->menu.current != APP_SCREEN_OPENING) {
+        return;
+    }
+    const int up_pressed = in->up && !a->opening_prev_up;
+    const int down_pressed = in->down && !a->opening_prev_down;
+    const int fire_pressed = in->fire && !a->opening_prev_fire;
+    if (up_pressed) {
+        a->opening_menu_selected = (a->opening_menu_selected + 4) % 5;
+    }
+    if (down_pressed) {
+        a->opening_menu_selected = (a->opening_menu_selected + 1) % 5;
+    }
+    if (fire_pressed) {
+        opening_open_link(a, a->opening_menu_selected);
+    }
+    a->opening_prev_up = in->up ? 1 : 0;
+    a->opening_prev_down = in->down ? 1 : 0;
+    a->opening_prev_fire = in->fire ? 1 : 0;
+}
+
 static int handle_shipyard_mouse(app* a, int mouse_x, int mouse_y, int set_value) {
     if (!a || a->menu.current != APP_SCREEN_SHIPYARD) {
         return 0;
@@ -2810,6 +2873,35 @@ static int handle_shipyard_mouse(app* a, int mouse_x, int mouse_y, int set_value
             }
             y -= (icon_h + icon_gap);
         }
+    }
+    return 0;
+}
+
+static int handle_opening_mouse(app* a, int mouse_x, int mouse_y, int set_value) {
+    if (!a || a->menu.current != APP_SCREEN_OPENING) {
+        return 0;
+    }
+    float mx = 0.0f;
+    float my = 0.0f;
+    map_mouse_to_scene_coords(a, mouse_x, mouse_y, &mx, &my);
+    const float w = (float)a->swapchain_extent.width;
+    const float h = (float)a->swapchain_extent.height;
+    const vg_rect panel = make_ui_safe_frame(w, h);
+    const vg_rect links_box = {panel.x + panel.w * 0.005f, panel.y + panel.h * 0.17f, panel.w * 0.19f, panel.h * 0.66f};
+    const float btn_h = links_box.h * 0.165f;
+    const float btn_gap = links_box.h * 0.045f;
+    float by = links_box.y + links_box.h - btn_h;
+    for (int i = 0; i < 5; ++i) {
+        const vg_rect r = {links_box.x, by, links_box.w, btn_h};
+        if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h) {
+            if (set_value) {
+                opening_open_link(a, i);
+            } else {
+                a->opening_menu_selected = i;
+            }
+            return 1;
+        }
+        by -= (btn_h + btn_gap);
     }
     return 0;
 }
@@ -2942,6 +3034,18 @@ static void init_planetarium_assets(app* a) {
             vg_svg_asset* asset = NULL;
             if (vg_svg_load_from_file(ship_candidates[i], &sp, &asset) == VG_OK && asset) {
                 a->shipyard_ship_svg_asset = asset;
+                break;
+            }
+        }
+    }
+    {
+        const char* obj_candidates[] = {
+            "assets/models/ship.obj",
+            "../assets/models/ship.obj",
+            "../../assets/models/ship.obj"
+        };
+        for (size_t i = 0; i < sizeof(obj_candidates) / sizeof(obj_candidates[0]); ++i) {
+            if (obj_wire_model_load_file(obj_candidates[i], &a->opening_ship_model)) {
                 break;
             }
         }
@@ -3388,6 +3492,7 @@ static void cleanup(app* a) {
             a->shipyard_weapon_svg_assets[i] = NULL;
         }
     }
+    obj_wire_model_destroy(&a->opening_ship_model);
     SDL_Quit();
 }
 
@@ -5901,6 +6006,17 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             a->shipyard_weapon_svg_assets[2],
             a->shipyard_weapon_svg_assets[3]
         },
+        .opening_menu_selected = a->opening_menu_selected,
+        .opening_ship_positions_xyz = a->opening_ship_model.positions_xyz,
+        .opening_ship_vertex_count = a->opening_ship_model.vertex_count,
+        .opening_ship_edges = a->opening_ship_model.edges,
+        .opening_ship_edge_count = a->opening_ship_model.edge_count,
+        .opening_ship_yaw_deg = a->opening_ship_yaw_deg,
+        .opening_ship_pitch_deg = a->opening_ship_pitch_deg,
+        .opening_ship_roll_deg = a->opening_ship_roll_deg,
+        .opening_ship_scale = a->opening_ship_scale,
+        .opening_ship_spin_rate = a->opening_ship_spin_rate,
+        .opening_ship_spin_axis = a->opening_ship_spin_axis,
         .surveillance_svg_asset = a->surveillance_svg_asset,
         .terrain_tuning_text = (a->fog_tuning_enabled &&
                                 a->fog_tuning_show &&
@@ -6277,6 +6393,16 @@ int main(void) {
     a.shipyard_prev_left = 0;
     a.shipyard_prev_right = 0;
     a.shipyard_prev_fire = 0;
+    a.opening_menu_selected = 0;
+    a.opening_prev_up = 0;
+    a.opening_prev_down = 0;
+    a.opening_prev_fire = 0;
+    a.opening_ship_yaw_deg = -425.0f;
+    a.opening_ship_pitch_deg = -185.0f;
+    a.opening_ship_roll_deg = -85.0f;
+    a.opening_ship_scale = 2.85f;
+    a.opening_ship_spin_rate = 1.3f;
+    a.opening_ship_spin_axis = 1;
     a.controls_gamepad = NULL;
     a.controls_gamepad_instance = -1;
     controls_set_defaults(&a);
@@ -6481,6 +6607,14 @@ int main(void) {
                         menu_open_screen(&a, APP_SCREEN_CONTROLS, ret);
                         a.show_crt_ui = 0;
                         controls_refresh_labels(&a);
+                    }
+                } else if (ev.key.keysym.sym == SDLK_6) {
+                    if (a.menu.current == APP_SCREEN_OPENING) {
+                        menu_back_screen(&a);
+                    } else {
+                        const int ret = menu_is_gameplay(&a.menu) ? APP_SCREEN_GAMEPLAY : a.menu.current;
+                        menu_open_screen(&a, APP_SCREEN_OPENING, ret);
+                        a.show_crt_ui = 0;
                     }
                 } else if (ev.key.keysym.sym == SDLK_l) {
                     if (a.menu.current == APP_SCREEN_LEVEL_EDITOR) {
@@ -6780,6 +6914,9 @@ int main(void) {
                 if (menu_is_screen(&a.menu, APP_SCREEN_VIDEO) && handle_video_menu_mouse(&a, ev.button.x, ev.button.y, 1)) {
                     a.acoustics_mouse_drag = 0;
                     a.crt_ui_mouse_drag = 0;
+                } else if (a.menu.current == APP_SCREEN_OPENING && handle_opening_mouse(&a, ev.button.x, ev.button.y, 1)) {
+                    a.acoustics_mouse_drag = 0;
+                    a.crt_ui_mouse_drag = 0;
                 } else if (a.menu.current == APP_SCREEN_SHIPYARD && handle_shipyard_mouse(&a, ev.button.x, ev.button.y, 1)) {
                     a.acoustics_mouse_drag = 0;
                     a.crt_ui_mouse_drag = 0;
@@ -6825,6 +6962,8 @@ int main(void) {
             } else if (ev.type == SDL_MOUSEMOTION) {
                 if (menu_is_screen(&a.menu, APP_SCREEN_VIDEO) && a.video_menu_dial_drag >= 0) {
                     (void)update_video_menu_dial_drag(&a, ev.motion.x, ev.motion.y);
+                } else if (a.menu.current == APP_SCREEN_OPENING) {
+                    (void)handle_opening_mouse(&a, ev.motion.x, ev.motion.y, 0);
                 } else if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR)) {
                     (void)handle_level_editor_mouse(
                         &a,
@@ -6870,12 +7009,17 @@ int main(void) {
         }
         if (a.menu.current == APP_SCREEN_SHIPYARD) {
             handle_shipyard_controls(&a, &in);
+        } else if (a.menu.current == APP_SCREEN_OPENING) {
+            handle_opening_controls(&a, &in);
         } else {
             a.shipyard_prev_up = 0;
             a.shipyard_prev_down = 0;
             a.shipyard_prev_left = 0;
             a.shipyard_prev_right = 0;
             a.shipyard_prev_fire = 0;
+            a.opening_prev_up = 0;
+            a.opening_prev_down = 0;
+            a.opening_prev_fire = 0;
         }
 
         uint64_t now = SDL_GetPerformanceCounter();
