@@ -4510,22 +4510,22 @@ static vg_result draw_planetarium_ui(vg_context* ctx, float w, float h, const re
         };
         vg_image_style is = {
             .kind = VG_IMAGE_STYLE_MONO_SCANLINE,
-            .threshold = 0.40f,
-            .contrast = 1.18f,
-            .scanline_pitch_px = 1.65f,
-            .min_line_width_px = 0.42f,
-            .max_line_width_px = 1.45f,
+            .threshold = metrics->nick_threshold,
+            .contrast = metrics->nick_contrast,
+            .scanline_pitch_px = metrics->nick_scanline_pitch_px,
+            .min_line_width_px = metrics->nick_min_line_width_px,
+            .max_line_width_px = metrics->nick_max_line_width_px,
             .line_jitter_px = 0.0f,
             .cell_width_px = 0.0f,
             .cell_height_px = 0.0f,
             .block_levels = 0,
-            .intensity = 1.0f,
+            .intensity = metrics->nick_intensity,
             .tint_color = pal.secondary,
             .blend = VG_BLEND_ALPHA,
             .use_crt_palette = 0,
             .use_context_palette = 0,
             .palette_index = 0,
-            .invert = 0,
+            .invert = metrics->nick_invert,
             .use_boxed_glyphs = 0
         };
         vg_rect dst = {nick_rect.x + 4.0f, nick_rect.y + 4.0f, nick_rect.w - 8.0f, nick_rect.h - 8.0f};

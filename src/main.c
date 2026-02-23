@@ -455,6 +455,13 @@ typedef struct app {
     uint32_t nick_w;
     uint32_t nick_h;
     uint32_t nick_stride;
+    float nick_threshold;
+    float nick_contrast;
+    float nick_scanline_pitch_px;
+    float nick_min_line_width_px;
+    float nick_max_line_width_px;
+    float nick_intensity;
+    int nick_invert;
     vg_svg_asset* shipyard_ship_svg_asset;
     vg_svg_asset* shipyard_weapon_svg_assets[4];
     vg_svg_asset* surveillance_svg_asset;
@@ -6277,6 +6284,13 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .nick_w = a->nick_w,
         .nick_h = a->nick_h,
         .nick_stride = a->nick_stride,
+        .nick_threshold = a->nick_threshold,
+        .nick_contrast = a->nick_contrast,
+        .nick_scanline_pitch_px = a->nick_scanline_pitch_px,
+        .nick_min_line_width_px = a->nick_min_line_width_px,
+        .nick_max_line_width_px = a->nick_max_line_width_px,
+        .nick_intensity = a->nick_intensity,
+        .nick_invert = a->nick_invert,
         .shipyard_weapon_selected = a->shipyard_weapon_selected,
         .shipyard_nav_column = a->shipyard_nav_column,
         .shipyard_link_selected = a->shipyard_link_selected,
@@ -6685,6 +6699,13 @@ int main(void) {
     a.wave_tty_visible[0] = '\0';
     a.current_system_index = 0;
     a.planetarium_selected = 0;
+    a.nick_threshold = 0.25f;
+    a.nick_contrast = 2.75f;
+    a.nick_scanline_pitch_px = 2.0f;
+    a.nick_min_line_width_px = 0.56f;
+    a.nick_max_line_width_px = 1.41f;
+    a.nick_intensity = 0.75f;
+    a.nick_invert = 0;
     a.shipyard_nav_column = 0;
     a.shipyard_link_selected = 0;
     a.shipyard_prev_up = 0;

@@ -105,6 +105,13 @@ typedef struct render_metrics {
     uint32_t nick_w;
     uint32_t nick_h;
     uint32_t nick_stride;
+    float nick_threshold;
+    float nick_contrast;
+    float nick_scanline_pitch_px;
+    float nick_min_line_width_px;
+    float nick_max_line_width_px;
+    float nick_intensity;
+    int nick_invert;
     int shipyard_weapon_selected;
     int shipyard_nav_column; /* 0=left links, 1=weapon column */
     int shipyard_link_selected; /* 0..3 top-to-bottom */
