@@ -2875,7 +2875,7 @@ static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render
 
     const int item_count = VIDEO_MENU_RES_COUNT + 1;
     const float row_h = panel.h * 0.082f;
-    const float row_w = panel.w * 0.36f;
+    const float row_w = panel.w * 0.29f;
     const float row_x = panel.x + panel.w * 0.05f;
     const float row_y0 = panel.y + panel.h * 0.68f;
     for (int i = 0; i < item_count; ++i) {
@@ -2949,22 +2949,40 @@ static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render
             d.show_ticks = 1;
             d.ui_scale = ui;
             d.text_scale = ui;
-            const float radius = lab.w * 0.052f;
+            const float radius = lab.w * 0.058f;
             for (int i = 0; i < VIDEO_MENU_DIAL_COUNT; ++i) {
                 const int row = i / 4;
                 const int col = i % 4;
                 const vg_vec2 c = {
                     lab.x + lab.w * (0.12f + 0.25f * (float)col),
-                    lab.y + lab.h * (0.72f - 0.29f * (float)row)
+                    lab.y + lab.h * (0.74f - 0.30f * (float)row)
                 };
                 float v = metrics->video_dial_01[i];
                 if (v < 0.0f) v = 0.0f;
                 if (v > 1.0f) v = 1.0f;
-                d.label = dial_labels[i];
+                d.label = NULL;
                 d.value = v * 100.0f;
                 r = vg_ui_meter_radial(ctx, c, radius, &d, &ms);
                 if (r != VG_OK) {
                     return r;
+                }
+                {
+                    vg_ui_meter_desc ld = d;
+                    ld.label = dial_labels[i];
+                    vg_ui_meter_radial_layout ll;
+                    if (vg_ui_meter_radial_layout_compute(c, radius, &ld, &ms, &ll) == VG_OK) {
+                        const float label_size = 11.0f * ui;
+                        const float label_spacing = 0.8f * ui;
+                        const float label_w = vg_measure_text(dial_labels[i], label_size, label_spacing);
+                        const vg_vec2 p = {
+                            ll.label_pos.x - label_w * 0.5f,
+                            ll.label_pos.y - 6.0f * ui
+                        };
+                        r = draw_text_vector_glow(ctx, dial_labels[i], p, label_size, label_spacing, &frame, &txt);
+                        if (r != VG_OK) {
+                            return r;
+                        }
+                    }
                 }
             }
         }

@@ -1053,12 +1053,12 @@ static void video_menu_dial_geometry(const app* a, vg_vec2 centers[VIDEO_MENU_DI
     const float h = (float)a->swapchain_extent.height;
     const vg_rect panel = make_ui_safe_frame(w, h);
     const vg_rect lab = {panel.x + panel.w * 0.42f, panel.y + panel.h * 0.07f, panel.w * 0.54f, panel.h * 0.86f};
-    *radius_px = lab.w * 0.052f;
+    *radius_px = lab.w * 0.058f;
     for (int i = 0; i < VIDEO_MENU_DIAL_COUNT; ++i) {
         const int row = i / 4;
         const int col = i % 4;
         const float cx = lab.x + lab.w * (0.12f + 0.25f * (float)col);
-        const float cy = lab.y + lab.h * (0.72f - 0.29f * (float)row);
+        const float cy = lab.y + lab.h * (0.74f - 0.30f * (float)row);
         centers[i] = (vg_vec2){cx, cy};
     }
 }
@@ -2783,7 +2783,7 @@ static int handle_video_menu_mouse(app* a, int mouse_x, int mouse_y, int set_val
 
     const int item_count = VIDEO_MENU_RES_COUNT + 1;
     const float row_h = panel.h * 0.082f;
-    const float row_w = panel.w * 0.36f;
+    const float row_w = panel.w * 0.29f;
     const float row_x = panel.x + panel.w * 0.05f;
     const float row_y0 = panel.y + panel.h * 0.68f;
     for (int i = 0; i < item_count; ++i) {
