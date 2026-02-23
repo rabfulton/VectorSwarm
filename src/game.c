@@ -438,7 +438,7 @@ static int asteroid_try_spawn_inflow_world(game_state* g, asteroid_body* a) {
     }
 
     for (int tries = 0; tries < 12; ++tries) {
-        const float sz = (8.0f + frand01() * 30.0f) * su;
+        const float sz = (8.0f + frand01() * 36.0f) * su;
         const float rr = sz * 0.90f;
         const int cursor = (g->asteroid_storm_emitter_cursor + tries) % emitter_n;
         const float cell_w = (x_max - x_min) / (float)emitter_n;
@@ -460,7 +460,7 @@ static int asteroid_try_spawn_inflow_world(game_state* g, asteroid_body* a) {
         a->size = sz;
         a->radius = rr;
         a->angle = frand01() * 6.2831853f;
-        a->spin_rate = frands1() * (0.85f + frand01() * 2.30f);
+        a->spin_rate = frands1() * (0.85f + frand01() * 4.80f);
         return 1;
     }
     return 0;
@@ -562,6 +562,8 @@ static void update_asteroid_storm(game_state* g, float dt) {
     const float x_max = g->camera_x + half_w + pad;
     const float y_min = -pad;
     const float y_max = g->world_h + pad;
+    const float screen_l = g->camera_x - half_w;
+    const float screen_r = g->camera_x + half_w;
     float vx = 0.0f, vy = 0.0f;
     asteroid_storm_velocity_local(g, &vx, &vy);
 
@@ -585,7 +587,7 @@ static void update_asteroid_storm(game_state* g, float dt) {
                 active_now += 1;
                 spawn_budget -= 1;
                 /* New randomized cooldown: each emitter is its own Poisson-ish source. */
-                const float base = 0.08f + 0.32f / fmaxf(g->asteroid_storm_density, 0.05f);
+                const float base = 0.10f + 0.40f / fmaxf(g->asteroid_storm_density, 0.05f);
                 g->asteroid_storm_emitter_cd[ei] = base * (0.6f + 1.2f * frand01());
             } else {
                 /* Try again soon. */
@@ -602,7 +604,15 @@ static void update_asteroid_storm(game_state* g, float dt) {
         }
         integrate_body(&a->b, dt);
         a->angle += a->spin_rate * dt;
-        if (a->b.y > y_max || a->b.y < y_min || a->b.x < x_min || a->b.x > x_max) {
+
+        /* Horizontal wrap to keep storm density consistent even when drift is steep. */
+        if (a->b.x < screen_l - a->radius) {
+            a->b.x = screen_r + a->radius;
+        } else if (a->b.x > screen_r + a->radius) {
+            a->b.x = screen_l - a->radius;
+        }
+
+        if (a->b.y > y_max || a->b.y < y_min) {
             a->active = 0;
             continue;
         }

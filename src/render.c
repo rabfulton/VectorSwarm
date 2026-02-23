@@ -1200,6 +1200,9 @@ static vg_result draw_asteroid_storm(
     main.intensity *= 0.92f;
     halo.color = (vg_color){pal->primary.r, pal->primary.g, pal->primary.b, 0.58f};
     main.color = (vg_color){pal->secondary.r, pal->secondary.g, pal->secondary.b, 0.78f};
+    vg_color fill_c = pal->primary_dim;
+    fill_c.a = fminf(fill_c.a, 0.22f);
+    const vg_fill_style fill = make_fill(0.55f, fill_c, VG_BLEND_ALPHA);
 
     for (int i = 0; i < g->asteroid_count && i < MAX_ASTEROIDS; ++i) {
         const asteroid_body* a = &g->asteroids[i];
@@ -1215,7 +1218,11 @@ static vg_result draw_asteroid_storm(
             poly[k].x = a->b.x + px * c - py * s;
             poly[k].y = a->b.y + px * s + py * c;
         }
-        vg_result r = vg_draw_polyline(ctx, poly, 11, &halo, 1);
+        vg_result r = vg_fill_convex(ctx, poly, 11, &fill);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_draw_polyline(ctx, poly, 11, &halo, 1);
         if (r != VG_OK) {
             return r;
         }
