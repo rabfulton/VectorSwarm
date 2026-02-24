@@ -291,6 +291,54 @@ static int parse_minefield(leveldef_level* lvl, const char* value, FILE* log_out
     return 1;
 }
 
+static int parse_missile_launcher(leveldef_level* lvl, const char* value, FILE* log_out) {
+    char buf[320];
+    char* tok;
+    char* save = NULL;
+    const int expected = 10;
+    char* fields[10];
+    int i = 0;
+    leveldef_missile_launcher ml;
+
+    if (!lvl || !value || lvl->missile_launcher_count >= LEVELDEF_MAX_MISSILE_LAUNCHERS) {
+        return 0;
+    }
+    memset(&ml, 0, sizeof(ml));
+    strncpy(buf, value, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    tok = strtok_r(buf, ",", &save);
+    while (tok && i < expected) {
+        fields[i++] = trim(tok);
+        tok = strtok_r(NULL, ",", &save);
+    }
+    if (i != expected) {
+        if (log_out) {
+            fprintf(log_out, "leveldef: missile_launcher expects %d fields, got %d\n", expected, i);
+        }
+        return 0;
+    }
+
+    ml.anchor_x01 = strtof(fields[0], NULL);
+    ml.anchor_y01 = strtof(fields[1], NULL);
+    ml.count = (int)strtol(fields[2], NULL, 10);
+    ml.spacing = strtof(fields[3], NULL);
+    ml.activation_range = strtof(fields[4], NULL);
+    ml.missile_speed = strtof(fields[5], NULL);
+    ml.missile_turn_rate_deg = strtof(fields[6], NULL);
+    ml.missile_ttl_s = strtof(fields[7], NULL);
+    ml.hit_radius = strtof(fields[8], NULL);
+    ml.blast_radius = strtof(fields[9], NULL);
+    if (ml.count <= 0) {
+        if (log_out) {
+            fprintf(log_out, "leveldef: missile_launcher count must be > 0\n");
+        }
+        return 0;
+    }
+    lvl->missile_launchers[lvl->missile_launcher_count++] = ml;
+    return 1;
+}
+
 static int parse_curated_enemy(leveldef_level* lvl, const char* value, FILE* log_out) {
     char buf[320];
     char* tok;
@@ -438,6 +486,7 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_level = &db->levels[sid];
                         cur_level->searchlight_count = 0;
                         cur_level->minefield_count = 0;
+                        cur_level->missile_launcher_count = 0;
                         cur_level->curated_count = 0;
                         cur_level->boid_cycle_count = 0;
                         cur_level->wave_cycle_count = 0;
@@ -608,6 +657,8 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         (void)parse_searchlight(cur_level, v, log_out);
                     } else if (strcmp(k, "minefield") == 0) {
                         (void)parse_minefield(cur_level, v, log_out);
+                    } else if (strcmp(k, "missile_launcher") == 0) {
+                        (void)parse_missile_launcher(cur_level, v, log_out);
                     } else if (strcmp(k, "curated_enemy") == 0) {
                         (void)parse_curated_enemy(cur_level, v, log_out);
                     }
@@ -927,6 +978,31 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
             if (mf->count <= 0 || mf->anchor_x01 < 0.0f || mf->anchor_y01 < 0.0f || mf->anchor_y01 > 1.0f) {
                 if (log_out) {
                     fprintf(log_out, "leveldef: level %d invalid minefield entry\n", i);
+                }
+                ok = 0;
+                break;
+            }
+        }
+        if (l->missile_launcher_count < 0 || l->missile_launcher_count > LEVELDEF_MAX_MISSILE_LAUNCHERS) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid missile_launcher_count\n", i);
+            }
+            ok = 0;
+        }
+        for (int m = 0; m < l->missile_launcher_count; ++m) {
+            const leveldef_missile_launcher* ml = &l->missile_launchers[m];
+            if (ml->count <= 0 ||
+                ml->anchor_x01 < 0.0f ||
+                ml->anchor_y01 < 0.0f || ml->anchor_y01 > 1.0f ||
+                ml->spacing < 0.0f ||
+                ml->activation_range <= 0.0f ||
+                ml->missile_speed <= 0.0f ||
+                ml->missile_turn_rate_deg <= 0.0f ||
+                ml->missile_ttl_s <= 0.0f ||
+                ml->hit_radius <= 0.0f ||
+                ml->blast_radius < 0.0f) {
+                if (log_out) {
+                    fprintf(log_out, "leveldef: level %d invalid missile_launcher entry\n", i);
                 }
                 ok = 0;
                 break;

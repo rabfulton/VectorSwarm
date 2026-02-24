@@ -1313,6 +1313,94 @@ static vg_result draw_minefields(
     return VG_OK;
 }
 
+static vg_result draw_missile_system(
+    vg_context* ctx,
+    const game_state* g,
+    const palette_theme* pal,
+    const vg_stroke_style* land_halo,
+    const vg_stroke_style* land_main
+) {
+    if (!ctx || !g || !pal || !land_halo || !land_main) {
+        return VG_OK;
+    }
+    vg_stroke_style halo = *land_halo;
+    vg_stroke_style main = *land_main;
+    halo.width_px *= 1.12f;
+    main.width_px *= 1.08f;
+    halo.intensity *= 0.96f;
+    main.intensity *= 1.05f;
+    halo.color = (vg_color){pal->primary.r, pal->primary.g, pal->primary.b, 0.66f};
+    main.color = (vg_color){pal->secondary.r, pal->secondary.g, pal->secondary.b, 0.94f};
+    vg_fill_style fill = make_fill(0.52f, pal->primary_dim, VG_BLEND_ALPHA);
+
+    if (g->missile_launcher_count > 0) {
+        for (int i = 0; i < g->missile_launcher_count && i < MAX_MISSILE_LAUNCHERS; ++i) {
+            const missile_launcher* ml = &g->missile_launchers[i];
+            if (!ml->active || ml->fired) {
+                continue;
+            }
+            vg_stroke_style l_halo = halo;
+            vg_stroke_style l_main = main;
+            l_halo.color = (vg_color){1.0f, 0.24f, 0.24f, 0.68f};
+            l_main.color = (vg_color){1.0f, 0.32f, 0.32f, 0.96f};
+            const float half = ((float)ml->count - 1.0f) * 0.5f;
+            for (int k = 0; k < ml->count; ++k) {
+                const float slot = (float)k - half;
+                const float x = ml->anchor_x + slot * ml->spacing;
+                const float y = ml->anchor_y;
+                const vg_vec2 shape[5] = {
+                    {x, y + 14.0f},
+                    {x - 8.5f, y - 8.0f},
+                    {x - 3.8f, y - 2.2f},
+                    {x + 8.5f, y - 8.0f},
+                    {x, y + 14.0f}
+                };
+                vg_result r = vg_fill_convex(ctx, shape, 4, &fill);
+                if (r != VG_OK) return r;
+                r = vg_draw_polyline(ctx, shape, 5, &l_halo, 1);
+                if (r != VG_OK) return r;
+                r = vg_draw_polyline(ctx, shape, 5, &l_main, 1);
+                if (r != VG_OK) return r;
+            }
+        }
+    }
+
+    if (g->missile_count <= 0) {
+        return VG_OK;
+    }
+    for (int i = 0; i < MAX_MISSILES; ++i) {
+        const homing_missile* m = &g->missiles[i];
+        if (!m->active) {
+            continue;
+        }
+        vg_stroke_style m_halo = halo;
+        vg_stroke_style m_main = main;
+        if (m->owner == MISSILE_OWNER_ENEMY) {
+            m_halo.color = (vg_color){1.0f, 0.24f, 0.24f, 0.72f};
+            m_main.color = (vg_color){1.0f, 0.30f, 0.30f, 1.0f};
+        }
+        const float c = cosf(m->heading_rad);
+        const float s = sinf(m->heading_rad);
+        const float len = m->radius * 1.6f;
+        const float half_w = m->radius * 0.68f;
+        const float notch = m->radius * 0.46f;
+        const vg_vec2 shape[5] = {
+            {m->b.x + c * len, m->b.y + s * len},
+            {m->b.x - c * len * 0.56f - s * half_w, m->b.y - s * len * 0.56f + c * half_w},
+            {m->b.x - c * notch, m->b.y - s * notch},
+            {m->b.x - c * len * 0.56f + s * half_w, m->b.y - s * len * 0.56f - c * half_w},
+            {m->b.x + c * len, m->b.y + s * len}
+        };
+        vg_result r = vg_fill_convex(ctx, shape, 4, &fill);
+        if (r != VG_OK) return r;
+        r = vg_draw_polyline(ctx, shape, 5, &m_halo, 1);
+        if (r != VG_OK) return r;
+        r = vg_draw_polyline(ctx, shape, 5, &m_main, 1);
+        if (r != VG_OK) return r;
+    }
+    return VG_OK;
+}
+
 static vg_result draw_text_vector_glow(
     vg_context* ctx,
     const char* text,
@@ -3096,6 +3184,7 @@ static const char* level_editor_marker_name(int kind) {
         case 5: return "BOID";
         case 6: return "ASTEROID STORM";
         case 7: return "MINEFIELD";
+        case 8: return "MISSILE LAUNCHER";
         default: return "MARKER";
     }
 }
@@ -3112,6 +3201,9 @@ static vg_color level_editor_marker_color(const palette_theme* pal, int kind) {
     }
     if (kind == 7) {
         return (vg_color){1.0f, 0.46f, 0.22f, 1.0f};
+    }
+    if (kind == 8) {
+        return (vg_color){1.0f, 0.34f, 0.18f, 1.0f};
     }
     if (kind == 2 || kind == 3 || kind == 4 || kind == 5) {
         return (vg_color){1.0f, 0.26f, 0.26f, 1.0f};
@@ -3239,6 +3331,15 @@ static int editor_marker_properties_text(
         if (n < cap) { out_labels[n] = "COUNT"; snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_a[sel]); n++; }
         return n;
     }
+    if (kind == 8) {
+        if (n < cap) { out_labels[n] = "POS X01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "POS Y01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "COUNT"; snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_a[sel]); n++; }
+        if (n < cap) { out_labels[n] = "SPACING"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_marker_b[sel]); n++; }
+        if (n < cap) { out_labels[n] = "ACT RANGE"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_marker_c[sel]); n++; }
+        if (n < cap) { out_labels[n] = "TTL S"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_d[sel]); n++; }
+        return n;
+    }
     if (kind == 2 || kind == 3 || kind == 4 || kind == 5) {
         const int event_item = (metrics->level_editor_marker_track[sel] == 1);
         if (n < cap) { out_labels[n] = "TYPE"; snprintf(out_values[n], 32, "%s", editor_wave_type_name(kind)); n++; }
@@ -3321,6 +3422,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     const vg_rect watcher_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 106.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
     const vg_rect asteroid_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 158.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
     const vg_rect mine_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 210.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
+    const vg_rect missile_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 262.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
     char level_name_disp[96];
     const int enemy_spatial =
         (metrics->level_editor_wave_mode == LEVELDEF_WAVES_CURATED &&
@@ -3390,6 +3492,8 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     if (r != VG_OK) return r;
     r = vg_draw_button(ctx, mine_btn, "MINEFIELD", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 7 ? 1 : 0);
     if (r != VG_OK) return r;
+    r = vg_draw_button(ctx, missile_btn, "MISSILES", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 8 ? 1 : 0);
+    if (r != VG_OK) return r;
     {
         vg_stroke_style icon = frame;
         icon.width_px = 1.2f * ui;
@@ -3441,6 +3545,19 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 &ms,
                 0
             );
+            if (r != VG_OK) return r;
+        }
+        {
+            vg_stroke_style mis = icon;
+            const float x0 = missile_btn.x + 10.0f * ui;
+            const float y0 = missile_btn.y + missile_btn.h * 0.50f;
+            const vg_vec2 tri[4] = {
+                {x0 + 16.0f * ui, y0},
+                {x0 + 4.0f * ui, y0 + 6.0f * ui},
+                {x0 + 7.0f * ui, y0},
+                {x0 + 4.0f * ui, y0 - 6.0f * ui}
+            };
+            r = vg_draw_polyline(ctx, tri, 4, &mis, 1);
             if (r != VG_OK) return r;
         }
     }
@@ -3641,6 +3758,15 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 }
                 hex[6] = hex[0];
                 r = vg_draw_polyline(ctx, hex, 7, &mk, 0);
+            } else if (kind == 8) {
+                const float sx = 1.5f * ui * glyph_scale;
+                const vg_vec2 tri[4] = {
+                    {vx + 12.0f * sx, vy},
+                    {vx - 8.0f * sx, vy + 6.0f * sx},
+                    {vx - 4.0f * sx, vy},
+                    {vx - 8.0f * sx, vy - 6.0f * sx}
+                };
+                r = vg_draw_polyline(ctx, tri, 4, &mk, 1);
             } else {
                 r = draw_editor_diamond(ctx, (vg_vec2){vx, vy}, 19.5f * ui * glyph_scale, &mk);
             }
@@ -3776,7 +3902,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     );
     if (r != VG_OK) return r;
     if (metrics->level_editor_drag_active &&
-        (metrics->level_editor_drag_kind == 5 || metrics->level_editor_drag_kind == 1 || metrics->level_editor_drag_kind == 6 || metrics->level_editor_drag_kind == 7)) {
+        (metrics->level_editor_drag_kind == 5 || metrics->level_editor_drag_kind == 1 || metrics->level_editor_drag_kind == 6 || metrics->level_editor_drag_kind == 7 || metrics->level_editor_drag_kind == 8)) {
         vg_stroke_style gs = frame;
         gs.intensity = 1.2f;
         gs.color = level_editor_marker_color(&pal, metrics->level_editor_drag_kind);
@@ -3798,6 +3924,15 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             }
             hex[6] = hex[0];
             r = vg_draw_polyline(ctx, hex, 7, &gs, 0);
+        } else if (metrics->level_editor_drag_kind == 8) {
+            const float sx = 1.5f * ui;
+            const vg_vec2 tri[4] = {
+                {metrics->level_editor_drag_x + 12.0f * sx, metrics->level_editor_drag_y},
+                {metrics->level_editor_drag_x - 8.0f * sx, metrics->level_editor_drag_y + 6.0f * sx},
+                {metrics->level_editor_drag_x - 4.0f * sx, metrics->level_editor_drag_y},
+                {metrics->level_editor_drag_x - 8.0f * sx, metrics->level_editor_drag_y - 6.0f * sx}
+            };
+            r = vg_draw_polyline(ctx, tri, 4, &gs, 1);
         } else {
             r = draw_editor_diamond(ctx, (vg_vec2){metrics->level_editor_drag_x, metrics->level_editor_drag_y}, 7.0f * ui, &gs);
         }
@@ -6386,6 +6521,13 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
     }
     if (g->mine_count > 0) {
         r = draw_minefields(ctx, g, &pal, &land_halo, &land_main);
+        if (r != VG_OK) {
+            (void)vg_transform_pop(ctx);
+            return r;
+        }
+    }
+    if (g->missile_launcher_count > 0 || g->missile_count > 0) {
+        r = draw_missile_system(ctx, g, &pal, &land_halo, &land_main);
         if (r != VG_OK) {
             (void)vg_transform_pop(ctx);
             return r;

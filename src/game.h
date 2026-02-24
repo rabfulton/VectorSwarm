@@ -16,6 +16,8 @@
 #define MAX_ASTEROIDS 192
 #define ASTEROID_EMITTERS 64
 #define MAX_MINES 256
+#define MAX_MISSILE_LAUNCHERS 64
+#define MAX_MISSILES 256
 #define PLAYER_ALT_WEAPON_COUNT 4
 
 struct leveldef_db;
@@ -236,6 +238,40 @@ typedef struct mine {
     int hp;
 } mine;
 
+typedef enum missile_owner_type {
+    MISSILE_OWNER_ENEMY = 0,
+    MISSILE_OWNER_PLAYER = 1
+} missile_owner_type;
+
+typedef struct missile_launcher {
+    int active;
+    int fired;
+    float anchor_x;
+    float anchor_y;
+    int count;
+    float spacing;
+    float activation_range;
+    float missile_speed;
+    float missile_turn_rate_deg;
+    float missile_ttl_s;
+    float hit_radius;
+    float blast_radius;
+} missile_launcher;
+
+typedef struct homing_missile {
+    int active;
+    int owner; /* enum missile_owner_type */
+    body b;
+    float heading_rad;
+    float speed;
+    float turn_rate_rad_s;
+    float ttl_s;
+    float hit_radius;
+    float blast_radius;
+    float radius;
+    float trail_emit_accum;
+} homing_missile;
+
 typedef struct game_input {
     int left;
     int right;
@@ -308,6 +344,10 @@ typedef struct game_state {
     float asteroid_storm_emitter_cd[ASTEROID_EMITTERS];
     mine mines[MAX_MINES];
     int mine_count;
+    missile_launcher missile_launchers[MAX_MISSILE_LAUNCHERS];
+    int missile_launcher_count;
+    homing_missile missiles[MAX_MISSILES];
+    int missile_count;
     int exit_portal_active;
     float exit_portal_x;
     float exit_portal_y;

@@ -242,6 +242,9 @@ static float marker_pick_radius01(int kind) {
     if (kind == LEVEL_EDITOR_MARKER_MINEFIELD) {
         return 0.12f;
     }
+    if (kind == LEVEL_EDITOR_MARKER_MISSILE) {
+        return 0.12f;
+    }
     return 0.08f;
 }
 
@@ -347,6 +350,7 @@ static const char* marker_kind_name(int kind) {
     if (kind == LEVEL_EDITOR_MARKER_SEARCHLIGHT) return "searchlight";
     if (kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) return "asteroid_storm";
     if (kind == LEVEL_EDITOR_MARKER_MINEFIELD) return "minefield";
+    if (kind == LEVEL_EDITOR_MARKER_MISSILE) return "missile_launcher";
     return "marker";
 }
 
@@ -391,6 +395,7 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
     size_t used = 0;
     leveldef_level lvl;
     int searchlight_n = 0;
+    int missile_n = 0;
     int i = 0;
     int found_exit = 0;
     int wave_n = 0;
@@ -479,6 +484,33 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
         mf.anchor_y01 = m->y01;
         mf.count = (int)lroundf(fmaxf(m->a, 1.0f));
         lvl.minefields[lvl.minefield_count++] = mf;
+    }
+    lvl.missile_launcher_count = 0;
+    for (i = 0; i < s->marker_count && lvl.missile_launcher_count < LEVELDEF_MAX_MISSILE_LAUNCHERS; ++i) {
+        const level_editor_marker* m = &s->markers[i];
+        leveldef_missile_launcher ml;
+        if (m->kind != LEVEL_EDITOR_MARKER_MISSILE || m->track != LEVEL_EDITOR_TRACK_SPATIAL) {
+            continue;
+        }
+        if (missile_n < base->missile_launcher_count) {
+            ml = base->missile_launchers[missile_n];
+        } else if (base->missile_launcher_count > 0) {
+            ml = base->missile_launchers[base->missile_launcher_count - 1];
+        } else {
+            memset(&ml, 0, sizeof(ml));
+            ml.missile_speed = 430.0f;
+            ml.missile_turn_rate_deg = 90.0f;
+            ml.hit_radius = 20.0f;
+            ml.blast_radius = 80.0f;
+        }
+        ml.anchor_x01 = m->x01 * level_len;
+        ml.anchor_y01 = m->y01;
+        ml.count = (int)lroundf(fmaxf(m->a, 1.0f));
+        ml.spacing = fmaxf(m->b, 0.0f);
+        ml.activation_range = fmaxf(m->c, 10.0f);
+        ml.missile_ttl_s = fmaxf(m->d, 0.20f);
+        lvl.missile_launchers[lvl.missile_launcher_count++] = ml;
+        missile_n += 1;
     }
 
     for (i = 0; i < s->marker_count; ++i) {
@@ -625,6 +657,9 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
     if (!appendf(out, out_cap, &used, "# sweep_speed,sweep_phase_deg,sweep_motion,source_type,source_radius,clear_grace_s,\n")) return 0;
     if (!appendf(out, out_cap, &used, "# fire_interval_s,projectile_speed,projectile_ttl_s,projectile_radius,aim_jitter_deg\n")) return 0;
     if (!appendf(out, out_cap, &used, "# minefield CSV fields: anchor_x01,anchor_y01,count\n")) return 0;
+    if (!appendf(out, out_cap, &used, "# missile_launcher CSV fields:\n")) return 0;
+    if (!appendf(out, out_cap, &used, "# anchor_x01,anchor_y01,count,spacing,activation_range,missile_speed,\n")) return 0;
+    if (!appendf(out, out_cap, &used, "# missile_turn_rate_deg,missile_ttl_s,hit_radius,blast_radius\n")) return 0;
     if (!appendf(out, out_cap, &used, "[level %s]\n", style_header_name(s->level_style))) return 0;
     if (!appendf(out, out_cap, &used, "render_style=%s\n", render_style_name(lvl.render_style))) return 0;
     if (!appendf(out, out_cap, &used, "wave_mode=%s\n", wave_mode_name(lvl.wave_mode))) return 0;
@@ -731,6 +766,24 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
                 mf->anchor_y01,
                 mf->count)) return 0;
     }
+    for (i = 0; i < lvl.missile_launcher_count; ++i) {
+        const leveldef_missile_launcher* ml = &lvl.missile_launchers[i];
+        if (!appendf(
+                out,
+                out_cap,
+                &used,
+                "missile_launcher=%.3f,%.3f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
+                ml->anchor_x01,
+                ml->anchor_y01,
+                ml->count,
+                ml->spacing,
+                ml->activation_range,
+                ml->missile_speed,
+                ml->missile_turn_rate_deg,
+                ml->missile_ttl_s,
+                ml->hit_radius,
+                ml->blast_radius)) return 0;
+    }
 
     return 1;
 }
@@ -751,6 +804,9 @@ static int marker_property_count(const level_editor_state* s) {
     }
     if (kind == LEVEL_EDITOR_MARKER_MINEFIELD) {
         return 3;
+    }
+    if (kind == LEVEL_EDITOR_MARKER_MISSILE) {
+        return 6;
     }
     if (kind == LEVEL_EDITOR_MARKER_EXIT) {
         return 2;
@@ -1045,7 +1101,12 @@ void level_editor_compute_layout(float w, float h, level_editor_layout* out) {
         out->entities.w - 16.0f * ui,
         42.0f * ui
     };
-
+    out->missile_button = (vg_rect){
+        out->entities.x + 8.0f * ui,
+        out->entities.y + out->entities.h - 262.0f * ui,
+        out->entities.w - 16.0f * ui,
+        42.0f * ui
+    };
     const float len_screens = 1.0f;
     const float window_w = out->timeline_track.w / len_screens;
     out->timeline_window = (vg_rect){
@@ -1140,6 +1201,22 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
             0.0f,
             0.0f,
             0.0f
+        );
+    }
+    for (int i = 0; i < lvl->missile_launcher_count; ++i) {
+        const leveldef_missile_launcher* ml = &lvl->missile_launchers[i];
+        push_marker(
+            s,
+            LEVEL_EDITOR_MARKER_MISSILE,
+            LEVEL_EDITOR_TRACK_SPATIAL,
+            1,
+            0.0f,
+            ml->anchor_x01 / fmaxf(s->level_length_screens, 1.0f),
+            ml->anchor_y01,
+            (float)ml->count,
+            ml->spacing,
+            ml->activation_range,
+            ml->missile_ttl_s
         );
     }
 
@@ -1363,6 +1440,8 @@ static void add_marker_at_view(
         push_marker(s, LEVEL_EDITOR_MARKER_ASTEROID_STORM, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, x01, y01, 10.0f, 30.0f, 520.0f, 1.3f);
     } else if (kind == LEVEL_EDITOR_MARKER_MINEFIELD) {
         push_marker(s, LEVEL_EDITOR_MARKER_MINEFIELD, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, x01, y01, 12.0f, 0.0f, 0.0f, 0.0f);
+    } else if (kind == LEVEL_EDITOR_MARKER_MISSILE) {
+        push_marker(s, LEVEL_EDITOR_MARKER_MISSILE, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, x01, y01, 6.0f, 64.0f, 760.0f, 3.6f);
     }
     s->selected_marker = s->marker_count - 1;
     s->selected_property = 0;
@@ -1478,6 +1557,14 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
             s->entity_drag_y = mouse_y;
             return 1;
         }
+        if (point_in_rect(mouse_x, mouse_y, l.missile_button)) {
+            s->entity_tool_selected = LEVEL_EDITOR_MARKER_MISSILE;
+            s->entity_drag_active = 1;
+            s->entity_drag_kind = LEVEL_EDITOR_MARKER_MISSILE;
+            s->entity_drag_x = mouse_x;
+            s->entity_drag_y = mouse_y;
+            return 1;
+        }
         if (point_in_rect(mouse_x, mouse_y, l.timeline_window) || point_in_rect(mouse_x, mouse_y, l.timeline_track)) {
             s->timeline_drag = 1;
         }
@@ -1564,7 +1651,8 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
                 } else if (s->entity_tool_selected == LEVEL_EDITOR_MARKER_BOID ||
                            s->entity_tool_selected == LEVEL_EDITOR_MARKER_SEARCHLIGHT ||
                            s->entity_tool_selected == LEVEL_EDITOR_MARKER_ASTEROID_STORM ||
-                           s->entity_tool_selected == LEVEL_EDITOR_MARKER_MINEFIELD) {
+                           s->entity_tool_selected == LEVEL_EDITOR_MARKER_MINEFIELD ||
+                           s->entity_tool_selected == LEVEL_EDITOR_MARKER_MISSILE) {
                     add_marker_at_view(s, s->entity_tool_selected, mx01, my01);
                 } else {
                     s->selected_marker = -1;
@@ -1608,6 +1696,14 @@ int level_editor_handle_mouse_release(level_editor_state* s, float mouse_x, floa
         const float mx01 = (mouse_x - l.viewport.x) / fmaxf(l.viewport.w, 1.0f);
         const float my01 = (mouse_y - l.viewport.y) / fmaxf(l.viewport.h, 1.0f);
         add_marker_at_view(s, s->entity_drag_kind, mx01, my01);
+    } else if (point_in_rect(mouse_x, mouse_y, l.timeline_track)) {
+        const float tx01 = clampf((mouse_x - l.timeline_track.x) / fmaxf(l.timeline_track.w, 1.0f), 0.0f, 1.0f);
+        if (s->entity_drag_kind == LEVEL_EDITOR_MARKER_SEARCHLIGHT ||
+            s->entity_drag_kind == LEVEL_EDITOR_MARKER_MINEFIELD ||
+            s->entity_drag_kind == LEVEL_EDITOR_MARKER_MISSILE ||
+            s->entity_drag_kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
+            add_marker_at_view(s, s->entity_drag_kind, tx01, 0.10f);
+        }
     } else if (point_in_rect(mouse_x, mouse_y, l.timeline_enemy_track)) {
         const float tx01 = clampf((mouse_x - l.timeline_enemy_track.x) / fmaxf(l.timeline_enemy_track.w, 1.0f), 0.0f, 1.0f);
         add_marker_at_timeline(s, s->entity_drag_kind, tx01);
@@ -1758,6 +1854,19 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             case 0: move_marker_x(s, s->selected_marker, delta); break;
             case 1: m->y01 = clampf(m->y01 + delta, 0.0f, 1.0f); break;
             case 2: m->a = clampf(m->a + delta * 24.0f, 1.0f, 128.0f); break;
+            default: break;
+        }
+        s->dirty = 1;
+        return;
+    }
+    if (m->kind == LEVEL_EDITOR_MARKER_MISSILE) {
+        switch (s->selected_property) {
+            case 0: move_marker_x(s, s->selected_marker, delta); break;
+            case 1: m->y01 = clampf(m->y01 + delta, 0.0f, 1.0f); break;
+            case 2: m->a = clampf(m->a + delta * 24.0f, 1.0f, 128.0f); break;
+            case 3: m->b = clampf(m->b + delta * 220.0f, 0.0f, 400.0f); break;
+            case 4: m->c = clampf(m->c + delta * 900.0f, 20.0f, 2500.0f); break;
+            case 5: m->d = clampf(m->d + delta * 10.0f, 0.20f, 30.0f); break;
             default: break;
         }
         s->dirty = 1;

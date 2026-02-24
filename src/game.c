@@ -122,12 +122,17 @@ static void ensure_leveldef_loaded(void) {
 
 static float gameplay_ui_scale(const game_state* g);
 static int level_uses_cylinder(const game_state* g);
+static float cylinder_period(const game_state* g);
+static float wrap_delta(float a, float b, float period);
 static float length2(float x, float y);
 static void normalize2(float* x, float* y);
+static float wrap_angle_rad(float a);
 static void steer_to_velocity(body* b, float target_vx, float target_vy, float accel, float damping);
 static void integrate_body(body* b, float dt);
+static particle* alloc_particle(game_state* g);
 static void explode_mine(game_state* g, mine* m, float impact_vx, float impact_vy);
 static void emit_player_asteroid_explosion(game_state* g);
+static void trigger_emp_visual_at(game_state* g, float x, float y, float radius);
 static void game_push_audio_event(game_state* g, game_audio_event_type type, float x, float y);
 static enemy_bullet* spawn_enemy_bullet_at(
     game_state* g,
@@ -144,6 +149,8 @@ static int set_level_index(game_state* g, int index);
 static void configure_minefields_for_level(game_state* g);
 static void update_minefields(game_state* g, float dt);
 static void minefield_apply_emp(game_state* g, float radius);
+static void configure_missile_launchers_for_level(game_state* g);
+static void update_missile_system(game_state* g, float dt);
 
 static void game_queue_death_message(game_state* g) {
     if (!g || g->lives > 0) {
@@ -667,6 +674,340 @@ static void update_asteroid_storm(game_state* g, float dt) {
     }
 }
 
+static homing_missile* alloc_missile(game_state* g) {
+    if (!g) {
+        return NULL;
+    }
+    for (int i = 0; i < MAX_MISSILES; ++i) {
+        if (g->missiles[i].active) {
+            continue;
+        }
+        homing_missile* m = &g->missiles[i];
+        memset(m, 0, sizeof(*m));
+        m->active = 1;
+        g->missile_count += 1;
+        return m;
+    }
+    return NULL;
+}
+
+static void kill_missile(game_state* g, homing_missile* m) {
+    if (!g || !m || !m->active) {
+        return;
+    }
+    m->active = 0;
+    if (g->missile_count > 0) {
+        g->missile_count -= 1;
+    }
+}
+
+static void emit_missile_explosion(game_state* g, float x, float y, float vx, float vy) {
+    if (!g) {
+        return;
+    }
+    const float su = gameplay_ui_scale(g);
+    game_push_audio_event(g, GAME_AUDIO_EVENT_EXPLOSION, x, y);
+    trigger_emp_visual_at(g, x, y, fminf(g->world_w, g->world_h) * 0.08f);
+    for (int i = 0; i < 26; ++i) {
+        particle* p = alloc_particle(g);
+        if (!p) {
+            break;
+        }
+        const float a = frand01() * 6.2831853f;
+        const float spd = (90.0f + frand01() * 320.0f) * su;
+        p->type = (frand01() < 0.70f) ? PARTICLE_POINT : PARTICLE_GEOM;
+        p->b.x = x + frands1() * 4.0f * su;
+        p->b.y = y + frands1() * 4.0f * su;
+        p->b.vx = cosf(a) * spd + vx * 0.2f;
+        p->b.vy = sinf(a) * spd + vy * 0.2f;
+        p->age_s = 0.0f;
+        p->life_s = 0.32f + frand01() * 0.56f;
+        p->size = (2.0f + frand01() * 4.2f) * su;
+        p->spin = frand01() * 6.2831853f;
+        p->spin_rate = frands1() * 9.0f;
+        p->r = 1.0f;
+        p->g = 0.72f + frand01() * 0.26f;
+        p->bcol = 0.30f + frand01() * 0.34f;
+        p->a = 1.0f;
+    }
+}
+
+static void explode_missile(game_state* g, homing_missile* m, int direct_hit) {
+    if (!g || !m || !m->active) {
+        return;
+    }
+    const float su = gameplay_ui_scale(g);
+    const int uses_cylinder = level_uses_cylinder(g);
+    const float period = cylinder_period(g);
+    const float x = m->b.x;
+    const float y = m->b.y;
+    const float hit_r = fmaxf(m->hit_radius, 1.0f);
+    const float blast_r = fmaxf(m->blast_radius, hit_r);
+    const float hit2 = hit_r * hit_r;
+    const float blast2 = blast_r * blast_r;
+
+    if (m->owner == MISSILE_OWNER_ENEMY) {
+        float dx = uses_cylinder ? wrap_delta(g->player.b.x, x, period) : (g->player.b.x - x);
+        float dy = g->player.b.y - y;
+        const float d2 = dx * dx + dy * dy;
+        if (d2 <= blast2) {
+            const float d = sqrtf(fmaxf(d2, 1.0e-6f));
+            float nx = dx / d;
+            float ny = dy / d;
+            if (d <= 1.0e-3f) {
+                nx = (frand01() < 0.5f) ? -1.0f : 1.0f;
+                ny = frands1() * 0.25f;
+            }
+            const float blast_push = 1250.0f * su;
+            g->player.b.vx += nx * blast_push;
+            g->player.b.vy += ny * blast_push;
+            g->mine_push_ax = nx * (blast_push * 3.4f);
+            g->mine_push_ay = ny * (blast_push * 3.4f);
+            if (g->mine_push_time_s < 0.35f) {
+                g->mine_push_time_s = 0.35f;
+            }
+        }
+        if (direct_hit && d2 <= hit2 && !g->shield_active && g->lives > 0) {
+            g->lives -= 1;
+            if (g->lives < 0) {
+                g->lives = 0;
+            }
+            if (g->lives == 0) {
+                game_queue_death_message(g);
+            }
+        }
+    } else {
+        const float blast_accel = 2200.0f * su;
+        const float push_duration_s = 1.10f;
+        for (size_t i = 0; i < MAX_ENEMIES; ++i) {
+            enemy* e = &g->enemies[i];
+            if (!e->active) {
+                continue;
+            }
+            const float dx = uses_cylinder ? wrap_delta(e->b.x, x, period) : (e->b.x - x);
+            const float dy = e->b.y - y;
+            const float d2 = dx * dx + dy * dy;
+            if (d2 <= hit2) {
+                e->active = 0;
+                g->kills += 1;
+                g->score += 100;
+                continue;
+            }
+            if (d2 <= blast2) {
+                const float d = sqrtf(fmaxf(d2, 1.0e-6f));
+                const float nx = dx / d;
+                const float ny = dy / d;
+                const float t = 1.0f - clampf((d - hit_r) / fmaxf(blast_r - hit_r, 1.0f), 0.0f, 1.0f);
+                const float impulse = blast_accel * (0.72f + 0.90f * t);
+                e->b.vx += nx * (impulse * 0.48f);
+                e->b.vy += ny * (impulse * 0.48f);
+                e->emp_push_ax += nx * (impulse * 3.0f);
+                e->emp_push_ay += ny * (impulse * 3.0f);
+                if (e->emp_push_time_s < push_duration_s) {
+                    e->emp_push_time_s = push_duration_s;
+                }
+            }
+        }
+    }
+
+    emit_missile_explosion(g, x, y, m->b.vx, m->b.vy);
+    kill_missile(g, m);
+}
+
+static void configure_missile_launchers_for_level(game_state* g) {
+    if (!g) {
+        return;
+    }
+    memset(g->missile_launchers, 0, sizeof(g->missile_launchers));
+    memset(g->missiles, 0, sizeof(g->missiles));
+    g->missile_launcher_count = 0;
+    g->missile_count = 0;
+    if (level_uses_cylinder(g)) {
+        return;
+    }
+    const leveldef_level* lvl = current_leveldef(g);
+    if (!lvl || lvl->missile_launcher_count <= 0) {
+        return;
+    }
+    const float su = gameplay_ui_scale(g);
+    const int n = clampi(lvl->missile_launcher_count, 0, MAX_MISSILE_LAUNCHERS);
+    for (int i = 0; i < n; ++i) {
+        const leveldef_missile_launcher* d = &lvl->missile_launchers[i];
+        missile_launcher* ml = &g->missile_launchers[g->missile_launcher_count++];
+        memset(ml, 0, sizeof(*ml));
+        ml->active = 1;
+        ml->fired = 0;
+        ml->anchor_x = d->anchor_x01 * g->world_w;
+        ml->anchor_y = d->anchor_y01 * g->world_h;
+        ml->count = clampi(d->count, 1, 24);
+        ml->spacing = fmaxf(d->spacing, 0.0f) * su;
+        ml->activation_range = fmaxf(d->activation_range, 20.0f) * su;
+        ml->missile_speed = fmaxf(d->missile_speed, 10.0f);
+        ml->missile_turn_rate_deg = fmaxf(d->missile_turn_rate_deg, 1.0f);
+        ml->missile_ttl_s = fmaxf(d->missile_ttl_s, 0.1f);
+        ml->hit_radius = fmaxf(d->hit_radius, 1.0f);
+        ml->blast_radius = fmaxf(d->blast_radius, ml->hit_radius);
+    }
+}
+
+static void spawn_enemy_missile_row(game_state* g, missile_launcher* ml) {
+    if (!g || !ml || !ml->active || ml->fired) {
+        return;
+    }
+    const float su = gameplay_ui_scale(g);
+    const float half = ((float)ml->count - 1.0f) * 0.5f;
+    for (int k = 0; k < ml->count; ++k) {
+        homing_missile* m = alloc_missile(g);
+        if (!m) {
+            break;
+        }
+        const float slot = ((float)k - half);
+        m->owner = MISSILE_OWNER_ENEMY;
+        m->b.x = ml->anchor_x + slot * ml->spacing;
+        m->b.y = ml->anchor_y;
+        m->heading_rad = 1.57079632679f;
+        m->speed = ml->missile_speed * su;
+        m->turn_rate_rad_s = deg_to_rad(ml->missile_turn_rate_deg);
+        m->ttl_s = ml->missile_ttl_s;
+        m->hit_radius = ml->hit_radius * su;
+        m->blast_radius = ml->blast_radius * su;
+        m->radius = 10.0f * su;
+        m->trail_emit_accum = 0.0f;
+        m->b.vx = cosf(m->heading_rad) * m->speed;
+        m->b.vy = sinf(m->heading_rad) * m->speed;
+    }
+    ml->fired = 1;
+}
+
+static void update_missile_system(game_state* g, float dt) {
+    if (!g || dt <= 0.0f) {
+        return;
+    }
+    if (g->missile_launcher_count > 0 && g->lives > 0) {
+        for (int i = 0; i < g->missile_launcher_count && i < MAX_MISSILE_LAUNCHERS; ++i) {
+            missile_launcher* ml = &g->missile_launchers[i];
+            if (!ml->active || ml->fired) {
+                continue;
+            }
+            if (dist_sq(g->player.b.x, g->player.b.y, ml->anchor_x, ml->anchor_y) <= ml->activation_range * ml->activation_range) {
+                spawn_enemy_missile_row(g, ml);
+            }
+        }
+    }
+
+    for (int i = 0; i < MAX_MISSILES; ++i) {
+        homing_missile* m = &g->missiles[i];
+        if (!m->active) {
+            continue;
+        }
+
+        float tx = g->player.b.x;
+        float ty = g->player.b.y;
+        if (m->owner == MISSILE_OWNER_PLAYER) {
+            float best_d2 = 1.0e20f;
+            int found = 0;
+            for (size_t j = 0; j < MAX_ENEMIES; ++j) {
+                const enemy* e = &g->enemies[j];
+                if (!e->active) {
+                    continue;
+                }
+                const float d2 = dist_sq(m->b.x, m->b.y, e->b.x, e->b.y);
+                if (d2 < best_d2) {
+                    best_d2 = d2;
+                    tx = e->b.x;
+                    ty = e->b.y;
+                    found = 1;
+                }
+            }
+            if (!found) {
+                tx = m->b.x + g->player.facing_x * g->world_w;
+                ty = m->b.y;
+            }
+        }
+
+        {
+            float dx = tx - m->b.x;
+            float dy = ty - m->b.y;
+            const float desired = atan2f(dy, dx);
+            const float delta = wrap_angle_rad(desired - m->heading_rad);
+            const float max_step = m->turn_rate_rad_s * dt;
+            m->heading_rad += clampf(delta, -max_step, max_step);
+            m->heading_rad = wrap_angle_rad(m->heading_rad);
+        }
+
+        m->b.ax = 0.0f;
+        m->b.ay = 0.0f;
+        m->b.vx = cosf(m->heading_rad) * m->speed;
+        m->b.vy = sinf(m->heading_rad) * m->speed;
+        integrate_body(&m->b, dt);
+        m->ttl_s -= dt;
+
+        {
+            const float su = gameplay_ui_scale(g);
+            const float trail_rate = 65.0f;
+            m->trail_emit_accum += trail_rate * dt;
+            int emit_n = (int)m->trail_emit_accum;
+            if (emit_n > 5) {
+                emit_n = 5;
+            }
+            m->trail_emit_accum -= (float)emit_n;
+            for (int p = 0; p < emit_n; ++p) {
+                particle* pr = alloc_particle(g);
+                if (!pr) {
+                    break;
+                }
+                const float tx = -cosf(m->heading_rad);
+                const float ty = -sinf(m->heading_rad);
+                float jx = frands1() * 0.30f;
+                float jy = frands1() * 0.30f;
+                normalize2(&jx, &jy);
+                pr->type = PARTICLE_POINT;
+                pr->b.x = m->b.x + tx * (m->radius * 0.95f);
+                pr->b.y = m->b.y + ty * (m->radius * 0.95f);
+                pr->b.vx = tx * (180.0f + frand01() * 120.0f) * su + jx * 40.0f * su;
+                pr->b.vy = ty * (180.0f + frand01() * 120.0f) * su + jy * 40.0f * su;
+                pr->age_s = 0.0f;
+                pr->life_s = 0.10f + frand01() * 0.20f;
+                pr->size = (1.1f + frand01() * 2.0f) * su;
+                pr->spin = 0.0f;
+                pr->spin_rate = 0.0f;
+                pr->r = 1.0f;
+                pr->g = 0.70f + frand01() * 0.24f;
+                pr->bcol = 0.20f + frand01() * 0.20f;
+                pr->a = 1.0f;
+            }
+        }
+
+        if (m->owner == MISSILE_OWNER_ENEMY) {
+            if (dist_sq(m->b.x, m->b.y, g->player.b.x, g->player.b.y) <= m->hit_radius * m->hit_radius) {
+                explode_missile(g, m, 1);
+                continue;
+            }
+        } else {
+            int direct = 0;
+            for (size_t j = 0; j < MAX_ENEMIES; ++j) {
+                const enemy* e = &g->enemies[j];
+                if (!e->active) {
+                    continue;
+                }
+                if (dist_sq(m->b.x, m->b.y, e->b.x, e->b.y) <= m->hit_radius * m->hit_radius) {
+                    direct = 1;
+                    break;
+                }
+            }
+            if (direct) {
+                explode_missile(g, m, 1);
+                continue;
+            }
+        }
+
+        if (m->ttl_s <= 0.0f) {
+            explode_missile(g, m, 0);
+            continue;
+        }
+    }
+}
+
 static void configure_minefields_for_level(game_state* g) {
     if (!g) {
         return;
@@ -883,6 +1224,7 @@ static void apply_level_runtime_config(game_state* g) {
     memset(g->curated_spawned, 0, sizeof(g->curated_spawned));
     configure_searchlights_for_level(g);
     configure_minefields_for_level(g);
+    configure_missile_launchers_for_level(g);
     configure_asteroid_storm_for_level(g);
     configure_exit_portal_for_level(g);
 }
@@ -901,6 +1243,8 @@ static int set_level_index(game_state* g, int index) {
     memset(g->debris, 0, sizeof(g->debris));
     memset(g->asteroids, 0, sizeof(g->asteroids));
     memset(g->mines, 0, sizeof(g->mines));
+    memset(g->missiles, 0, sizeof(g->missiles));
+    memset(g->missile_launchers, 0, sizeof(g->missile_launchers));
     g->active_particles = 0;
     g->wave_index = 0;
     g->wave_id_alloc = 0;
@@ -925,6 +1269,8 @@ static int set_level_index(game_state* g, int index) {
     g->emp_blast_radius = 0.0f;
     g->asteroid_count = 0;
     g->mine_count = 0;
+    g->missile_count = 0;
+    g->missile_launcher_count = 0;
     g->asteroid_storm_active = 0;
     g->asteroid_storm_completed = 0;
     g->asteroid_storm_announced = 0;
@@ -958,6 +1304,16 @@ static void normalize2(float* x, float* y) {
         *x /= l;
         *y /= l;
     }
+}
+
+static float wrap_angle_rad(float a) {
+    while (a > 3.14159265359f) {
+        a -= 6.28318530718f;
+    }
+    while (a < -3.14159265359f) {
+        a += 6.28318530718f;
+    }
+    return a;
 }
 
 static void steer_to_velocity(body* b, float target_vx, float target_vy, float accel, float damping) {
@@ -1772,6 +2128,7 @@ void game_update(game_state* g, float dt, const game_input* in) {
     }
     enemy_update_system(g, &g_leveldef, dt, su, level_uses_cylinder(g), cylinder_period(g));
     update_minefields(g, dt);
+    update_missile_system(g, dt);
     game_update_particles(g, dt);
     game_update_camera(g, dt);
 }

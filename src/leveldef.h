@@ -11,6 +11,7 @@
 #define LEVELDEF_MAX_DISCOVERED_LEVELS 128
 #define LEVELDEF_MAX_EVENTS 64
 #define LEVELDEF_MAX_MINEFIELDS 32
+#define LEVELDEF_MAX_MISSILE_LAUNCHERS 32
 
 enum leveldef_wave_mode {
     LEVELDEF_WAVES_NORMAL = 0,
@@ -98,6 +99,19 @@ typedef struct leveldef_minefield {
     float anchor_y01;
     int count;
 } leveldef_minefield;
+
+typedef struct leveldef_missile_launcher {
+    float anchor_x01;
+    float anchor_y01;
+    int count;
+    float spacing;
+    float activation_range;
+    float missile_speed;
+    float missile_turn_rate_deg;
+    float missile_ttl_s;
+    float hit_radius;
+    float blast_radius;
+} leveldef_missile_launcher;
 
 typedef struct leveldef_combat_tuning {
     struct {
@@ -217,6 +231,8 @@ typedef struct leveldef_level {
     leveldef_searchlight searchlights[MAX_SEARCHLIGHTS];
     int minefield_count;
     leveldef_minefield minefields[LEVELDEF_MAX_MINEFIELDS];
+    int missile_launcher_count;
+    leveldef_missile_launcher missile_launchers[LEVELDEF_MAX_MISSILE_LAUNCHERS];
 } leveldef_level;
 
 typedef struct leveldef_db {
