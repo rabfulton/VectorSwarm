@@ -63,6 +63,18 @@ static vg_result draw_structure_prefab_tile(
     const vg_fill_style* fill
 );
 
+static vg_vec2 structure_map_point(
+    float lx,
+    float ly,
+    float bx,
+    float by,
+    float w,
+    float h,
+    int rotation_quadrants,
+    int flip_x,
+    int flip_y
+);
+
 static vg_stroke_style make_stroke(float width, float intensity, vg_color color, vg_blend_mode blend) {
     vg_stroke_style s;
     s.width_px = width;
@@ -1440,27 +1452,38 @@ static vg_result draw_level_structures(
         }
 
         if (st->layer > 0 && st->prefab_id == 5) {
-            const float y0 = by + bh * 0.40f;
-            const float y1 = by + bh * 0.60f;
             const float streak_half = fmaxf(unit_w * 0.14f, 2.0f);
             for (int lane = 0; lane < 2; ++lane) {
-                const float ly = (lane == 0) ? y0 : y1;
+                const float ly = (lane == 0) ? (bh * 0.40f) : (bh * 0.60f);
                 for (int p = 0; p < 6; ++p) {
                     const float h = (float)(((st->grid_x * 37 + st->grid_y * 19 + p * 13) & 255)) / 255.0f;
                     const float ph = repeatf(g->t * (0.55f + 0.35f * h) + (float)p * 0.31f + h, 1.0f);
-                    const float x = bx + ph * bw;
+                    const float x = ph * bw;
                     const float alpha = 0.44f * (0.65f + 0.35f * sinf(g->t * 3.2f + h * 7.1f));
                     const vg_fill_style spark = {
                         .intensity = 0.95f,
                         .color = (vg_color){pal->secondary.r, pal->secondary.g, pal->secondary.b, alpha},
                         .blend = VG_BLEND_ALPHA
                     };
-                    const vg_vec2 core[2] = {{x - streak_half, ly}, {x + streak_half, ly}};
+                    const vg_vec2 core[2] = {
+                        structure_map_point(
+                            x - streak_half, ly, bx, by, bw, bh,
+                            st->rotation_quadrants, st->flip_x, st->flip_y
+                        ),
+                        structure_map_point(
+                            x + streak_half, ly, bx, by, bw, bh,
+                            st->rotation_quadrants, st->flip_x, st->flip_y
+                        )
+                    };
+                    const vg_vec2 center = structure_map_point(
+                        x, ly, bx, by, bw, bh,
+                        st->rotation_quadrants, st->flip_x, st->flip_y
+                    );
                     vr = vg_draw_polyline(ctx, core, 2, mn, 0);
                     if (vr != VG_OK) {
                         return vr;
                     }
-                    vr = vg_fill_circle(ctx, (vg_vec2){x, ly}, fmaxf(unit_h * 0.07f, 1.2f), &spark, 10);
+                    vr = vg_fill_circle(ctx, center, fmaxf(unit_h * 0.07f, 1.2f), &spark, 10);
                     if (vr != VG_OK) {
                         return vr;
                     }
@@ -1469,10 +1492,10 @@ static vg_result draw_level_structures(
         } else if (st->layer > 0 && st->prefab_id >= 7) {
             const int streams = 4;
             const int puffs_per_stream = 8;
-            const float vent_y = by + bh;
+            const float vent_y = bh;
             for (int stream = 0; stream < streams; ++stream) {
                 const float stream_t = (streams > 1) ? ((float)stream / (float)(streams - 1)) : 0.5f;
-                const float vent_x = bx + bw * (0.24f + 0.52f * stream_t);
+                const float vent_x = bw * (0.24f + 0.52f * stream_t);
                 for (int puff = 0; puff < puffs_per_stream; ++puff) {
                     const int seed = st->grid_x * 73 + st->grid_y * 41 + stream * 101 + puff * 31;
                     const float h = (float)(seed & 255) / 255.0f;
@@ -1493,13 +1516,14 @@ static vg_result draw_level_structures(
                         },
                         .blend = VG_BLEND_ALPHA
                     };
-                    vr = vg_fill_circle(
-                        ctx,
-                        (vg_vec2){vent_x + swirl + spread, vent_y + rise},
-                        r,
-                        &smoke,
-                        12
-                    );
+                    vr = vg_fill_circle(ctx,
+                        structure_map_point(
+                            vent_x + swirl + spread,
+                            vent_y + rise,
+                            bx, by, bw, bh,
+                            st->rotation_quadrants, st->flip_x, st->flip_y
+                        ),
+                        r, &smoke, 12);
                     if (vr != VG_OK) {
                         return vr;
                     }
@@ -3466,6 +3490,79 @@ static void editor_structure_prefab_dims(int prefab_id, int* out_w, int* out_h) 
     if (out_h) *out_h = h;
 }
 
+static vg_vec2 structure_map_point(
+    float lx,
+    float ly,
+    float bx,
+    float by,
+    float w,
+    float h,
+    int rotation_quadrants,
+    int flip_x,
+    int flip_y
+) {
+    const float cx = w * 0.5f;
+    const float cy = h * 0.5f;
+    const int q = ((rotation_quadrants % 4) + 4) % 4;
+    if (flip_x) {
+        lx = w - lx;
+    }
+    if (flip_y) {
+        ly = h - ly;
+    }
+    {
+        const float dx = lx - cx;
+        const float dy = ly - cy;
+        if (q == 1) {
+            lx = cx - dy;
+            ly = cy + dx;
+        } else if (q == 2) {
+            lx = cx - dx;
+            ly = cy - dy;
+        } else if (q == 3) {
+            lx = cx + dy;
+            ly = cy - dx;
+        }
+    }
+    return (vg_vec2){bx + lx, by + ly};
+}
+
+static vg_result structure_draw_rect_transformed(
+    vg_context* ctx,
+    float lx,
+    float ly,
+    float rw,
+    float rh,
+    float bx,
+    float by,
+    float w,
+    float h,
+    int rotation_quadrants,
+    int flip_x,
+    int flip_y,
+    const vg_stroke_style* st,
+    const vg_fill_style* fill
+) {
+    vg_vec2 q[4];
+    vg_vec2 loop[5];
+    q[0] = structure_map_point(lx, ly, bx, by, w, h, rotation_quadrants, flip_x, flip_y);
+    q[1] = structure_map_point(lx + rw, ly, bx, by, w, h, rotation_quadrants, flip_x, flip_y);
+    q[2] = structure_map_point(lx + rw, ly + rh, bx, by, w, h, rotation_quadrants, flip_x, flip_y);
+    q[3] = structure_map_point(lx, ly + rh, bx, by, w, h, rotation_quadrants, flip_x, flip_y);
+    if (fill) {
+        vg_result r = vg_fill_convex(ctx, q, 4, fill);
+        if (r != VG_OK) {
+            return r;
+        }
+    }
+    loop[0] = q[0];
+    loop[1] = q[1];
+    loop[2] = q[2];
+    loop[3] = q[3];
+    loop[4] = q[0];
+    return vg_draw_polyline(ctx, loop, 5, st, 0);
+}
+
 static vg_result draw_structure_prefab_tile(
     vg_context* ctx,
     int prefab_id,
@@ -3485,36 +3582,51 @@ static vg_result draw_structure_prefab_tile(
     editor_structure_prefab_dims(prefab_id, &w_units, &h_units);
     const float w = unit_w * (float)w_units;
     const float h = unit_h * (float)h_units;
-    const vg_rect outer = {bx, by, w, h};
     vg_result r = VG_OK;
     if (prefab_id != 3) {
-        if (fill && layer == 0) {
-            r = vg_fill_rect(ctx, outer, fill);
-            if (r != VG_OK) return r;
-        }
-        r = vg_draw_rect(ctx, outer, st);
+        r = structure_draw_rect_transformed(
+            ctx, 0.0f, 0.0f, w, h, bx, by, w, h,
+            rotation_quadrants, flip_x ? 1 : 0, flip_y ? 1 : 0,
+            st, (fill && layer == 0) ? fill : NULL
+        );
         if (r != VG_OK) return r;
     }
 
     if (prefab_id == 1) {
         const float mx = fminf(unit_w * 0.20f, w * 0.26f);
         const float my = fminf(unit_h * 0.20f, h * 0.26f);
-        const vg_rect inner = {bx + mx, by + my, fmaxf(w - 2.0f * mx, 1.0f), fmaxf(h - 2.0f * my, 1.0f)};
-        return vg_draw_rect(ctx, inner, st);
+        return structure_draw_rect_transformed(
+            ctx,
+            mx,
+            my,
+            fmaxf(w - 2.0f * mx, 1.0f),
+            fmaxf(h - 2.0f * my, 1.0f),
+            bx,
+            by,
+            w,
+            h,
+            rotation_quadrants,
+            flip_x ? 1 : 0,
+            flip_y ? 1 : 0,
+            st,
+            NULL
+        );
     }
     if (prefab_id == 2) {
-        const vg_vec2 d0[2] = {{bx, by}, {bx + w, by + h}};
-        const vg_vec2 d1[2] = {{bx + w, by}, {bx, by + h}};
+        const vg_vec2 d0[2] = {
+            structure_map_point(0.0f, 0.0f, bx, by, w, h, rotation_quadrants, flip_x, flip_y),
+            structure_map_point(w, h, bx, by, w, h, rotation_quadrants, flip_x, flip_y)
+        };
+        const vg_vec2 d1[2] = {
+            structure_map_point(w, 0.0f, bx, by, w, h, rotation_quadrants, flip_x, flip_y),
+            structure_map_point(0.0f, h, bx, by, w, h, rotation_quadrants, flip_x, flip_y)
+        };
         r = vg_draw_polyline(ctx, d0, 2, st, 0);
         if (r != VG_OK) return r;
         return vg_draw_polyline(ctx, d1, 2, st, 0);
     }
     if (prefab_id == 3) {
-        const float cx = w * 0.5f;
-        const float cy = h * 0.5f;
-        const int q = ((rotation_quadrants % 4) + 4) % 4;
-        const int fx = flip_x ? 1 : 0;
-        const int fy = flip_y ? 1 : 0;
+        vg_vec2 tri_fill[3];
         vg_vec2 tri[4];
         const vg_vec2 base[3] = {
             {0.0f, h},
@@ -3522,32 +3634,20 @@ static vg_result draw_structure_prefab_tile(
             {w, h}
         };
         for (int i = 0; i < 3; ++i) {
-            float x = base[i].x;
-            float y = base[i].y;
-            if (fx) {
-                x = w - x;
-            }
-            if (fy) {
-                y = h - y;
-            }
-            {
-                const float dx = x - cx;
-                const float dy = y - cy;
-                if (q == 1) {
-                    x = cx - dy;
-                    y = cy + dx;
-                } else if (q == 2) {
-                    x = cx - dx;
-                    y = cy - dy;
-                } else if (q == 3) {
-                    x = cx + dy;
-                    y = cy - dx;
-                }
-            }
-            tri[i].x = bx + x;
-            tri[i].y = by + y;
+            tri_fill[i] = structure_map_point(
+                base[i].x, base[i].y,
+                bx, by, w, h,
+                rotation_quadrants, flip_x, flip_y
+            );
+            tri[i] = tri_fill[i];
         }
         tri[3] = tri[0];
+        if (fill && layer == 0) {
+            r = vg_fill_convex(ctx, tri_fill, 3, fill);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
         return vg_draw_polyline(ctx, tri, 4, st, 0);
     }
     if (prefab_id == 4) {
@@ -3555,13 +3655,22 @@ static vg_result draw_structure_prefab_tile(
         const float inset_h = fminf(unit_h * 0.54f, unit_h - 1.0f);
         for (int row = 0; row < 3; ++row) {
             const float cy = by + ((float)row + 0.5f) * unit_h;
-            const vg_rect inner = {
-                bx + inset_x,
-                cy - inset_h * 0.5f,
+            r = structure_draw_rect_transformed(
+                ctx,
+                inset_x,
+                (cy - by) - inset_h * 0.5f,
                 fmaxf(w - 2.0f * inset_x, 1.0f),
-                inset_h
-            };
-            r = vg_draw_rect(ctx, inner, st);
+                inset_h,
+                bx,
+                by,
+                w,
+                h,
+                rotation_quadrants,
+                flip_x ? 1 : 0,
+                flip_y ? 1 : 0,
+                st,
+                NULL
+            );
             if (r != VG_OK) return r;
         }
         return VG_OK;
@@ -3572,33 +3681,75 @@ static vg_result draw_structure_prefab_tile(
         const float c_w = fmaxf(unit_w * 0.10f, 1.5f);
         const float c_h = fmaxf(h * 0.86f, 1.0f);
         const float c_y = by + (h - c_h) * 0.5f;
-        const vg_vec2 p0[2] = {{bx, y0}, {bx + w, y0}};
-        const vg_vec2 p1[2] = {{bx, y1}, {bx + w, y1}};
-        const vg_rect c0 = {bx + unit_w * 0.06f, c_y, c_w, c_h};
-        const vg_rect c1 = {bx + w - unit_w * 0.06f - c_w, c_y, c_w, c_h};
+        const vg_vec2 p0[2] = {
+            structure_map_point(0.0f, y0 - by, bx, by, w, h, rotation_quadrants, flip_x, flip_y),
+            structure_map_point(w, y0 - by, bx, by, w, h, rotation_quadrants, flip_x, flip_y)
+        };
+        const vg_vec2 p1[2] = {
+            structure_map_point(0.0f, y1 - by, bx, by, w, h, rotation_quadrants, flip_x, flip_y),
+            structure_map_point(w, y1 - by, bx, by, w, h, rotation_quadrants, flip_x, flip_y)
+        };
         r = vg_draw_polyline(ctx, p0, 2, st, 0);
         if (r != VG_OK) return r;
         r = vg_draw_polyline(ctx, p1, 2, st, 0);
         if (r != VG_OK) return r;
-        r = vg_draw_rect(ctx, c0, st);
+        r = structure_draw_rect_transformed(
+            ctx,
+            unit_w * 0.06f,
+            c_y - by,
+            c_w,
+            c_h,
+            bx,
+            by,
+            w,
+            h,
+            rotation_quadrants,
+            flip_x ? 1 : 0,
+            flip_y ? 1 : 0,
+            st,
+            NULL
+        );
         if (r != VG_OK) return r;
-        return vg_draw_rect(ctx, c1, st);
+        return structure_draw_rect_transformed(
+            ctx,
+            w - unit_w * 0.06f - c_w,
+            c_y - by,
+            c_w,
+            c_h,
+            bx,
+            by,
+            w,
+            h,
+            rotation_quadrants,
+            flip_x ? 1 : 0,
+            flip_y ? 1 : 0,
+            st,
+            NULL
+        );
     }
     if (prefab_id == 6) {
         const float rr = fminf(w, h) * 0.34f;
-        const float cx = bx + w * 0.5f;
-        const float cy = by + h * 0.5f;
+        const float cx = w * 0.5f;
+        const float cy = h * 0.5f;
         vg_vec2 ring[17];
         for (int k = 0; k < 16; ++k) {
             const float a = ((float)k / 16.0f) * 6.2831853f;
-            ring[k] = (vg_vec2){cx + cosf(a) * rr, cy + sinf(a) * rr};
+            ring[k] = structure_map_point(
+                cx + cosf(a) * rr,
+                cy + sinf(a) * rr,
+                bx, by, w, h,
+                rotation_quadrants, flip_x, flip_y
+            );
         }
         ring[16] = ring[0];
         r = vg_draw_polyline(ctx, ring, 17, st, 0);
         if (r != VG_OK) return r;
         for (int s = 0; s < 4; ++s) {
             const float a = ((float)s / 4.0f) * 6.2831853f;
-            const vg_vec2 spoke[2] = {{cx, cy}, {cx + cosf(a) * rr, cy + sinf(a) * rr}};
+            const vg_vec2 spoke[2] = {
+                structure_map_point(cx, cy, bx, by, w, h, rotation_quadrants, flip_x, flip_y),
+                structure_map_point(cx + cosf(a) * rr, cy + sinf(a) * rr, bx, by, w, h, rotation_quadrants, flip_x, flip_y)
+            };
             r = vg_draw_polyline(ctx, spoke, 2, st, 0);
             if (r != VG_OK) return r;
         }
@@ -3607,8 +3758,22 @@ static vg_result draw_structure_prefab_tile(
     if (prefab_id >= 7) {
         const float mx = fminf(unit_w * 0.18f, w * 0.24f);
         const float my = fminf(unit_h * 0.22f, h * 0.30f);
-        const vg_rect slit = {bx + mx, by + my, fmaxf(w - 2.0f * mx, 1.0f), fmaxf(h - 2.0f * my, 1.0f)};
-        return vg_draw_rect(ctx, slit, st);
+        return structure_draw_rect_transformed(
+            ctx,
+            mx,
+            my,
+            fmaxf(w - 2.0f * mx, 1.0f),
+            fmaxf(h - 2.0f * my, 1.0f),
+            bx,
+            by,
+            w,
+            h,
+            rotation_quadrants,
+            flip_x ? 1 : 0,
+            flip_y ? 1 : 0,
+            st,
+            NULL
+        );
     }
     return VG_OK;
 }
