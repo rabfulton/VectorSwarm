@@ -30,7 +30,8 @@ enum level_style_id {
     LEVEL_STYLE_HIGH_PLAINS_DRIFTER = 4,
     LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2 = 5,
     LEVEL_STYLE_FOG_OF_WAR = 6,
-    LEVEL_STYLE_COUNT = 7
+    LEVEL_STYLE_BLANK = 7,
+    LEVEL_STYLE_COUNT = 8
 };
 
 enum level_render_style_id {
@@ -38,7 +39,8 @@ enum level_render_style_id {
     LEVEL_RENDER_CYLINDER = 1,
     LEVEL_RENDER_DRIFTER = 2,
     LEVEL_RENDER_DRIFTER_SHADED = 3,
-    LEVEL_RENDER_FOG = 4
+    LEVEL_RENDER_FOG = 4,
+    LEVEL_RENDER_BLANK = 5
 };
 
 typedef struct star {
@@ -314,6 +316,7 @@ typedef struct game_state {
     float camera_vy;
     int level_style; /* enum level_style_id */
     int level_index;
+    char current_level_name[64];
     int render_style; /* enum level_render_style_id */
     player_state player;
     star stars[MAX_STARS];
@@ -386,6 +389,7 @@ int game_pop_audio_events(game_state* g, game_audio_event* out, int out_cap);
 const struct leveldef_db* game_leveldef_get(void);
 const char* game_current_level_name(const game_state* g);
 int game_set_level_by_name(game_state* g, const char* name);
+int game_refresh_levels(game_state* g);
 void game_set_alt_weapon(game_state* g, int weapon_id);
 int game_get_alt_weapon(const game_state* g);
 int game_get_alt_weapon_ammo(const game_state* g, int weapon_id);

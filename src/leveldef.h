@@ -12,6 +12,10 @@
 #define LEVELDEF_MAX_EVENTS 64
 #define LEVELDEF_MAX_MINEFIELDS 32
 #define LEVELDEF_MAX_MISSILE_LAUNCHERS 32
+#define LEVELDEF_MAX_STRUCTURES 512
+#define LEVELDEF_STRUCTURE_GRID_W 64
+#define LEVELDEF_STRUCTURE_GRID_H 36
+#define LEVELDEF_STRUCTURE_GRID_SCALE 2
 
 enum leveldef_wave_mode {
     LEVELDEF_WAVES_NORMAL = 0,
@@ -112,6 +116,19 @@ typedef struct leveldef_missile_launcher {
     float hit_radius;
     float blast_radius;
 } leveldef_missile_launcher;
+
+typedef struct leveldef_structure_instance {
+    int prefab_id;
+    int layer; /* 0=base, 1=feature */
+    int grid_x;
+    int grid_y;
+    int rotation_quadrants;
+    int flip_x;
+    int flip_y;
+    int w_units;
+    int h_units;
+    int variant;
+} leveldef_structure_instance;
 
 typedef struct leveldef_combat_tuning {
     struct {
@@ -233,6 +250,8 @@ typedef struct leveldef_level {
     leveldef_minefield minefields[LEVELDEF_MAX_MINEFIELDS];
     int missile_launcher_count;
     leveldef_missile_launcher missile_launchers[LEVELDEF_MAX_MISSILE_LAUNCHERS];
+    int structure_count;
+    leveldef_structure_instance structures[LEVELDEF_MAX_STRUCTURES];
 } leveldef_level;
 
 typedef struct leveldef_db {

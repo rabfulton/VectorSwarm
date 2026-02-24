@@ -16,6 +16,7 @@ static int level_style_from_name(const char* name) {
     if (strcmp(name, "HIGH_PLAINS_DRIFTER") == 0) return LEVEL_STYLE_HIGH_PLAINS_DRIFTER;
     if (strcmp(name, "HIGH_PLAINS_DRIFTER_2") == 0) return LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2;
     if (strcmp(name, "FOG_OF_WAR") == 0) return LEVEL_STYLE_FOG_OF_WAR;
+    if (strcmp(name, "BLANK") == 0) return LEVEL_STYLE_BLANK;
     return -1;
 }
 
@@ -92,6 +93,7 @@ static int render_style_from_name(const char* name) {
     if (strcmp(name, "drifter") == 0) return LEVEL_RENDER_DRIFTER;
     if (strcmp(name, "drifter_shaded") == 0) return LEVEL_RENDER_DRIFTER_SHADED;
     if (strcmp(name, "fog") == 0) return LEVEL_RENDER_FOG;
+    if (strcmp(name, "blank") == 0) return LEVEL_RENDER_BLANK;
     return -1;
 }
 
@@ -191,6 +193,27 @@ void leveldef_init_defaults(leveldef_db* db) {
         db->levels[i].render_style = -1;
         db->levels[i].spawn_mode = -1;
         db->levels[i].default_boid_profile = -1;
+    }
+    {
+        leveldef_level* b = &db->levels[LEVEL_STYLE_BLANK];
+        b->render_style = LEVEL_RENDER_BLANK;
+        b->wave_mode = LEVELDEF_WAVES_NORMAL;
+        b->spawn_mode = LEVELDEF_SPAWN_SEQUENCED_CLEAR;
+        b->spawn_interval_s = 2.0f;
+        b->default_boid_profile = 0;
+        b->wave_cooldown_initial_s = 0.65f;
+        b->wave_cooldown_between_s = 2.0f;
+        b->bidirectional_spawns = 0;
+        b->cylinder_double_swarm_chance = 0.0f;
+        b->exit_enabled = 0;
+        b->exit_x01 = 2.0f;
+        b->exit_y01 = 0.5f;
+        b->asteroid_storm_enabled = 0;
+        b->asteroid_storm_start_x01 = 0.0f;
+        b->asteroid_storm_angle_deg = 30.0f;
+        b->asteroid_storm_speed = 520.0f;
+        b->asteroid_storm_duration_s = 10.0f;
+        b->asteroid_storm_density = 1.0f;
     }
 }
 
@@ -336,6 +359,47 @@ static int parse_missile_launcher(leveldef_level* lvl, const char* value, FILE* 
         return 0;
     }
     lvl->missile_launchers[lvl->missile_launcher_count++] = ml;
+    return 1;
+}
+
+static int parse_structure_instance(leveldef_level* lvl, const char* value, FILE* log_out) {
+    char buf[320];
+    char* tok;
+    char* save = NULL;
+    const int expected = 10;
+    char* fields[10];
+    int i = 0;
+    leveldef_structure_instance st;
+
+    if (!lvl || !value || lvl->structure_count >= LEVELDEF_MAX_STRUCTURES) {
+        return 0;
+    }
+    memset(&st, 0, sizeof(st));
+    strncpy(buf, value, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    tok = strtok_r(buf, ",", &save);
+    while (tok && i < expected) {
+        fields[i++] = trim(tok);
+        tok = strtok_r(NULL, ",", &save);
+    }
+    if (i != expected) {
+        if (log_out) {
+            fprintf(log_out, "leveldef: structure expects %d fields, got %d\n", expected, i);
+        }
+        return 0;
+    }
+    st.prefab_id = (int)strtol(fields[0], NULL, 10);
+    st.layer = (int)strtol(fields[1], NULL, 10);
+    st.grid_x = (int)strtol(fields[2], NULL, 10);
+    st.grid_y = (int)strtol(fields[3], NULL, 10);
+    st.rotation_quadrants = (int)strtol(fields[4], NULL, 10);
+    st.flip_x = (int)strtol(fields[5], NULL, 10);
+    st.flip_y = (int)strtol(fields[6], NULL, 10);
+    st.w_units = (int)strtol(fields[7], NULL, 10);
+    st.h_units = (int)strtol(fields[8], NULL, 10);
+    st.variant = (int)strtol(fields[9], NULL, 10);
+    lvl->structures[lvl->structure_count++] = st;
     return 1;
 }
 
@@ -487,6 +551,7 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_level->searchlight_count = 0;
                         cur_level->minefield_count = 0;
                         cur_level->missile_launcher_count = 0;
+                        cur_level->structure_count = 0;
                         cur_level->curated_count = 0;
                         cur_level->boid_cycle_count = 0;
                         cur_level->wave_cycle_count = 0;
@@ -659,6 +724,8 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         (void)parse_minefield(cur_level, v, log_out);
                     } else if (strcmp(k, "missile_launcher") == 0) {
                         (void)parse_missile_launcher(cur_level, v, log_out);
+                    } else if (strcmp(k, "structure") == 0) {
+                        (void)parse_structure_instance(cur_level, v, log_out);
                     } else if (strcmp(k, "curated_enemy") == 0) {
                         (void)parse_curated_enemy(cur_level, v, log_out);
                     }
@@ -925,25 +992,14 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
             ok = 0;
         }
         if (l->wave_mode == LEVELDEF_WAVES_BOID_ONLY) {
-            if (l->boid_cycle_count <= 0) {
-                if (log_out) {
-                    fprintf(log_out, "leveldef: level %d boid_only missing boid_cycle\n", i);
-                }
-                ok = 0;
+            if (l->boid_cycle_count > 0) {
+                /* boid cycle present and valid */
             }
         } else if (l->wave_mode == LEVELDEF_WAVES_CURATED) {
-            if (l->curated_count <= 0) {
-                if (log_out) {
-                    fprintf(log_out, "leveldef: level %d curated mode missing curated_enemy entries\n", i);
-                }
-                ok = 0;
+            if (l->curated_count > 0) {
+                /* curated entries present and valid */
             }
-        } else if (l->wave_cycle_count <= 0) {
-            if (log_out) {
-                fprintf(log_out, "leveldef: level %d normal mode missing wave_cycle\n", i);
-            }
-            ok = 0;
-        } else {
+        } else if (l->wave_cycle_count > 0) {
             int j;
             for (j = 0; j < l->wave_cycle_count; ++j) {
                 if (l->wave_cycle[j] < 0) {
@@ -1008,6 +1064,23 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
                 break;
             }
         }
+        if (l->structure_count < 0 || l->structure_count > LEVELDEF_MAX_STRUCTURES) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid structure_count\n", i);
+            }
+            ok = 0;
+        }
+        for (int m = 0; m < l->structure_count; ++m) {
+            const leveldef_structure_instance* st = &l->structures[m];
+            if (st->prefab_id < 0 || st->layer < 0 || st->layer > 1 ||
+                st->w_units <= 0 || st->h_units <= 0) {
+                if (log_out) {
+                    fprintf(log_out, "leveldef: level %d invalid structure entry\n", i);
+                }
+                ok = 0;
+                break;
+            }
+        }
     }
     return ok;
 }
@@ -1015,14 +1088,7 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
 int leveldef_load_project_layout(leveldef_db* db, const char* dir_path, FILE* log_out) {
     static const char* files[] = {
         "combat.cfg",
-        "boids.cfg",
-        "level_defender.cfg",
-        "level_enemy_radar.cfg",
-        "level_event_horizon.cfg",
-        "level_event_horizon_legacy.cfg",
-        "level_high_plains_drifter.cfg",
-        "level_high_plains_drifter_2.cfg",
-        "level_fog_of_war.cfg"
+        "boids.cfg"
     };
     char path[512];
     int i;
@@ -1046,6 +1112,34 @@ int leveldef_load_project_layout(leveldef_db* db, const char* dir_path, FILE* lo
         }
         if (!leveldef_apply_file(db, path, log_out)) {
             ok = 0;
+        }
+    }
+    if (ok) {
+        DIR* d = opendir(dir_path);
+        if (!d) {
+            ok = 0;
+            if (log_out) {
+                fprintf(log_out, "leveldef: could not open level directory %s\n", dir_path);
+            }
+        } else {
+            struct dirent* de = NULL;
+            while ((de = readdir(d)) != NULL) {
+                const char* fn = de->d_name;
+                if (!has_prefix(fn, "level_") || !has_suffix(fn, ".cfg")) {
+                    continue;
+                }
+                if (snprintf(path, sizeof(path), "%s/%s", dir_path, fn) >= (int)sizeof(path)) {
+                    ok = 0;
+                    if (log_out) {
+                        fprintf(log_out, "leveldef: path too long for %s/%s\n", dir_path, fn);
+                    }
+                    continue;
+                }
+                if (!leveldef_apply_file(db, path, log_out)) {
+                    ok = 0;
+                }
+            }
+            closedir(d);
         }
     }
     if (ok) {

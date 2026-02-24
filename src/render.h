@@ -150,6 +150,7 @@ typedef struct render_metrics {
     int level_editor_selected_marker;
     int level_editor_selected_property;
     int level_editor_tool_selected;
+    int level_editor_structure_tool_selected;
     int level_editor_drag_active;
     int level_editor_drag_kind;
     float level_editor_drag_x;

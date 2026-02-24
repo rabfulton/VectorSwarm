@@ -48,6 +48,17 @@ static int wrapi(int i, int n);
 static float lerpf(float a, float b, float t);
 static float cylinder_period(const game_state* g);
 static vg_vec2 project_cylinder_point(const game_state* g, float x, float y, float* depth01);
+static vg_result draw_structure_prefab_tile(
+    vg_context* ctx,
+    int prefab_id,
+    int layer,
+    float bx,
+    float by,
+    float unit_w,
+    float unit_h,
+    const vg_stroke_style* st,
+    const vg_fill_style* fill
+);
 
 static vg_stroke_style make_stroke(float width, float intensity, vg_color color, vg_blend_mode blend) {
     vg_stroke_style s;
@@ -72,6 +83,12 @@ static vg_fill_style make_fill(float intensity, vg_color color, vg_blend_mode bl
 }
 
 static float clampf(float v, float lo, float hi) {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+static int clampi(int v, int lo, int hi) {
     if (v < lo) return lo;
     if (v > hi) return hi;
     return v;
@@ -1306,6 +1323,81 @@ static vg_result draw_minefields(
             return vr;
         }
         vr = vg_draw_polyline(ctx, hex, 7, &main, 0);
+        if (vr != VG_OK) {
+            return vr;
+        }
+    }
+    return VG_OK;
+}
+
+static vg_result draw_level_structures(
+    vg_context* ctx,
+    const game_state* g,
+    const palette_theme* pal,
+    const vg_stroke_style* land_halo,
+    const vg_stroke_style* land_main
+) {
+    if (!ctx || !g || !pal || !land_halo || !land_main || g->render_style == LEVEL_RENDER_CYLINDER) {
+        return VG_OK;
+    }
+    const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
+    const leveldef_level* lvl = leveldef_get_level(db, g->level_style);
+    if (!lvl || lvl->structure_count <= 0) {
+        return VG_OK;
+    }
+
+    vg_stroke_style base_halo = *land_halo;
+    vg_stroke_style base_main = *land_main;
+    base_halo.width_px *= 0.90f;
+    base_main.width_px *= 0.88f;
+    base_halo.color = (vg_color){pal->primary.r, pal->primary.g, pal->primary.b, 0.48f};
+    base_main.color = (vg_color){pal->primary_dim.r, pal->primary_dim.g, pal->primary_dim.b, 0.84f};
+
+    vg_stroke_style feature_halo = *land_halo;
+    vg_stroke_style feature_main = *land_main;
+    feature_halo.width_px *= 0.94f;
+    feature_main.width_px *= 0.92f;
+    feature_halo.color = (vg_color){pal->secondary.r, pal->secondary.g, pal->secondary.b, 0.58f};
+    feature_main.color = (vg_color){pal->secondary.r, pal->secondary.g, pal->secondary.b, 0.94f};
+
+    vg_fill_style base_fill = make_fill(0.65f, pal->primary_dim, VG_BLEND_ALPHA);
+    base_fill.color.a = fminf(base_fill.color.a, 0.22f);
+
+    const float unit_w = g->world_w * (float)LEVELDEF_STRUCTURE_GRID_SCALE / (float)(LEVELDEF_STRUCTURE_GRID_W - 1);
+    const float unit_h = g->world_h * (float)LEVELDEF_STRUCTURE_GRID_SCALE / (float)(LEVELDEF_STRUCTURE_GRID_H - 1);
+
+    for (int i = 0; i < lvl->structure_count && i < LEVELDEF_MAX_STRUCTURES; ++i) {
+        const leveldef_structure_instance* st = &lvl->structures[i];
+        const vg_stroke_style* hl = (st->layer > 0) ? &feature_halo : &base_halo;
+        const vg_stroke_style* mn = (st->layer > 0) ? &feature_main : &base_main;
+        const float bx = (float)st->grid_x * unit_w;
+        const float by = (float)st->grid_y * unit_h;
+
+        vg_result vr = draw_structure_prefab_tile(
+            ctx,
+            st->prefab_id,
+            st->layer,
+            bx,
+            by,
+            unit_w,
+            unit_h,
+            hl,
+            &base_fill
+        );
+        if (vr != VG_OK) {
+            return vr;
+        }
+        vr = draw_structure_prefab_tile(
+            ctx,
+            st->prefab_id,
+            st->layer,
+            bx,
+            by,
+            unit_w,
+            unit_h,
+            mn,
+            NULL
+        );
         if (vr != VG_OK) {
             return vr;
         }
@@ -3187,6 +3279,7 @@ static const char* level_editor_marker_name(int kind) {
         case 6: return "ASTEROID STORM";
         case 7: return "MINEFIELD";
         case 8: return "MISSILE LAUNCHER";
+        case 9: return "STRUCTURE";
         default: return "MARKER";
     }
 }
@@ -3206,6 +3299,9 @@ static vg_color level_editor_marker_color(const palette_theme* pal, int kind) {
     }
     if (kind == 8) {
         return (vg_color){1.0f, 0.34f, 0.18f, 1.0f};
+    }
+    if (kind == 9) {
+        return (vg_color){0.48f, 0.90f, 1.0f, 1.0f};
     }
     if (kind == 2 || kind == 3 || kind == 4 || kind == 5) {
         return (vg_color){1.0f, 0.26f, 0.26f, 1.0f};
@@ -3241,6 +3337,143 @@ static vg_result draw_editor_ship(vg_context* ctx, vg_vec2 c, float scale, const
     }
     const vg_vec2 spine[2] = {{x - 13.0f * sx, y}, {x + 8.0f * sx, y}};
     return vg_draw_polyline(ctx, spine, 2, s, 0);
+}
+
+static int editor_structure_grid_steps_x(float level_screens) {
+    const float ls = fmaxf(level_screens, 1.0f);
+    const int base_steps = (int)lroundf(ls * (float)(LEVELDEF_STRUCTURE_GRID_W - 1));
+    const int steps = base_steps / LEVELDEF_STRUCTURE_GRID_SCALE;
+    return (steps < 1) ? 1 : steps;
+}
+
+static int editor_structure_grid_steps_y(void) {
+    const int steps = (LEVELDEF_STRUCTURE_GRID_H - 1) / LEVELDEF_STRUCTURE_GRID_SCALE;
+    return (steps < 1) ? 1 : steps;
+}
+
+static void editor_structure_prefab_dims(int prefab_id, int* out_w, int* out_h) {
+    int w = 1;
+    int h = 1;
+    if (prefab_id == 3) {
+        h = 2;
+    }
+    if (prefab_id == 4) {
+        h = 3;
+    }
+    if (out_w) *out_w = w;
+    if (out_h) *out_h = h;
+}
+
+static vg_result draw_structure_prefab_tile(
+    vg_context* ctx,
+    int prefab_id,
+    int layer,
+    float bx,
+    float by,
+    float unit_w,
+    float unit_h,
+    const vg_stroke_style* st,
+    const vg_fill_style* fill
+) {
+    int w_units = 1;
+    int h_units = 1;
+    editor_structure_prefab_dims(prefab_id, &w_units, &h_units);
+    const float w = unit_w * (float)w_units;
+    const float h = unit_h * (float)h_units;
+    const vg_rect outer = {bx, by, w, h};
+    vg_result r = VG_OK;
+    if (fill && layer == 0) {
+        r = vg_fill_rect(ctx, outer, fill);
+        if (r != VG_OK) return r;
+    }
+    r = vg_draw_rect(ctx, outer, st);
+    if (r != VG_OK) return r;
+
+    if (prefab_id == 1) {
+        const float mx = fminf(unit_w * 0.20f, w * 0.26f);
+        const float my = fminf(unit_h * 0.20f, h * 0.26f);
+        const vg_rect inner = {bx + mx, by + my, fmaxf(w - 2.0f * mx, 1.0f), fmaxf(h - 2.0f * my, 1.0f)};
+        return vg_draw_rect(ctx, inner, st);
+    }
+    if (prefab_id == 2) {
+        const vg_vec2 d0[2] = {{bx, by}, {bx + w, by + h}};
+        const vg_vec2 d1[2] = {{bx + w, by}, {bx, by + h}};
+        r = vg_draw_polyline(ctx, d0, 2, st, 0);
+        if (r != VG_OK) return r;
+        return vg_draw_polyline(ctx, d1, 2, st, 0);
+    }
+    if (prefab_id == 3) {
+        const vg_rect base = {bx, by, w, unit_h};
+        const vg_vec2 roof[3] = {
+            {bx, by + unit_h},
+            {bx + w * 0.5f, by + h},
+            {bx + w, by + unit_h}
+        };
+        r = vg_draw_rect(ctx, base, st);
+        if (r != VG_OK) return r;
+        return vg_draw_polyline(ctx, roof, 3, st, 0);
+    }
+    if (prefab_id == 4) {
+        const float inset_x = fminf(unit_w * 0.20f, w * 0.30f);
+        const float inset_h = fminf(unit_h * 0.54f, unit_h - 1.0f);
+        for (int row = 0; row < 3; ++row) {
+            const float cy = by + ((float)row + 0.5f) * unit_h;
+            const vg_rect inner = {
+                bx + inset_x,
+                cy - inset_h * 0.5f,
+                fmaxf(w - 2.0f * inset_x, 1.0f),
+                inset_h
+            };
+            r = vg_draw_rect(ctx, inner, st);
+            if (r != VG_OK) return r;
+        }
+        return VG_OK;
+    }
+    if (prefab_id == 5) {
+        const float y0 = by + h * 0.40f;
+        const float y1 = by + h * 0.60f;
+        const float c_w = fmaxf(unit_w * 0.10f, 1.5f);
+        const float c_h = fmaxf(h * 0.86f, 1.0f);
+        const float c_y = by + (h - c_h) * 0.5f;
+        const vg_vec2 p0[2] = {{bx, y0}, {bx + w, y0}};
+        const vg_vec2 p1[2] = {{bx, y1}, {bx + w, y1}};
+        const vg_rect c0 = {bx + unit_w * 0.06f, c_y, c_w, c_h};
+        const vg_rect c1 = {bx + w - unit_w * 0.06f - c_w, c_y, c_w, c_h};
+        r = vg_draw_polyline(ctx, p0, 2, st, 0);
+        if (r != VG_OK) return r;
+        r = vg_draw_polyline(ctx, p1, 2, st, 0);
+        if (r != VG_OK) return r;
+        r = vg_draw_rect(ctx, c0, st);
+        if (r != VG_OK) return r;
+        return vg_draw_rect(ctx, c1, st);
+    }
+    if (prefab_id == 6) {
+        const float rr = fminf(w, h) * 0.34f;
+        const float cx = bx + w * 0.5f;
+        const float cy = by + h * 0.5f;
+        vg_vec2 ring[17];
+        for (int k = 0; k < 16; ++k) {
+            const float a = ((float)k / 16.0f) * 6.2831853f;
+            ring[k] = (vg_vec2){cx + cosf(a) * rr, cy + sinf(a) * rr};
+        }
+        ring[16] = ring[0];
+        r = vg_draw_polyline(ctx, ring, 17, st, 0);
+        if (r != VG_OK) return r;
+        for (int s = 0; s < 4; ++s) {
+            const float a = ((float)s / 4.0f) * 6.2831853f;
+            const vg_vec2 spoke[2] = {{cx, cy}, {cx + cosf(a) * rr, cy + sinf(a) * rr}};
+            r = vg_draw_polyline(ctx, spoke, 2, st, 0);
+            if (r != VG_OK) return r;
+        }
+        return VG_OK;
+    }
+    if (prefab_id >= 7) {
+        const float mx = fminf(unit_w * 0.18f, w * 0.24f);
+        const float my = fminf(unit_h * 0.22f, h * 0.30f);
+        const vg_rect slit = {bx + mx, by + my, fmaxf(w - 2.0f * mx, 1.0f), fmaxf(h - 2.0f * my, 1.0f)};
+        return vg_draw_rect(ctx, slit, st);
+    }
+    return VG_OK;
 }
 
 static void editor_sanitize_label(const char* in, char* out, size_t out_cap) {
@@ -3283,6 +3516,7 @@ static const char* editor_render_style_name(int style) {
     if (style == LEVEL_RENDER_DRIFTER) return "DRIFTER";
     if (style == LEVEL_RENDER_DRIFTER_SHADED) return "DRIFTER SHADED";
     if (style == LEVEL_RENDER_FOG) return "FOG";
+    if (style == LEVEL_RENDER_BLANK) return "BLANK";
     return "DEFENDER";
 }
 
@@ -3342,6 +3576,15 @@ static int editor_marker_properties_text(
         if (n < cap) { out_labels[n] = "TTL S"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_d[sel]); n++; }
         return n;
     }
+    if (kind == 9) {
+        if (n < cap) { out_labels[n] = "POS X01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "POS Y01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "PREFAB"; snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_a[sel]); n++; }
+        if (n < cap) { out_labels[n] = "LAYER"; snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_b[sel]); n++; }
+        if (n < cap) { out_labels[n] = "ROT"; snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_c[sel]); n++; }
+        if (n < cap) { out_labels[n] = "FLIP"; snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_d[sel]); n++; }
+        return n;
+    }
     if (kind == 2 || kind == 3 || kind == 4 || kind == 5) {
         const int event_item = (metrics->level_editor_marker_track[sel] == 1);
         if (n < cap) { out_labels[n] = "TYPE"; snprintf(out_values[n], 32, "%s", editor_wave_type_name(kind)); n++; }
@@ -3387,11 +3630,13 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     const float right_total_w = w * 0.30f;
     const float left_w = w - right_total_w - m * 2.0f - gap;
     const float timeline_h = h * 0.18f;
-    const float top_h = h - m * 2.0f - timeline_h - gap;
+    const float toolbar_h = 44.0f * ui;
+    const float top_h = h - m * 2.0f - timeline_h - gap - toolbar_h - gap;
     const float side_gap = 10.0f * ui;
     const float props_w = right_total_w * 0.72f;
     const float entities_w = right_total_w - props_w - side_gap;
     const vg_rect viewport = {m, m + timeline_h + gap, left_w, top_h};
+    const vg_rect construction_toolbar = {viewport.x, viewport.y + viewport.h + gap, viewport.w, toolbar_h};
     const vg_rect timeline = {m, m, left_w, timeline_h};
     const vg_rect timeline_track = {
         timeline.x + 14.0f * ui,
@@ -3425,6 +3670,20 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     const vg_rect asteroid_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 158.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
     const vg_rect mine_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 210.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
     const vg_rect missile_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 262.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
+    const float ctb_x = construction_toolbar.x + 8.0f * ui;
+    const float ctb_y = construction_toolbar.y + 3.0f * ui;
+    const float ctb_w = construction_toolbar.w - 16.0f * ui;
+    const float ctb_gap = 8.0f * ui;
+    const float ctb_btn_w = (ctb_w - ctb_gap * 9.0f) / 10.0f;
+    const float ctb_btn_h = construction_toolbar.h - 6.0f * ui;
+    const vg_rect ctb_btn0 = {ctb_x + (ctb_btn_w + ctb_gap) * 0.0f, ctb_y, ctb_btn_w, ctb_btn_h};
+    const vg_rect ctb_btn1 = {ctb_x + (ctb_btn_w + ctb_gap) * 1.0f, ctb_y, ctb_btn_w, ctb_btn_h};
+    const vg_rect ctb_btn2 = {ctb_x + (ctb_btn_w + ctb_gap) * 2.0f, ctb_y, ctb_btn_w, ctb_btn_h};
+    const vg_rect ctb_btn3 = {ctb_x + (ctb_btn_w + ctb_gap) * 3.0f, ctb_y, ctb_btn_w, ctb_btn_h};
+    const vg_rect ctb_btn4 = {ctb_x + (ctb_btn_w + ctb_gap) * 4.0f, ctb_y, ctb_btn_w, ctb_btn_h};
+    const vg_rect ctb_btn5 = {ctb_x + (ctb_btn_w + ctb_gap) * 5.0f, ctb_y, ctb_btn_w, ctb_btn_h};
+    const vg_rect ctb_btn6 = {ctb_x + (ctb_btn_w + ctb_gap) * 6.0f, ctb_y, ctb_btn_w, ctb_btn_h};
+    const vg_rect ctb_btn7 = {ctb_x + (ctb_btn_w + ctb_gap) * 7.0f, ctb_y, ctb_btn_w, ctb_btn_h};
     char level_name_disp[96];
     const int enemy_spatial =
         (metrics->level_editor_wave_mode == LEVELDEF_WAVES_CURATED &&
@@ -3453,6 +3712,10 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     vg_result r = vg_fill_rect(ctx, viewport, &haze);
     if (r != VG_OK) return r;
     r = vg_draw_rect(ctx, viewport, &frame);
+    if (r != VG_OK) return r;
+    r = vg_fill_rect(ctx, construction_toolbar, &haze);
+    if (r != VG_OK) return r;
+    r = vg_draw_rect(ctx, construction_toolbar, &frame);
     if (r != VG_OK) return r;
     r = vg_fill_rect(ctx, props, &haze);
     if (r != VG_OK) return r;
@@ -3485,6 +3748,32 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     r = vg_draw_button(ctx, name_box, level_name_disp, 11.4f * ui, &frame, &text, 0);
     if (r != VG_OK) return r;
     r = vg_draw_button(ctx, next_btn, "", 12.6f * ui, &frame, &text, 0);
+    if (r != VG_OK) return r;
+    vg_stroke_style layer1_frame = frame;
+    vg_stroke_style layer1_text = text;
+    vg_stroke_style layer2_frame = frame;
+    vg_stroke_style layer2_text = text;
+    layer1_frame.color = pal.primary_dim;
+    layer1_frame.intensity *= 1.06f;
+    layer1_text.color = pal.secondary;
+    layer2_frame.color = pal.secondary;
+    layer2_frame.intensity *= 1.12f;
+    layer2_text.color = pal.primary;
+    r = vg_draw_button(ctx, ctb_btn0, "PANEL SQ", 9.8f * ui, &layer1_frame, &layer1_text, metrics->level_editor_structure_tool_selected == 1 ? 1 : 0);
+    if (r != VG_OK) return r;
+    r = vg_draw_button(ctx, ctb_btn1, "INSET SQ", 9.8f * ui, &layer1_frame, &layer1_text, metrics->level_editor_structure_tool_selected == 2 ? 1 : 0);
+    if (r != VG_OK) return r;
+    r = vg_draw_button(ctx, ctb_btn2, "X BRACE", 9.8f * ui, &layer1_frame, &layer1_text, metrics->level_editor_structure_tool_selected == 3 ? 1 : 0);
+    if (r != VG_OK) return r;
+    r = vg_draw_button(ctx, ctb_btn3, "ROOF TRI", 9.8f * ui, &layer1_frame, &layer1_text, metrics->level_editor_structure_tool_selected == 4 ? 1 : 0);
+    if (r != VG_OK) return r;
+    r = vg_draw_button(ctx, ctb_btn4, "TRIPLE", 9.8f * ui, &layer1_frame, &layer1_text, metrics->level_editor_structure_tool_selected == 5 ? 1 : 0);
+    if (r != VG_OK) return r;
+    r = vg_draw_button(ctx, ctb_btn5, "PIPE", 9.8f * ui, &layer2_frame, &layer2_text, metrics->level_editor_structure_tool_selected == 6 ? 1 : 0);
+    if (r != VG_OK) return r;
+    r = vg_draw_button(ctx, ctb_btn6, "VALVE", 9.8f * ui, &layer2_frame, &layer2_text, metrics->level_editor_structure_tool_selected == 7 ? 1 : 0);
+    if (r != VG_OK) return r;
+    r = vg_draw_button(ctx, ctb_btn7, "VENT", 9.8f * ui, &layer2_frame, &layer2_text, metrics->level_editor_structure_tool_selected == 8 ? 1 : 0);
     if (r != VG_OK) return r;
     r = vg_draw_button(ctx, swarm_btn, "SWARM", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 5 ? 1 : 0);
     if (r != VG_OK) return r;
@@ -3641,7 +3930,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 {tx, timeline_track.y + 2.0f * ui},
                 {tx, timeline_track.y + timeline_track.h - 2.0f * ui}
             };
-            if (enemy_spatial || !event_item) {
+            if ((enemy_spatial || !event_item) && kind != 9) {
                 r = vg_draw_polyline(ctx, tick, 2, &mk, 0);
                 if (r != VG_OK) return r;
             } else {
@@ -3769,6 +4058,37 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                     {vx - 8.0f * sx, vy - 6.0f * sx}
                 };
                 r = vg_draw_polyline(ctx, tri, 4, &mk, 1);
+            } else if (kind == 9) {
+                const int prefab = (int)lroundf(metrics->level_editor_marker_a[i]);
+                const int layer = (int)lroundf(metrics->level_editor_marker_b[i]);
+                vg_stroke_style st = mk;
+                if (layer > 0) {
+                    st.color = (vg_color){pal.secondary.r, pal.secondary.g, pal.secondary.b, 1.0f};
+                    st.intensity *= 1.12f;
+                } else {
+                    st.color = pal.primary_dim;
+                    st.intensity *= 0.95f;
+                }
+                {
+                    const float len_screens = fmaxf(metrics->level_editor_level_length_screens, 1.0f);
+                    const float start_screen = clampf(metrics->level_editor_timeline_01, 0.0f, 1.0f) * fmaxf(len_screens - 1.0f, 0.0f);
+                    const int gx_steps_total = editor_structure_grid_steps_x(len_screens);
+                    const int gy_steps = editor_structure_grid_steps_y();
+                    const int view_gx0 = clampi((int)lroundf((start_screen / len_screens) * (float)gx_steps_total), 0, gx_steps_total);
+                    const int gx = clampi((int)lroundf(mx01 * (float)gx_steps_total), 0, gx_steps_total);
+                    const int gy = clampi((int)lroundf(my01 * (float)gy_steps), 0, gy_steps);
+                    const float gx_span = (float)gx_steps_total / fmaxf(len_screens, 1.0f);
+                    const float cell_w = viewport.w / fmaxf(gx_span, 1.0f);
+                    const float cell_h = viewport.h / (float)gy_steps;
+                    const float bx = viewport.x + (float)(gx - view_gx0) * cell_w;
+                    const float by = viewport.y + (float)gy * cell_h;
+                    vg_fill_style fill = {
+                        .intensity = 0.55f,
+                        .color = (vg_color){pal.primary_dim.r, pal.primary_dim.g, pal.primary_dim.b, 0.15f},
+                        .blend = VG_BLEND_ALPHA
+                    };
+                    r = draw_structure_prefab_tile(ctx, prefab, layer, bx, by, cell_w, cell_h, &st, &fill);
+                }
             } else {
                 r = draw_editor_diamond(ctx, (vg_vec2){vx, vy}, 19.5f * ui * glyph_scale, &mk);
             }
@@ -3904,7 +4224,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     );
     if (r != VG_OK) return r;
     if (metrics->level_editor_drag_active &&
-        (metrics->level_editor_drag_kind == 5 || metrics->level_editor_drag_kind == 1 || metrics->level_editor_drag_kind == 6 || metrics->level_editor_drag_kind == 7 || metrics->level_editor_drag_kind == 8)) {
+        (metrics->level_editor_drag_kind == 5 || metrics->level_editor_drag_kind == 1 || metrics->level_editor_drag_kind == 6 || metrics->level_editor_drag_kind == 7 || metrics->level_editor_drag_kind == 8 || metrics->level_editor_drag_kind == 9)) {
         vg_stroke_style gs = frame;
         gs.intensity = 1.2f;
         gs.color = level_editor_marker_color(&pal, metrics->level_editor_drag_kind);
@@ -3935,6 +4255,37 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 {metrics->level_editor_drag_x - 8.0f * sx, metrics->level_editor_drag_y - 6.0f * sx}
             };
             r = vg_draw_polyline(ctx, tri, 4, &gs, 1);
+        } else if (metrics->level_editor_drag_kind == 9) {
+            const int prefab = metrics->level_editor_structure_tool_selected > 0
+                ? (metrics->level_editor_structure_tool_selected - 1)
+                : 0;
+            const int layer = (prefab >= 5) ? 1 : 0;
+            const float len_screens = fmaxf(metrics->level_editor_level_length_screens, 1.0f);
+            const float start_screen = clampf(metrics->level_editor_timeline_01, 0.0f, 1.0f) * fmaxf(len_screens - 1.0f, 0.0f);
+            const float view_min = start_screen / len_screens;
+            const float view_max = (start_screen + 1.0f) / len_screens;
+            const int gx_steps_total = editor_structure_grid_steps_x(len_screens);
+            const int gy_steps = editor_structure_grid_steps_y();
+            const int view_gx0 = clampi((int)lroundf((start_screen / len_screens) * (float)gx_steps_total), 0, gx_steps_total);
+            const float mx01 = clampf((metrics->level_editor_drag_x - viewport.x) / fmaxf(viewport.w, 1.0f), 0.0f, 1.0f);
+            const float my01 = clampf((metrics->level_editor_drag_y - viewport.y) / fmaxf(viewport.h, 1.0f), 0.0f, 1.0f);
+            const float x01 = view_min + mx01 * fmaxf(view_max - view_min, 1.0e-6f);
+            const int gx = clampi((int)lroundf(x01 * (float)gx_steps_total), 0, gx_steps_total);
+            const int gy = clampi((int)lroundf(my01 * (float)gy_steps), 0, gy_steps);
+            const float gx_span = (float)gx_steps_total / fmaxf(len_screens, 1.0f);
+            const float cell_w = viewport.w / fmaxf(gx_span, 1.0f);
+            const float cell_h = viewport.h / (float)gy_steps;
+            const float bx = viewport.x + (float)(gx - view_gx0) * cell_w;
+            const float by = viewport.y + (float)gy * cell_h;
+            gs.color = (layer == 0) ? pal.primary_dim : pal.secondary;
+            {
+                vg_fill_style fill = {
+                    .intensity = 0.60f,
+                    .color = (vg_color){gs.color.r, gs.color.g, gs.color.b, 0.12f},
+                    .blend = VG_BLEND_ALPHA
+                };
+                r = draw_structure_prefab_tile(ctx, prefab, layer, bx, by, cell_w, cell_h, &gs, &fill);
+            }
         } else {
             r = draw_editor_diamond(ctx, (vg_vec2){metrics->level_editor_drag_x, metrics->level_editor_drag_y}, 7.0f * ui, &gs);
         }
@@ -6353,7 +6704,7 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         return VG_OK;
     }
 
-    if (!foreground_only) {
+    if (!foreground_only && g->render_style != LEVEL_RENDER_BLANK) {
         for (size_t i = 0; i < MAX_STARS; ++i) {
             if (g->render_style == LEVEL_RENDER_DRIFTER_SHADED ||
                 g->render_style == LEVEL_RENDER_DRIFTER) {
@@ -6467,7 +6818,8 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
                 }
             }
         } else if (g->render_style != LEVEL_RENDER_DRIFTER_SHADED &&
-                   g->render_style != LEVEL_RENDER_FOG) {
+                   g->render_style != LEVEL_RENDER_FOG &&
+                   g->render_style != LEVEL_RENDER_BLANK) {
             /* Foreground vector landscape layers for depth/parallax. */
             vg_stroke_style land1_halo = land_halo;
             vg_stroke_style land1_main = land_main;
@@ -6527,6 +6879,11 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             (void)vg_transform_pop(ctx);
             return r;
         }
+    }
+    r = draw_level_structures(ctx, g, &pal, &land_halo, &land_main);
+    if (r != VG_OK) {
+        (void)vg_transform_pop(ctx);
+        return r;
     }
     if (g->missile_launcher_count > 0 || g->missile_count > 0) {
         r = draw_missile_system(ctx, g, &pal, &land_halo, &land_main);

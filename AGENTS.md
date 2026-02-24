@@ -92,6 +92,17 @@ New `.c` files are **not** auto-discovered.
 - If a fix or feature is needed in the library, stop and ask the user to make/approve the upstream/library-side change.
 - Keep project-side adaptations in `src/` unless the user explicitly instructs otherwise.
 
+## Fallback Policy (Important)
+
+- Do **not** add speculative/default fallback behavior as a quick fix when the root cause is unknown.
+- Avoid hidden fallback paths that silently reuse prior state, template data, or alternate code paths.
+- When behavior is wrong, trace the exact active read/write/update path and fix that path directly.
+- If a fallback is truly required for safety, it must be explicit, narrow, documented here, and approved by the user.
+
+Why this matters in `v-type`:
+- Broad fallbacks have repeatedly masked real bugs (state leaks, duplicated logic paths, invalid serialization assumptions).
+- They make regressions hard to diagnose because behavior differs by execution path instead of by clear state.
+
 ## Editing Checklist for Planetarium UI Changes
 
 1. If moving nodes/boss gate, update both `src/render.c` and `src/main.c` geometry helpers.

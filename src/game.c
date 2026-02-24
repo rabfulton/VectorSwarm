@@ -1336,6 +1336,7 @@ static int set_level_index(game_state* g, int index) {
     }
     g->level_index = index;
     g->level_style = g_levels[index].style_hint;
+    snprintf(g->current_level_name, sizeof(g->current_level_name), "%s", g_levels[index].name);
     memset(g->bullets, 0, sizeof(g->bullets));
     memset(g->enemy_bullets, 0, sizeof(g->enemy_bullets));
     memset(g->enemies, 0, sizeof(g->enemies));
@@ -1803,6 +1804,7 @@ void game_init(game_state* g, float world_w, float world_h) {
     g->camera_y = world_h * 0.5f;
     g->level_style = LEVEL_STYLE_DEFENDER;
     g->level_index = 0;
+    g->current_level_name[0] = '\0';
     g->wave_index = 0;
     g->wave_id_alloc = 0;
     ensure_leveldef_loaded();
@@ -1814,6 +1816,7 @@ void game_init(game_state* g, float world_w, float world_h) {
     }
     if (g_level_count > 0) {
         g->level_style = g_levels[g->level_index].style_hint;
+        snprintf(g->current_level_name, sizeof(g->current_level_name), "%s", g_levels[g->level_index].name);
     }
     apply_level_runtime_config(g);
 
@@ -2302,6 +2305,9 @@ const struct leveldef_db* game_leveldef_get(void) {
 
 const char* game_current_level_name(const game_state* g) {
     ensure_leveldef_loaded();
+    if (g && g->current_level_name[0] != '\0') {
+        return g->current_level_name;
+    }
     if (g && g_level_count > 0 && g->level_index >= 0 && g->level_index < g_level_count) {
         return g_levels[g->level_index].name;
     }
@@ -2315,6 +2321,7 @@ const char* game_current_level_name(const game_state* g) {
         case LEVEL_STYLE_HIGH_PLAINS_DRIFTER: return "level_high_plains_drifter";
         case LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2: return "level_high_plains_drifter_2";
         case LEVEL_STYLE_FOG_OF_WAR: return "level_fog_of_war";
+        case LEVEL_STYLE_BLANK: return "level_blank";
         default: return "level_defender";
     }
 }
@@ -2333,6 +2340,40 @@ int game_set_level_by_name(game_state* g, const char* name) {
         }
     }
     return 0;
+}
+
+int game_refresh_levels(game_state* g) {
+    char keep_name[64];
+    keep_name[0] = '\0';
+    ensure_leveldef_loaded();
+    if (g) {
+        const char* cur = game_current_level_name(g);
+        if (cur && cur[0]) {
+            snprintf(keep_name, sizeof(keep_name), "%s", cur);
+        }
+    }
+    if (!leveldef_load_project_layout(&g_leveldef, g_level_dir, stderr)) {
+        return 0;
+    }
+    g_level_count = leveldef_discover_levels_from_dir(
+        &g_leveldef,
+        g_level_dir,
+        g_levels,
+        LEVELDEF_MAX_DISCOVERED_LEVELS,
+        stderr
+    );
+    if (g_level_count <= 0) {
+        return 0;
+    }
+    if (g && keep_name[0]) {
+        if (game_set_level_by_name(g, keep_name)) {
+            return 1;
+        }
+    }
+    if (g) {
+        return set_level_index(g, 0);
+    }
+    return 1;
 }
 
 void game_set_alt_weapon(game_state* g, int weapon_id) {

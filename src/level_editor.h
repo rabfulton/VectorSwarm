@@ -18,7 +18,8 @@ enum level_editor_marker_kind {
     LEVEL_EDITOR_MARKER_BOID = 5,
     LEVEL_EDITOR_MARKER_ASTEROID_STORM = 6,
     LEVEL_EDITOR_MARKER_MINEFIELD = 7,
-    LEVEL_EDITOR_MARKER_MISSILE = 8
+    LEVEL_EDITOR_MARKER_MISSILE = 8,
+    LEVEL_EDITOR_MARKER_STRUCTURE = 9
 };
 
 enum level_editor_marker_track {
@@ -41,6 +42,7 @@ typedef struct level_editor_marker {
 
 typedef struct level_editor_layout {
     vg_rect viewport;
+    vg_rect construction_toolbar;
     vg_rect properties;
     vg_rect entities;
     vg_rect timeline;
@@ -60,6 +62,14 @@ typedef struct level_editor_layout {
     vg_rect asteroid_button;
     vg_rect mine_button;
     vg_rect missile_button;
+    vg_rect construction_button_0;
+    vg_rect construction_button_1;
+    vg_rect construction_button_2;
+    vg_rect construction_button_3;
+    vg_rect construction_button_4;
+    vg_rect construction_button_5;
+    vg_rect construction_button_6;
+    vg_rect construction_button_7;
 } level_editor_layout;
 
 typedef struct level_editor_state {
@@ -80,13 +90,18 @@ typedef struct level_editor_state {
     int selected_marker;
     int selected_property;
     int entity_tool_selected; /* 0=none, LEVEL_EDITOR_MARKER_* */
+    int structure_tool_selected; /* 0=none, 1..5 construction palette */
     int entity_drag_active;
     int entity_drag_kind;
     float entity_drag_x;
     float entity_drag_y;
+    int marker_drag_active;
+    int marker_drag_index;
     int dirty;
     char source_path[LEVEL_EDITOR_PATH_CAP];
     char source_text[16384];
+    int loaded_level_valid;
+    leveldef_level loaded_level;
     int marker_count;
     level_editor_marker markers[LEVEL_EDITOR_MAX_MARKERS];
     int snapshot_valid;

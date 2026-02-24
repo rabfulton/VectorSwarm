@@ -13,6 +13,145 @@ static float clampf(float v, float lo, float hi) {
     return v;
 }
 
+static int clampi(int v, int lo, int hi) {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+static int structure_grid_x_steps_for_level(float level_screens) {
+    const float ls = fmaxf(level_screens, 1.0f);
+    const int base_steps = (int)lroundf(ls * (float)(LEVELDEF_STRUCTURE_GRID_W - 1));
+    const int steps = base_steps / LEVELDEF_STRUCTURE_GRID_SCALE;
+    return (steps < 1) ? 1 : steps;
+}
+
+static int structure_grid_y_steps(void) {
+    const int steps = (LEVELDEF_STRUCTURE_GRID_H - 1) / LEVELDEF_STRUCTURE_GRID_SCALE;
+    return (steps < 1) ? 1 : steps;
+}
+
+static float snap_x01(float x01) {
+    const int steps = structure_grid_x_steps_for_level(1.0f);
+    const float gx = roundf(clampf(x01, 0.0f, 1.0f) * (float)steps);
+    return gx / (float)steps;
+}
+
+static float snap_x01_level(float x01, float level_screens) {
+    const int steps = structure_grid_x_steps_for_level(level_screens);
+    const float gx = roundf(clampf(x01, 0.0f, 1.0f) * (float)steps);
+    return gx / (float)steps;
+}
+
+static float snap_y01(float y01) {
+    const int steps = structure_grid_y_steps();
+    const float gy = roundf(clampf(y01, 0.0f, 1.0f) * (float)steps);
+    return gy / (float)steps;
+}
+
+static void structure_prefab_dims(int prefab_id, int* out_w, int* out_h) {
+    int w = 1;
+    int h = 1;
+    if (prefab_id == 3) {
+        h = 2;
+    }
+    if (prefab_id == 4) {
+        h = 3;
+    }
+    if (out_w) *out_w = w;
+    if (out_h) *out_h = h;
+}
+
+static int structure_overlaps_cell(
+    const level_editor_state* s,
+    int layer,
+    int gx_steps,
+    int ignore_marker_index,
+    int gx,
+    int gy,
+    int w_units,
+    int h_units
+) {
+    if (!s) {
+        return 0;
+    }
+    const int ax0 = gx;
+    const int ay0 = gy;
+    const int ax1 = gx + w_units;
+    const int ay1 = gy + h_units;
+    for (int i = 0; i < s->marker_count; ++i) {
+        if (i == ignore_marker_index) {
+            continue;
+        }
+        const level_editor_marker* m = &s->markers[i];
+        if (m->kind != LEVEL_EDITOR_MARKER_STRUCTURE || m->track != LEVEL_EDITOR_TRACK_SPATIAL) {
+            continue;
+        }
+        const int mlayer = clampi((int)lroundf(m->b), 0, 1);
+        if (mlayer != layer) {
+            continue;
+        }
+        int mw = 1;
+        int mh = 1;
+        structure_prefab_dims(clampi((int)lroundf(m->a), 0, 31), &mw, &mh);
+        const int mgx = clampi((int)lroundf(m->x01 * (float)gx_steps), 0, gx_steps);
+        const int mgy = clampi((int)lroundf(m->y01 * (float)structure_grid_y_steps()), 0, structure_grid_y_steps());
+        const int bx0 = mgx;
+        const int by0 = mgy;
+        const int bx1 = mgx + mw;
+        const int by1 = mgy + mh;
+        if (ax0 < bx1 && ax1 > bx0 && ay0 < by1 && ay1 > by0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void place_structure_marker_from_view(level_editor_state* s, int marker_index, float mx01, float my01) {
+    if (!s || marker_index < 0 || marker_index >= s->marker_count) {
+        return;
+    }
+    level_editor_marker* m = &s->markers[marker_index];
+    if (m->kind != LEVEL_EDITOR_MARKER_STRUCTURE || m->track != LEVEL_EDITOR_TRACK_SPATIAL) {
+        return;
+    }
+    const float level_screens = fmaxf(s->level_length_screens, 1.0f);
+    const float start_screen = s->timeline_01 * fmaxf(level_screens - 1.0f, 0.0f);
+    const float view_min = start_screen / level_screens;
+    const float view_max = (start_screen + 1.0f) / level_screens;
+    const float x01 = view_min + clampf(mx01, 0.0f, 1.0f) * fmaxf(view_max - view_min, 1.0e-6f);
+    const float y01 = clampf(my01, 0.0f, 1.0f);
+    const int prefab_id = clampi((int)lroundf(m->a), 0, 31);
+    const int layer = clampi((int)lroundf(m->b), 0, 1);
+    const int gx_steps = structure_grid_x_steps_for_level(level_screens);
+    int w_units = 1;
+    int h_units = 1;
+    structure_prefab_dims(prefab_id, &w_units, &h_units);
+    const int max_gx = gx_steps - w_units + 1;
+    const int max_gy = structure_grid_y_steps() - h_units + 1;
+    int gx = clampi((int)lroundf(x01 * (float)gx_steps), 0, (max_gx > 0) ? max_gx : 0);
+    int gy = clampi((int)lroundf(y01 * (float)structure_grid_y_steps()), 0, (max_gy > 0) ? max_gy : 0);
+    if (structure_overlaps_cell(s, layer, gx_steps, marker_index, gx, gy, w_units, h_units)) {
+        for (int radius = 1; radius <= 16; ++radius) {
+            const int candidates[2] = {gx + radius, gx - radius};
+            int found = 0;
+            for (int ci = 0; ci < 2; ++ci) {
+                const int cgx = clampi(candidates[ci], 0, (max_gx > 0) ? max_gx : 0);
+                if (!structure_overlaps_cell(s, layer, gx_steps, marker_index, cgx, gy, w_units, h_units)) {
+                    gx = cgx;
+                    found = 1;
+                    break;
+                }
+            }
+            if (found) {
+                break;
+            }
+        }
+    }
+    m->x01 = (float)gx / (float)gx_steps;
+    m->y01 = (float)gy / (float)structure_grid_y_steps();
+}
+
 static int strieq(const char* a, const char* b) {
     if (!a || !b) {
         return 0;
@@ -245,6 +384,9 @@ static float marker_pick_radius01(int kind) {
     if (kind == LEVEL_EDITOR_MARKER_MISSILE) {
         return 0.12f;
     }
+    if (kind == LEVEL_EDITOR_MARKER_STRUCTURE) {
+        return 0.10f;
+    }
     return 0.08f;
 }
 
@@ -275,6 +417,7 @@ static const char* style_header_name(int style) {
         case LEVEL_STYLE_HIGH_PLAINS_DRIFTER: return "HIGH_PLAINS_DRIFTER";
         case LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2: return "HIGH_PLAINS_DRIFTER_2";
         case LEVEL_STYLE_FOG_OF_WAR: return "FOG_OF_WAR";
+        case LEVEL_STYLE_BLANK: return "BLANK";
         default: return "UNKNOWN";
     }
 }
@@ -286,6 +429,7 @@ static const char* render_style_name(int render_style) {
         case LEVEL_RENDER_DRIFTER: return "drifter";
         case LEVEL_RENDER_DRIFTER_SHADED: return "drifter_shaded";
         case LEVEL_RENDER_FOG: return "fog";
+        case LEVEL_RENDER_BLANK: return "blank";
         default: return "defender";
     }
 }
@@ -351,6 +495,7 @@ static const char* marker_kind_name(int kind) {
     if (kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) return "asteroid_storm";
     if (kind == LEVEL_EDITOR_MARKER_MINEFIELD) return "minefield";
     if (kind == LEVEL_EDITOR_MARKER_MISSILE) return "missile_launcher";
+    if (kind == LEVEL_EDITOR_MARKER_STRUCTURE) return "structure";
     return "marker";
 }
 
@@ -361,6 +506,7 @@ static const char* render_style_file_base(int render_style) {
         case LEVEL_RENDER_DRIFTER: return "level_high_plains_drifter";
         case LEVEL_RENDER_DRIFTER_SHADED: return "level_high_plains_drifter_2";
         case LEVEL_RENDER_FOG: return "level_fog_of_war";
+        case LEVEL_RENDER_BLANK: return "level_blank";
         default: return "level_defender";
     }
 }
@@ -371,6 +517,7 @@ static int level_style_from_render_style(int render_style) {
         case LEVEL_RENDER_DRIFTER: return LEVEL_STYLE_HIGH_PLAINS_DRIFTER;
         case LEVEL_RENDER_DRIFTER_SHADED: return LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2;
         case LEVEL_RENDER_FOG: return LEVEL_STYLE_FOG_OF_WAR;
+        case LEVEL_RENDER_BLANK: return LEVEL_STYLE_BLANK;
         default: return LEVEL_STYLE_DEFENDER;
     }
 }
@@ -400,19 +547,40 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
     int found_exit = 0;
     int wave_n = 0;
     wave_marker_ref waves[LEVEL_EDITOR_MAX_MARKERS];
-    const leveldef_level* base = NULL;
     const float level_len = fmaxf(s ? s->level_length_screens : 1.0f, 1.0f);
 
     if (!s || !db || !out || out_cap == 0) {
         return 0;
     }
-    base = leveldef_get_level(db, s->level_style);
-    if (!base) {
-        return 0;
+    if (s->loaded_level_valid) {
+        lvl = s->loaded_level;
+    } else {
+        const leveldef_level* base = leveldef_get_level(db, s->level_style);
+        if (base) {
+            lvl = *base;
+        } else {
+            memset(&lvl, 0, sizeof(lvl));
+            lvl.spawn_mode = LEVELDEF_SPAWN_SEQUENCED_CLEAR;
+            lvl.spawn_interval_s = 2.0f;
+            lvl.default_boid_profile = leveldef_find_boid_profile(db, "FISH");
+            if (lvl.default_boid_profile < 0) {
+                lvl.default_boid_profile = 0;
+            }
+            lvl.wave_cooldown_initial_s = 0.65f;
+            lvl.wave_cooldown_between_s = 2.0f;
+            lvl.exit_y01 = 0.5f;
+        }
     }
-    lvl = *base;
     lvl.render_style = s->level_render_style;
     lvl.wave_mode = s->level_wave_mode;
+    lvl.searchlight_count = 0;
+    lvl.minefield_count = 0;
+    lvl.missile_launcher_count = 0;
+    lvl.structure_count = 0;
+    lvl.event_count = 0;
+    lvl.curated_count = 0;
+    lvl.wave_cycle_count = 0;
+    lvl.boid_cycle_count = 0;
     /* Spatial asteroid storms are source-of-truth from spatial markers only.
        Event-lane storms are serialized as event entries, not this flag. */
     lvl.asteroid_storm_enabled = 0;
@@ -448,22 +616,16 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
         if (m->kind != LEVEL_EDITOR_MARKER_SEARCHLIGHT) {
             continue;
         }
-        if (searchlight_n < base->searchlight_count) {
-            sl = base->searchlights[searchlight_n];
-        } else if (base->searchlight_count > 0) {
-            sl = base->searchlights[base->searchlight_count - 1];
-        } else {
-            memset(&sl, 0, sizeof(sl));
-            sl.sweep_motion = SEARCHLIGHT_MOTION_PENDULUM;
-            sl.source_type = SEARCHLIGHT_SOURCE_DOME;
-            sl.source_radius = 14.0f;
-            sl.clear_grace_s = 2.0f;
-            sl.fire_interval_s = 0.08f;
-            sl.projectile_speed = 900.0f;
-            sl.projectile_ttl_s = 2.0f;
-            sl.projectile_radius = 3.2f;
-            sl.aim_jitter_deg = 1.0f;
-        }
+        memset(&sl, 0, sizeof(sl));
+        sl.sweep_motion = SEARCHLIGHT_MOTION_PENDULUM;
+        sl.source_type = SEARCHLIGHT_SOURCE_DOME;
+        sl.source_radius = 14.0f;
+        sl.clear_grace_s = 2.0f;
+        sl.fire_interval_s = 0.08f;
+        sl.projectile_speed = 900.0f;
+        sl.projectile_ttl_s = 2.0f;
+        sl.projectile_radius = 3.2f;
+        sl.aim_jitter_deg = 1.0f;
         sl.anchor_x01 = m->x01 * level_len;
         sl.anchor_y01 = m->y01;
         sl.length_h01 = m->a;
@@ -492,17 +654,11 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
         if (m->kind != LEVEL_EDITOR_MARKER_MISSILE || m->track != LEVEL_EDITOR_TRACK_SPATIAL) {
             continue;
         }
-        if (missile_n < base->missile_launcher_count) {
-            ml = base->missile_launchers[missile_n];
-        } else if (base->missile_launcher_count > 0) {
-            ml = base->missile_launchers[base->missile_launcher_count - 1];
-        } else {
-            memset(&ml, 0, sizeof(ml));
-            ml.missile_speed = 430.0f;
-            ml.missile_turn_rate_deg = 90.0f;
-            ml.hit_radius = 20.0f;
-            ml.blast_radius = 80.0f;
-        }
+        memset(&ml, 0, sizeof(ml));
+        ml.missile_speed = 430.0f;
+        ml.missile_turn_rate_deg = 90.0f;
+        ml.hit_radius = 20.0f;
+        ml.blast_radius = 80.0f;
         ml.anchor_x01 = m->x01 * level_len;
         ml.anchor_y01 = m->y01;
         ml.count = (int)lroundf(fmaxf(m->a, 1.0f));
@@ -511,6 +667,38 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
         ml.missile_ttl_s = fmaxf(m->d, 0.20f);
         lvl.missile_launchers[lvl.missile_launcher_count++] = ml;
         missile_n += 1;
+    }
+    lvl.structure_count = 0;
+    for (i = 0; i < s->marker_count && lvl.structure_count < LEVELDEF_MAX_STRUCTURES; ++i) {
+        const level_editor_marker* m = &s->markers[i];
+        leveldef_structure_instance st;
+        if (m->kind != LEVEL_EDITOR_MARKER_STRUCTURE || m->track != LEVEL_EDITOR_TRACK_SPATIAL) {
+            continue;
+        }
+        memset(&st, 0, sizeof(st));
+        st.prefab_id = clampi((int)lroundf(m->a), 0, 31);
+        st.layer = clampi((int)lroundf(m->b), 0, 1);
+        st.grid_x = clampi(
+            (int)lroundf(m->x01 * (float)structure_grid_x_steps_for_level(level_len)),
+            0,
+            structure_grid_x_steps_for_level(level_len)
+        );
+        st.grid_y = clampi((int)lroundf(m->y01 * (float)structure_grid_y_steps()), 0, structure_grid_y_steps());
+        st.rotation_quadrants = clampi((int)lroundf(m->c), 0, 3);
+        {
+            const int flip = clampi((int)lroundf(m->d), 0, 3);
+            st.flip_x = (flip & 1) ? 1 : 0;
+            st.flip_y = (flip & 2) ? 1 : 0;
+        }
+        structure_prefab_dims(st.prefab_id, &st.w_units, &st.h_units);
+        {
+            const int max_gx = structure_grid_x_steps_for_level(level_len) - st.w_units + 1;
+            const int max_gy = structure_grid_y_steps() - st.h_units + 1;
+            st.grid_x = clampi(st.grid_x, 0, (max_gx > 0) ? max_gx : 0);
+            st.grid_y = clampi(st.grid_y, 0, (max_gy > 0) ? max_gy : 0);
+        }
+        st.variant = 0;
+        lvl.structures[lvl.structure_count++] = st;
     }
 
     for (i = 0; i < s->marker_count; ++i) {
@@ -572,15 +760,12 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
         }
         lvl.curated_count = curated_n;
     } else if (lvl.wave_mode == LEVELDEF_WAVES_BOID_ONLY) {
-        const int base_cycle_n = (base->boid_cycle_count > 0) ? base->boid_cycle_count : 1;
         int boid_n = 0;
         for (i = 0; i < wave_n && boid_n < LEVELDEF_MAX_BOID_CYCLE; ++i) {
             if (waves[i].marker.kind != LEVEL_EDITOR_MARKER_BOID) {
                 continue;
             }
-            lvl.boid_cycle[boid_n] = (base->boid_cycle_count > 0)
-                ? base->boid_cycle[boid_n % base_cycle_n]
-                : ((lvl.default_boid_profile >= 0) ? lvl.default_boid_profile : 0);
+            lvl.boid_cycle[boid_n] = (lvl.default_boid_profile >= 0) ? lvl.default_boid_profile : 0;
             ++boid_n;
         }
         if (boid_n > 0) {
@@ -660,6 +845,8 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
     if (!appendf(out, out_cap, &used, "# missile_launcher CSV fields:\n")) return 0;
     if (!appendf(out, out_cap, &used, "# anchor_x01,anchor_y01,count,spacing,activation_range,missile_speed,\n")) return 0;
     if (!appendf(out, out_cap, &used, "# missile_turn_rate_deg,missile_ttl_s,hit_radius,blast_radius\n")) return 0;
+    if (!appendf(out, out_cap, &used, "# structure CSV fields:\n")) return 0;
+    if (!appendf(out, out_cap, &used, "# prefab_id,layer,grid_x,grid_y,rotation_quadrants,flip_x,flip_y,w_units,h_units,variant\n")) return 0;
     if (!appendf(out, out_cap, &used, "[level %s]\n", style_header_name(s->level_style))) return 0;
     if (!appendf(out, out_cap, &used, "render_style=%s\n", render_style_name(lvl.render_style))) return 0;
     if (!appendf(out, out_cap, &used, "wave_mode=%s\n", wave_mode_name(lvl.wave_mode))) return 0;
@@ -714,37 +901,58 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
         }
     }
 
-    if (!appendf(out, out_cap, &used, "sine.count=%d\n", lvl.sine.count)) return 0;
-    if (!appendf(out, out_cap, &used, "sine.start_x01=%.3f\n", lvl.sine.start_x01)) return 0;
-    if (!appendf(out, out_cap, &used, "sine.spacing_x=%.3f\n", lvl.sine.spacing_x)) return 0;
-    if (!appendf(out, out_cap, &used, "sine.home_y01=%.3f\n", lvl.sine.home_y01)) return 0;
-    if (!appendf(out, out_cap, &used, "sine.phase_step=%.3f\n", lvl.sine.phase_step)) return 0;
-    if (!appendf(out, out_cap, &used, "sine.form_amp=%.3f\n", lvl.sine.form_amp)) return 0;
-    if (!appendf(out, out_cap, &used, "sine.form_freq=%.3f\n", lvl.sine.form_freq)) return 0;
-    if (!appendf(out, out_cap, &used, "sine.break_delay_base=%.3f\n", lvl.sine.break_delay_base)) return 0;
-    if (!appendf(out, out_cap, &used, "sine.break_delay_step=%.3f\n", lvl.sine.break_delay_step)) return 0;
-    if (!appendf(out, out_cap, &used, "sine.max_speed=%.3f\n", lvl.sine.max_speed)) return 0;
-    if (!appendf(out, out_cap, &used, "sine.accel=%.3f\n", lvl.sine.accel)) return 0;
-    if (!appendf(out, out_cap, &used, "v.count=%d\n", lvl.v.count)) return 0;
-    if (!appendf(out, out_cap, &used, "v.start_x01=%.3f\n", lvl.v.start_x01)) return 0;
-    if (!appendf(out, out_cap, &used, "v.spacing_x=%.3f\n", lvl.v.spacing_x)) return 0;
-    if (!appendf(out, out_cap, &used, "v.home_y01=%.3f\n", lvl.v.home_y01)) return 0;
-    if (!appendf(out, out_cap, &used, "v.home_y_step=%.3f\n", lvl.v.home_y_step)) return 0;
-    if (!appendf(out, out_cap, &used, "v.phase_step=%.3f\n", lvl.v.phase_step)) return 0;
-    if (!appendf(out, out_cap, &used, "v.form_amp=%.3f\n", lvl.v.form_amp)) return 0;
-    if (!appendf(out, out_cap, &used, "v.form_freq=%.3f\n", lvl.v.form_freq)) return 0;
-    if (!appendf(out, out_cap, &used, "v.break_delay_min=%.3f\n", lvl.v.break_delay_min)) return 0;
-    if (!appendf(out, out_cap, &used, "v.break_delay_rand=%.3f\n", lvl.v.break_delay_rand)) return 0;
-    if (!appendf(out, out_cap, &used, "v.max_speed=%.3f\n", lvl.v.max_speed)) return 0;
-    if (!appendf(out, out_cap, &used, "v.accel=%.3f\n", lvl.v.accel)) return 0;
-    if (!appendf(out, out_cap, &used, "kamikaze.count=%d\n", lvl.kamikaze.count)) return 0;
-    if (!appendf(out, out_cap, &used, "kamikaze.start_x01=%.3f\n", lvl.kamikaze.start_x01)) return 0;
-    if (!appendf(out, out_cap, &used, "kamikaze.spacing_x=%.3f\n", lvl.kamikaze.spacing_x)) return 0;
-    if (!appendf(out, out_cap, &used, "kamikaze.y_margin=%.3f\n", lvl.kamikaze.y_margin)) return 0;
-    if (!appendf(out, out_cap, &used, "kamikaze.max_speed=%.3f\n", lvl.kamikaze.max_speed)) return 0;
-    if (!appendf(out, out_cap, &used, "kamikaze.accel=%.3f\n", lvl.kamikaze.accel)) return 0;
-    if (!appendf(out, out_cap, &used, "kamikaze.radius_min=%.3f\n", lvl.kamikaze.radius_min)) return 0;
-    if (!appendf(out, out_cap, &used, "kamikaze.radius_max=%.3f\n", lvl.kamikaze.radius_max)) return 0;
+    {
+        int need_sine = (lvl.sine.count > 0);
+        int need_v = (lvl.v.count > 0);
+        int need_kamikaze = (lvl.kamikaze.count > 0);
+        for (i = 0; i < lvl.wave_cycle_count; ++i) {
+            if (lvl.wave_cycle[i] == LEVELDEF_WAVE_SINE_SNAKE) need_sine = 1;
+            if (lvl.wave_cycle[i] == LEVELDEF_WAVE_V_FORMATION) need_v = 1;
+            if (lvl.wave_cycle[i] == LEVELDEF_WAVE_KAMIKAZE) need_kamikaze = 1;
+        }
+        for (i = 0; i < lvl.event_count; ++i) {
+            if (lvl.events[i].kind == LEVELDEF_EVENT_WAVE_SINE) need_sine = 1;
+            if (lvl.events[i].kind == LEVELDEF_EVENT_WAVE_V) need_v = 1;
+            if (lvl.events[i].kind == LEVELDEF_EVENT_WAVE_KAMIKAZE) need_kamikaze = 1;
+        }
+        if (need_sine) {
+            if (!appendf(out, out_cap, &used, "sine.count=%d\n", lvl.sine.count)) return 0;
+            if (!appendf(out, out_cap, &used, "sine.start_x01=%.3f\n", lvl.sine.start_x01)) return 0;
+            if (!appendf(out, out_cap, &used, "sine.spacing_x=%.3f\n", lvl.sine.spacing_x)) return 0;
+            if (!appendf(out, out_cap, &used, "sine.home_y01=%.3f\n", lvl.sine.home_y01)) return 0;
+            if (!appendf(out, out_cap, &used, "sine.phase_step=%.3f\n", lvl.sine.phase_step)) return 0;
+            if (!appendf(out, out_cap, &used, "sine.form_amp=%.3f\n", lvl.sine.form_amp)) return 0;
+            if (!appendf(out, out_cap, &used, "sine.form_freq=%.3f\n", lvl.sine.form_freq)) return 0;
+            if (!appendf(out, out_cap, &used, "sine.break_delay_base=%.3f\n", lvl.sine.break_delay_base)) return 0;
+            if (!appendf(out, out_cap, &used, "sine.break_delay_step=%.3f\n", lvl.sine.break_delay_step)) return 0;
+            if (!appendf(out, out_cap, &used, "sine.max_speed=%.3f\n", lvl.sine.max_speed)) return 0;
+            if (!appendf(out, out_cap, &used, "sine.accel=%.3f\n", lvl.sine.accel)) return 0;
+        }
+        if (need_v) {
+            if (!appendf(out, out_cap, &used, "v.count=%d\n", lvl.v.count)) return 0;
+            if (!appendf(out, out_cap, &used, "v.start_x01=%.3f\n", lvl.v.start_x01)) return 0;
+            if (!appendf(out, out_cap, &used, "v.spacing_x=%.3f\n", lvl.v.spacing_x)) return 0;
+            if (!appendf(out, out_cap, &used, "v.home_y01=%.3f\n", lvl.v.home_y01)) return 0;
+            if (!appendf(out, out_cap, &used, "v.home_y_step=%.3f\n", lvl.v.home_y_step)) return 0;
+            if (!appendf(out, out_cap, &used, "v.phase_step=%.3f\n", lvl.v.phase_step)) return 0;
+            if (!appendf(out, out_cap, &used, "v.form_amp=%.3f\n", lvl.v.form_amp)) return 0;
+            if (!appendf(out, out_cap, &used, "v.form_freq=%.3f\n", lvl.v.form_freq)) return 0;
+            if (!appendf(out, out_cap, &used, "v.break_delay_min=%.3f\n", lvl.v.break_delay_min)) return 0;
+            if (!appendf(out, out_cap, &used, "v.break_delay_rand=%.3f\n", lvl.v.break_delay_rand)) return 0;
+            if (!appendf(out, out_cap, &used, "v.max_speed=%.3f\n", lvl.v.max_speed)) return 0;
+            if (!appendf(out, out_cap, &used, "v.accel=%.3f\n", lvl.v.accel)) return 0;
+        }
+        if (need_kamikaze) {
+            if (!appendf(out, out_cap, &used, "kamikaze.count=%d\n", lvl.kamikaze.count)) return 0;
+            if (!appendf(out, out_cap, &used, "kamikaze.start_x01=%.3f\n", lvl.kamikaze.start_x01)) return 0;
+            if (!appendf(out, out_cap, &used, "kamikaze.spacing_x=%.3f\n", lvl.kamikaze.spacing_x)) return 0;
+            if (!appendf(out, out_cap, &used, "kamikaze.y_margin=%.3f\n", lvl.kamikaze.y_margin)) return 0;
+            if (!appendf(out, out_cap, &used, "kamikaze.max_speed=%.3f\n", lvl.kamikaze.max_speed)) return 0;
+            if (!appendf(out, out_cap, &used, "kamikaze.accel=%.3f\n", lvl.kamikaze.accel)) return 0;
+            if (!appendf(out, out_cap, &used, "kamikaze.radius_min=%.3f\n", lvl.kamikaze.radius_min)) return 0;
+            if (!appendf(out, out_cap, &used, "kamikaze.radius_max=%.3f\n", lvl.kamikaze.radius_max)) return 0;
+        }
+    }
 
     for (i = 0; i < lvl.searchlight_count; ++i) {
         const leveldef_searchlight* sl = &lvl.searchlights[i];
@@ -784,6 +992,24 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
                 ml->hit_radius,
                 ml->blast_radius)) return 0;
     }
+    for (i = 0; i < lvl.structure_count; ++i) {
+        const leveldef_structure_instance* st = &lvl.structures[i];
+        if (!appendf(
+                out,
+                out_cap,
+                &used,
+                "structure=%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
+                st->prefab_id,
+                st->layer,
+                st->grid_x,
+                st->grid_y,
+                st->rotation_quadrants,
+                st->flip_x,
+                st->flip_y,
+                st->w_units,
+                st->h_units,
+                st->variant)) return 0;
+    }
 
     return 1;
 }
@@ -806,6 +1032,9 @@ static int marker_property_count(const level_editor_state* s) {
         return 3;
     }
     if (kind == LEVEL_EDITOR_MARKER_MISSILE) {
+        return 6;
+    }
+    if (kind == LEVEL_EDITOR_MARKER_STRUCTURE) {
         return 6;
     }
     if (kind == LEVEL_EDITOR_MARKER_EXIT) {
@@ -924,6 +1153,9 @@ static int level_style_from_name_loose(const char* name) {
     if (strieq(name, "fog_of_war") || strieq(name, "level_fog_of_war")) {
         return LEVEL_STYLE_FOG_OF_WAR;
     }
+    if (strieq(name, "blank") || strieq(name, "level_blank")) {
+        return LEVEL_STYLE_BLANK;
+    }
     if (stristarts(name, "level_defender")) {
         return LEVEL_STYLE_DEFENDER;
     }
@@ -945,6 +1177,9 @@ static int level_style_from_name_loose(const char* name) {
     if (stristarts(name, "level_fog_of_war")) {
         return LEVEL_STYLE_FOG_OF_WAR;
     }
+    if (stristarts(name, "level_blank")) {
+        return LEVEL_STYLE_BLANK;
+    }
     return -1;
 }
 
@@ -957,12 +1192,29 @@ static const char* level_style_name(int style) {
         case LEVEL_STYLE_HIGH_PLAINS_DRIFTER: return "level_high_plains_drifter";
         case LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2: return "level_high_plains_drifter_2";
         case LEVEL_STYLE_FOG_OF_WAR: return "level_fog_of_war";
+        case LEVEL_STYLE_BLANK: return "level_blank";
         default: return "level_unknown";
     }
 }
 
 static int level_style_count(void) {
     return LEVEL_STYLE_COUNT;
+}
+
+static void normalize_level_name_for_file(const char* in, char* out, size_t out_cap) {
+    if (!out || out_cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (!in || !in[0]) {
+        snprintf(out, out_cap, "level_untitled");
+        return;
+    }
+    if (stristarts(in, "level_")) {
+        snprintf(out, out_cap, "%s", in);
+    } else {
+        snprintf(out, out_cap, "level_%s", in);
+    }
 }
 
 static void clear_markers(level_editor_state* s) {
@@ -1000,12 +1252,14 @@ void level_editor_compute_layout(float w, float h, level_editor_layout* out) {
     const float right_total_w = w * 0.30f;
     const float left_w = w - right_total_w - m * 2.0f - gap;
     const float timeline_h = h * 0.18f;
-    const float top_h = h - m * 2.0f - timeline_h - gap;
+    const float toolbar_h = 44.0f * ui;
+    const float top_h = h - m * 2.0f - timeline_h - gap - toolbar_h - gap;
     const float side_gap = 10.0f * ui;
     const float props_w = right_total_w * 0.72f;
     const float entities_w = right_total_w - props_w - side_gap;
 
     out->viewport = (vg_rect){m, m + timeline_h + gap, left_w, top_h};
+    out->construction_toolbar = (vg_rect){out->viewport.x, out->viewport.y + out->viewport.h + gap, out->viewport.w, toolbar_h};
     out->timeline = (vg_rect){m, m, left_w, timeline_h};
     out->timeline_track = (vg_rect){
         out->timeline.x + 14.0f * ui,
@@ -1107,6 +1361,22 @@ void level_editor_compute_layout(float w, float h, level_editor_layout* out) {
         out->entities.w - 16.0f * ui,
         42.0f * ui
     };
+    {
+        const float tb_x = out->construction_toolbar.x + 8.0f * ui;
+        const float tb_y = out->construction_toolbar.y + 3.0f * ui;
+        const float tb_w = out->construction_toolbar.w - 16.0f * ui;
+        const float btn_gap = 8.0f * ui;
+        const float btn_w = (tb_w - btn_gap * 9.0f) / 10.0f;
+        const float btn_h = out->construction_toolbar.h - 6.0f * ui;
+        out->construction_button_0 = (vg_rect){tb_x + (btn_w + btn_gap) * 0.0f, tb_y, btn_w, btn_h};
+        out->construction_button_1 = (vg_rect){tb_x + (btn_w + btn_gap) * 1.0f, tb_y, btn_w, btn_h};
+        out->construction_button_2 = (vg_rect){tb_x + (btn_w + btn_gap) * 2.0f, tb_y, btn_w, btn_h};
+        out->construction_button_3 = (vg_rect){tb_x + (btn_w + btn_gap) * 3.0f, tb_y, btn_w, btn_h};
+        out->construction_button_4 = (vg_rect){tb_x + (btn_w + btn_gap) * 4.0f, tb_y, btn_w, btn_h};
+        out->construction_button_5 = (vg_rect){tb_x + (btn_w + btn_gap) * 5.0f, tb_y, btn_w, btn_h};
+        out->construction_button_6 = (vg_rect){tb_x + (btn_w + btn_gap) * 6.0f, tb_y, btn_w, btn_h};
+        out->construction_button_7 = (vg_rect){tb_x + (btn_w + btn_gap) * 7.0f, tb_y, btn_w, btn_h};
+    }
     const float len_screens = 1.0f;
     const float window_w = out->timeline_track.w / len_screens;
     out->timeline_window = (vg_rect){
@@ -1129,13 +1399,13 @@ static void sync_timeline_window(level_editor_state* s, level_editor_layout* l) 
     l->timeline_window.h = l->timeline_track.h;
 }
 
-static void build_markers(level_editor_state* s, const leveldef_db* db, int style) {
+static void build_markers(level_editor_state* s, const leveldef_db* db, int style, const leveldef_level* lvl_override) {
     clear_markers(s);
     if (!s || !db || style < 0 || style >= LEVEL_STYLE_COUNT) {
         return;
     }
 
-    const leveldef_level* lvl = leveldef_get_level(db, style);
+    const leveldef_level* lvl = lvl_override ? lvl_override : leveldef_get_level(db, style);
     if (!lvl) {
         return;
     }
@@ -1217,6 +1487,22 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
             ml->spacing,
             ml->activation_range,
             ml->missile_ttl_s
+        );
+    }
+    for (int i = 0; i < lvl->structure_count; ++i) {
+        const leveldef_structure_instance* st = &lvl->structures[i];
+        push_marker(
+            s,
+            LEVEL_EDITOR_MARKER_STRUCTURE,
+            LEVEL_EDITOR_TRACK_SPATIAL,
+            1,
+            0.0f,
+            (float)st->grid_x / (float)structure_grid_x_steps_for_level(s->level_length_screens),
+            (float)st->grid_y / (float)structure_grid_y_steps(),
+            (float)st->prefab_id,
+            (float)st->layer,
+            (float)(st->rotation_quadrants & 3),
+            (float)((st->flip_x ? 1 : 0) | ((st->flip_y ? 1 : 0) << 1))
         );
     }
 
@@ -1303,8 +1589,8 @@ void level_editor_init(level_editor_state* s) {
         return;
     }
     memset(s, 0, sizeof(*s));
-    s->level_style = LEVEL_STYLE_DEFENDER;
-    s->level_render_style = LEVEL_RENDER_DEFENDER;
+    s->level_style = LEVEL_STYLE_BLANK;
+    s->level_render_style = LEVEL_RENDER_BLANK;
     s->level_wave_mode = LEVELDEF_WAVES_NORMAL;
     s->level_asteroid_storm_enabled = 0;
     s->level_asteroid_storm_angle_deg = 180.0f;
@@ -1324,31 +1610,47 @@ void level_editor_init(level_editor_state* s) {
     s->entity_drag_kind = 0;
     s->entity_drag_x = 0.0f;
     s->entity_drag_y = 0.0f;
+    s->marker_drag_active = 0;
+    s->marker_drag_index = -1;
     s->dirty = 0;
     s->source_path[0] = '\0';
     s->source_text[0] = '\0';
+    s->loaded_level_valid = 0;
+    memset(&s->loaded_level, 0, sizeof(s->loaded_level));
     s->snapshot_valid = 0;
 }
 
 int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, const char* name) {
+    leveldef_level loaded_level;
+    const leveldef_level* lvl = NULL;
+    int style = -1;
     if (!s || !db) {
         return 0;
     }
-    const int style = level_style_from_name_loose(name ? name : s->level_name);
+    style = level_style_from_name_loose(name ? name : s->level_name);
     if (style < 0 || style >= LEVEL_STYLE_COUNT) {
         snprintf(s->status_text, sizeof(s->status_text), "unknown level name");
         return 0;
     }
-    s->level_style = style;
+    memset(&loaded_level, 0, sizeof(loaded_level));
     if (name && name[0] != '\0') {
         snprintf(s->level_name, sizeof(s->level_name), "%s", name);
     } else {
         snprintf(s->level_name, sizeof(s->level_name), "%s", level_style_name(style));
     }
+    s->source_path[0] = '\0';
+    s->source_text[0] = '\0';
+    if (resolve_level_file_path(s->level_name, s->source_path, sizeof(s->source_path)) &&
+        leveldef_load_level_file_with_base(db, s->source_path, &loaded_level, &style, NULL)) {
+        lvl = &loaded_level;
+        (void)read_file_text(s->source_path, s->source_text, sizeof(s->source_text));
+    } else {
+        lvl = leveldef_get_level(db, style);
+    }
+    s->level_style = style;
     s->timeline_01 = 0.0f;
 
     {
-        const leveldef_level* lvl = leveldef_get_level(db, style);
         const int cycle_n = lvl ? ((lvl->wave_mode == LEVELDEF_WAVES_BOID_ONLY) ? lvl->boid_cycle_count :
                                    (lvl->wave_mode == LEVELDEF_WAVES_CURATED) ? lvl->curated_count :
                                    lvl->wave_cycle_count) : 0;
@@ -1375,12 +1677,11 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
             s->level_asteroid_storm_density = lvl->asteroid_storm_density;
         }
     }
-    build_markers(s, db, style);
+    build_markers(s, db, style, lvl);
     s->dirty = 0;
-    s->source_path[0] = '\0';
-    s->source_text[0] = '\0';
-    if (resolve_level_file_path(s->level_name, s->source_path, sizeof(s->source_path))) {
-        (void)read_file_text(s->source_path, s->source_text, sizeof(s->source_text));
+    s->loaded_level_valid = (lvl != NULL) ? 1 : 0;
+    if (lvl) {
+        s->loaded_level = *lvl;
     }
     level_editor_save_snapshot(s);
     snprintf(s->status_text, sizeof(s->status_text), "loaded %s (%d objects)", s->level_name, s->marker_count);
@@ -1442,6 +1743,20 @@ static void add_marker_at_view(
         push_marker(s, LEVEL_EDITOR_MARKER_MINEFIELD, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, x01, y01, 12.0f, 0.0f, 0.0f, 0.0f);
     } else if (kind == LEVEL_EDITOR_MARKER_MISSILE) {
         push_marker(s, LEVEL_EDITOR_MARKER_MISSILE, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, x01, y01, 6.0f, 64.0f, 760.0f, 3.6f);
+    } else if (kind == LEVEL_EDITOR_MARKER_STRUCTURE) {
+        push_marker(
+            s,
+            LEVEL_EDITOR_MARKER_STRUCTURE,
+            LEVEL_EDITOR_TRACK_SPATIAL,
+            1,
+            0.0f,
+            snap_x01(x01),
+            snap_y01(y01),
+            0.0f,
+            0.0f,
+            0.0f,
+            0.0f
+        );
     }
     s->selected_marker = s->marker_count - 1;
     s->selected_property = 0;
@@ -1480,6 +1795,61 @@ static void add_marker_at_timeline(level_editor_state* s, int kind, float x01) {
     snprintf(s->status_text, sizeof(s->status_text), "added %s", marker_kind_name(kind));
 }
 
+static void add_structure_marker_at_view(level_editor_state* s, float mx01, float my01) {
+    if (!s || s->marker_count >= LEVEL_EDITOR_MAX_MARKERS || s->structure_tool_selected <= 0) {
+        return;
+    }
+    const float level_screens = fmaxf(s->level_length_screens, 1.0f);
+    const float start_screen = s->timeline_01 * fmaxf(level_screens - 1.0f, 0.0f);
+    const float view_min = start_screen / level_screens;
+    const float view_max = (start_screen + 1.0f) / level_screens;
+    const float x01 = view_min + clampf(mx01, 0.0f, 1.0f) * fmaxf(view_max - view_min, 1.0e-6f);
+    const float y01 = clampf(my01, 0.0f, 1.0f);
+    const int prefab_id = clampi(s->structure_tool_selected - 1, 0, 31);
+    const int layer = (prefab_id >= 5) ? 1 : 0;
+    const int gx_steps = structure_grid_x_steps_for_level(level_screens);
+    int w_units = 1;
+    int h_units = 1;
+    structure_prefab_dims(prefab_id, &w_units, &h_units);
+    const int max_gx = gx_steps - w_units + 1;
+    const int max_gy = structure_grid_y_steps() - h_units + 1;
+    int gx = clampi((int)lroundf(x01 * (float)gx_steps), 0, (max_gx > 0) ? max_gx : 0);
+    int gy = clampi((int)lroundf(y01 * (float)structure_grid_y_steps()), 0, (max_gy > 0) ? max_gy : 0);
+    if (structure_overlaps_cell(s, layer, gx_steps, -1, gx, gy, w_units, h_units)) {
+        for (int radius = 1; radius <= 16; ++radius) {
+            const int candidates[2] = {gx + radius, gx - radius};
+            int found = 0;
+            for (int ci = 0; ci < 2; ++ci) {
+                const int cgx = clampi(candidates[ci], 0, (max_gx > 0) ? max_gx : 0);
+                if (!structure_overlaps_cell(s, layer, gx_steps, -1, cgx, gy, w_units, h_units)) {
+                    gx = cgx;
+                    found = 1;
+                    break;
+                }
+            }
+            if (found) {
+                break;
+            }
+        }
+    }
+    push_marker(
+        s,
+        LEVEL_EDITOR_MARKER_STRUCTURE,
+        LEVEL_EDITOR_TRACK_SPATIAL,
+        1,
+        0.0f,
+        (float)gx / (float)gx_steps,
+        (float)gy / (float)structure_grid_y_steps(),
+        (float)prefab_id,
+        (float)layer,
+        0.0f,
+        0.0f
+    );
+    s->selected_marker = s->marker_count - 1;
+    s->selected_property = 0;
+    s->dirty = 1;
+}
+
 int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_y, float w, float h, int mouse_down, int mouse_pressed) {
     if (!s) {
         return 0;
@@ -1487,9 +1857,26 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
     level_editor_layout l;
     level_editor_compute_layout(w, h, &l);
     sync_timeline_window(s, &l);
+    if (!mouse_down) {
+        s->marker_drag_active = 0;
+        s->marker_drag_index = -1;
+    }
     if (s->entity_drag_active) {
         s->entity_drag_x = mouse_x;
         s->entity_drag_y = mouse_y;
+    }
+    if (s->marker_drag_active &&
+        s->marker_drag_index >= 0 &&
+        s->marker_drag_index < s->marker_count &&
+        mouse_down &&
+        point_in_rect(mouse_x, mouse_y, l.viewport)) {
+        const float mx01 = (mouse_x - l.viewport.x) / fmaxf(l.viewport.w, 1.0f);
+        const float my01 = (mouse_y - l.viewport.y) / fmaxf(l.viewport.h, 1.0f);
+        place_structure_marker_from_view(s, s->marker_drag_index, mx01, my01);
+        s->selected_marker = s->marker_drag_index;
+        s->selected_property = 0;
+        s->dirty = 1;
+        return 1;
     }
 
     if (mouse_pressed) {
@@ -1524,6 +1911,86 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
         if (point_in_rect(mouse_x, mouse_y, l.next_button)) {
             s->entry_active = 0;
             return 5;
+        }
+        if (point_in_rect(mouse_x, mouse_y, l.construction_button_0)) {
+            s->structure_tool_selected = 1;
+            s->entity_tool_selected = 0;
+            s->entity_drag_active = 1;
+            s->entity_drag_kind = LEVEL_EDITOR_MARKER_STRUCTURE;
+            s->entity_drag_x = mouse_x;
+            s->entity_drag_y = mouse_y;
+            snprintf(s->status_text, sizeof(s->status_text), "construction tool: panel square");
+            return 1;
+        }
+        if (point_in_rect(mouse_x, mouse_y, l.construction_button_1)) {
+            s->structure_tool_selected = 2;
+            s->entity_tool_selected = 0;
+            s->entity_drag_active = 1;
+            s->entity_drag_kind = LEVEL_EDITOR_MARKER_STRUCTURE;
+            s->entity_drag_x = mouse_x;
+            s->entity_drag_y = mouse_y;
+            snprintf(s->status_text, sizeof(s->status_text), "construction tool: inset square");
+            return 1;
+        }
+        if (point_in_rect(mouse_x, mouse_y, l.construction_button_2)) {
+            s->structure_tool_selected = 3;
+            s->entity_tool_selected = 0;
+            s->entity_drag_active = 1;
+            s->entity_drag_kind = LEVEL_EDITOR_MARKER_STRUCTURE;
+            s->entity_drag_x = mouse_x;
+            s->entity_drag_y = mouse_y;
+            snprintf(s->status_text, sizeof(s->status_text), "construction tool: cross brace");
+            return 1;
+        }
+        if (point_in_rect(mouse_x, mouse_y, l.construction_button_3)) {
+            s->structure_tool_selected = 4;
+            s->entity_tool_selected = 0;
+            s->entity_drag_active = 1;
+            s->entity_drag_kind = LEVEL_EDITOR_MARKER_STRUCTURE;
+            s->entity_drag_x = mouse_x;
+            s->entity_drag_y = mouse_y;
+            snprintf(s->status_text, sizeof(s->status_text), "construction tool: roof unit");
+            return 1;
+        }
+        if (point_in_rect(mouse_x, mouse_y, l.construction_button_4)) {
+            s->structure_tool_selected = 5;
+            s->entity_tool_selected = 0;
+            s->entity_drag_active = 1;
+            s->entity_drag_kind = LEVEL_EDITOR_MARKER_STRUCTURE;
+            s->entity_drag_x = mouse_x;
+            s->entity_drag_y = mouse_y;
+            snprintf(s->status_text, sizeof(s->status_text), "construction tool: triple inset");
+            return 1;
+        }
+        if (point_in_rect(mouse_x, mouse_y, l.construction_button_5)) {
+            s->structure_tool_selected = 6;
+            s->entity_tool_selected = 0;
+            s->entity_drag_active = 1;
+            s->entity_drag_kind = LEVEL_EDITOR_MARKER_STRUCTURE;
+            s->entity_drag_x = mouse_x;
+            s->entity_drag_y = mouse_y;
+            snprintf(s->status_text, sizeof(s->status_text), "construction tool: pipe section");
+            return 1;
+        }
+        if (point_in_rect(mouse_x, mouse_y, l.construction_button_6)) {
+            s->structure_tool_selected = 7;
+            s->entity_tool_selected = 0;
+            s->entity_drag_active = 1;
+            s->entity_drag_kind = LEVEL_EDITOR_MARKER_STRUCTURE;
+            s->entity_drag_x = mouse_x;
+            s->entity_drag_y = mouse_y;
+            snprintf(s->status_text, sizeof(s->status_text), "construction tool: valve wheel");
+            return 1;
+        }
+        if (point_in_rect(mouse_x, mouse_y, l.construction_button_7)) {
+            s->structure_tool_selected = 8;
+            s->entity_tool_selected = 0;
+            s->entity_drag_active = 1;
+            s->entity_drag_kind = LEVEL_EDITOR_MARKER_STRUCTURE;
+            s->entity_drag_x = mouse_x;
+            s->entity_drag_y = mouse_y;
+            snprintf(s->status_text, sizeof(s->status_text), "construction tool: duct vent");
+            return 1;
         }
         if (point_in_rect(mouse_x, mouse_y, l.swarm_button)) {
             s->entity_tool_selected = LEVEL_EDITOR_MARKER_BOID;
@@ -1643,20 +2110,36 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
                 const float r = marker_pick_radius01(s->markers[best].kind);
                 pick_d2 = r * r;
             }
-            if (best >= 0 && best_d2 < pick_d2) {
-                s->selected_marker = best;
-            } else {
+            if (s->structure_tool_selected > 0) {
+                if (best >= 0 && best_d2 < pick_d2 &&
+                    s->markers[best].kind == LEVEL_EDITOR_MARKER_STRUCTURE &&
+                    s->markers[best].track == LEVEL_EDITOR_TRACK_SPATIAL) {
+                    s->selected_marker = best;
+                    s->selected_property = 0;
+                    s->marker_drag_active = 1;
+                    s->marker_drag_index = best;
+                } else {
+                    add_structure_marker_at_view(s, mx01, my01);
+                }
+            } else if (s->entity_tool_selected == LEVEL_EDITOR_MARKER_BOID ||
+                       s->entity_tool_selected == LEVEL_EDITOR_MARKER_SEARCHLIGHT ||
+                       s->entity_tool_selected == LEVEL_EDITOR_MARKER_ASTEROID_STORM ||
+                       s->entity_tool_selected == LEVEL_EDITOR_MARKER_MINEFIELD ||
+                       s->entity_tool_selected == LEVEL_EDITOR_MARKER_MISSILE) {
                 if (!level_editor_enemy_spatial(s) && s->entity_tool_selected == LEVEL_EDITOR_MARKER_BOID) {
                     s->selected_marker = -1;
-                } else if (s->entity_tool_selected == LEVEL_EDITOR_MARKER_BOID ||
-                           s->entity_tool_selected == LEVEL_EDITOR_MARKER_SEARCHLIGHT ||
-                           s->entity_tool_selected == LEVEL_EDITOR_MARKER_ASTEROID_STORM ||
-                           s->entity_tool_selected == LEVEL_EDITOR_MARKER_MINEFIELD ||
-                           s->entity_tool_selected == LEVEL_EDITOR_MARKER_MISSILE) {
-                    add_marker_at_view(s, s->entity_tool_selected, mx01, my01);
                 } else {
-                    s->selected_marker = -1;
+                    add_marker_at_view(s, s->entity_tool_selected, mx01, my01);
                 }
+            } else if (best >= 0 && best_d2 < pick_d2) {
+                s->selected_marker = best;
+                if (s->markers[best].kind == LEVEL_EDITOR_MARKER_STRUCTURE &&
+                    s->markers[best].track == LEVEL_EDITOR_TRACK_SPATIAL) {
+                    s->marker_drag_active = 1;
+                    s->marker_drag_index = best;
+                }
+            } else {
+                s->selected_marker = -1;
             }
             s->selected_property = 0;
             return 1;
@@ -1687,6 +2170,8 @@ int level_editor_handle_mouse_release(level_editor_state* s, float mouse_x, floa
     if (!s) {
         return 0;
     }
+    s->marker_drag_active = 0;
+    s->marker_drag_index = -1;
     if (!s->entity_drag_active) {
         return 0;
     }
@@ -1695,7 +2180,11 @@ int level_editor_handle_mouse_release(level_editor_state* s, float mouse_x, floa
     if (point_in_rect(mouse_x, mouse_y, l.viewport)) {
         const float mx01 = (mouse_x - l.viewport.x) / fmaxf(l.viewport.w, 1.0f);
         const float my01 = (mouse_y - l.viewport.y) / fmaxf(l.viewport.h, 1.0f);
-        add_marker_at_view(s, s->entity_drag_kind, mx01, my01);
+        if (s->entity_drag_kind == LEVEL_EDITOR_MARKER_STRUCTURE) {
+            add_structure_marker_at_view(s, mx01, my01);
+        } else {
+            add_marker_at_view(s, s->entity_drag_kind, mx01, my01);
+        }
     } else if (point_in_rect(mouse_x, mouse_y, l.timeline_track)) {
         const float tx01 = clampf((mouse_x - l.timeline_track.x) / fmaxf(l.timeline_track.w, 1.0f), 0.0f, 1.0f);
         if (s->entity_drag_kind == LEVEL_EDITOR_MARKER_SEARCHLIGHT ||
@@ -1772,7 +2261,7 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             } break;
             case 1: {
                 const int dir = (delta >= 0.0f) ? 1 : -1;
-                const int n = 5;
+                const int n = 6;
                 int r = s->level_render_style;
                 if (r < 0 || r >= n) {
                     r = LEVEL_RENDER_DEFENDER;
@@ -1872,6 +2361,44 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
         s->dirty = 1;
         return;
     }
+    if (m->kind == LEVEL_EDITOR_MARKER_STRUCTURE) {
+        const float gx_step = 1.0f / (float)structure_grid_x_steps_for_level(s->level_length_screens);
+        const float gy_step = 1.0f / (float)structure_grid_y_steps();
+        switch (s->selected_property) {
+            case 0: m->x01 = clampf(m->x01 + ((delta >= 0.0f) ? gx_step : -gx_step), 0.0f, 1.0f); break;
+            case 1: m->y01 = clampf(m->y01 + ((delta >= 0.0f) ? gy_step : -gy_step), 0.0f, 1.0f); break;
+            case 2: {
+                int id = (int)lroundf(m->a) + ((delta >= 0.0f) ? 1 : -1);
+                if (id < 0) id = 7;
+                if (id > 7) id = 0;
+                m->a = (float)id;
+            } break;
+            case 3: m->b = (m->b >= 0.5f) ? 0.0f : 1.0f; break;
+            case 4: m->c = (float)(((int)lroundf(m->c) + ((delta >= 0.0f) ? 1 : 3)) & 3); break;
+            case 5: {
+                int flip = ((int)lroundf(m->d)) & 3;
+                flip ^= 1;
+                m->d = (float)flip;
+            } break;
+            default: break;
+        }
+        m->x01 = snap_x01_level(m->x01, s->level_length_screens);
+        m->y01 = snap_y01(m->y01);
+        {
+            const int gx_steps = structure_grid_x_steps_for_level(s->level_length_screens);
+            int w_units = 1;
+            int h_units = 1;
+            int gx = clampi((int)lroundf(m->x01 * (float)gx_steps), 0, gx_steps);
+            int gy = clampi((int)lroundf(m->y01 * (float)structure_grid_y_steps()), 0, structure_grid_y_steps());
+            structure_prefab_dims(clampi((int)lroundf(m->a), 0, 31), &w_units, &h_units);
+            gx = clampi(gx, 0, ((gx_steps - w_units + 1) > 0) ? (gx_steps - w_units + 1) : 0);
+            gy = clampi(gy, 0, ((structure_grid_y_steps() - h_units + 1) > 0) ? (structure_grid_y_steps() - h_units + 1) : 0);
+            m->x01 = (float)gx / (float)gx_steps;
+            m->y01 = (float)gy / (float)structure_grid_y_steps();
+        }
+        s->dirty = 1;
+        return;
+    }
 
     if (m->kind == LEVEL_EDITOR_MARKER_EXIT) {
         switch (s->selected_property) {
@@ -1925,7 +2452,8 @@ int level_editor_cycle_level(level_editor_state* s, const leveldef_db* db, int d
 }
 
 int level_editor_save_current(level_editor_state* s, const leveldef_db* db, char* out_path, size_t out_path_cap) {
-    (void)db;
+    char level_name_file[LEVEL_EDITOR_NAME_CAP];
+    char serialized[16384];
     if (!s) {
         return 0;
     }
@@ -1934,34 +2462,40 @@ int level_editor_save_current(level_editor_state* s, const leveldef_db* db, char
     }
 
     if (s->source_path[0] == '\0') {
+        normalize_level_name_for_file(s->level_name, level_name_file, sizeof(level_name_file));
+        snprintf(s->level_name, sizeof(s->level_name), "%s", level_name_file);
         if (!resolve_level_file_path(s->level_name, s->source_path, sizeof(s->source_path))) {
-            snprintf(s->status_text, sizeof(s->status_text), "save failed: level file not found");
-            return 0;
+            char dir[LEVEL_EDITOR_PATH_CAP];
+            if (!choose_levels_dir(dir, sizeof(dir))) {
+                snprintf(s->status_text, sizeof(s->status_text), "save failed: level file not found");
+                return 0;
+            }
+            if (snprintf(s->source_path, sizeof(s->source_path), "%s/%s.cfg", dir, s->level_name) >= (int)sizeof(s->source_path)) {
+                snprintf(s->status_text, sizeof(s->status_text), "save failed: path too long");
+                return 0;
+            }
         }
     }
-    if (s->source_text[0] == '\0') {
-        if (!read_file_text(s->source_path, s->source_text, sizeof(s->source_text))) {
-            snprintf(s->status_text, sizeof(s->status_text), "save failed: read source");
-            return 0;
-        }
+    if (!build_level_serialized_text(s, db, serialized, sizeof(serialized))) {
+        snprintf(s->status_text, sizeof(s->status_text), "save failed: serialize");
+        return 0;
     }
-    if (s->dirty) {
-        char serialized[16384];
-        if (!build_level_serialized_text(s, db, serialized, sizeof(serialized))) {
-            snprintf(s->status_text, sizeof(s->status_text), "save failed: serialize");
-            return 0;
-        }
-        if (!write_file_text(s->source_path, serialized)) {
-            snprintf(s->status_text, sizeof(s->status_text), "save failed: write");
-            return 0;
-        }
-        snprintf(s->source_text, sizeof(s->source_text), "%s", serialized);
-        s->dirty = 0;
-        level_editor_save_snapshot(s);
-    } else if (!write_file_text(s->source_path, s->source_text)) {
+    if (!write_file_text(s->source_path, serialized)) {
         snprintf(s->status_text, sizeof(s->status_text), "save failed: write");
         return 0;
     }
+    snprintf(s->source_text, sizeof(s->source_text), "%s", serialized);
+    s->dirty = 0;
+    {
+        leveldef_level ll;
+        int style = s->level_style;
+        if (db && leveldef_load_level_file_with_base(db, s->source_path, &ll, &style, NULL)) {
+            s->loaded_level = ll;
+            s->loaded_level_valid = 1;
+            s->level_style = style;
+        }
+    }
+    level_editor_save_snapshot(s);
     if (out_path && out_path_cap > 0) {
         snprintf(out_path, out_path_cap, "%s", s->source_path);
     }
@@ -2016,6 +2550,15 @@ int level_editor_save_new(level_editor_state* s, const leveldef_db* db, char* ou
     snprintf(s->level_name, sizeof(s->level_name), "%s", level_name);
     snprintf(s->source_path, sizeof(s->source_path), "%s", path);
     snprintf(s->source_text, sizeof(s->source_text), "%s", serialized);
+    {
+        leveldef_level ll;
+        int style = s->level_style;
+        if (leveldef_load_level_file_with_base(db, s->source_path, &ll, &style, NULL)) {
+            s->loaded_level = ll;
+            s->loaded_level_valid = 1;
+            s->level_style = style;
+        }
+    }
     s->dirty = 0;
     level_editor_save_snapshot(s);
     if (out_path && out_path_cap > 0) {
@@ -2067,15 +2610,20 @@ void level_editor_new_blank(level_editor_state* s) {
     s->entry_active = 1;
     s->source_path[0] = '\0';
     s->source_text[0] = '\0';
+    s->loaded_level_valid = 0;
+    memset(&s->loaded_level, 0, sizeof(s->loaded_level));
     s->snapshot_valid = 0;
+    s->marker_drag_active = 0;
+    s->marker_drag_index = -1;
     s->dirty = 1;
-    s->level_style = level_style_from_render_style(s->level_render_style);
+    s->level_render_style = LEVEL_RENDER_BLANK;
+    s->level_style = LEVEL_STYLE_BLANK;
     s->level_asteroid_storm_enabled = 0;
     s->level_asteroid_storm_angle_deg = 180.0f;
     s->level_asteroid_storm_speed = 190.0f;
     s->level_asteroid_storm_duration_s = 12.0f;
     s->level_asteroid_storm_density = 1.0f;
-    snprintf(s->level_name, sizeof(s->level_name), "untitled");
+    snprintf(s->level_name, sizeof(s->level_name), "level_blank");
     snprintf(s->status_text, sizeof(s->status_text), "new level");
 }
 

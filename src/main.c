@@ -3242,6 +3242,11 @@ static int handle_level_editor_mouse(app* a, int mouse_x, int mouse_y, int mouse
         const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
         char saved_path[LEVEL_EDITOR_PATH_CAP];
         if (level_editor_save_current(&a->level_editor, db, saved_path, sizeof(saved_path))) {
+            if (!game_refresh_levels(&a->game) ||
+                !game_set_level_by_name(&a->game, a->level_editor.level_name)) {
+                set_tty_message(a, "level editor: saved, runtime sync failed");
+                return action != 0;
+            }
             set_tty_message(a, "level editor: saved");
         } else {
             set_tty_message(a, a->level_editor.status_text[0] ? a->level_editor.status_text : "level editor: save failed");
@@ -3250,6 +3255,11 @@ static int handle_level_editor_mouse(app* a, int mouse_x, int mouse_y, int mouse
         const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
         char saved_path[LEVEL_EDITOR_PATH_CAP];
         if (level_editor_save_new(&a->level_editor, db, saved_path, sizeof(saved_path))) {
+            if (!game_refresh_levels(&a->game) ||
+                !game_set_level_by_name(&a->game, a->level_editor.level_name)) {
+                set_tty_message(a, "level editor: saved new, runtime sync failed");
+                return action != 0;
+            }
             set_tty_message(a, "level editor: saved new");
         } else {
             set_tty_message(a, a->level_editor.status_text[0] ? a->level_editor.status_text : "level editor: save new failed");
@@ -6352,6 +6362,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .level_editor_selected_marker = a->level_editor.selected_marker,
         .level_editor_selected_property = a->level_editor.selected_property,
         .level_editor_tool_selected = a->level_editor.entity_tool_selected,
+        .level_editor_structure_tool_selected = a->level_editor.structure_tool_selected,
         .level_editor_drag_active = a->level_editor.entity_drag_active,
         .level_editor_drag_kind = a->level_editor.entity_drag_kind,
         .level_editor_drag_x = a->level_editor.entity_drag_x,
@@ -6731,7 +6742,7 @@ int main(void) {
     level_editor_init(&a.level_editor);
     {
         const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
-        (void)level_editor_load_by_name(&a.level_editor, db, "level_defender");
+        (void)level_editor_load_by_name(&a.level_editor, db, "level_blank");
     }
     acoustics_defaults(&a);
     acoustics_combat_defaults(&a);
@@ -6958,6 +6969,11 @@ int main(void) {
                     if (a.menu.current == APP_SCREEN_LEVEL_EDITOR) {
                         menu_back_screen(&a);
                     } else {
+                        const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
+                        const char* cur = game_current_level_name(&a.game);
+                        if (cur && cur[0]) {
+                            (void)level_editor_load_by_name(&a.level_editor, db, cur);
+                        }
                         const int ret = menu_preferred_return(&a.menu);
                         menu_open_screen(&a, APP_SCREEN_LEVEL_EDITOR, ret);
                         a.show_crt_ui = 0;
