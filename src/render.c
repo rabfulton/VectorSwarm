@@ -4207,7 +4207,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 const int kind_i = metrics->level_editor_marker_kind[i];
                 const int track_i = metrics->level_editor_marker_track[i];
                 const int is_enemy_i = (kind_i == 2 || kind_i == 3 || kind_i == 4 || kind_i == 5 || kind_i == 6);
-                const int event_item_i = is_enemy_i && (track_i == 1 || kind_i != 6);
+                const int event_item_i = is_enemy_i && (track_i == 1);
                 if (event_item_i) {
                     event_n += 1;
                 }
@@ -4219,7 +4219,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             const int kind = metrics->level_editor_marker_kind[i];
             const int track = metrics->level_editor_marker_track[i];
             const int is_enemy = (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 6);
-            const int event_item = is_enemy && (track == 1 || kind != 6);
+            const int event_item = is_enemy && (track == 1);
             const vg_color c = level_editor_marker_color(&pal, kind);
 
             vg_stroke_style mk = frame;
@@ -4241,7 +4241,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                     const int kind_j = metrics->level_editor_marker_kind[j];
                     const int track_j = metrics->level_editor_marker_track[j];
                     const int is_enemy_j = (kind_j == 2 || kind_j == 3 || kind_j == 4 || kind_j == 5 || kind_j == 6);
-                    const int event_item_j = is_enemy_j && (track_j == 1 || kind_j != 6);
+                    const int event_item_j = is_enemy_j && (track_j == 1);
                     if (!event_item_j) {
                         continue;
                     }

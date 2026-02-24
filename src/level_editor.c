@@ -714,7 +714,13 @@ static int build_level_serialized_text(
 
     for (i = 0; i < s->marker_count; ++i) {
         const level_editor_marker* m = &s->markers[i];
-        if (!marker_is_event_item(s, m) || wave_n >= LEVEL_EDITOR_MAX_MARKERS) {
+        int include = 0;
+        if (lvl.wave_mode == LEVELDEF_WAVES_CURATED) {
+            include = is_wave_kind(m->kind) && (m->track == LEVEL_EDITOR_TRACK_SPATIAL);
+        } else {
+            include = marker_is_event_item(s, m);
+        }
+        if (!include || wave_n >= LEVEL_EDITOR_MAX_MARKERS) {
             continue;
         }
         waves[wave_n].x01 = m->x01;
@@ -1677,6 +1683,39 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
         float data_len = lvl ? fmaxf(1.0f, lvl->exit_x01 + 0.75f) : cycle_len;
         if (lvl) {
             data_len = fmaxf(data_len, lvl->asteroid_storm_start_x01 + 1.0f);
+            {
+                const float steps_per_screen = (float)structure_grid_x_steps_for_level(1.0f);
+                float struct_len = 1.0f;
+                for (int i = 0; i < lvl->structure_count; ++i) {
+                    const leveldef_structure_instance* st = &lvl->structures[i];
+                    int w_units = 1;
+                    int h_units = 1;
+                    int q = 0;
+                    float right_screens = 0.0f;
+                    structure_prefab_dims(st->prefab_id, &w_units, &h_units);
+                    q = ((st->rotation_quadrants % 4) + 4) % 4;
+                    if ((q & 1) != 0) {
+                        const int tmp = w_units;
+                        w_units = h_units;
+                        h_units = tmp;
+                    }
+                    right_screens = ((float)st->grid_x + (float)w_units) / fmaxf(steps_per_screen, 1.0f);
+                    struct_len = fmaxf(struct_len, right_screens + 0.25f);
+                }
+                data_len = fmaxf(data_len, struct_len);
+            }
+            for (int i = 0; i < lvl->searchlight_count; ++i) {
+                data_len = fmaxf(data_len, lvl->searchlights[i].anchor_x01 + 0.5f);
+            }
+            for (int i = 0; i < lvl->minefield_count; ++i) {
+                data_len = fmaxf(data_len, lvl->minefields[i].anchor_x01 + 0.5f);
+            }
+            for (int i = 0; i < lvl->missile_launcher_count; ++i) {
+                data_len = fmaxf(data_len, lvl->missile_launchers[i].anchor_x01 + 0.5f);
+            }
+            for (int i = 0; i < lvl->curated_count; ++i) {
+                data_len = fmaxf(data_len, lvl->curated[i].x01 + 0.5f);
+            }
             if (lvl->event_count > 0) {
                 float sum = 0.0f;
                 for (int i = 0; i < lvl->event_count; ++i) {
@@ -1756,6 +1795,9 @@ static void add_marker_at_view(
     if (kind == LEVEL_EDITOR_MARKER_SEARCHLIGHT) {
         push_marker(s, LEVEL_EDITOR_MARKER_SEARCHLIGHT, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, x01, y01, 0.36f, 12.0f, 1.2f, 45.0f);
     } else if (kind == LEVEL_EDITOR_MARKER_BOID) {
+        if (s->level_wave_mode != LEVELDEF_WAVES_CURATED) {
+            s->level_wave_mode = LEVELDEF_WAVES_CURATED;
+        }
         push_marker(s, LEVEL_EDITOR_MARKER_BOID, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, x01, y01, 12.0f, 190.0f, 90.0f, 0.0f);
     } else if (kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
         push_marker(s, LEVEL_EDITOR_MARKER_ASTEROID_STORM, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, x01, y01, 10.0f, 30.0f, 520.0f, 1.3f);
@@ -1777,6 +1819,34 @@ static void add_marker_at_view(
             0.0f,
             0.0f
         );
+    }
+    s->selected_marker = s->marker_count - 1;
+    s->selected_property = 0;
+    mark_editor_dirty(s);
+    snprintf(s->status_text, sizeof(s->status_text), "added %s", marker_kind_name(kind));
+}
+
+static void add_spatial_marker_at_x01(level_editor_state* s, int kind, float x01, float y01) {
+    if (!s || s->marker_count >= LEVEL_EDITOR_MAX_MARKERS) {
+        return;
+    }
+    const float xx = clampf(x01, 0.0f, 1.0f);
+    const float yy = clampf(y01, 0.0f, 1.0f);
+    if (kind == LEVEL_EDITOR_MARKER_SEARCHLIGHT) {
+        push_marker(s, LEVEL_EDITOR_MARKER_SEARCHLIGHT, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, xx, yy, 0.36f, 12.0f, 1.2f, 45.0f);
+    } else if (kind == LEVEL_EDITOR_MARKER_BOID) {
+        if (s->level_wave_mode != LEVELDEF_WAVES_CURATED) {
+            s->level_wave_mode = LEVELDEF_WAVES_CURATED;
+        }
+        push_marker(s, LEVEL_EDITOR_MARKER_BOID, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, xx, yy, 12.0f, 190.0f, 90.0f, 0.0f);
+    } else if (kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
+        push_marker(s, LEVEL_EDITOR_MARKER_ASTEROID_STORM, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, xx, yy, 10.0f, 30.0f, 520.0f, 1.3f);
+    } else if (kind == LEVEL_EDITOR_MARKER_MINEFIELD) {
+        push_marker(s, LEVEL_EDITOR_MARKER_MINEFIELD, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, xx, yy, 12.0f, 0.0f, 0.0f, 0.0f);
+    } else if (kind == LEVEL_EDITOR_MARKER_MISSILE) {
+        push_marker(s, LEVEL_EDITOR_MARKER_MISSILE, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, xx, yy, 6.0f, 64.0f, 760.0f, 3.6f);
+    } else {
+        return;
     }
     s->selected_marker = s->marker_count - 1;
     s->selected_property = 0;
@@ -2146,11 +2216,7 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
                        s->entity_tool_selected == LEVEL_EDITOR_MARKER_ASTEROID_STORM ||
                        s->entity_tool_selected == LEVEL_EDITOR_MARKER_MINEFIELD ||
                        s->entity_tool_selected == LEVEL_EDITOR_MARKER_MISSILE) {
-                if (!level_editor_enemy_spatial(s) && s->entity_tool_selected == LEVEL_EDITOR_MARKER_BOID) {
-                    s->selected_marker = -1;
-                } else {
-                    add_marker_at_view(s, s->entity_tool_selected, mx01, my01);
-                }
+                add_marker_at_view(s, s->entity_tool_selected, mx01, my01);
             } else if (best >= 0 && best_d2 < pick_d2) {
                 s->selected_marker = best;
                 if (s->markers[best].kind == LEVEL_EDITOR_MARKER_STRUCTURE &&
@@ -2208,14 +2274,22 @@ int level_editor_handle_mouse_release(level_editor_state* s, float mouse_x, floa
     } else if (point_in_rect(mouse_x, mouse_y, l.timeline_track)) {
         const float tx01 = clampf((mouse_x - l.timeline_track.x) / fmaxf(l.timeline_track.w, 1.0f), 0.0f, 1.0f);
         if (s->entity_drag_kind == LEVEL_EDITOR_MARKER_SEARCHLIGHT ||
+            s->entity_drag_kind == LEVEL_EDITOR_MARKER_BOID ||
             s->entity_drag_kind == LEVEL_EDITOR_MARKER_MINEFIELD ||
             s->entity_drag_kind == LEVEL_EDITOR_MARKER_MISSILE ||
             s->entity_drag_kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
-            add_marker_at_view(s, s->entity_drag_kind, tx01, 0.10f);
+            add_spatial_marker_at_x01(
+                s,
+                s->entity_drag_kind,
+                tx01,
+                (s->entity_drag_kind == LEVEL_EDITOR_MARKER_BOID) ? 0.50f : 0.10f
+            );
         }
     } else if (point_in_rect(mouse_x, mouse_y, l.timeline_enemy_track)) {
         const float tx01 = clampf((mouse_x - l.timeline_enemy_track.x) / fmaxf(l.timeline_enemy_track.w, 1.0f), 0.0f, 1.0f);
-        add_marker_at_timeline(s, s->entity_drag_kind, tx01);
+        if (!level_editor_enemy_spatial(s)) {
+            add_marker_at_timeline(s, s->entity_drag_kind, tx01);
+        }
     }
     s->entity_drag_active = 0;
     s->entity_drag_kind = 0;

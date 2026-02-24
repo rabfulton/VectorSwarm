@@ -175,6 +175,278 @@ static float dist_sq(float ax, float ay, float bx, float by) {
     return dx * dx + dy * dy;
 }
 
+static void structure_prefab_dims_world(int prefab_id, int* out_w, int* out_h) {
+    int w = 1;
+    int h = 1;
+    if (prefab_id == 4) {
+        h = 3;
+    }
+    if (out_w) {
+        *out_w = w;
+    }
+    if (out_h) {
+        *out_h = h;
+    }
+}
+
+static void structure_aabb_world(
+    const game_state* g,
+    const leveldef_structure_instance* st,
+    float* out_min_x,
+    float* out_min_y,
+    float* out_max_x,
+    float* out_max_y
+) {
+    int w_units = 1;
+    int h_units = 1;
+    int q;
+    float unit_w;
+    float unit_h;
+    float bx;
+    float by;
+    float bw;
+    float bh;
+
+    if (!g || !st || !out_min_x || !out_min_y || !out_max_x || !out_max_y) {
+        return;
+    }
+    structure_prefab_dims_world(st->prefab_id, &w_units, &h_units);
+    unit_w = g->world_w * (float)LEVELDEF_STRUCTURE_GRID_SCALE / (float)(LEVELDEF_STRUCTURE_GRID_W - 1);
+    unit_h = g->world_h * (float)LEVELDEF_STRUCTURE_GRID_SCALE / (float)(LEVELDEF_STRUCTURE_GRID_H - 1);
+    bx = (float)st->grid_x * unit_w;
+    by = (float)st->grid_y * unit_h;
+    bw = unit_w * (float)w_units;
+    bh = unit_h * (float)h_units;
+    q = ((st->rotation_quadrants % 4) + 4) % 4;
+    if ((q & 1) != 0) {
+        const float tmp = bw;
+        bw = bh;
+        bh = tmp;
+    }
+    *out_min_x = bx;
+    *out_min_y = by;
+    *out_max_x = bx + bw;
+    *out_max_y = by + bh;
+}
+
+static int segment_intersects_aabb(
+    float x0,
+    float y0,
+    float x1,
+    float y1,
+    float min_x,
+    float min_y,
+    float max_x,
+    float max_y
+) {
+    const float dx = x1 - x0;
+    const float dy = y1 - y0;
+    float tmin = 0.0f;
+    float tmax = 1.0f;
+
+    if (fabsf(dx) < 1.0e-6f) {
+        if (x0 < min_x || x0 > max_x) {
+            return 0;
+        }
+    } else {
+        const float inv_dx = 1.0f / dx;
+        float tx1 = (min_x - x0) * inv_dx;
+        float tx2 = (max_x - x0) * inv_dx;
+        if (tx1 > tx2) {
+            const float tmp = tx1;
+            tx1 = tx2;
+            tx2 = tmp;
+        }
+        tmin = fmaxf(tmin, tx1);
+        tmax = fminf(tmax, tx2);
+        if (tmin > tmax) {
+            return 0;
+        }
+    }
+
+    if (fabsf(dy) < 1.0e-6f) {
+        if (y0 < min_y || y0 > max_y) {
+            return 0;
+        }
+    } else {
+        const float inv_dy = 1.0f / dy;
+        float ty1 = (min_y - y0) * inv_dy;
+        float ty2 = (max_y - y0) * inv_dy;
+        if (ty1 > ty2) {
+            const float tmp = ty1;
+            ty1 = ty2;
+            ty2 = tmp;
+        }
+        tmin = fmaxf(tmin, ty1);
+        tmax = fminf(tmax, ty2);
+        if (tmin > tmax) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int game_structure_circle_overlap(const game_state* g, float x, float y, float radius) {
+    const leveldef_level* lvl;
+    if (!g) {
+        return 0;
+    }
+    if (g->render_style == LEVEL_RENDER_CYLINDER) {
+        return 0;
+    }
+    lvl = current_leveldef(g);
+    if (!lvl || lvl->structure_count <= 0) {
+        return 0;
+    }
+    for (int i = 0; i < lvl->structure_count && i < LEVELDEF_MAX_STRUCTURES; ++i) {
+        const leveldef_structure_instance* st = &lvl->structures[i];
+        float min_x;
+        float min_y;
+        float max_x;
+        float max_y;
+        float nx;
+        float ny;
+        float dx;
+        float dy;
+        if (st->layer != 0) {
+            continue;
+        }
+        structure_aabb_world(g, st, &min_x, &min_y, &max_x, &max_y);
+        nx = fmaxf(min_x, fminf(x, max_x));
+        ny = fmaxf(min_y, fminf(y, max_y));
+        dx = x - nx;
+        dy = y - ny;
+        if (dx * dx + dy * dy <= radius * radius) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int game_find_noncolliding_spawn(
+    const game_state* g,
+    float* io_x,
+    float* io_y,
+    float radius,
+    float search_step,
+    float max_search_radius
+) {
+    const float pi = 3.14159265359f;
+    if (!g || !io_x || !io_y) {
+        return 0;
+    }
+    if (!game_structure_circle_overlap(g, *io_x, *io_y, radius)) {
+        return 1;
+    }
+    if (search_step <= 0.0f) {
+        search_step = fmaxf(4.0f, radius * 0.5f);
+    }
+    if (max_search_radius <= search_step) {
+        max_search_radius = search_step * 6.0f;
+    }
+    for (float r = search_step; r <= max_search_radius; r += search_step) {
+        const int samples = 24;
+        for (int i = 0; i < samples; ++i) {
+            const float a = (2.0f * pi * (float)i) / (float)samples;
+            float tx = *io_x + cosf(a) * r;
+            float ty = *io_y + sinf(a) * r;
+            if (ty < 0.0f) ty = 0.0f;
+            if (ty > g->world_h) ty = g->world_h;
+            if (!game_structure_circle_overlap(g, tx, ty, radius)) {
+                *io_x = tx;
+                *io_y = ty;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+void game_structure_avoidance_vector(
+    const game_state* g,
+    float x,
+    float y,
+    float probe_radius,
+    float probe_distance,
+    float* out_x,
+    float* out_y
+) {
+    float ax = 0.0f;
+    float ay = 0.0f;
+    const float dirs[8][2] = {
+        { 1.0f,  0.0f},
+        {-1.0f,  0.0f},
+        { 0.0f,  1.0f},
+        { 0.0f, -1.0f},
+        { 0.70710677f,  0.70710677f},
+        {-0.70710677f,  0.70710677f},
+        { 0.70710677f, -0.70710677f},
+        {-0.70710677f, -0.70710677f}
+    };
+    if (out_x) {
+        *out_x = 0.0f;
+    }
+    if (out_y) {
+        *out_y = 0.0f;
+    }
+    if (!g || probe_radius <= 0.0f || probe_distance <= 0.0f) {
+        return;
+    }
+    if (!game_structure_circle_overlap(g, x, y, probe_radius + probe_distance)) {
+        return;
+    }
+    for (int i = 0; i < 8; ++i) {
+        const float sx = x + dirs[i][0] * probe_distance;
+        const float sy = y + dirs[i][1] * probe_distance;
+        if (game_structure_circle_overlap(g, sx, sy, probe_radius)) {
+            ax -= dirs[i][0];
+            ay -= dirs[i][1];
+        }
+    }
+    if (out_x) {
+        *out_x = ax;
+    }
+    if (out_y) {
+        *out_y = ay;
+    }
+}
+
+int game_line_of_sight_clear(const game_state* g, float x0, float y0, float x1, float y1, float radius) {
+    const leveldef_level* lvl;
+    if (!g) {
+        return 1;
+    }
+    if (g->render_style == LEVEL_RENDER_CYLINDER) {
+        return 1;
+    }
+    lvl = current_leveldef(g);
+    if (!lvl || lvl->structure_count <= 0) {
+        return 1;
+    }
+    if (radius < 0.0f) {
+        radius = 0.0f;
+    }
+    for (int i = 0; i < lvl->structure_count && i < LEVELDEF_MAX_STRUCTURES; ++i) {
+        const leveldef_structure_instance* st = &lvl->structures[i];
+        float min_x;
+        float min_y;
+        float max_x;
+        float max_y;
+        if (st->layer != 0) {
+            continue;
+        }
+        structure_aabb_world(g, st, &min_x, &min_y, &max_x, &max_y);
+        min_x -= radius;
+        min_y -= radius;
+        max_x += radius;
+        max_y += radius;
+        if (segment_intersects_aabb(x0, y0, x1, y1, min_x, min_y, max_x, max_y)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 typedef struct mine_tuning {
     float activation_distance;
     float detonation_distance;
@@ -302,6 +574,14 @@ static void configure_searchlights_for_level(game_state* g) {
         sl->damage_timer_s = sl->damage_interval_s;
         sl->alert_timer_s = 0.0f;
         sl->current_angle_rad = sl->sweep_center_rad;
+        (void)game_find_noncolliding_spawn(
+            g,
+            &sl->origin_x,
+            &sl->origin_y,
+            fmaxf(sl->source_radius, 10.0f),
+            fmaxf(8.0f, sl->source_radius * 0.45f),
+            g->world_h * 0.35f
+        );
     }
 }
 
@@ -897,6 +1177,14 @@ static void configure_missile_launchers_for_level(game_state* g) {
         ml->missile_ttl_s = fmaxf(d->missile_ttl_s, 0.1f);
         ml->hit_radius = fmaxf(d->hit_radius, 1.0f);
         ml->blast_radius = fmaxf(d->blast_radius, ml->hit_radius);
+        (void)game_find_noncolliding_spawn(
+            g,
+            &ml->anchor_x,
+            &ml->anchor_y,
+            fmaxf(ml->hit_radius * su, 16.0f * su),
+            fmaxf(8.0f * su, ml->hit_radius * su * 0.5f),
+            g->world_h * 0.35f
+        );
     }
 }
 
@@ -978,7 +1266,14 @@ static void update_missile_system(game_state* g, float dt) {
             if (!ml->active || ml->fired) {
                 continue;
             }
-            if (dist_sq(g->player.b.x, g->player.b.y, ml->anchor_x, ml->anchor_y) <= ml->activation_range * ml->activation_range) {
+            if (dist_sq(g->player.b.x, g->player.b.y, ml->anchor_x, ml->anchor_y) <= ml->activation_range * ml->activation_range &&
+                game_line_of_sight_clear(
+                    g,
+                    ml->anchor_x,
+                    ml->anchor_y,
+                    g->player.b.x,
+                    g->player.b.y,
+                    5.0f * gameplay_ui_scale(g))) {
                 spawn_enemy_missile_row(g, ml);
             }
         }
@@ -1942,6 +2237,12 @@ static int game_update_player(game_state* g, float dt, const game_input* in, flo
         if (g->player.b.vy > 0.0f) {
             g->player.b.vy = 0.0f;
         }
+    }
+    if (game_structure_circle_overlap(g, g->player.b.x, g->player.b.y, 14.0f * su)) {
+        emit_player_asteroid_explosion(g);
+        g->lives = 0;
+        game_queue_death_message(g);
+        return 0;
     }
     if (g->exit_portal_active &&
         dist_sq(g->player.b.x, g->player.b.y, g->exit_portal_x, g->exit_portal_y) <=

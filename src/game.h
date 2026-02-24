@@ -396,5 +396,24 @@ int game_apply_level_override(game_state* g, const struct leveldef_level* level,
 void game_set_alt_weapon(game_state* g, int weapon_id);
 int game_get_alt_weapon(const game_state* g);
 int game_get_alt_weapon_ammo(const game_state* g, int weapon_id);
+int game_structure_circle_overlap(const game_state* g, float x, float y, float radius);
+int game_find_noncolliding_spawn(
+    const game_state* g,
+    float* io_x,
+    float* io_y,
+    float radius,
+    float search_step,
+    float max_search_radius
+);
+void game_structure_avoidance_vector(
+    const game_state* g,
+    float x,
+    float y,
+    float probe_radius,
+    float probe_distance,
+    float* out_x,
+    float* out_y
+);
+int game_line_of_sight_clear(const game_state* g, float x0, float y0, float x1, float y1, float radius);
 
 #endif

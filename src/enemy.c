@@ -466,6 +466,20 @@ static void announce_wave(game_state* g, const char* wave_name) {
     snprintf(g->wave_announce_text, sizeof(g->wave_announce_text), "inbound enemy wave %02d\n%s", g->wave_index + 1, wave_name);
 }
 
+static void enemy_adjust_spawn_clear(game_state* g, enemy* e, float su) {
+    if (!g || !e) {
+        return;
+    }
+    (void)game_find_noncolliding_spawn(
+        g,
+        &e->b.x,
+        &e->b.y,
+        fmaxf(e->radius, 10.0f * su),
+        fmaxf(8.0f * su, e->radius * 0.55f),
+        g->world_h * 0.40f
+    );
+}
+
 static void spawn_wave_sine_snake(game_state* g, const leveldef_db* db, const leveldef_level* lvl, int wave_id, int bidirectional_spawns, float su, int uses_cylinder, float period) {
     const leveldef_wave_sine_tuning* w = &lvl->sine;
     if (w->count <= 0) {
@@ -494,6 +508,7 @@ static void spawn_wave_sine_snake(game_state* g, const leveldef_db* db, const le
         e->break_delay_s = w->break_delay_base + w->break_delay_step * (float)i;
         e->max_speed = w->max_speed * su;
         e->accel = w->accel;
+        enemy_adjust_spawn_clear(g, e, su);
     }
 }
 
@@ -527,6 +542,7 @@ static void spawn_wave_v_formation(game_state* g, const leveldef_db* db, const l
         e->break_delay_s = w->break_delay_min + frand01() * w->break_delay_rand;
         e->max_speed = w->max_speed * su;
         e->accel = w->accel;
+        enemy_adjust_spawn_clear(g, e, su);
     }
 }
 
@@ -571,6 +587,7 @@ static void spawn_wave_swarm_profile(game_state* g, const leveldef_db* db, int w
         e->swarm_wander_w = p->wander_w;
         e->swarm_wander_freq = p->wander_freq;
         e->swarm_drag = p->steer_drag;
+        enemy_adjust_spawn_clear(g, e, su);
     }
 }
 
@@ -617,6 +634,7 @@ static void spawn_wave_kamikaze(game_state* g, const leveldef_db* db, const leve
             e->kamikaze_strike_x = e->b.x;
             e->kamikaze_strike_y = e->b.y;
             e->kamikaze_is_turning = 0;
+            enemy_adjust_spawn_clear(g, e, su);
         }
     }
 }
@@ -675,6 +693,7 @@ void enemy_spawn_curated_enemy(
             e->swarm_wander_w = p->wander_w;
             e->swarm_wander_freq = p->wander_freq;
             e->swarm_drag = p->steer_drag;
+            enemy_adjust_spawn_clear(g, e, su);
         }
         return;
     }
@@ -712,6 +731,7 @@ void enemy_spawn_curated_enemy(
             e->kamikaze_strike_x = e->b.x;
             e->kamikaze_strike_y = e->b.y;
             e->kamikaze_is_turning = 0;
+            enemy_adjust_spawn_clear(g, e, su);
         } else {
             e->archetype = ENEMY_ARCH_FORMATION;
             e->state = ENEMY_STATE_FORMATION;
@@ -725,6 +745,7 @@ void enemy_spawn_curated_enemy(
             e->max_speed = ((ce->c > 0.0f) ? ce->c : ((ce->kind == 3) ? lvl->v.max_speed : lvl->sine.max_speed)) * su;
             e->accel = (ce->kind == 3) ? lvl->v.accel : lvl->sine.accel;
             e->lane_dir = lane_dir_toward_player_x(g, e->b.x, uses_cylinder, period);
+            enemy_adjust_spawn_clear(g, e, su);
         }
     }
 }
@@ -930,6 +951,16 @@ static void enemy_try_fire(game_state* g, enemy* e, float dt, const leveldef_db*
             return;
         }
     }
+    if (!game_line_of_sight_clear(
+            g,
+            e->b.x,
+            e->b.y,
+            g->player.b.x,
+            g->player.b.y,
+            fmaxf(2.0f, e->radius * 0.22f))) {
+        enemy_reset_fire_cooldown(w, &t, e);
+        return;
+    }
 
     {
         const float dx = uses_cylinder ? wrap_delta(g->player.b.x, e->b.x, period) : (g->player.b.x - e->b.x);
@@ -1046,6 +1077,14 @@ static void update_enemy_kamikaze(game_state* g, enemy* e, float dt, int uses_cy
     float player_dx = uses_cylinder ? wrap_delta(g->player.b.x, e->b.x, period) : (g->player.b.x - e->b.x);
     float player_dy = g->player.b.y - e->b.y;
     const float dist_to_player_now = length2(player_dx, player_dy);
+    const int has_los = game_line_of_sight_clear(
+        g,
+        e->b.x,
+        e->b.y,
+        g->player.b.x,
+        g->player.b.y,
+        fmaxf(2.0f, e->radius * 0.28f)
+    );
     normalize2(&dir_x, &dir_y);
     normalize2(&player_dx, &player_dy);
     {
@@ -1097,7 +1136,7 @@ static void update_enemy_kamikaze(game_state* g, enemy* e, float dt, int uses_cy
             const float screen_y = g->world_h * 0.52f;
             const int same_screen = (fabsf(uses_cylinder ? wrap_delta(g->player.b.x, e->b.x, period) : (g->player.b.x - e->b.x)) <= screen_x) &&
                                     (fabsf(g->player.b.y - e->b.y) <= screen_y);
-            if (same_screen && strike_range) {
+            if (same_screen && strike_range && has_los) {
                 /* Kill-strike entry gate: only if target is within +/-90 degrees of facing. */
                 e->kamikaze_strike_x = g->player.b.x;
                 e->kamikaze_strike_y = g->player.b.y;
@@ -1119,7 +1158,7 @@ static void update_enemy_kamikaze(game_state* g, enemy* e, float dt, int uses_cy
                     }
                 }
             }
-            if (same_screen && e->ai_timer_s > 0.20f) {
+            if (same_screen && has_los && e->ai_timer_s > 0.20f) {
                 const float near01 = clampf(1.0f - dist_to_player / (g->world_w * 0.60f), 0.0f, 1.0f);
                 const float lunge_rate = 0.35f + near01 * 2.05f; /* events/second */
                 const float p_dt = 1.0f - expf(-lunge_rate * fmaxf(dt, 0.0f));
@@ -1146,6 +1185,22 @@ static void update_enemy_kamikaze(game_state* g, enemy* e, float dt, int uses_cy
         float sx = uses_cylinder ? wrap_delta(e->kamikaze_strike_x, e->b.x, period) : (e->kamikaze_strike_x - e->b.x);
         float sy = e->kamikaze_strike_y - e->b.y;
         normalize2(&sx, &sy);
+        if (!game_line_of_sight_clear(
+                g,
+                e->b.x,
+                e->b.y,
+                e->kamikaze_strike_x,
+                e->kamikaze_strike_y,
+                fmaxf(2.0f, e->radius * 0.28f))) {
+            e->state = ENEMY_STATE_KAMIKAZE_COIL;
+            e->ai_timer_s = 0.0f;
+            e->break_delay_s = 0.55f + frand01() * 0.35f;
+            e->kamikaze_thrust = 0.0f;
+            e->kamikaze_tail = 0.22f;
+            e->kamikaze_tail_start = e->kamikaze_tail;
+            e->kamikaze_is_turning = 0;
+            return;
+        }
         if (e->kamikaze_is_turning) {
             const float turn_rate = clampf(dt * 30.0f, 0.0f, 1.0f);
             const float facing_dot = e->facing_x * sx + e->facing_y * sy;
@@ -1344,6 +1399,23 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt, int uses_cylin
             }
         }
     }
+    {
+        float wall_avoid_x = 0.0f;
+        float wall_avoid_y = 0.0f;
+        game_structure_avoidance_vector(
+            g,
+            e->b.x,
+            e->b.y,
+            fmaxf(8.0f * su, e->radius),
+            84.0f * su,
+            &wall_avoid_x,
+            &wall_avoid_y
+        );
+        if (fabsf(wall_avoid_x) > 1.0e-4f || fabsf(wall_avoid_y) > 1.0e-4f) {
+            avoid_x += wall_avoid_x * 1.35f;
+            avoid_y += wall_avoid_y * 1.35f;
+        }
+    }
 
     {
         const float goal_dir = (e->swarm_goal_dir < 0.0f) ? -1.0f : 1.0f;
@@ -1440,6 +1512,40 @@ void enemy_update_system(
             }
         }
         integrate_body(&e->b, dt);
+        if (!uses_cylinder) {
+            float avoid_x = 0.0f;
+            float avoid_y = 0.0f;
+            game_structure_avoidance_vector(
+                g,
+                e->b.x,
+                e->b.y,
+                fmaxf(8.0f * su, e->radius),
+                fmaxf(14.0f * su, e->radius * 1.4f),
+                &avoid_x,
+                &avoid_y
+            );
+            if (fabsf(avoid_x) > 1.0e-4f || fabsf(avoid_y) > 1.0e-4f) {
+                normalize2(&avoid_x, &avoid_y);
+                e->b.vx += avoid_x * (620.0f * su) * dt;
+                e->b.vy += avoid_y * (620.0f * su) * dt;
+            }
+            if (game_structure_circle_overlap(g, e->b.x, e->b.y, fmaxf(8.0f * su, e->radius))) {
+                float nx = e->b.x;
+                float ny = e->b.y;
+                if (game_find_noncolliding_spawn(
+                        g,
+                        &nx,
+                        &ny,
+                        fmaxf(8.0f * su, e->radius),
+                        fmaxf(8.0f * su, e->radius * 0.6f),
+                        g->world_h * 0.45f)) {
+                    e->b.x = nx;
+                    e->b.y = ny;
+                    e->b.vx *= -0.35f;
+                    e->b.vy *= -0.35f;
+                }
+            }
+        }
         {
             const float v = length2(e->b.vx, e->b.vy);
             float speed_cap = e->max_speed;
