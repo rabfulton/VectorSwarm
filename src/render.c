@@ -56,6 +56,9 @@ static vg_result draw_structure_prefab_tile(
     float by,
     float unit_w,
     float unit_h,
+    int rotation_quadrants,
+    int flip_x,
+    int flip_y,
     const vg_stroke_style* st,
     const vg_fill_style* fill
 );
@@ -1330,6 +1333,20 @@ static vg_result draw_minefields(
     return VG_OK;
 }
 
+static void structure_prefab_dims_world(int prefab_id, int* out_w, int* out_h) {
+    int w = 1;
+    int h = 1;
+    if (prefab_id == 4) {
+        h = 3;
+    }
+    if (out_w) {
+        *out_w = w;
+    }
+    if (out_h) {
+        *out_h = h;
+    }
+}
+
 static vg_result draw_level_structures(
     vg_context* ctx,
     const game_state* g,
@@ -1340,8 +1357,7 @@ static vg_result draw_level_structures(
     if (!ctx || !g || !pal || !land_halo || !land_main || g->render_style == LEVEL_RENDER_CYLINDER) {
         return VG_OK;
     }
-    const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
-    const leveldef_level* lvl = leveldef_get_level(db, g->level_style);
+    const leveldef_level* lvl = game_current_leveldef(g);
     if (!lvl || lvl->structure_count <= 0) {
         return VG_OK;
     }
@@ -1365,15 +1381,30 @@ static vg_result draw_level_structures(
 
     const float unit_w = g->world_w * (float)LEVELDEF_STRUCTURE_GRID_SCALE / (float)(LEVELDEF_STRUCTURE_GRID_W - 1);
     const float unit_h = g->world_h * (float)LEVELDEF_STRUCTURE_GRID_SCALE / (float)(LEVELDEF_STRUCTURE_GRID_H - 1);
+    const float view_min_x = g->camera_x - g->world_w * 0.58f;
+    const float view_max_x = g->camera_x + g->world_w * 0.58f;
+    const float view_min_y = g->camera_y - g->world_h * 0.58f;
+    const float view_max_y = g->camera_y + g->world_h * 0.58f;
 
     for (int i = 0; i < lvl->structure_count && i < LEVELDEF_MAX_STRUCTURES; ++i) {
         const leveldef_structure_instance* st = &lvl->structures[i];
         const vg_stroke_style* hl = (st->layer > 0) ? &feature_halo : &base_halo;
         const vg_stroke_style* mn = (st->layer > 0) ? &feature_main : &base_main;
+        int w_units = 1;
+        int h_units = 1;
+        structure_prefab_dims_world(st->prefab_id, &w_units, &h_units);
         const float bx = (float)st->grid_x * unit_w;
         const float by = (float)st->grid_y * unit_h;
+        const float bw = unit_w * (float)w_units;
+        const float bh = unit_h * (float)h_units;
+        if (bx + bw < view_min_x - unit_w || bx > view_max_x + unit_w ||
+            by + bh < view_min_y - unit_h || by > view_max_y + unit_h) {
+            continue;
+        }
 
-        vg_result vr = draw_structure_prefab_tile(
+        vg_result vr = VG_OK;
+
+        vr = draw_structure_prefab_tile(
             ctx,
             st->prefab_id,
             st->layer,
@@ -1381,6 +1412,9 @@ static vg_result draw_level_structures(
             by,
             unit_w,
             unit_h,
+            st->rotation_quadrants,
+            st->flip_x,
+            st->flip_y,
             hl,
             &base_fill
         );
@@ -1395,11 +1429,82 @@ static vg_result draw_level_structures(
             by,
             unit_w,
             unit_h,
+            st->rotation_quadrants,
+            st->flip_x,
+            st->flip_y,
             mn,
             NULL
         );
         if (vr != VG_OK) {
             return vr;
+        }
+
+        if (st->layer > 0 && st->prefab_id == 5) {
+            const float y0 = by + bh * 0.40f;
+            const float y1 = by + bh * 0.60f;
+            const float streak_half = fmaxf(unit_w * 0.14f, 2.0f);
+            for (int lane = 0; lane < 2; ++lane) {
+                const float ly = (lane == 0) ? y0 : y1;
+                for (int p = 0; p < 6; ++p) {
+                    const float h = (float)(((st->grid_x * 37 + st->grid_y * 19 + p * 13) & 255)) / 255.0f;
+                    const float ph = repeatf(g->t * (0.55f + 0.35f * h) + (float)p * 0.31f + h, 1.0f);
+                    const float x = bx + ph * bw;
+                    const float alpha = 0.44f * (0.65f + 0.35f * sinf(g->t * 3.2f + h * 7.1f));
+                    const vg_fill_style spark = {
+                        .intensity = 0.95f,
+                        .color = (vg_color){pal->secondary.r, pal->secondary.g, pal->secondary.b, alpha},
+                        .blend = VG_BLEND_ALPHA
+                    };
+                    const vg_vec2 core[2] = {{x - streak_half, ly}, {x + streak_half, ly}};
+                    vr = vg_draw_polyline(ctx, core, 2, mn, 0);
+                    if (vr != VG_OK) {
+                        return vr;
+                    }
+                    vr = vg_fill_circle(ctx, (vg_vec2){x, ly}, fmaxf(unit_h * 0.07f, 1.2f), &spark, 10);
+                    if (vr != VG_OK) {
+                        return vr;
+                    }
+                }
+            }
+        } else if (st->layer > 0 && st->prefab_id >= 7) {
+            const int streams = 4;
+            const int puffs_per_stream = 8;
+            const float vent_y = by + bh;
+            for (int stream = 0; stream < streams; ++stream) {
+                const float stream_t = (streams > 1) ? ((float)stream / (float)(streams - 1)) : 0.5f;
+                const float vent_x = bx + bw * (0.24f + 0.52f * stream_t);
+                for (int puff = 0; puff < puffs_per_stream; ++puff) {
+                    const int seed = st->grid_x * 73 + st->grid_y * 41 + stream * 101 + puff * 31;
+                    const float h = (float)(seed & 255) / 255.0f;
+                    const float ph = repeatf(g->t * (0.11f + 0.10f * h) + (float)puff * 0.17f + h * 0.9f + stream_t * 0.31f, 1.0f);
+                    const float rise = ph * (bh * 4.8f);
+                    const float swirl = sinf((ph + h) * (8.6f + 2.1f * stream_t) + (float)puff * 1.1f) * bw * (0.10f + 0.20f * ph);
+                    const float spread = ((float)puff / (float)puffs_per_stream) * bw * 0.18f;
+                    const float r = fmaxf(unit_h * (0.10f + 0.26f * ph + 0.12f * h), 1.0f);
+                    const float a = 0.34f * (1.0f - ph) * (0.75f + 0.25f * (1.0f - stream_t));
+                    const float shade = 0.70f + 0.25f * h;
+                    const vg_fill_style smoke = {
+                        .intensity = 0.82f,
+                        .color = (vg_color){
+                            pal->primary_dim.r * shade,
+                            pal->primary_dim.g * shade,
+                            pal->primary_dim.b * shade,
+                            a
+                        },
+                        .blend = VG_BLEND_ALPHA
+                    };
+                    vr = vg_fill_circle(
+                        ctx,
+                        (vg_vec2){vent_x + swirl + spread, vent_y + rise},
+                        r,
+                        &smoke,
+                        12
+                    );
+                    if (vr != VG_OK) {
+                        return vr;
+                    }
+                }
+            }
         }
     }
     return VG_OK;
@@ -3354,9 +3459,6 @@ static int editor_structure_grid_steps_y(void) {
 static void editor_structure_prefab_dims(int prefab_id, int* out_w, int* out_h) {
     int w = 1;
     int h = 1;
-    if (prefab_id == 3) {
-        h = 2;
-    }
     if (prefab_id == 4) {
         h = 3;
     }
@@ -3372,6 +3474,9 @@ static vg_result draw_structure_prefab_tile(
     float by,
     float unit_w,
     float unit_h,
+    int rotation_quadrants,
+    int flip_x,
+    int flip_y,
     const vg_stroke_style* st,
     const vg_fill_style* fill
 ) {
@@ -3382,12 +3487,14 @@ static vg_result draw_structure_prefab_tile(
     const float h = unit_h * (float)h_units;
     const vg_rect outer = {bx, by, w, h};
     vg_result r = VG_OK;
-    if (fill && layer == 0) {
-        r = vg_fill_rect(ctx, outer, fill);
+    if (prefab_id != 3) {
+        if (fill && layer == 0) {
+            r = vg_fill_rect(ctx, outer, fill);
+            if (r != VG_OK) return r;
+        }
+        r = vg_draw_rect(ctx, outer, st);
         if (r != VG_OK) return r;
     }
-    r = vg_draw_rect(ctx, outer, st);
-    if (r != VG_OK) return r;
 
     if (prefab_id == 1) {
         const float mx = fminf(unit_w * 0.20f, w * 0.26f);
@@ -3403,15 +3510,45 @@ static vg_result draw_structure_prefab_tile(
         return vg_draw_polyline(ctx, d1, 2, st, 0);
     }
     if (prefab_id == 3) {
-        const vg_rect base = {bx, by, w, unit_h};
-        const vg_vec2 roof[3] = {
-            {bx, by + unit_h},
-            {bx + w * 0.5f, by + h},
-            {bx + w, by + unit_h}
+        const float cx = w * 0.5f;
+        const float cy = h * 0.5f;
+        const int q = ((rotation_quadrants % 4) + 4) % 4;
+        const int fx = flip_x ? 1 : 0;
+        const int fy = flip_y ? 1 : 0;
+        vg_vec2 tri[4];
+        const vg_vec2 base[3] = {
+            {0.0f, h},
+            {0.0f, 0.0f},
+            {w, h}
         };
-        r = vg_draw_rect(ctx, base, st);
-        if (r != VG_OK) return r;
-        return vg_draw_polyline(ctx, roof, 3, st, 0);
+        for (int i = 0; i < 3; ++i) {
+            float x = base[i].x;
+            float y = base[i].y;
+            if (fx) {
+                x = w - x;
+            }
+            if (fy) {
+                y = h - y;
+            }
+            {
+                const float dx = x - cx;
+                const float dy = y - cy;
+                if (q == 1) {
+                    x = cx - dy;
+                    y = cy + dx;
+                } else if (q == 2) {
+                    x = cx - dx;
+                    y = cy - dy;
+                } else if (q == 3) {
+                    x = cx + dy;
+                    y = cy - dx;
+                }
+            }
+            tri[i].x = bx + x;
+            tri[i].y = by + y;
+        }
+        tri[3] = tri[0];
+        return vg_draw_polyline(ctx, tri, 4, st, 0);
     }
     if (prefab_id == 4) {
         const float inset_x = fminf(unit_w * 0.20f, w * 0.30f);
@@ -3765,7 +3902,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     if (r != VG_OK) return r;
     r = vg_draw_button(ctx, ctb_btn2, "X BRACE", 9.8f * ui, &layer1_frame, &layer1_text, metrics->level_editor_structure_tool_selected == 3 ? 1 : 0);
     if (r != VG_OK) return r;
-    r = vg_draw_button(ctx, ctb_btn3, "ROOF TRI", 9.8f * ui, &layer1_frame, &layer1_text, metrics->level_editor_structure_tool_selected == 4 ? 1 : 0);
+    r = vg_draw_button(ctx, ctb_btn3, "TRI", 9.8f * ui, &layer1_frame, &layer1_text, metrics->level_editor_structure_tool_selected == 4 ? 1 : 0);
     if (r != VG_OK) return r;
     r = vg_draw_button(ctx, ctb_btn4, "TRIPLE", 9.8f * ui, &layer1_frame, &layer1_text, metrics->level_editor_structure_tool_selected == 5 ? 1 : 0);
     if (r != VG_OK) return r;
@@ -4087,7 +4224,20 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                         .color = (vg_color){pal.primary_dim.r, pal.primary_dim.g, pal.primary_dim.b, 0.15f},
                         .blend = VG_BLEND_ALPHA
                     };
-                    r = draw_structure_prefab_tile(ctx, prefab, layer, bx, by, cell_w, cell_h, &st, &fill);
+                    r = draw_structure_prefab_tile(
+                        ctx,
+                        prefab,
+                        layer,
+                        bx,
+                        by,
+                        cell_w,
+                        cell_h,
+                        (int)lroundf(metrics->level_editor_marker_c[i]),
+                        (((int)lroundf(metrics->level_editor_marker_d[i])) & 1),
+                        ((((int)lroundf(metrics->level_editor_marker_d[i])) >> 1) & 1),
+                        &st,
+                        &fill
+                    );
                 }
             } else {
                 r = draw_editor_diamond(ctx, (vg_vec2){vx, vy}, 19.5f * ui * glyph_scale, &mk);
@@ -4284,7 +4434,20 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                     .color = (vg_color){gs.color.r, gs.color.g, gs.color.b, 0.12f},
                     .blend = VG_BLEND_ALPHA
                 };
-                r = draw_structure_prefab_tile(ctx, prefab, layer, bx, by, cell_w, cell_h, &gs, &fill);
+                r = draw_structure_prefab_tile(
+                    ctx,
+                    prefab,
+                    layer,
+                    bx,
+                    by,
+                    cell_w,
+                    cell_h,
+                    0,
+                    0,
+                    0,
+                    &gs,
+                    &fill
+                );
             }
         } else {
             r = draw_editor_diamond(ctx, (vg_vec2){metrics->level_editor_drag_x, metrics->level_editor_drag_y}, 7.0f * ui, &gs);

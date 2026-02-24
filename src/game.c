@@ -2303,6 +2303,11 @@ const struct leveldef_db* game_leveldef_get(void) {
     return &g_leveldef;
 }
 
+const struct leveldef_level* game_current_leveldef(const game_state* g) {
+    ensure_leveldef_loaded();
+    return current_leveldef(g);
+}
+
 const char* game_current_level_name(const game_state* g) {
     ensure_leveldef_loaded();
     if (g && g->current_level_name[0] != '\0') {
@@ -2373,6 +2378,26 @@ int game_refresh_levels(game_state* g) {
     if (g) {
         return set_level_index(g, 0);
     }
+    return 1;
+}
+
+int game_apply_level_override(game_state* g, const struct leveldef_level* level, const char* level_name) {
+    if (!g || !level) {
+        return 0;
+    }
+    ensure_leveldef_loaded();
+    if (g_level_count <= 0) {
+        return 0;
+    }
+    if (g->level_index < 0 || g->level_index >= g_level_count) {
+        return 0;
+    }
+    g_levels[g->level_index].level = *level;
+    if (level_name && level_name[0]) {
+        snprintf(g_levels[g->level_index].name, sizeof(g_levels[g->level_index].name), "%s", level_name);
+        snprintf(g->current_level_name, sizeof(g->current_level_name), "%s", level_name);
+    }
+    apply_level_runtime_config(g);
     return 1;
 }
 

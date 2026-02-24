@@ -98,6 +98,7 @@ typedef struct level_editor_state {
     int marker_drag_active;
     int marker_drag_index;
     int dirty;
+    unsigned edit_revision;
     char source_path[LEVEL_EDITOR_PATH_CAP];
     char source_text[16384];
     int loaded_level_valid;
@@ -135,5 +136,7 @@ int level_editor_save_new(level_editor_state* s, const leveldef_db* db, char* ou
 int level_editor_revert(level_editor_state* s);
 void level_editor_new_blank(level_editor_state* s);
 int level_editor_delete_selected(level_editor_state* s);
+int level_editor_build_level(const level_editor_state* s, const leveldef_db* db, leveldef_level* out_level);
+int level_editor_rotate_selected_structure(level_editor_state* s, int delta_quadrants);
 
 #endif

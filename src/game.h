@@ -21,6 +21,7 @@
 #define PLAYER_ALT_WEAPON_COUNT 4
 
 struct leveldef_db;
+struct leveldef_level;
 
 enum level_style_id {
     LEVEL_STYLE_DEFENDER = 0,
@@ -387,9 +388,11 @@ int game_pop_wave_announcement(game_state* g, char* out, size_t out_cap);
 int game_pop_fire_sfx_count(game_state* g);
 int game_pop_audio_events(game_state* g, game_audio_event* out, int out_cap);
 const struct leveldef_db* game_leveldef_get(void);
+const struct leveldef_level* game_current_leveldef(const game_state* g);
 const char* game_current_level_name(const game_state* g);
 int game_set_level_by_name(game_state* g, const char* name);
 int game_refresh_levels(game_state* g);
+int game_apply_level_override(game_state* g, const struct leveldef_level* level, const char* level_name);
 void game_set_alt_weapon(game_state* g, int weapon_id);
 int game_get_alt_weapon(const game_state* g);
 int game_get_alt_weapon_ammo(const game_state* g, int weapon_id);

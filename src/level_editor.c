@@ -19,6 +19,14 @@ static int clampi(int v, int lo, int hi) {
     return v;
 }
 
+static void mark_editor_dirty(level_editor_state* s) {
+    if (!s) {
+        return;
+    }
+    s->dirty = 1;
+    s->edit_revision += 1u;
+}
+
 static int structure_grid_x_steps_for_level(float level_screens) {
     const float ls = fmaxf(level_screens, 1.0f);
     const int base_steps = (int)lroundf(ls * (float)(LEVELDEF_STRUCTURE_GRID_W - 1));
@@ -52,9 +60,6 @@ static float snap_y01(float y01) {
 static void structure_prefab_dims(int prefab_id, int* out_w, int* out_h) {
     int w = 1;
     int h = 1;
-    if (prefab_id == 3) {
-        h = 2;
-    }
     if (prefab_id == 4) {
         h = 3;
     }
@@ -538,7 +543,13 @@ static int appendf(char* out, size_t out_cap, size_t* used, const char* fmt, ...
     return 1;
 }
 
-static int build_level_serialized_text(const level_editor_state* s, const leveldef_db* db, char* out, size_t out_cap) {
+static int build_level_serialized_text(
+    const level_editor_state* s,
+    const leveldef_db* db,
+    char* out,
+    size_t out_cap,
+    leveldef_level* out_level
+) {
     size_t used = 0;
     leveldef_level lvl;
     int searchlight_n = 0;
@@ -549,7 +560,7 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
     wave_marker_ref waves[LEVEL_EDITOR_MAX_MARKERS];
     const float level_len = fmaxf(s ? s->level_length_screens : 1.0f, 1.0f);
 
-    if (!s || !db || !out || out_cap == 0) {
+    if (!s || !db || (!out_level && (!out || out_cap == 0))) {
         return 0;
     }
     if (s->loaded_level_valid) {
@@ -834,6 +845,13 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
         }
     }
 
+    if (out_level) {
+        *out_level = lvl;
+    }
+    if (!out || out_cap == 0) {
+        return 1;
+    }
+
     if (!appendf(out, out_cap, &used, "# LevelDef v1\n")) return 0;
     if (!appendf(out, out_cap, &used, "# wave_cycle tokens: sine_snake,v_formation,swarm,kamikaze,asteroid_storm\n")) return 0;
     if (!appendf(out, out_cap, &used, "# event fields: kind,order,delay_s\n")) return 0;
@@ -878,7 +896,7 @@ static int build_level_serialized_text(const level_editor_state* s, const leveld
             const char* pname = (pid >= 0 && pid < db->profile_count) ? db->profiles[pid].name : "FISH";
             if (!appendf(out, out_cap, &used, "%s%s", (i > 0) ? "," : "", pname)) return 0;
         }
-        if (!appendf(out, out_cap, &used, "\n")) return 0;
+    if (!appendf(out, out_cap, &used, "\n")) return 0;
     } else if (lvl.wave_mode == LEVELDEF_WAVES_CURATED) {
         for (i = 0; i < lvl.curated_count; ++i) {
             const leveldef_curated_enemy* ce = &lvl.curated[i];
@@ -1613,6 +1631,7 @@ void level_editor_init(level_editor_state* s) {
     s->marker_drag_active = 0;
     s->marker_drag_index = -1;
     s->dirty = 0;
+    s->edit_revision = 1u;
     s->source_path[0] = '\0';
     s->source_text[0] = '\0';
     s->loaded_level_valid = 0;
@@ -1679,6 +1698,7 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
     }
     build_markers(s, db, style, lvl);
     s->dirty = 0;
+    s->edit_revision += 1u;
     s->loaded_level_valid = (lvl != NULL) ? 1 : 0;
     if (lvl) {
         s->loaded_level = *lvl;
@@ -1760,7 +1780,7 @@ static void add_marker_at_view(
     }
     s->selected_marker = s->marker_count - 1;
     s->selected_property = 0;
-    s->dirty = 1;
+    mark_editor_dirty(s);
     snprintf(s->status_text, sizeof(s->status_text), "added %s", marker_kind_name(kind));
 }
 
@@ -1791,7 +1811,7 @@ static void add_marker_at_timeline(level_editor_state* s, int kind, float x01) {
     }
     s->selected_marker = s->marker_count - 1;
     s->selected_property = 0;
-    s->dirty = 1;
+    mark_editor_dirty(s);
     snprintf(s->status_text, sizeof(s->status_text), "added %s", marker_kind_name(kind));
 }
 
@@ -1847,7 +1867,7 @@ static void add_structure_marker_at_view(level_editor_state* s, float mx01, floa
     );
     s->selected_marker = s->marker_count - 1;
     s->selected_property = 0;
-    s->dirty = 1;
+    mark_editor_dirty(s);
 }
 
 int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_y, float w, float h, int mouse_down, int mouse_pressed) {
@@ -1875,7 +1895,7 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
         place_structure_marker_from_view(s, s->marker_drag_index, mx01, my01);
         s->selected_marker = s->marker_drag_index;
         s->selected_property = 0;
-        s->dirty = 1;
+        mark_editor_dirty(s);
         return 1;
     }
 
@@ -1949,7 +1969,7 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
             s->entity_drag_kind = LEVEL_EDITOR_MARKER_STRUCTURE;
             s->entity_drag_x = mouse_x;
             s->entity_drag_y = mouse_y;
-            snprintf(s->status_text, sizeof(s->status_text), "construction tool: roof unit");
+            snprintf(s->status_text, sizeof(s->status_text), "construction tool: tri");
             return 1;
         }
         if (point_in_rect(mouse_x, mouse_y, l.construction_button_4)) {
@@ -2299,7 +2319,7 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             default:
                 break;
         }
-        s->dirty = 1;
+        mark_editor_dirty(s);
         return;
     }
     level_editor_marker* m = &s->markers[s->selected_marker];
@@ -2321,7 +2341,7 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             case 5: m->d = clampf(m->d + delta * 6.0f, 0.01f, 8.0f); break;
             default: break;
         }
-        s->dirty = 1;
+        mark_editor_dirty(s);
         return;
     }
 
@@ -2335,7 +2355,7 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             case 5: m->d += delta * 20.0f; break;
             default: break;
         }
-        s->dirty = 1;
+        mark_editor_dirty(s);
         return;
     }
     if (m->kind == LEVEL_EDITOR_MARKER_MINEFIELD) {
@@ -2345,7 +2365,7 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             case 2: m->a = clampf(m->a + delta * 24.0f, 1.0f, 128.0f); break;
             default: break;
         }
-        s->dirty = 1;
+        mark_editor_dirty(s);
         return;
     }
     if (m->kind == LEVEL_EDITOR_MARKER_MISSILE) {
@@ -2358,7 +2378,7 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             case 5: m->d = clampf(m->d + delta * 10.0f, 0.20f, 30.0f); break;
             default: break;
         }
-        s->dirty = 1;
+        mark_editor_dirty(s);
         return;
     }
     if (m->kind == LEVEL_EDITOR_MARKER_STRUCTURE) {
@@ -2396,7 +2416,7 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             m->x01 = (float)gx / (float)gx_steps;
             m->y01 = (float)gy / (float)structure_grid_y_steps();
         }
-        s->dirty = 1;
+        mark_editor_dirty(s);
         return;
     }
 
@@ -2406,7 +2426,7 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             case 1: m->y01 = clampf(m->y01 + delta, 0.0f, 1.0f); break;
             default: break;
         }
-        s->dirty = 1;
+        mark_editor_dirty(s);
         return;
     }
 
@@ -2430,7 +2450,7 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             case 6: m->delay_s = fmaxf(0.0f, m->delay_s + delta * 40.0f); break;
             default: break;
         }
-        s->dirty = 1;
+        mark_editor_dirty(s);
         return;
     }
 }
@@ -2476,7 +2496,7 @@ int level_editor_save_current(level_editor_state* s, const leveldef_db* db, char
             }
         }
     }
-    if (!build_level_serialized_text(s, db, serialized, sizeof(serialized))) {
+    if (!build_level_serialized_text(s, db, serialized, sizeof(serialized), NULL)) {
         snprintf(s->status_text, sizeof(s->status_text), "save failed: serialize");
         return 0;
     }
@@ -2521,7 +2541,7 @@ int level_editor_save_new(level_editor_state* s, const leveldef_db* db, char* ou
         snprintf(s->status_text, sizeof(s->status_text), "save new failed: levels dir not found");
         return 0;
     }
-    if (!build_level_serialized_text(s, db, serialized, sizeof(serialized))) {
+    if (!build_level_serialized_text(s, db, serialized, sizeof(serialized), NULL)) {
         snprintf(s->status_text, sizeof(s->status_text), "save new failed: serialize");
         return 0;
     }
@@ -2596,6 +2616,7 @@ int level_editor_revert(level_editor_state* s) {
     s->selected_marker = (s->marker_count > 0) ? 0 : -1;
     s->selected_property = 0;
     s->dirty = 0;
+    s->edit_revision += 1u;
     snprintf(s->status_text, sizeof(s->status_text), "reverted %s", s->level_name);
     return 1;
 }
@@ -2615,7 +2636,7 @@ void level_editor_new_blank(level_editor_state* s) {
     s->snapshot_valid = 0;
     s->marker_drag_active = 0;
     s->marker_drag_index = -1;
-    s->dirty = 1;
+    mark_editor_dirty(s);
     s->level_render_style = LEVEL_RENDER_BLANK;
     s->level_style = LEVEL_STYLE_BLANK;
     s->level_asteroid_storm_enabled = 0;
@@ -2655,6 +2676,32 @@ int level_editor_delete_selected(level_editor_state* s) {
             }
         }
     }
-    s->dirty = 1;
+    mark_editor_dirty(s);
+    return 1;
+}
+
+int level_editor_build_level(const level_editor_state* s, const leveldef_db* db, leveldef_level* out_level) {
+    if (!s || !db || !out_level) {
+        return 0;
+    }
+    return build_level_serialized_text(s, db, NULL, 0, out_level);
+}
+
+int level_editor_rotate_selected_structure(level_editor_state* s, int delta_quadrants) {
+    int q = 0;
+    if (!s || s->selected_marker < 0 || s->selected_marker >= s->marker_count || delta_quadrants == 0) {
+        return 0;
+    }
+    level_editor_marker* m = &s->markers[s->selected_marker];
+    if (m->kind != LEVEL_EDITOR_MARKER_STRUCTURE || m->track != LEVEL_EDITOR_TRACK_SPATIAL) {
+        return 0;
+    }
+    q = (int)lroundf(m->c);
+    q = (q + delta_quadrants) % 4;
+    if (q < 0) {
+        q += 4;
+    }
+    m->c = (float)q;
+    mark_editor_dirty(s);
     return 1;
 }

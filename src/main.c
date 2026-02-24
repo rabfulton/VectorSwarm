@@ -478,6 +478,7 @@ typedef struct app {
     float opening_ship_spin_rate;
     int opening_ship_spin_axis; /* 0=yaw, 1=pitch, 2=roll */
     level_editor_state level_editor;
+    unsigned level_editor_applied_revision;
 } app;
 
 static VkSampleCountFlagBits pick_msaa_samples(app* a) {
@@ -3216,6 +3217,26 @@ static int handle_planetarium_mouse(app* a, int mouse_x, int mouse_y, int set_va
     return 1;
 }
 
+static void apply_level_editor_runtime(app* a) {
+    const leveldef_db* db = NULL;
+    leveldef_level lvl;
+    if (!a) {
+        return;
+    }
+    if (a->level_editor_applied_revision == a->level_editor.edit_revision) {
+        return;
+    }
+    db = (const leveldef_db*)game_leveldef_get();
+    if (!db) {
+        return;
+    }
+    (void)game_set_level_by_name(&a->game, a->level_editor.level_name);
+    if (level_editor_build_level(&a->level_editor, db, &lvl) &&
+        game_apply_level_override(&a->game, &lvl, a->level_editor.level_name)) {
+        a->level_editor_applied_revision = a->level_editor.edit_revision;
+    }
+}
+
 static int handle_level_editor_mouse(app* a, int mouse_x, int mouse_y, int mouse_down, int mouse_pressed) {
     if (!a) {
         return 0;
@@ -3235,6 +3256,7 @@ static int handle_level_editor_mouse(app* a, int mouse_x, int mouse_y, int mouse
     if (action == 2) {
         if (level_editor_revert(&a->level_editor)) {
             set_tty_message(a, "level editor: reverted");
+            apply_level_editor_runtime(a);
         } else {
             set_tty_message(a, "level editor: revert failed");
         }
@@ -3267,9 +3289,11 @@ static int handle_level_editor_mouse(app* a, int mouse_x, int mouse_y, int mouse
     } else if (action == 7) {
         level_editor_new_blank(&a->level_editor);
         set_tty_message(a, "level editor: new");
+        apply_level_editor_runtime(a);
     } else if (action == 8) {
         if (level_editor_delete_selected(&a->level_editor)) {
             set_tty_message(a, "level editor: deleted");
+            apply_level_editor_runtime(a);
         } else {
             set_tty_message(a, "level editor: nothing selected");
         }
@@ -3277,13 +3301,16 @@ static int handle_level_editor_mouse(app* a, int mouse_x, int mouse_y, int mouse
         const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
         if (level_editor_cycle_level(&a->level_editor, db, -1)) {
             set_tty_message(a, "level editor: previous level");
+            apply_level_editor_runtime(a);
         }
     } else if (action == 5) {
         const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
         if (level_editor_cycle_level(&a->level_editor, db, 1)) {
             set_tty_message(a, "level editor: next level");
+            apply_level_editor_runtime(a);
         }
     }
+    apply_level_editor_runtime(a);
     return action != 0;
 }
 
@@ -6743,6 +6770,7 @@ int main(void) {
     {
         const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
         (void)level_editor_load_by_name(&a.level_editor, db, "level_blank");
+        a.level_editor_applied_revision = a.level_editor.edit_revision;
     }
     acoustics_defaults(&a);
     acoustics_combat_defaults(&a);
@@ -7109,6 +7137,7 @@ int main(void) {
                     const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
                     if (level_editor_load_by_name(&a.level_editor, db, a.level_editor.level_name)) {
                         set_tty_message(&a, "level editor: loaded");
+                        apply_level_editor_runtime(&a);
                     } else {
                         set_tty_message(&a, "level editor: load failed");
                     }
@@ -7123,15 +7152,24 @@ int main(void) {
                 } else if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR) && ev.key.keysym.sym == SDLK_COMMA) {
                     const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
                     (void)level_editor_cycle_level(&a.level_editor, db, -1);
+                    apply_level_editor_runtime(&a);
                 } else if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR) && ev.key.keysym.sym == SDLK_PERIOD) {
                     const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
                     (void)level_editor_cycle_level(&a.level_editor, db, 1);
+                    apply_level_editor_runtime(&a);
                 } else if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR) && ev.key.keysym.sym == SDLK_LEFT) {
                     const float step = (ev.key.keysym.mod & KMOD_SHIFT) ? 0.05f : 0.01f;
                     level_editor_adjust_selected_property(&a.level_editor, -step);
+                    apply_level_editor_runtime(&a);
                 } else if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR) && ev.key.keysym.sym == SDLK_RIGHT) {
                     const float step = (ev.key.keysym.mod & KMOD_SHIFT) ? 0.05f : 0.01f;
                     level_editor_adjust_selected_property(&a.level_editor, step);
+                    apply_level_editor_runtime(&a);
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR) && ev.key.keysym.sym == SDLK_r) {
+                    if (level_editor_rotate_selected_structure(&a.level_editor, 1)) {
+                        apply_level_editor_runtime(&a);
+                        set_tty_message(&a, "level editor: rotated");
+                    }
                 } else if (ev.key.keysym.sym == SDLK_TAB) {
                     a.show_crt_ui = !a.show_crt_ui;
                 } else if (ev.key.keysym.sym == SDLK_r) {
