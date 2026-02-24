@@ -3405,6 +3405,9 @@ static const char* level_editor_marker_name(int kind) {
         case 3: return "V WAVE";
         case 4: return "KAMIKAZE";
         case 5: return "BOID";
+        case 10: return "SWARM FISH";
+        case 11: return "SWARM FIREFLY";
+        case 12: return "SWARM BIRD";
         case 6: return "ASTEROID STORM";
         case 7: return "MINEFIELD";
         case 8: return "MISSILE LAUNCHER";
@@ -3432,7 +3435,7 @@ static vg_color level_editor_marker_color(const palette_theme* pal, int kind) {
     if (kind == 9) {
         return (vg_color){0.48f, 0.90f, 1.0f, 1.0f};
     }
-    if (kind == 2 || kind == 3 || kind == 4 || kind == 5) {
+    if (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 10 || kind == 11 || kind == 12) {
         return (vg_color){1.0f, 0.26f, 0.26f, 1.0f};
     }
     return pal->secondary;
@@ -3803,6 +3806,9 @@ static const char* editor_wave_type_name(int kind) {
         case 3: return "V";
         case 4: return "KAMIKAZE";
         case 5: return "BOID";
+        case 10: return "SWARM FISH";
+        case 11: return "SWARM FIREFLY";
+        case 12: return "SWARM BIRD";
         default: return "UNKNOWN";
     }
 }
@@ -3887,7 +3893,7 @@ static int editor_marker_properties_text(
         if (n < cap) { out_labels[n] = "FLIP"; snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_d[sel]); n++; }
         return n;
     }
-    if (kind == 2 || kind == 3 || kind == 4 || kind == 5) {
+    if (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 10 || kind == 11 || kind == 12) {
         const int event_item = (metrics->level_editor_marker_track[sel] == 1);
         if (n < cap) { out_labels[n] = "TYPE"; snprintf(out_values[n], 32, "%s", editor_wave_type_name(kind)); n++; }
         if (event_item) {
@@ -3988,8 +3994,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     const vg_rect ctb_btn7 = {ctb_x + (ctb_btn_w + ctb_gap) * 7.0f, ctb_y, ctb_btn_w, ctb_btn_h};
     char level_name_disp[96];
     const int enemy_spatial =
-        (metrics->level_editor_wave_mode == LEVELDEF_WAVES_CURATED &&
-         metrics->level_editor_render_style == LEVEL_RENDER_DEFENDER);
+        (metrics->level_editor_wave_mode == LEVELDEF_WAVES_CURATED);
     editor_sanitize_label(metrics->level_editor_level_name ? metrics->level_editor_level_name : "level_defender", level_name_disp, sizeof(level_name_disp));
 
     vg_stroke_style frame = {
@@ -4218,7 +4223,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             const float my01 = clampf(metrics->level_editor_marker_y01[i], 0.0f, 1.0f);
             const int kind = metrics->level_editor_marker_kind[i];
             const int track = metrics->level_editor_marker_track[i];
-            const int is_enemy = (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 6);
+            const int is_enemy = (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 6 || kind == 10 || kind == 11 || kind == 12);
             const int event_item = is_enemy && (track == 1);
             const vg_color c = level_editor_marker_color(&pal, kind);
 
@@ -4326,7 +4331,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                     mk2.intensity *= 0.74f;
                     r = draw_editor_diamond(ctx, (vg_vec2){vx, vy}, 6.0f * ui * glyph_scale, &mk2);
                 }
-            } else if (kind == 5) {
+            } else if (kind == 5 || kind == 10 || kind == 11 || kind == 12) {
                 vg_stroke_style mk2 = mk;
                 mk2.intensity *= 0.78f;
                 r = draw_editor_diamond(ctx, (vg_vec2){vx, vy}, 21.0f * ui * glyph_scale, &mk);
@@ -4480,7 +4485,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             {
                 int selected_prop = metrics->level_editor_selected_property;
                 if (selected_prop < 0) selected_prop = 0;
-                if (selected_prop > 7) selected_prop = 7;
+                if (selected_prop > 2) selected_prop = 2;
                 char row[96];
                 const vg_rect rb0 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
                 snprintf(row, sizeof(row), "WAVE MODE      %s", editor_wave_mode_name(metrics->level_editor_wave_mode));
@@ -4495,31 +4500,6 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 const vg_rect rb2 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
                 snprintf(row, sizeof(row), "LENGTH         %.1f", metrics->level_editor_level_length_screens);
                 r = vg_draw_button(ctx, rb2, row, 10.4f * ui, &frame, &text, (selected_prop == 2) ? 1 : 0);
-                if (r != VG_OK) return r;
-                ty -= 32.0f * ui;
-                const vg_rect rb3 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
-                snprintf(row, sizeof(row), "ASTEROID STORM %s", metrics->level_editor_asteroid_storm_enabled ? "ON" : "OFF");
-                r = vg_draw_button(ctx, rb3, row, 10.4f * ui, &frame, &text, (selected_prop == 3) ? 1 : 0);
-                if (r != VG_OK) return r;
-                ty -= 32.0f * ui;
-                const vg_rect rb4 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
-                snprintf(row, sizeof(row), "STORM ANGLE    %.1f", metrics->level_editor_asteroid_storm_angle_deg);
-                r = vg_draw_button(ctx, rb4, row, 10.4f * ui, &frame, &text, (selected_prop == 4) ? 1 : 0);
-                if (r != VG_OK) return r;
-                ty -= 32.0f * ui;
-                const vg_rect rb5 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
-                snprintf(row, sizeof(row), "STORM SPEED    %.1f", metrics->level_editor_asteroid_storm_speed);
-                r = vg_draw_button(ctx, rb5, row, 10.4f * ui, &frame, &text, (selected_prop == 5) ? 1 : 0);
-                if (r != VG_OK) return r;
-                ty -= 32.0f * ui;
-                const vg_rect rb6 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
-                snprintf(row, sizeof(row), "STORM DURATION %.1f", metrics->level_editor_asteroid_storm_duration_s);
-                r = vg_draw_button(ctx, rb6, row, 10.4f * ui, &frame, &text, (selected_prop == 6) ? 1 : 0);
-                if (r != VG_OK) return r;
-                ty -= 32.0f * ui;
-                const vg_rect rb7 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
-                snprintf(row, sizeof(row), "STORM DENSITY  %.2f", metrics->level_editor_asteroid_storm_density);
-                r = vg_draw_button(ctx, rb7, row, 10.4f * ui, &frame, &text, (selected_prop == 7) ? 1 : 0);
                 if (r != VG_OK) return r;
             }
             ty -= 34.0f * ui;
@@ -4539,7 +4519,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     );
     if (r != VG_OK) return r;
     if (metrics->level_editor_drag_active &&
-        (metrics->level_editor_drag_kind == 5 || metrics->level_editor_drag_kind == 1 || metrics->level_editor_drag_kind == 6 || metrics->level_editor_drag_kind == 7 || metrics->level_editor_drag_kind == 8 || metrics->level_editor_drag_kind == 9)) {
+        (metrics->level_editor_drag_kind == 5 || metrics->level_editor_drag_kind == 10 || metrics->level_editor_drag_kind == 11 || metrics->level_editor_drag_kind == 12 || metrics->level_editor_drag_kind == 1 || metrics->level_editor_drag_kind == 6 || metrics->level_editor_drag_kind == 7 || metrics->level_editor_drag_kind == 8 || metrics->level_editor_drag_kind == 9)) {
         vg_stroke_style gs = frame;
         gs.intensity = 1.2f;
         gs.color = level_editor_marker_color(&pal, metrics->level_editor_drag_kind);

@@ -591,6 +591,27 @@ static void spawn_wave_swarm_profile(game_state* g, const leveldef_db* db, int w
     }
 }
 
+static int resolve_boid_profile_by_variant(const leveldef_db* db, const leveldef_level* lvl, int variant_kind_or_pattern) {
+    int pid = -1;
+    if (!db || !lvl) {
+        return 0;
+    }
+    if (variant_kind_or_pattern == 10 || variant_kind_or_pattern == LEVELDEF_WAVE_SWARM_FISH) {
+        pid = leveldef_find_boid_profile(db, "FISH");
+    } else if (variant_kind_or_pattern == 11 || variant_kind_or_pattern == LEVELDEF_WAVE_SWARM_FIREFLY) {
+        pid = leveldef_find_boid_profile(db, "FIREFLY");
+    } else if (variant_kind_or_pattern == 12 || variant_kind_or_pattern == LEVELDEF_WAVE_SWARM_BIRD) {
+        pid = leveldef_find_boid_profile(db, "BIRD");
+    }
+    if (pid < 0) {
+        pid = lvl->default_boid_profile;
+    }
+    if (pid < 0) {
+        pid = 0;
+    }
+    return pid;
+}
+
 static void spawn_wave_kamikaze(game_state* g, const leveldef_db* db, const leveldef_level* lvl, int wave_id, int bidirectional_spawns, float su) {
     const leveldef_wave_kamikaze_tuning* w = &lvl->kamikaze;
     (void)db;
@@ -657,8 +678,8 @@ void enemy_spawn_curated_enemy(
     if (count > 24) {
         count = 24;
     }
-    if (ce->kind == 5) {
-        const int profile_id = lvl->default_boid_profile;
+    if (ce->kind == 5 || ce->kind == 10 || ce->kind == 11 || ce->kind == 12) {
+        const int profile_id = resolve_boid_profile_by_variant(db, lvl, ce->kind);
         const leveldef_boid_profile* p = leveldef_get_boid_profile(db, profile_id);
         if (!p) {
             return;
@@ -796,7 +817,13 @@ void enemy_spawn_next_wave(
         }
         {
             const leveldef_curated_enemy* ce = &lvl->curated[g->wave_index % lvl->curated_count];
-            if (ce->kind == 5) {
+            if (ce->kind == 10) {
+                announce_wave(g, "curated fish swarm");
+            } else if (ce->kind == 11) {
+                announce_wave(g, "curated firefly swarm");
+            } else if (ce->kind == 12) {
+                announce_wave(g, "curated bird swarm");
+            } else if (ce->kind == 5) {
                 announce_wave(g, "curated boid contact");
             } else if (ce->kind == 4) {
                 announce_wave(g, "curated kamikaze contact");
@@ -824,9 +851,14 @@ void enemy_spawn_next_wave(
         } else if (pattern == LEVELDEF_WAVE_V_FORMATION) {
             announce_wave(g, "galaxian break v formation");
             spawn_wave_v_formation(g, db, lvl, wave_id, bidirectional_spawns, su, uses_cylinder, period);
-        } else if (pattern == LEVELDEF_WAVE_SWARM) {
-            const int profile_id = lvl->default_boid_profile;
-            announce_wave(g, "boid swarm cluster");
+        } else if (pattern == LEVELDEF_WAVE_SWARM ||
+                   pattern == LEVELDEF_WAVE_SWARM_FISH ||
+                   pattern == LEVELDEF_WAVE_SWARM_FIREFLY ||
+                   pattern == LEVELDEF_WAVE_SWARM_BIRD) {
+            const int profile_id = resolve_boid_profile_by_variant(db, lvl, pattern);
+            const leveldef_boid_profile* profile = leveldef_get_boid_profile(db, profile_id);
+            const char* wave_name = profile ? profile->wave_name : "boid swarm cluster";
+            announce_wave(g, wave_name);
             {
                 const float dir = bidirectional_spawns ? ((frand01() < 0.5f) ? -1.0f : 1.0f) : 1.0f;
                 spawn_wave_swarm_profile(g, db, wave_id, profile_id, dir, bidirectional_spawns, su);

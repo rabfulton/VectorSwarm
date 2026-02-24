@@ -2329,8 +2329,7 @@ static void game_update_wave_spawning(game_state* g, float dt) {
     if (!lvl) {
         return;
     }
-    if (lvl->wave_mode == LEVELDEF_WAVES_CURATED &&
-        lvl->render_style == LEVEL_RENDER_DEFENDER) {
+    if (lvl->wave_mode == LEVELDEF_WAVES_CURATED) {
         const float activate_min_x = g->camera_x + g->world_w * 0.05f;
         const float activate_x = g->camera_x + g->world_w * 1.18f;
         for (int i = 0; i < lvl->curated_count && i < MAX_CURATED_RUNTIME; ++i) {
@@ -2413,6 +2412,12 @@ static void game_update_wave_spawning(game_state* g, float dt) {
                     one.wave_cycle[0] = LEVELDEF_WAVE_V_FORMATION;
                 } else if (ev_kind == LEVELDEF_EVENT_WAVE_SWARM) {
                     one.wave_cycle[0] = LEVELDEF_WAVE_SWARM;
+                } else if (ev_kind == LEVELDEF_EVENT_WAVE_SWARM_FISH) {
+                    one.wave_cycle[0] = LEVELDEF_WAVE_SWARM_FISH;
+                } else if (ev_kind == LEVELDEF_EVENT_WAVE_SWARM_FIREFLY) {
+                    one.wave_cycle[0] = LEVELDEF_WAVE_SWARM_FIREFLY;
+                } else if (ev_kind == LEVELDEF_EVENT_WAVE_SWARM_BIRD) {
+                    one.wave_cycle[0] = LEVELDEF_WAVE_SWARM_BIRD;
                 } else {
                     one.wave_cycle[0] = LEVELDEF_WAVE_KAMIKAZE;
                 }

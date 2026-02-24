@@ -46,6 +46,9 @@ static int wave_pattern_from_name(const char* name) {
     if (strcmp(name, "sine_snake") == 0) return LEVELDEF_WAVE_SINE_SNAKE;
     if (strcmp(name, "v_formation") == 0) return LEVELDEF_WAVE_V_FORMATION;
     if (strcmp(name, "swarm") == 0) return LEVELDEF_WAVE_SWARM;
+    if (strcmp(name, "swarm_fish") == 0 || strcmp(name, "boid_fish") == 0) return LEVELDEF_WAVE_SWARM_FISH;
+    if (strcmp(name, "swarm_firefly") == 0 || strcmp(name, "boid_firefly") == 0) return LEVELDEF_WAVE_SWARM_FIREFLY;
+    if (strcmp(name, "swarm_bird") == 0 || strcmp(name, "boid_bird") == 0) return LEVELDEF_WAVE_SWARM_BIRD;
     if (strcmp(name, "kamikaze") == 0) return LEVELDEF_WAVE_KAMIKAZE;
     if (strcmp(name, "asteroid") == 0 || strcmp(name, "asteroid_storm") == 0) return LEVELDEF_WAVE_ASTEROID_STORM;
     return -1;
@@ -58,6 +61,9 @@ static int event_kind_from_name(const char* name) {
     if (strcmp(name, "sine") == 0 || strcmp(name, "sine_snake") == 0) return LEVELDEF_EVENT_WAVE_SINE;
     if (strcmp(name, "v") == 0 || strcmp(name, "v_formation") == 0) return LEVELDEF_EVENT_WAVE_V;
     if (strcmp(name, "swarm") == 0 || strcmp(name, "boid") == 0) return LEVELDEF_EVENT_WAVE_SWARM;
+    if (strcmp(name, "swarm_fish") == 0 || strcmp(name, "boid_fish") == 0) return LEVELDEF_EVENT_WAVE_SWARM_FISH;
+    if (strcmp(name, "swarm_firefly") == 0 || strcmp(name, "boid_firefly") == 0) return LEVELDEF_EVENT_WAVE_SWARM_FIREFLY;
+    if (strcmp(name, "swarm_bird") == 0 || strcmp(name, "boid_bird") == 0) return LEVELDEF_EVENT_WAVE_SWARM_BIRD;
     if (strcmp(name, "kamikaze") == 0) return LEVELDEF_EVENT_WAVE_KAMIKAZE;
     if (strcmp(name, "asteroid") == 0 || strcmp(name, "asteroid_storm") == 0) return LEVELDEF_EVENT_ASTEROID_STORM;
     return -1;
@@ -81,6 +87,9 @@ static int curated_kind_from_name(const char* name) {
     if (strcmp(name, "v") == 0 || strcmp(name, "v_formation") == 0) return 3;
     if (strcmp(name, "kamikaze") == 0) return 4;
     if (strcmp(name, "boid") == 0 || strcmp(name, "swarm") == 0) return 5;
+    if (strcmp(name, "boid_fish") == 0 || strcmp(name, "swarm_fish") == 0) return 10;
+    if (strcmp(name, "boid_firefly") == 0 || strcmp(name, "swarm_firefly") == 0) return 11;
+    if (strcmp(name, "boid_bird") == 0 || strcmp(name, "swarm_bird") == 0) return 12;
     return -1;
 }
 
@@ -1014,7 +1023,7 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
         if (l->event_count > 0) {
             int j;
             for (j = 0; j < l->event_count; ++j) {
-                if (l->events[j].kind < 0 || l->events[j].kind > LEVELDEF_EVENT_ASTEROID_STORM || l->events[j].order <= 0 || l->events[j].delay_s < 0.0f) {
+                if (l->events[j].kind < 0 || l->events[j].kind > LEVELDEF_EVENT_WAVE_SWARM_BIRD || l->events[j].order <= 0 || l->events[j].delay_s < 0.0f) {
                     if (log_out) {
                         fprintf(log_out, "leveldef: level %d has invalid event entry\n", i);
                     }

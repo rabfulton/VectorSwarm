@@ -3269,6 +3269,7 @@ static int handle_level_editor_mouse(app* a, int mouse_x, int mouse_y, int mouse
                 set_tty_message(a, "level editor: saved, runtime sync failed");
                 return action != 0;
             }
+            a->level_editor_applied_revision = a->level_editor.edit_revision;
             set_tty_message(a, "level editor: saved");
         } else {
             set_tty_message(a, a->level_editor.status_text[0] ? a->level_editor.status_text : "level editor: save failed");
@@ -3282,6 +3283,7 @@ static int handle_level_editor_mouse(app* a, int mouse_x, int mouse_y, int mouse
                 set_tty_message(a, "level editor: saved new, runtime sync failed");
                 return action != 0;
             }
+            a->level_editor_applied_revision = a->level_editor.edit_revision;
             set_tty_message(a, "level editor: saved new");
         } else {
             set_tty_message(a, a->level_editor.status_text[0] ? a->level_editor.status_text : "level editor: save new failed");
