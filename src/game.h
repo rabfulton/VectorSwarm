@@ -269,6 +269,9 @@ typedef struct homing_missile {
     float hit_radius;
     float blast_radius;
     float radius;
+    float arm_delay_s;
+    float forward_x;
+    float forward_y;
     float trail_emit_accum;
 } homing_missile;
 

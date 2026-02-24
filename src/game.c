@@ -706,7 +706,7 @@ static void emit_missile_explosion(game_state* g, float x, float y, float vx, fl
         return;
     }
     const float su = gameplay_ui_scale(g);
-    game_push_audio_event(g, GAME_AUDIO_EVENT_EXPLOSION, x, y);
+    game_push_audio_event(g, GAME_AUDIO_EVENT_EMP, x, y);
     trigger_emp_visual_at(g, x, y, fminf(g->world_w, g->world_h) * 0.08f);
     for (int i = 0; i < 26; ++i) {
         particle* p = alloc_particle(g);
@@ -730,6 +730,56 @@ static void emit_missile_explosion(game_state* g, float x, float y, float vx, fl
         p->bcol = 0.30f + frand01() * 0.34f;
         p->a = 1.0f;
     }
+}
+
+static int find_player_missile_target(
+    const game_state* g,
+    const homing_missile* m,
+    float half_angle_deg,
+    float* out_tx,
+    float* out_ty
+) {
+    if (!g || !m || !out_tx || !out_ty) {
+        return 0;
+    }
+    const int uses_cylinder = level_uses_cylinder(g);
+    const float period = cylinder_period(g);
+    float fwd_x = m->forward_x;
+    float fwd_y = m->forward_y;
+    if (fabsf(fwd_x) < 1.0e-5f && fabsf(fwd_y) < 1.0e-5f) {
+        fwd_x = cosf(m->heading_rad);
+        fwd_y = sinf(m->heading_rad);
+    }
+    normalize2(&fwd_x, &fwd_y);
+    const float cone_cos = cosf(deg_to_rad(clampf(half_angle_deg, 1.0f, 179.0f)));
+    float best_d2 = 1.0e20f;
+    int found = 0;
+    for (size_t j = 0; j < MAX_ENEMIES; ++j) {
+        const enemy* e = &g->enemies[j];
+        if (!e->active) {
+            continue;
+        }
+        const float dx = uses_cylinder ? wrap_delta(e->b.x, m->b.x, period) : (e->b.x - m->b.x);
+        const float dy = e->b.y - m->b.y;
+        const float d2 = dx * dx + dy * dy;
+        if (d2 <= 1.0e-6f) {
+            continue;
+        }
+        const float inv_d = 1.0f / sqrtf(d2);
+        const float nx = dx * inv_d;
+        const float ny = dy * inv_d;
+        const float dp = nx * fwd_x + ny * fwd_y;
+        if (dp < cone_cos) {
+            continue;
+        }
+        if (d2 < best_d2) {
+            best_d2 = d2;
+            *out_tx = m->b.x + dx;
+            *out_ty = m->b.y + dy;
+            found = 1;
+        }
+    }
+    return found;
 }
 
 static void explode_missile(game_state* g, homing_missile* m, int direct_hit) {
@@ -879,6 +929,45 @@ static void spawn_enemy_missile_row(game_state* g, missile_launcher* ml) {
     ml->fired = 1;
 }
 
+static void spawn_player_missile(game_state* g) {
+    if (!g || g->lives <= 0) {
+        return;
+    }
+    if (g->alt_weapon_equipped != PLAYER_ALT_WEAPON_MISSILE) {
+        return;
+    }
+    if (g->alt_weapon_ammo[PLAYER_ALT_WEAPON_MISSILE] <= 0) {
+        return;
+    }
+    const float su = gameplay_ui_scale(g);
+    const float screen_ref = fminf(g->world_w, g->world_h);
+    const float forward_x = (g->player.facing_x < 0.0f) ? -1.0f : 1.0f;
+    const float forward_y = 0.0f;
+    homing_missile* m = alloc_missile(g);
+    if (!m) {
+        return;
+    }
+    m->owner = MISSILE_OWNER_PLAYER;
+    m->b.x = g->player.b.x - forward_x * (14.0f * su);
+    m->b.y = g->player.b.y - (20.0f * su);
+    m->heading_rad = atan2f(forward_y, forward_x);
+    m->speed = 560.0f * su;
+    m->turn_rate_rad_s = deg_to_rad(360.0f);
+    m->ttl_s = 4.6f;
+    m->hit_radius = screen_ref * 0.15f;
+    m->blast_radius = screen_ref * 0.30f;
+    m->radius = 9.5f * su;
+    m->arm_delay_s = 1.0f;
+    m->forward_x = forward_x;
+    m->forward_y = forward_y;
+    m->trail_emit_accum = 0.0f;
+    m->b.vx = forward_x * (130.0f * su);
+    m->b.vy = 0.0f;
+    g->alt_weapon_ammo[PLAYER_ALT_WEAPON_MISSILE] -= 1;
+    g->secondary_fire_cooldown_s = 0.18f;
+    g->fire_sfx_pending += 1;
+}
+
 static void update_missile_system(game_state* g, float dt) {
     if (!g || dt <= 0.0f) {
         return;
@@ -901,33 +990,37 @@ static void update_missile_system(game_state* g, float dt) {
             continue;
         }
 
+        if (m->owner == MISSILE_OWNER_PLAYER && m->arm_delay_s > 0.0f) {
+            m->arm_delay_s -= dt;
+            m->heading_rad = atan2f(m->forward_y, m->forward_x);
+            m->b.ax = 0.0f;
+            m->b.ay = 0.0f;
+            m->b.vx = m->forward_x * (130.0f * gameplay_ui_scale(g));
+            m->b.vy = m->forward_y * (130.0f * gameplay_ui_scale(g));
+            integrate_body(&m->b, dt);
+            if (m->arm_delay_s > 0.0f) {
+                continue;
+            }
+            m->heading_rad = atan2f(m->forward_y, m->forward_x);
+            m->b.vx = cosf(m->heading_rad) * m->speed;
+            m->b.vy = sinf(m->heading_rad) * m->speed;
+        }
+
         float tx = g->player.b.x;
         float ty = g->player.b.y;
         if (m->owner == MISSILE_OWNER_PLAYER) {
-            float best_d2 = 1.0e20f;
-            int found = 0;
-            for (size_t j = 0; j < MAX_ENEMIES; ++j) {
-                const enemy* e = &g->enemies[j];
-                if (!e->active) {
-                    continue;
-                }
-                const float d2 = dist_sq(m->b.x, m->b.y, e->b.x, e->b.y);
-                if (d2 < best_d2) {
-                    best_d2 = d2;
-                    tx = e->b.x;
-                    ty = e->b.y;
-                    found = 1;
-                }
-            }
-            if (!found) {
-                tx = m->b.x + g->player.facing_x * g->world_w;
-                ty = m->b.y;
+            if (!find_player_missile_target(g, m, 70.0f, &tx, &ty)) {
+                tx = m->b.x + m->forward_x * g->world_w;
+                ty = m->b.y + m->forward_y * g->world_h * 0.02f;
             }
         }
 
         {
             float dx = tx - m->b.x;
             float dy = ty - m->b.y;
+            if (level_uses_cylinder(g)) {
+                dx = wrap_delta(tx, m->b.x, cylinder_period(g));
+            }
             const float desired = atan2f(dy, dx);
             const float delta = wrap_angle_rad(desired - m->heading_rad);
             const float max_step = m->turn_rate_rad_s * dt;
@@ -985,12 +1078,19 @@ static void update_missile_system(game_state* g, float dt) {
             }
         } else {
             int direct = 0;
+            const float su = gameplay_ui_scale(g);
+            const int uses_cylinder = level_uses_cylinder(g);
+            const float period = cylinder_period(g);
             for (size_t j = 0; j < MAX_ENEMIES; ++j) {
                 const enemy* e = &g->enemies[j];
                 if (!e->active) {
                     continue;
                 }
-                if (dist_sq(m->b.x, m->b.y, e->b.x, e->b.y) <= m->hit_radius * m->hit_radius) {
+                const float dx = uses_cylinder ? wrap_delta(e->b.x, m->b.x, period) : (e->b.x - m->b.x);
+                const float dy = e->b.y - m->b.y;
+                const float enemy_r = fmaxf(8.0f * su, e->radius);
+                const float rr = m->radius + enemy_r;
+                if ((dx * dx + dy * dy) <= rr * rr) {
                     direct = 1;
                     break;
                 }
@@ -1630,6 +1730,9 @@ static void use_secondary_weapon(game_state* g) {
     switch (g->alt_weapon_equipped) {
         case PLAYER_ALT_WEAPON_REAR_GUN:
             spawn_secondary_bullet(g);
+            break;
+        case PLAYER_ALT_WEAPON_MISSILE:
+            spawn_player_missile(g);
             break;
         case PLAYER_ALT_WEAPON_EMP:
             trigger_emp_blast(g);

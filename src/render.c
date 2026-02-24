@@ -1375,9 +1375,11 @@ static vg_result draw_missile_system(
         }
         vg_stroke_style m_halo = halo;
         vg_stroke_style m_main = main;
+        vg_fill_style m_fill = fill;
         if (m->owner == MISSILE_OWNER_ENEMY) {
             m_halo.color = (vg_color){1.0f, 0.24f, 0.24f, 0.72f};
             m_main.color = (vg_color){1.0f, 0.30f, 0.30f, 1.0f};
+            m_fill.color = (vg_color){0.35f, 0.08f, 0.08f, 0.48f};
         }
         const float c = cosf(m->heading_rad);
         const float s = sinf(m->heading_rad);
@@ -1391,7 +1393,7 @@ static vg_result draw_missile_system(
             {m->b.x - c * len * 0.56f + s * half_w, m->b.y - s * len * 0.56f - c * half_w},
             {m->b.x + c * len, m->b.y + s * len}
         };
-        vg_result r = vg_fill_convex(ctx, shape, 4, &fill);
+        vg_result r = vg_fill_convex(ctx, shape, 4, &m_fill);
         if (r != VG_OK) return r;
         r = vg_draw_polyline(ctx, shape, 5, &m_halo, 1);
         if (r != VG_OK) return r;
