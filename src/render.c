@@ -6598,8 +6598,21 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
     const vg_color starfield_color = (vg_color){0.62f, 0.86f, 1.0f, 1.0f};
     const vg_fill_style star_fill = make_fill(0.68f * intensity_scale, starfield_color, VG_BLEND_ADDITIVE);
     const vg_stroke_style ship_style = make_stroke(2.0f, 1.15f * intensity_scale, pal.ship, VG_BLEND_ALPHA);
-    const vg_stroke_style bullet_style = make_stroke(2.6f, 1.0f * intensity_scale, (vg_color){1.0f, 0.9f, 0.55f, 1.0f}, VG_BLEND_ALPHA);
+    const vg_stroke_style bullet_style = make_stroke(0.95f, 0.94f * intensity_scale, (vg_color){1.0f, 0.9f, 0.55f, 1.0f}, VG_BLEND_ALPHA);
+    const vg_stroke_style bullet_halo_style = make_stroke(
+        4.8f,
+        0.24f * intensity_scale,
+        (vg_color){1.0f, 0.92f, 0.62f, 0.30f},
+        VG_BLEND_ADDITIVE
+    );
     const vg_stroke_style enemy_style = make_stroke(2.5f, 1.0f * intensity_scale, (vg_color){1.0f, 0.3f, 0.3f, 1.0f}, VG_BLEND_ALPHA);
+    const vg_stroke_style enemy_bullet_style = make_stroke(0.82f, 0.88f * intensity_scale, (vg_color){1.0f, 0.36f, 0.36f, 1.0f}, VG_BLEND_ALPHA);
+    const vg_stroke_style enemy_bullet_halo_style = make_stroke(
+        4.0f,
+        0.21f * intensity_scale,
+        (vg_color){1.0f, 0.38f, 0.38f, 0.28f},
+        VG_BLEND_ADDITIVE
+    );
     const vg_fill_style thruster_fill = make_fill(1.0f * intensity_scale, pal.thruster, VG_BLEND_ADDITIVE);
     const vg_fill_style shield_glow = make_fill(
         0.50f * intensity_scale,
@@ -6873,14 +6886,61 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             if (!g->bullets[i].active) {
                 continue;
             }
-            float d0 = 0.0f;
-            float d1 = 0.0f;
-            const vg_vec2 a = project_cylinder_point(g, g->bullets[i].b.x - 7.0f, g->bullets[i].b.y, &d0);
-            const vg_vec2 b = project_cylinder_point(g, g->bullets[i].b.x + 8.0f, g->bullets[i].b.y, &d1);
-            vg_stroke_style bs = bullet_style;
-            bs.width_px *= 0.45f + 0.9f * (d0 + d1) * 0.5f;
-            const vg_vec2 bolt[] = {a, b};
-            r = vg_draw_polyline(ctx, bolt, 2, &bs, 0);
+            const bullet* b = &g->bullets[i];
+            float ux = b->b.vx;
+            float uy = b->b.vy;
+            float speed = sqrtf(ux * ux + uy * uy);
+            if (speed > 1.0e-4f) {
+                ux /= speed;
+                uy /= speed;
+            } else {
+                ux = 1.0f;
+                uy = 0.0f;
+                speed = 0.0f;
+            }
+            const float core_f = 13.5f;
+            const float core_b = 8.0f;
+            const float trail = 22.0f + clampf(speed * 0.030f, 10.0f, 34.0f);
+            const float x0w = b->b.x - ux * trail;
+            const float y0w = b->b.y - uy * trail;
+            const float x1w = b->b.x - ux * core_b;
+            const float y1w = b->b.y - uy * core_b;
+            const float x2w = b->b.x + ux * core_f;
+            const float y2w = b->b.y + uy * core_f;
+            float d0 = 0.0f, d1 = 0.0f, d2 = 0.0f;
+            const vg_vec2 p0 = project_cylinder_point(g, x0w, y0w, &d0);
+            const vg_vec2 p1 = project_cylinder_point(g, x1w, y1w, &d1);
+            const vg_vec2 p2 = project_cylinder_point(g, x2w, y2w, &d2);
+            const float depth = (d0 + d1 + d2) * (1.0f / 3.0f);
+            vg_stroke_style core = bullet_style;
+            vg_stroke_style halo = bullet_halo_style;
+            core.width_px *= 0.44f + 0.92f * depth;
+            halo.width_px *= 0.40f + 0.95f * depth;
+            core.intensity *= 0.34f + 0.98f * depth;
+            halo.intensity *= 0.28f + 0.92f * depth;
+            core.color.a *= 0.36f + 0.76f * depth;
+            halo.color.a *= 0.34f + 0.74f * depth;
+            vg_stroke_style core_tail = core;
+            vg_stroke_style halo_tail = halo;
+            core_tail.intensity *= 0.58f;
+            halo_tail.intensity *= 0.62f;
+            core_tail.color.a *= 0.62f;
+            halo_tail.color.a *= 0.62f;
+            const vg_vec2 seg_tail[] = {p0, p1};
+            const vg_vec2 seg_core[] = {p1, p2};
+            r = vg_draw_polyline(ctx, seg_tail, 2, &halo_tail, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_draw_polyline(ctx, seg_tail, 2, &core_tail, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_draw_polyline(ctx, seg_core, 2, &halo, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_draw_polyline(ctx, seg_core, 2, &core, 0);
             if (r != VG_OK) {
                 return r;
             }
@@ -6890,17 +6950,61 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             if (!g->enemy_bullets[i].active) {
                 continue;
             }
-            float d0 = 0.0f;
-            float d1 = 0.0f;
-            const vg_vec2 a = project_cylinder_point(g, g->enemy_bullets[i].b.x - 5.0f, g->enemy_bullets[i].b.y, &d0);
-            const vg_vec2 b = project_cylinder_point(g, g->enemy_bullets[i].b.x + 5.0f, g->enemy_bullets[i].b.y, &d1);
-            vg_stroke_style es = enemy_style;
-            const float depth = 0.5f * (d0 + d1);
-            es.width_px *= 0.42f + depth * 0.95f;
-            es.intensity *= 0.32f + depth * 0.92f;
-            es.color.a *= 0.30f + depth * 0.80f;
-            const vg_vec2 bolt[] = {a, b};
-            r = vg_draw_polyline(ctx, bolt, 2, &es, 0);
+            const enemy_bullet* b = &g->enemy_bullets[i];
+            float ux = b->b.vx;
+            float uy = b->b.vy;
+            float speed = sqrtf(ux * ux + uy * uy);
+            if (speed > 1.0e-4f) {
+                ux /= speed;
+                uy /= speed;
+            } else {
+                ux = -1.0f;
+                uy = 0.0f;
+                speed = 0.0f;
+            }
+            const float core_f = 10.5f;
+            const float core_b = 6.2f;
+            const float trail = 16.0f + clampf(speed * 0.026f, 7.0f, 24.0f);
+            const float x0w = b->b.x - ux * trail;
+            const float y0w = b->b.y - uy * trail;
+            const float x1w = b->b.x - ux * core_b;
+            const float y1w = b->b.y - uy * core_b;
+            const float x2w = b->b.x + ux * core_f;
+            const float y2w = b->b.y + uy * core_f;
+            float d0 = 0.0f, d1 = 0.0f, d2 = 0.0f;
+            const vg_vec2 p0 = project_cylinder_point(g, x0w, y0w, &d0);
+            const vg_vec2 p1 = project_cylinder_point(g, x1w, y1w, &d1);
+            const vg_vec2 p2 = project_cylinder_point(g, x2w, y2w, &d2);
+            const float depth = (d0 + d1 + d2) * (1.0f / 3.0f);
+            vg_stroke_style core = enemy_bullet_style;
+            vg_stroke_style halo = enemy_bullet_halo_style;
+            core.width_px *= 0.42f + depth * 0.92f;
+            halo.width_px *= 0.42f + depth * 0.98f;
+            core.intensity *= 0.30f + depth * 0.90f;
+            halo.intensity *= 0.28f + depth * 0.86f;
+            core.color.a *= 0.30f + depth * 0.78f;
+            halo.color.a *= 0.30f + depth * 0.72f;
+            vg_stroke_style core_tail = core;
+            vg_stroke_style halo_tail = halo;
+            core_tail.intensity *= 0.56f;
+            halo_tail.intensity *= 0.60f;
+            core_tail.color.a *= 0.60f;
+            halo_tail.color.a *= 0.60f;
+            const vg_vec2 seg_tail[] = {p0, p1};
+            const vg_vec2 seg_core[] = {p1, p2};
+            r = vg_draw_polyline(ctx, seg_tail, 2, &halo_tail, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_draw_polyline(ctx, seg_tail, 2, &core_tail, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_draw_polyline(ctx, seg_core, 2, &halo, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_draw_polyline(ctx, seg_core, 2, &core, 0);
             if (r != VG_OK) {
                 return r;
             }
@@ -7322,11 +7426,53 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         if (!g->bullets[i].active) {
             continue;
         }
-        const vg_vec2 bolt[] = {
-            {g->bullets[i].b.x - 7.0f, g->bullets[i].b.y},
-            {g->bullets[i].b.x + 8.0f, g->bullets[i].b.y}
+        const bullet* b = &g->bullets[i];
+        float ux = b->b.vx;
+        float uy = b->b.vy;
+        float speed = sqrtf(ux * ux + uy * uy);
+        if (speed > 1.0e-4f) {
+            ux /= speed;
+            uy /= speed;
+        } else {
+            ux = 1.0f;
+            uy = 0.0f;
+            speed = 0.0f;
+        }
+        const float core_f = 13.5f;
+        const float core_b = 8.0f;
+        const float trail = 22.0f + clampf(speed * 0.030f, 10.0f, 34.0f);
+        const vg_vec2 seg_tail[] = {
+            {b->b.x - ux * trail, b->b.y - uy * trail},
+            {b->b.x - ux * core_b, b->b.y - uy * core_b}
         };
-        r = vg_draw_polyline(ctx, bolt, 2, &bullet_style, 0);
+        const vg_vec2 seg_core[] = {
+            {b->b.x - ux * core_b, b->b.y - uy * core_b},
+            {b->b.x + ux * core_f, b->b.y + uy * core_f}
+        };
+        vg_stroke_style core = bullet_style;
+        vg_stroke_style halo = bullet_halo_style;
+        vg_stroke_style core_tail = core;
+        vg_stroke_style halo_tail = halo;
+        core_tail.intensity *= 0.60f;
+        halo_tail.intensity *= 0.64f;
+        core_tail.color.a *= 0.66f;
+        halo_tail.color.a *= 0.66f;
+        r = vg_draw_polyline(ctx, seg_tail, 2, &halo_tail, 0);
+        if (r != VG_OK) {
+            (void)vg_transform_pop(ctx);
+            return r;
+        }
+        r = vg_draw_polyline(ctx, seg_tail, 2, &core_tail, 0);
+        if (r != VG_OK) {
+            (void)vg_transform_pop(ctx);
+            return r;
+        }
+        r = vg_draw_polyline(ctx, seg_core, 2, &halo, 0);
+        if (r != VG_OK) {
+            (void)vg_transform_pop(ctx);
+            return r;
+        }
+        r = vg_draw_polyline(ctx, seg_core, 2, &core, 0);
         if (r != VG_OK) {
             (void)vg_transform_pop(ctx);
             return r;
@@ -7337,15 +7483,53 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         if (!g->enemy_bullets[i].active) {
             continue;
         }
-        const float dx = (g->enemy_bullets[i].b.vx < 0.0f) ? -5.0f : 5.0f;
-        const vg_vec2 bolt[] = {
-            {g->enemy_bullets[i].b.x - dx, g->enemy_bullets[i].b.y},
-            {g->enemy_bullets[i].b.x + dx, g->enemy_bullets[i].b.y}
+        const enemy_bullet* b = &g->enemy_bullets[i];
+        float ux = b->b.vx;
+        float uy = b->b.vy;
+        float speed = sqrtf(ux * ux + uy * uy);
+        if (speed > 1.0e-4f) {
+            ux /= speed;
+            uy /= speed;
+        } else {
+            ux = -1.0f;
+            uy = 0.0f;
+            speed = 0.0f;
+        }
+        const float core_f = 10.5f;
+        const float core_b = 6.2f;
+        const float trail = 16.0f + clampf(speed * 0.026f, 7.0f, 24.0f);
+        const vg_vec2 seg_tail[] = {
+            {b->b.x - ux * trail, b->b.y - uy * trail},
+            {b->b.x - ux * core_b, b->b.y - uy * core_b}
         };
-        vg_stroke_style es = enemy_style;
-        es.width_px *= 0.80f;
-        es.intensity *= 0.95f;
-        r = vg_draw_polyline(ctx, bolt, 2, &es, 0);
+        const vg_vec2 seg_core[] = {
+            {b->b.x - ux * core_b, b->b.y - uy * core_b},
+            {b->b.x + ux * core_f, b->b.y + uy * core_f}
+        };
+        vg_stroke_style core = enemy_bullet_style;
+        vg_stroke_style halo = enemy_bullet_halo_style;
+        vg_stroke_style core_tail = core;
+        vg_stroke_style halo_tail = halo;
+        core_tail.intensity *= 0.58f;
+        halo_tail.intensity *= 0.62f;
+        core_tail.color.a *= 0.62f;
+        halo_tail.color.a *= 0.62f;
+        r = vg_draw_polyline(ctx, seg_tail, 2, &halo_tail, 0);
+        if (r != VG_OK) {
+            (void)vg_transform_pop(ctx);
+            return r;
+        }
+        r = vg_draw_polyline(ctx, seg_tail, 2, &core_tail, 0);
+        if (r != VG_OK) {
+            (void)vg_transform_pop(ctx);
+            return r;
+        }
+        r = vg_draw_polyline(ctx, seg_core, 2, &halo, 0);
+        if (r != VG_OK) {
+            (void)vg_transform_pop(ctx);
+            return r;
+        }
+        r = vg_draw_polyline(ctx, seg_core, 2, &core, 0);
         if (r != VG_OK) {
             (void)vg_transform_pop(ctx);
             return r;
