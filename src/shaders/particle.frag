@@ -11,10 +11,49 @@ layout(push_constant) uniform Push {
     vec4 params; /* x=viewport_width, y=viewport_height, z=core_gain, w=trail_gain */
 } pc;
 
+float hash21(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+float noise21(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    float a = hash21(i);
+    float b = hash21(i + vec2(1.0, 0.0));
+    float c = hash21(i + vec2(0.0, 1.0));
+    float d = hash21(i + vec2(1.0, 1.0));
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+float fbm(vec2 p) {
+    float v = 0.0;
+    float a = 0.5;
+    for (int i = 0; i < 4; ++i) {
+        v += a * noise21(p);
+        p = p * 2.03 + vec2(13.7, 9.2);
+        a *= 0.5;
+    }
+    return v;
+}
+
 void main() {
     float alpha = 0.0;
     float intensity = 0.0;
-    if (v_kind > 1.5) {
+    if (v_kind > 2.5) {
+        float r = length(v_uv);
+        if (r > 1.0) {
+            discard;
+        }
+        vec2 puv = v_uv * 2.7 + vec2(v_heat * 11.3, v_heat * 8.1);
+        float n = fbm(puv);
+        float n2 = fbm(puv * 1.9 + vec2(3.7, 5.1));
+        float edge = r + (n - 0.5) * 0.72;
+        float core = 1.0 - smoothstep(0.06, 0.70, edge);
+        float wisps = 1.0 - smoothstep(0.22, 1.06, edge + (n2 - 0.5) * 0.58);
+        intensity = core * 0.90 + wisps * 0.62;
+        alpha = (core * 0.26 + wisps * 0.20) * (0.65 + 0.35 * n);
+    } else if (v_kind > 1.5) {
         float r = length(v_uv);
         if (r > 1.0) {
             discard;

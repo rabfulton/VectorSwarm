@@ -75,7 +75,7 @@
 #define APP_HEIGHT 720
 #define APP_MAX_SWAPCHAIN_IMAGES 8
 #define ACOUSTICS_SCOPE_HISTORY_SAMPLES 8192
-#define GPU_PARTICLE_MAX_INSTANCES MAX_PARTICLES
+#define GPU_PARTICLE_MAX_INSTANCES (MAX_PARTICLES + 2048u)
 #define TERRAIN_ROWS 24
 #define TERRAIN_COLS 70
 #define RADAR_GPU_MAX_VERTS 4096
@@ -5925,6 +5925,84 @@ static void update_gpu_particle_instances(app* a) {
             out[n].heat = heat;
         }
         ++n;
+    }
+    {
+        const leveldef_level* lvl = game_current_leveldef(g);
+        if (lvl && lvl->structure_count > 0 && g->render_style != LEVEL_RENDER_CYLINDER) {
+            const float unit_w = g->world_w * (float)LEVELDEF_STRUCTURE_GRID_SCALE / (float)(LEVELDEF_STRUCTURE_GRID_W - 1);
+            const float unit_h = g->world_h * (float)LEVELDEF_STRUCTURE_GRID_SCALE / (float)(LEVELDEF_STRUCTURE_GRID_H - 1);
+            for (int i = 0; i < lvl->structure_count && i < LEVELDEF_MAX_STRUCTURES; ++i) {
+                const leveldef_structure_instance* st = &lvl->structures[i];
+                if (st->layer <= 0 || st->prefab_id < 7) {
+                    continue;
+                }
+                if (n >= GPU_PARTICLE_MAX_INSTANCES) {
+                    break;
+                }
+                const float bx = (float)st->grid_x * unit_w;
+                const float by = (float)st->grid_y * unit_h;
+                const float bw = unit_w;
+                const float bh = unit_h;
+                const int streams = 6;
+                const int puffs_per_stream = 14;
+                for (int stream = 0; stream < streams; ++stream) {
+                    const float stream_t = (streams > 1) ? ((float)stream / (float)(streams - 1)) : 0.5f;
+                    const float vent_x = bx + bw * (0.18f + 0.64f * stream_t);
+                    const float vent_y = by + bh;
+                    for (int puff = 0; puff < puffs_per_stream; ++puff) {
+                        if (n >= GPU_PARTICLE_MAX_INSTANCES) {
+                            break;
+                        }
+                        const int seed = st->grid_x * 97 + st->grid_y * 53 + stream * 131 + puff * 37;
+                        const float h = (float)(seed & 255) / 255.0f;
+                        const float h2 = (float)((seed * 137) & 255) / 255.0f;
+                        const float ph = repeatf(
+                            g->t * (0.095f + 0.075f * h) + (float)puff * 0.143f + h * 0.91f + stream_t * 0.37f,
+                            1.0f
+                        );
+                        const float rise = ph * (bh * 5.8f);
+                        const float swirl = sinf((ph + h) * (8.0f + 1.9f * stream_t) + (float)puff * 1.07f) *
+                                            bw * (0.10f + 0.22f * ph);
+                        const float spread = ((float)puff / (float)puffs_per_stream) * bw * 0.24f;
+                        const float life_in = clampf(ph / 0.18f, 0.0f, 1.0f);
+                        const float life_out = clampf((1.0f - ph) / 0.62f, 0.0f, 1.0f);
+                        const float life = life_in * life_out;
+                        const float life_s = life * life * (3.0f - 2.0f * life);
+                        const float size_u = ph * ph * (3.0f - 2.0f * ph);
+                        const float wx = vent_x + swirl + spread;
+                        const float wy = vent_y + rise;
+                        const float sx = wx + g->world_w * 0.5f - g->camera_x;
+                        const float sy = wy + g->world_h * 0.5f - g->camera_y;
+                        if (sx < -44.0f || sx > g->world_w + 44.0f || sy < -44.0f || sy > g->world_h + 44.0f) {
+                            continue;
+                        }
+                        out[n].x = sx;
+                        out[n].y = sy;
+                        out[n].radius_px = fmaxf(unit_h * (0.12f + 0.20f * size_u + 0.08f * h), 1.2f);
+                        out[n].kind = 3.0f; /* Vent smoke textured splat */
+                        if (a->palette_mode == 1) {
+                            out[n].r = clampf(0.82f + (h2 - 0.5f) * 0.10f, 0.0f, 1.0f);
+                            out[n].g = clampf(0.58f + (h - 0.5f) * 0.10f, 0.0f, 1.0f);
+                            out[n].b = clampf(0.30f + (h2 - 0.5f) * 0.08f, 0.0f, 1.0f);
+                        } else if (a->palette_mode == 2) {
+                            out[n].r = clampf(0.54f + (h2 - 0.5f) * 0.10f, 0.0f, 1.0f);
+                            out[n].g = clampf(0.70f + (h - 0.5f) * 0.10f, 0.0f, 1.0f);
+                            out[n].b = clampf(0.82f + (h2 - 0.5f) * 0.10f, 0.0f, 1.0f);
+                        } else {
+                            out[n].r = clampf(0.36f + (h2 - 0.5f) * 0.08f, 0.0f, 1.0f);
+                            out[n].g = clampf(0.62f + (h - 0.5f) * 0.10f, 0.0f, 1.0f);
+                            out[n].b = clampf(0.42f + (h2 - 0.5f) * 0.08f, 0.0f, 1.0f);
+                        }
+                        out[n].a = clampf(0.18f * life_s * (0.76f + 0.24f * (1.0f - stream_t)), 0.0f, 0.35f);
+                        out[n].dir_x = 0.04f * sinf(g->t * 0.77f + h * 4.0f);
+                        out[n].dir_y = -1.0f;
+                        out[n].trail = 0.06f;
+                        out[n].heat = ph + h2 * 0.5f;
+                        ++n;
+                    }
+                }
+            }
+        }
     }
     a->particle_instance_count = n;
     if (trace_enabled && n > 0 && (g->t - trace_last_t) >= 0.5f) {

@@ -1364,7 +1364,8 @@ static vg_result draw_level_structures(
     const game_state* g,
     const palette_theme* pal,
     const vg_stroke_style* land_halo,
-    const vg_stroke_style* land_main
+    const vg_stroke_style* land_main,
+    int draw_cpu_vent_smoke
 ) {
     if (!ctx || !g || !pal || !land_halo || !land_main || g->render_style == LEVEL_RENDER_CYLINDER) {
         return VG_OK;
@@ -1489,9 +1490,9 @@ static vg_result draw_level_structures(
                     }
                 }
             }
-        } else if (st->layer > 0 && st->prefab_id >= 7) {
-            const int streams = 4;
-            const int puffs_per_stream = 8;
+        } else if (draw_cpu_vent_smoke && st->layer > 0 && st->prefab_id >= 7) {
+            const int streams = 5;
+            const int puffs_per_stream = 10;
             const float vent_y = bh;
             for (int stream = 0; stream < streams; ++stream) {
                 const float stream_t = (streams > 1) ? ((float)stream / (float)(streams - 1)) : 0.5f;
@@ -1499,33 +1500,139 @@ static vg_result draw_level_structures(
                 for (int puff = 0; puff < puffs_per_stream; ++puff) {
                     const int seed = st->grid_x * 73 + st->grid_y * 41 + stream * 101 + puff * 31;
                     const float h = (float)(seed & 255) / 255.0f;
+                    const float h2 = (float)((seed * 131) & 255) / 255.0f;
                     const float ph = repeatf(g->t * (0.11f + 0.10f * h) + (float)puff * 0.17f + h * 0.9f + stream_t * 0.31f, 1.0f);
-                    const float rise = ph * (bh * 4.8f);
+                    const float rise = ph * (bh * 5.4f);
                     const float swirl = sinf((ph + h) * (8.6f + 2.1f * stream_t) + (float)puff * 1.1f) * bw * (0.10f + 0.20f * ph);
                     const float spread = ((float)puff / (float)puffs_per_stream) * bw * 0.18f;
-                    const float r = fmaxf(unit_h * (0.10f + 0.26f * ph + 0.12f * h), 1.0f);
-                    const float a = 0.34f * (1.0f - ph) * (0.75f + 0.25f * (1.0f - stream_t));
-                    const float shade = 0.70f + 0.25f * h;
-                    const vg_fill_style smoke = {
-                        .intensity = 0.82f,
+                    const float life_in = clampf(ph / 0.14f, 0.0f, 1.0f);
+                    const float life_out = clampf((1.0f - ph) / 0.48f, 0.0f, 1.0f);
+                    const float life = life_in * life_out;
+                    const float life_s = life * life * (3.0f - 2.0f * life);
+                    const float size_u = ph * ph * (3.0f - 2.0f * ph);
+                    const float r_outer = fmaxf(unit_h * (0.20f + 0.36f * size_u + 0.14f * h), 1.3f);
+                    const float r_mid = r_outer * (0.62f + 0.10f * h);
+                    const float r_core = r_outer * 0.34f;
+                    const float base_a = 0.28f * life_s * (0.82f + 0.18f * (1.0f - stream_t));
+                    const float tone = (h2 - 0.5f) * 0.16f;
+                    const float shade_outer = 0.54f + 0.22f * h + tone;
+                    const float shade_mid = 0.44f + 0.20f * h + tone * 0.85f;
+                    const float shade_core = 0.34f + 0.16f * h + tone * 0.70f;
+                    const float ch_r = 1.00f + (h2 - 0.5f) * 0.08f;
+                    const float ch_g = 1.00f + (h - 0.5f) * 0.06f;
+                    const float ch_b = 1.00f + (0.5f - h2) * 0.08f;
+                    const vg_vec2 center = structure_map_point(
+                        vent_x + swirl + spread,
+                        vent_y + rise,
+                        bx, by, bw, bh,
+                        st->rotation_quadrants, st->flip_x, st->flip_y
+                    );
+                    const vg_fill_style smoke_outer = {
+                        .intensity = 0.64f,
                         .color = (vg_color){
-                            pal->primary_dim.r * shade,
-                            pal->primary_dim.g * shade,
-                            pal->primary_dim.b * shade,
-                            a
+                            pal->primary_dim.r * shade_outer * ch_r,
+                            pal->primary_dim.g * shade_outer * ch_g,
+                            pal->primary_dim.b * shade_outer * ch_b,
+                            base_a * (0.90f + 0.16f * h2)
                         },
                         .blend = VG_BLEND_ALPHA
                     };
-                    vr = vg_fill_circle(ctx,
-                        structure_map_point(
-                            vent_x + swirl + spread,
-                            vent_y + rise,
-                            bx, by, bw, bh,
-                            st->rotation_quadrants, st->flip_x, st->flip_y
-                        ),
-                        r, &smoke, 12);
-                    if (vr != VG_OK) {
-                        return vr;
+                    const vg_fill_style smoke_mid = {
+                        .intensity = 0.56f,
+                        .color = (vg_color){
+                            pal->primary_dim.r * shade_mid * ch_r,
+                            pal->primary_dim.g * shade_mid * ch_g,
+                            pal->primary_dim.b * shade_mid * ch_b,
+                            base_a * 0.72f * (0.88f + 0.18f * h)
+                        },
+                        .blend = VG_BLEND_ALPHA
+                    };
+                    const vg_fill_style smoke_core = {
+                        .intensity = 0.48f,
+                        .color = (vg_color){
+                            pal->primary_dim.r * shade_core * ch_r,
+                            pal->primary_dim.g * shade_core * ch_g,
+                            pal->primary_dim.b * shade_core * ch_b,
+                            base_a * 0.46f * (0.92f + 0.12f * h2)
+                        },
+                        .blend = VG_BLEND_ALPHA
+                    };
+                    {
+                        enum { SPLAT_VERTS = 18 };
+                        vg_vec2 splat_outer[SPLAT_VERTS];
+                        vg_vec2 splat_mid[SPLAT_VERTS];
+                        vg_vec2 splat_core[SPLAT_VERTS];
+                        const float rot = h * 6.2831853f + ph * 1.6f;
+                        const float nseed_x = (float)(st->grid_x * 13 + st->grid_y * 7) * 0.173f + (float)stream * 0.91f + (float)puff * 0.37f;
+                        const float nseed_y = (float)(st->grid_x * 5 + st->grid_y * 11) * 0.191f + (float)stream * 0.67f + (float)puff * 0.53f;
+                        const float ox = (perlin2(nseed_x + ph * 2.7f, nseed_y + 1.7f + h2) * 0.5f + 0.5f) - 0.5f;
+                        const float oy = (perlin2(nseed_x + 2.9f + ph * 1.9f, nseed_y + 0.9f + h) * 0.5f + 0.5f) - 0.5f;
+                        const vg_vec2 c_outer = {center.x + ox * r_outer * 0.18f, center.y + oy * r_outer * 0.18f};
+                        const vg_vec2 c_mid = {center.x - ox * r_mid * 0.14f, center.y + oy * r_mid * 0.10f};
+                        const vg_vec2 c_core = {center.x + ox * r_core * 0.10f, center.y - oy * r_core * 0.12f};
+                        for (int sv = 0; sv < SPLAT_VERTS; ++sv) {
+                            const float t = (float)sv / (float)SPLAT_VERTS;
+                            const float a = rot + t * 6.2831853f;
+                            const float ca = cosf(a);
+                            const float sa = sinf(a);
+                            const float no = 0.5f + 0.5f * perlin2(
+                                nseed_x + ca * 1.8f + ph * 2.3f,
+                                nseed_y + sa * 1.8f + h * 1.7f
+                            );
+                            const float nm = 0.5f + 0.5f * perlin2(
+                                nseed_x + 1.9f + ca * 2.2f + ph * 2.9f,
+                                nseed_y + 1.3f + sa * 2.2f + h2 * 1.6f
+                            );
+                            const float nc = 0.5f + 0.5f * perlin2(
+                                nseed_x + 3.7f + ca * 2.6f + ph * 3.4f,
+                                nseed_y + 2.1f + sa * 2.6f + h * 1.9f
+                            );
+                            const float ro = r_outer * (0.52f + 0.88f * no);
+                            const float rm = r_mid * (0.56f + 0.74f * nm);
+                            const float rc = r_core * (0.64f + 0.52f * nc);
+                            splat_outer[sv] = (vg_vec2){c_outer.x + ca * ro, c_outer.y + sa * ro};
+                            splat_mid[sv] = (vg_vec2){c_mid.x + ca * rm, c_mid.y + sa * rm};
+                            splat_core[sv] = (vg_vec2){c_core.x + ca * rc, c_core.y + sa * rc};
+                        }
+                        vr = vg_fill_convex(ctx, splat_outer, SPLAT_VERTS, &smoke_outer);
+                        if (vr != VG_OK) {
+                            return vr;
+                        }
+                        vr = vg_fill_convex(ctx, splat_mid, SPLAT_VERTS, &smoke_mid);
+                        if (vr != VG_OK) {
+                            return vr;
+                        }
+                        vr = vg_fill_convex(ctx, splat_core, SPLAT_VERTS, &smoke_core);
+                        if (vr != VG_OK) {
+                            return vr;
+                        }
+                        {
+                            /* Add one low-alpha offset wisp to break uniform blob silhouettes. */
+                            vg_fill_style wisp = smoke_outer;
+                            vg_vec2 wisp_poly[SPLAT_VERTS];
+                            const float w_rot = rot + 0.7f + h2 * 1.6f;
+                            const vg_vec2 cw = {
+                                center.x + (ox - oy) * r_outer * 0.26f,
+                                center.y + (ox + oy) * r_outer * 0.18f
+                            };
+                            wisp.color.a *= 0.34f;
+                            for (int sv = 0; sv < SPLAT_VERTS; ++sv) {
+                                const float t = (float)sv / (float)SPLAT_VERTS;
+                                const float a = w_rot + t * 6.2831853f;
+                                const float ca = cosf(a);
+                                const float sa = sinf(a);
+                                const float nw = 0.5f + 0.5f * perlin2(
+                                    nseed_x + 4.7f + ca * 2.3f + ph * 2.0f,
+                                    nseed_y + 3.9f + sa * 2.3f + h2 * 2.1f
+                                );
+                                const float rw = r_outer * (0.34f + 0.42f * nw);
+                                wisp_poly[sv] = (vg_vec2){cw.x + ca * rw, cw.y + sa * rw};
+                            }
+                            vr = vg_fill_convex(ctx, wisp_poly, SPLAT_VERTS, &wisp);
+                            if (vr != VG_OK) {
+                                return vr;
+                            }
+                        }
                     }
                 }
             }
@@ -7310,7 +7417,7 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             return r;
         }
     }
-    r = draw_level_structures(ctx, g, &pal, &land_halo, &land_main);
+    r = draw_level_structures(ctx, g, &pal, &land_halo, &land_main, metrics->use_gpu_particles ? 0 : 1);
     if (r != VG_OK) {
         (void)vg_transform_pop(ctx);
         return r;
