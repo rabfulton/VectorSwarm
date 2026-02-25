@@ -74,7 +74,9 @@ typedef struct leveldef_boid_profile {
     float wander_w;
     float wander_freq;
     float steer_drag;
+    float max_turn_rate_deg;
     float max_speed;
+    float min_speed;
     float accel;
     float radius_min;
     float radius_max;

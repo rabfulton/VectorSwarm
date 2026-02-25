@@ -132,6 +132,203 @@ static float dist_sq_level(int uses_cylinder, float period, float ax, float ay, 
     return dx * dx + dy * dy;
 }
 
+static float wrap_angle_pi(float a) {
+    const float pi = 3.14159265359f;
+    while (a > pi) a -= 2.0f * pi;
+    while (a < -pi) a += 2.0f * pi;
+    return a;
+}
+
+static void structure_prefab_dims_world(int prefab_id, int* out_w, int* out_h) {
+    int w = 1;
+    int h = 1;
+    if (prefab_id == 4) {
+        h = 3;
+    }
+    if (out_w) {
+        *out_w = w;
+    }
+    if (out_h) {
+        *out_h = h;
+    }
+}
+
+static void structure_aabb_world_enemy(
+    const game_state* g,
+    const leveldef_structure_instance* st,
+    float* out_min_x,
+    float* out_min_y,
+    float* out_max_x,
+    float* out_max_y
+) {
+    int w_units = 1;
+    int h_units = 1;
+    int q;
+    float unit_w;
+    float unit_h;
+    float bx;
+    float by;
+    float bw;
+    float bh;
+
+    if (!g || !st || !out_min_x || !out_min_y || !out_max_x || !out_max_y) {
+        return;
+    }
+    structure_prefab_dims_world(st->prefab_id, &w_units, &h_units);
+    unit_w = g->world_w * (float)LEVELDEF_STRUCTURE_GRID_SCALE / (float)(LEVELDEF_STRUCTURE_GRID_W - 1);
+    unit_h = g->world_h * (float)LEVELDEF_STRUCTURE_GRID_SCALE / (float)(LEVELDEF_STRUCTURE_GRID_H - 1);
+    bx = (float)st->grid_x * unit_w;
+    by = (float)st->grid_y * unit_h;
+    bw = unit_w * (float)w_units;
+    bh = unit_h * (float)h_units;
+    q = ((st->rotation_quadrants % 4) + 4) % 4;
+    if ((q & 1) != 0) {
+        const float tmp = bw;
+        bw = bh;
+        bh = tmp;
+    }
+    *out_min_x = bx;
+    *out_min_y = by;
+    *out_max_x = bx + bw;
+    *out_max_y = by + bh;
+}
+
+static int swarm_structure_collision_response(
+    const game_state* g,
+    float x,
+    float y,
+    float radius,
+    float* out_nx,
+    float* out_ny,
+    float* out_penetration
+) {
+    const leveldef_level* lvl;
+    float best_pen = 0.0f;
+    float best_nx = 0.0f;
+    float best_ny = 0.0f;
+    int hit = 0;
+    if (!g || !out_nx || !out_ny || !out_penetration || radius <= 0.0f) {
+        return 0;
+    }
+    if (g->render_style == LEVEL_RENDER_CYLINDER) {
+        return 0;
+    }
+    lvl = game_current_leveldef(g);
+    if (!lvl || lvl->structure_count <= 0) {
+        return 0;
+    }
+    for (int i = 0; i < lvl->structure_count && i < LEVELDEF_MAX_STRUCTURES; ++i) {
+        const leveldef_structure_instance* st = &lvl->structures[i];
+        float min_x;
+        float min_y;
+        float max_x;
+        float max_y;
+        float nearest_x;
+        float nearest_y;
+        float dx;
+        float dy;
+        float d2;
+        float nx;
+        float ny;
+        float pen;
+        if (st->layer != 0) {
+            continue;
+        }
+        structure_aabb_world_enemy(g, st, &min_x, &min_y, &max_x, &max_y);
+        nearest_x = fmaxf(min_x, fminf(x, max_x));
+        nearest_y = fmaxf(min_y, fminf(y, max_y));
+        dx = x - nearest_x;
+        dy = y - nearest_y;
+        d2 = dx * dx + dy * dy;
+        if (d2 > radius * radius) {
+            continue;
+        }
+        if (d2 > 1.0e-6f) {
+            const float d = sqrtf(d2);
+            nx = dx / d;
+            ny = dy / d;
+            pen = radius - d;
+        } else {
+            const float left = fabsf(x - min_x);
+            const float right = fabsf(max_x - x);
+            const float bottom = fabsf(y - min_y);
+            const float top = fabsf(max_y - y);
+            nx = -1.0f;
+            ny = 0.0f;
+            pen = radius + left;
+            if (right < left && right <= bottom && right <= top) {
+                nx = 1.0f;
+                ny = 0.0f;
+                pen = radius + right;
+            } else if (bottom < left && bottom <= right && bottom <= top) {
+                nx = 0.0f;
+                ny = -1.0f;
+                pen = radius + bottom;
+            } else if (top < left && top <= right && top <= bottom) {
+                nx = 0.0f;
+                ny = 1.0f;
+                pen = radius + top;
+            }
+        }
+        if (!hit || pen > best_pen) {
+            best_pen = pen;
+            best_nx = nx;
+            best_ny = ny;
+            hit = 1;
+        }
+    }
+    if (!hit) {
+        return 0;
+    }
+    *out_nx = best_nx;
+    *out_ny = best_ny;
+    *out_penetration = best_pen;
+    return 1;
+}
+
+static float add_inverse_avoid_force(
+    float self_x,
+    float self_y,
+    float source_x,
+    float source_y,
+    float aware_r2,
+    float personal_r2,
+    float far_scale,
+    float near_scale,
+    float* io_avoid_x,
+    float* io_avoid_y
+) {
+    float dx = self_x - source_x;
+    float dy = self_y - source_y;
+    float d2 = dx * dx + dy * dy;
+    float boost = 0.0f;
+    if (d2 >= aware_r2) {
+        return 0.0f;
+    }
+    if (d2 < 1.0e-4f) {
+        d2 = 1.0e-4f;
+        dx = 1.0f;
+        dy = 0.0f;
+    }
+    {
+        const float far_falloff = 1.0f - (d2 / aware_r2);
+        *io_avoid_x += (dx / d2) * (far_scale * far_falloff);
+        *io_avoid_y += (dy / d2) * (far_scale * far_falloff);
+        if (far_falloff > boost) {
+            boost = far_falloff;
+        }
+    }
+    if (d2 < personal_r2) {
+        const float near_falloff = 1.0f - (d2 / personal_r2);
+        *io_avoid_x += (dx / d2) * (near_scale * near_falloff);
+        *io_avoid_y += (dy / d2) * (near_scale * near_falloff);
+        if (near_falloff > boost) {
+            boost = near_falloff;
+        }
+    }
+    return boost;
+}
+
 static void game_push_audio_event(game_state* g, game_audio_event_type type, float x, float y) {
     if (!g || g->audio_event_count < 0 || g->audio_event_count >= MAX_AUDIO_EVENTS) {
         return;
@@ -587,6 +784,8 @@ static void spawn_wave_swarm_profile(game_state* g, const leveldef_db* db, int w
         e->swarm_wander_w = p->wander_w;
         e->swarm_wander_freq = p->wander_freq;
         e->swarm_drag = p->steer_drag;
+        e->swarm_min_speed = p->min_speed * su;
+        e->swarm_turn_rate_rad = p->max_turn_rate_deg * (3.14159265359f / 180.0f);
         enemy_adjust_spawn_clear(g, e, su);
     }
 }
@@ -714,6 +913,8 @@ void enemy_spawn_curated_enemy(
             e->swarm_wander_w = p->wander_w;
             e->swarm_wander_freq = p->wander_freq;
             e->swarm_drag = p->steer_drag;
+            e->swarm_min_speed = p->min_speed * su;
+            e->swarm_turn_rate_rad = p->max_turn_rate_deg * (3.14159265359f / 180.0f);
             enemy_adjust_spawn_clear(g, e, su);
         }
         return;
@@ -1340,15 +1541,19 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt, int uses_cylin
         if (!o->active || o == e || o->archetype != ENEMY_ARCH_SWARM) {
             continue;
         }
-        const float dx = uses_cylinder ? wrap_delta(o->b.x, e->b.x, period) : (o->b.x - e->b.x);
-        const float dy = o->b.y - e->b.y;
-        const float d2 = dx * dx + dy * dy;
+        float dx = uses_cylinder ? wrap_delta(o->b.x, e->b.x, period) : (o->b.x - e->b.x);
+        float dy = o->b.y - e->b.y;
+        float d2 = dx * dx + dy * dy;
         if (d2 < 1e-4f) {
-            continue;
+            const float phase = (float)(((e->slot_index * 97 + o->slot_index * 57 + e->wave_id * 17) & 255)) * 0.024543693f;
+            dx = cosf(phase) * 0.01f;
+            dy = sinf(phase) * 0.01f;
+            d2 = dx * dx + dy * dy;
         }
         if (d2 < sep_r2) {
-            sep_x -= dx / d2;
-            sep_y -= dy / d2;
+            const float near_falloff = 1.0f - (d2 / sep_r2);
+            sep_x -= (dx / d2) * near_falloff;
+            sep_y -= (dy / d2) * near_falloff;
         }
         if (d2 < ali_r2) {
             ali_x += o->b.vx;
@@ -1373,38 +1578,73 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt, int uses_cylin
 
     float avoid_x = 0.0f;
     float avoid_y = 0.0f;
+    float avoid_boost = 0.0f;
     float player_avoid_boost = 0.0f;
     {
         const float lead = 0.22f;
         const float px = g->player.b.x + g->player.b.vx * lead;
         const float py = g->player.b.y + g->player.b.vy * lead;
-        float dx = uses_cylinder ? wrap_delta(e->b.x, px, period) : (e->b.x - px);
-        float dy = e->b.y - py;
-        float d2 = dx * dx + dy * dy;
-        const float aware_r = 300.0f * su;
+        const float aware_r = 360.0f * su;
         const float aware_r2 = aware_r * aware_r;
-        const float personal_r = 120.0f * su;
+        const float personal_r = 150.0f * su;
         const float personal_r2 = personal_r * personal_r;
-        if (d2 < aware_r2) {
-            if (d2 < 1e-4f) {
-                d2 = 1e-4f;
-            }
-            {
-                const float far_falloff = 1.0f - (d2 / aware_r2);
-                avoid_x += (dx / d2) * far_falloff;
-                avoid_y += (dy / d2) * far_falloff;
-                if (far_falloff > player_avoid_boost) {
-                    player_avoid_boost = far_falloff;
+        float boost = 0.0f;
+        if (uses_cylinder) {
+            const float wrapped_px = e->b.x - wrap_delta(e->b.x, px, period);
+            boost = add_inverse_avoid_force(
+                e->b.x, e->b.y, wrapped_px, py,
+                aware_r2, personal_r2, 1.35f, 3.10f,
+                &avoid_x, &avoid_y
+            );
+        } else {
+            boost = add_inverse_avoid_force(
+                e->b.x, e->b.y, px, py,
+                aware_r2, personal_r2, 1.35f, 3.10f,
+                &avoid_x, &avoid_y
+            );
+        }
+        {
+            /* Extra urgency when trajectories are converging toward imminent collision. */
+            float rel_x = uses_cylinder ? wrap_delta(px, e->b.x, period) : (px - e->b.x);
+            float rel_y = py - e->b.y;
+            float rel_vx = g->player.b.vx - e->b.vx;
+            float rel_vy = g->player.b.vy - e->b.vy;
+            float rel_v2 = rel_vx * rel_vx + rel_vy * rel_vy;
+            if (rel_v2 > 1.0e-5f) {
+                float ttc = -((rel_x * rel_vx + rel_y * rel_vy) / rel_v2);
+                if (ttc > 0.0f && ttc < 0.70f) {
+                    float cx = rel_x + rel_vx * ttc;
+                    float cy = rel_y + rel_vy * ttc;
+                    float cd2 = cx * cx + cy * cy;
+                    float avoid_dist = personal_r + fmaxf(e->radius, 12.0f * su);
+                    if (cd2 < avoid_dist * avoid_dist) {
+                        float away_x = -rel_x;
+                        float away_y = -rel_y;
+                        const float away_l2 = away_x * away_x + away_y * away_y;
+                        if (away_l2 > 1.0e-6f) {
+                            const float away_l = sqrtf(away_l2);
+                            const float urgency = (1.0f - clampf(ttc / 0.70f, 0.0f, 1.0f));
+                            away_x /= away_l;
+                            away_y /= away_l;
+                            avoid_x += away_x * (2.1f * urgency);
+                            avoid_y += away_y * (2.1f * urgency);
+                            {
+                                float side_x = -away_y;
+                                float side_y = away_x;
+                                const float side_sign = (((e->wave_id * 31 + e->slot_index) & 1) == 0) ? 1.0f : -1.0f;
+                                avoid_x += side_x * (1.65f * urgency * side_sign);
+                                avoid_y += side_y * (1.65f * urgency * side_sign);
+                            }
+                            if (urgency > player_avoid_boost) {
+                                player_avoid_boost = urgency;
+                            }
+                        }
+                    }
                 }
             }
-            if (d2 < personal_r2) {
-                const float near_falloff = 1.0f - (d2 / personal_r2);
-                avoid_x += (dx / d2) * (1.75f * near_falloff);
-                avoid_y += (dy / d2) * (1.75f * near_falloff);
-                if (near_falloff > player_avoid_boost) {
-                    player_avoid_boost = near_falloff;
-                }
-            }
+        }
+        if (boost > player_avoid_boost) {
+            player_avoid_boost = boost;
         }
     }
     if (g->searchlight_count > 0) {
@@ -1432,25 +1672,97 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt, int uses_cylin
         }
     }
     {
-        float wall_avoid_x = 0.0f;
-        float wall_avoid_y = 0.0f;
-        game_structure_avoidance_vector(
-            g,
-            e->b.x,
-            e->b.y,
-            fmaxf(8.0f * su, e->radius),
-            84.0f * su,
-            &wall_avoid_x,
-            &wall_avoid_y
-        );
-        if (fabsf(wall_avoid_x) > 1.0e-4f || fabsf(wall_avoid_y) > 1.0e-4f) {
-            avoid_x += wall_avoid_x * 1.35f;
-            avoid_y += wall_avoid_y * 1.35f;
+        const leveldef_level* lvl = game_current_leveldef(g);
+        if (!uses_cylinder && g->render_style != LEVEL_RENDER_CYLINDER && lvl && lvl->structure_count > 0) {
+            float fwd_x = e->b.vx;
+            float fwd_y = e->b.vy;
+            const float fwd_v = length2(fwd_x, fwd_y);
+            if (fwd_v > 1.0e-4f) {
+                fwd_x /= fwd_v;
+                fwd_y /= fwd_v;
+            } else {
+                fwd_x = (e->facing_x != 0.0f) ? e->facing_x : ((e->swarm_goal_dir < 0.0f) ? -1.0f : 1.0f);
+                fwd_y = e->facing_y;
+                normalize2(&fwd_x, &fwd_y);
+            }
+            for (int i = 0; i < lvl->structure_count && i < LEVELDEF_MAX_STRUCTURES; ++i) {
+                const leveldef_structure_instance* st = &lvl->structures[i];
+                float min_x;
+                float min_y;
+                float max_x;
+                float max_y;
+                float cx;
+                float cy;
+                float w;
+                float h;
+                float structure_r;
+                float personal_r;
+                float aware_r;
+                float rel_x;
+                float rel_y;
+                float along;
+                float lateral_x;
+                float lateral_y;
+                float lateral2;
+                float lateral_limit;
+                float lookahead;
+                float course_w;
+                if (st->layer != 0) {
+                    continue;
+                }
+                structure_aabb_world_enemy(g, st, &min_x, &min_y, &max_x, &max_y);
+                cx = 0.5f * (min_x + max_x);
+                cy = 0.5f * (min_y + max_y);
+                w = fmaxf(max_x - min_x, 1.0f);
+                h = fmaxf(max_y - min_y, 1.0f);
+                structure_r = 0.68f * sqrtf(w * w + h * h);
+                personal_r = structure_r + fmaxf(e->radius, 6.0f * su);
+                aware_r = personal_r + fmaxf(96.0f * su, 0.78f * structure_r);
+                rel_x = cx - e->b.x;
+                rel_y = cy - e->b.y;
+                along = rel_x * fwd_x + rel_y * fwd_y;
+                lateral_x = rel_x - along * fwd_x;
+                lateral_y = rel_y - along * fwd_y;
+                lateral2 = lateral_x * lateral_x + lateral_y * lateral_y;
+                lateral_limit = personal_r + fmaxf(8.0f * su, e->radius * 0.35f);
+                lookahead = aware_r + fmaxf(40.0f * su, e->radius * 1.5f);
+                if (along < -e->radius) {
+                    continue;
+                }
+                if (along > lookahead) {
+                    continue;
+                }
+                if (lateral2 > lateral_limit * lateral_limit) {
+                    continue;
+                }
+                course_w = 1.0f - clampf(along / fmaxf(lookahead, 1.0f), 0.0f, 1.0f);
+                {
+                    float boost = add_inverse_avoid_force(
+                        e->b.x,
+                        e->b.y,
+                        cx,
+                        cy,
+                        aware_r * aware_r,
+                        personal_r * personal_r,
+                        1.0f * course_w,
+                        1.75f * course_w,
+                        &avoid_x,
+                        &avoid_y
+                    );
+                    if (boost > avoid_boost) {
+                        avoid_boost = boost;
+                    }
+                }
+            }
         }
     }
 
     {
         const float goal_dir = (e->swarm_goal_dir < 0.0f) ? -1.0f : 1.0f;
+        const float los_radius = fmaxf(4.0f * su, e->radius * 0.65f);
+        const int player_los_clear = uses_cylinder ? 1 : game_line_of_sight_clear(
+            g, e->b.x, e->b.y, g->player.b.x, g->player.b.y, los_radius
+        );
         float goal_x = (g->player.b.x + goal_dir * 280.0f * su) - e->b.x;
         float goal_y;
         float wander_x = 0.0f;
@@ -1461,6 +1773,7 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt, int uses_cylin
         float avoid_w = (e->swarm_avoid_w > 0.01f) ? e->swarm_avoid_w : 2.70f;
         float goal_w = (e->swarm_goal_w > 0.01f) ? e->swarm_goal_w : 0.95f;
         const float wander_w = (e->swarm_wander_w > 0.01f) ? e->swarm_wander_w : 0.0f;
+        float wander_w_eff = wander_w;
         const float wander_freq = (e->swarm_wander_freq > 0.01f) ? e->swarm_wander_freq : 0.9f;
         const float steer_drag = (e->swarm_drag > 0.01f) ? e->swarm_drag : 1.3f;
 
@@ -1474,6 +1787,7 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt, int uses_cylin
         }
 
         {
+            const float avoid_boost_total = fmaxf(avoid_boost, player_avoid_boost);
             const float phase = (float)(e->wave_id & 31) * 0.61f;
             const float breathe = 0.5f + 0.5f * sinf(g->t * 0.85f + phase);
             const float tightness = 0.80f + 0.40f * breathe;
@@ -1481,8 +1795,16 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt, int uses_cylin
             ali_w *= (0.90f + 0.25f * tightness);
             coh_w *= tightness;
             goal_w *= (0.92f + 0.18f * tightness);
-            avoid_w *= (1.0f + 2.4f * player_avoid_boost);
-            goal_w *= (1.0f - 0.45f * player_avoid_boost);
+            avoid_w *= (1.0f + 2.4f * avoid_boost_total);
+            goal_w *= (1.0f - 0.45f * avoid_boost_total);
+            if (!player_los_clear) {
+                goal_x = goal_dir;
+                goal_y = 0.0f;
+                goal_w *= 0.38f;
+                if (wander_w_eff < 0.20f) {
+                    wander_w_eff = 0.20f;
+                }
+            }
         }
 
         {
@@ -1491,7 +1813,17 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt, int uses_cylin
             wander_y = sinf(wp * 1.11f + 0.8f) + 0.28f * cosf(wp * 0.49f + 0.4f);
         }
 
-        normalize2(&sep_x, &sep_y);
+        {
+            const float sep_mag = length2(sep_x, sep_y);
+            if (sep_mag > 1.0e-5f) {
+                normalize2(&sep_x, &sep_y);
+                sep_w *= fminf(sep_mag * (0.16f * sep_r), 2.75f);
+            } else {
+                sep_x = 0.0f;
+                sep_y = 0.0f;
+                sep_w = 0.0f;
+            }
+        }
         normalize2(&ali_x, &ali_y);
         normalize2(&coh_x, &coh_y);
         normalize2(&avoid_x, &avoid_y);
@@ -1499,10 +1831,86 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt, int uses_cylin
         normalize2(&wander_x, &wander_y);
 
         {
-            const float fx = sep_x * sep_w + ali_x * ali_w + coh_x * coh_w + avoid_x * avoid_w + goal_x * goal_w + wander_x * wander_w;
-            const float fy = sep_y * sep_w + ali_y * ali_w + coh_y * coh_w + avoid_y * avoid_w + goal_y * goal_w + wander_y * wander_w;
-            e->b.ax = fx * (e->accel * 135.0f) - e->b.vx * steer_drag;
-            e->b.ay = fy * (e->accel * 135.0f) - e->b.vy * steer_drag;
+            const float fx = sep_x * sep_w + ali_x * ali_w + coh_x * coh_w + avoid_x * avoid_w + goal_x * goal_w + wander_x * wander_w_eff;
+            const float fy = sep_y * sep_w + ali_y * ali_w + coh_y * coh_w + avoid_y * avoid_w + goal_y * goal_w + wander_y * wander_w_eff;
+            const float force_mag = length2(fx, fy);
+            const float max_turn = (e->swarm_turn_rate_rad > 1.0e-4f)
+                ? e->swarm_turn_rate_rad
+                : (120.0f * (3.14159265359f / 180.0f));
+            float cur_x = e->b.vx;
+            float cur_y = e->b.vy;
+            float cur_v = length2(cur_x, cur_y);
+            float desired_x = fx;
+            float desired_y = fy;
+            float desired_a;
+            float cur_a;
+            float out_a;
+            float target_speed;
+            float min_speed;
+            float target_vx;
+            float target_vy;
+            float desired_vx;
+            float desired_vy;
+            float max_accel;
+
+            if (cur_v < 1.0e-4f) {
+                cur_x = e->facing_x;
+                cur_y = e->facing_y;
+                cur_v = length2(cur_x, cur_y);
+            }
+            if (cur_v < 1.0e-4f) {
+                cur_x = (e->swarm_goal_dir < 0.0f) ? -1.0f : 1.0f;
+                cur_y = 0.0f;
+                cur_v = 1.0f;
+            }
+            normalize2(&cur_x, &cur_y);
+
+            if (length2(desired_x, desired_y) < 1.0e-5f) {
+                desired_x = cur_x;
+                desired_y = cur_y;
+            } else {
+                normalize2(&desired_x, &desired_y);
+            }
+
+            cur_a = atan2f(cur_y, cur_x);
+            desired_a = atan2f(desired_y, desired_x);
+            out_a = cur_a;
+            if (dt > 1.0e-5f && max_turn > 1.0e-4f) {
+                const float max_da = max_turn * dt;
+                float da = wrap_angle_pi(desired_a - cur_a);
+                if (da > max_da) da = max_da;
+                if (da < -max_da) da = -max_da;
+                out_a = cur_a + da;
+            }
+
+            min_speed = (e->swarm_min_speed > 1.0f) ? e->swarm_min_speed : fmaxf(26.0f * su, e->max_speed * 0.24f);
+            target_speed = cur_v + (force_mag * e->accel * 18.0f - cur_v * steer_drag) * dt;
+            /* Tighten turns under structure/searchlight urgency. */
+            target_speed -= avoid_boost * (0.28f * e->max_speed);
+            /* Player collision urgency should trigger evasive acceleration. */
+            target_speed += player_avoid_boost * (0.36f * e->max_speed);
+            target_speed = clampf(target_speed, min_speed, e->max_speed);
+
+            target_vx = cosf(out_a) * target_speed;
+            target_vy = sinf(out_a) * target_speed;
+            desired_vx = target_vx;
+            desired_vy = target_vy;
+            if (dt > 1.0e-5f) {
+                e->b.ax = (desired_vx - e->b.vx) / dt;
+                e->b.ay = (desired_vy - e->b.vy) / dt;
+                max_accel = fmaxf(220.0f, e->accel * 280.0f);
+                {
+                    const float a_len = length2(e->b.ax, e->b.ay);
+                    if (a_len > max_accel) {
+                        const float s = max_accel / a_len;
+                        e->b.ax *= s;
+                        e->b.ay *= s;
+                    }
+                }
+            } else {
+                e->b.ax = 0.0f;
+                e->b.ay = 0.0f;
+            }
         }
     }
 }
@@ -1564,21 +1972,34 @@ void enemy_update_system(
                 }
             }
             if (game_structure_circle_overlap(g, e->b.x, e->b.y, fmaxf(8.0f * su, e->radius))) {
-                float nx = e->b.x;
-                float ny = e->b.y;
-                if (game_find_noncolliding_spawn(
-                        g,
-                        &nx,
-                        &ny,
-                        fmaxf(8.0f * su, e->radius),
-                        fmaxf(8.0f * su, e->radius * 0.6f),
-                        g->world_h * 0.45f)) {
-                    e->b.x = nx;
-                    e->b.y = ny;
-                    if (e->archetype == ENEMY_ARCH_SWARM) {
-                        e->b.vx *= 0.72f;
-                        e->b.vy *= 0.72f;
-                    } else {
+                if (e->archetype == ENEMY_ARCH_SWARM) {
+                    float n_x = 0.0f;
+                    float n_y = 0.0f;
+                    float penetration = 0.0f;
+                    const float rr = fmaxf(8.0f * su, e->radius);
+                    if (swarm_structure_collision_response(g, e->b.x, e->b.y, rr, &n_x, &n_y, &penetration)) {
+                        const float vdot = e->b.vx * n_x + e->b.vy * n_y;
+                        e->b.x += n_x * (penetration + 1.0f);
+                        e->b.y += n_y * (penetration + 1.0f);
+                        if (vdot < 0.0f) {
+                            e->b.vx -= 2.0f * vdot * n_x;
+                            e->b.vy -= 2.0f * vdot * n_y;
+                        }
+                        e->b.vx *= 0.88f;
+                        e->b.vy *= 0.88f;
+                    }
+                } else {
+                    float nx = e->b.x;
+                    float ny = e->b.y;
+                    if (game_find_noncolliding_spawn(
+                            g,
+                            &nx,
+                            &ny,
+                            fmaxf(8.0f * su, e->radius),
+                            fmaxf(8.0f * su, e->radius * 0.6f),
+                            g->world_h * 0.45f)) {
+                        e->b.x = nx;
+                        e->b.y = ny;
                         e->b.vx *= -0.35f;
                         e->b.vy *= -0.35f;
                     }
@@ -1586,7 +2007,7 @@ void enemy_update_system(
             }
         }
         {
-            const float v = length2(e->b.vx, e->b.vy);
+            float v = length2(e->b.vx, e->b.vy);
             float speed_cap = e->max_speed;
             if (e->archetype == ENEMY_ARCH_KAMIKAZE &&
                 (e->state == ENEMY_STATE_KAMIKAZE_THRUST || e->state == ENEMY_STATE_KAMIKAZE_STRIKE)) {
@@ -1599,6 +2020,31 @@ void enemy_update_system(
                 const float s = speed_cap / v;
                 e->b.vx *= s;
                 e->b.vy *= s;
+            }
+            if (e->archetype == ENEMY_ARCH_SWARM) {
+                const float min_speed = (e->swarm_min_speed > 1.0f) ? e->swarm_min_speed : fmaxf(26.0f * su, e->max_speed * 0.24f);
+                v = length2(e->b.vx, e->b.vy);
+                if (v < min_speed) {
+                    float dir_x = e->b.vx;
+                    float dir_y = e->b.vy;
+                    if (v < 1.0e-4f) {
+                        dir_x = e->facing_x;
+                        dir_y = e->facing_y;
+                    }
+                    if (length2(dir_x, dir_y) < 1.0e-4f) {
+                        dir_x = (e->swarm_goal_dir < 0.0f) ? -1.0f : 1.0f;
+                        dir_y = 0.0f;
+                    }
+                    normalize2(&dir_x, &dir_y);
+                    {
+                        const float gain = clampf(dt * 6.0f, 0.0f, 1.0f);
+                        const float tvx = dir_x * min_speed;
+                        const float tvy = dir_y * min_speed;
+                        e->b.vx += (tvx - e->b.vx) * gain;
+                        e->b.vy += (tvy - e->b.vy) * gain;
+                    }
+                    v = length2(e->b.vx, e->b.vy);
+                }
             }
             if (v > 1.0f) {
                 e->facing_x = e->b.vx / v;

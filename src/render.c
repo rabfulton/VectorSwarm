@@ -3895,6 +3895,7 @@ static int editor_marker_properties_text(
     }
     if (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 10 || kind == 11 || kind == 12) {
         const int event_item = (metrics->level_editor_marker_track[sel] == 1);
+        const int boid_item = (kind == 5 || kind == 10 || kind == 11 || kind == 12);
         if (n < cap) { out_labels[n] = "TYPE"; snprintf(out_values[n], 32, "%s", editor_wave_type_name(kind)); n++; }
         if (event_item) {
             if (n < cap) { out_labels[n] = "ORDER"; snprintf(out_values[n], 32, "%d", metrics->level_editor_marker_order[sel]); n++; }
@@ -3914,6 +3915,7 @@ static int editor_marker_properties_text(
             snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_c[sel]);
             n++;
         }
+        if (boid_item && n < cap) { out_labels[n] = "MAX TURN DEG"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_marker_d[sel]); n++; }
         if (!event_item && n < cap) { out_labels[n] = "DELAY S"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_delay_s[sel]); n++; }
         return n;
     }
@@ -4458,10 +4460,23 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 if (selected_prop < 0) selected_prop = 0;
                 if (selected_prop >= pn) selected_prop = pn - 1;
                 for (int i = 0; i < pn; ++i) {
-                    char row[96];
-                    snprintf(row, sizeof(row), "%-14s %s", labels[i], values[i]);
                     const vg_rect rb = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
-                    r = vg_draw_button(ctx, rb, row, 10.4f * ui, &frame, &text, (i == selected_prop) ? 1 : 0);
+                    const float row_text_px = 10.4f * ui;
+                    const float tracking = row_text_px * 0.08f;
+                    const float pad = 8.0f * ui;
+                    const float text_y = rb.y + (rb.h - row_text_px) * 0.5f;
+                    vg_stroke_style row_text = text;
+                    const float value_w = vg_measure_text(values[i], row_text_px, tracking);
+                    const vg_vec2 label_pos = {rb.x + pad, text_y};
+                    const vg_vec2 value_pos = {rb.x + rb.w - pad - value_w, text_y};
+                    r = vg_draw_button(ctx, rb, "", row_text_px, &frame, &text, (i == selected_prop) ? 1 : 0);
+                    if (r != VG_OK) return r;
+                    if (i == selected_prop) {
+                        row_text.intensity *= 1.12f;
+                    }
+                    r = vg_draw_text(ctx, labels[i], label_pos, row_text_px, tracking, &row_text, NULL);
+                    if (r != VG_OK) return r;
+                    r = vg_draw_text(ctx, values[i], value_pos, row_text_px, tracking, &row_text, NULL);
                     if (r != VG_OK) return r;
                     ty -= 32.0f * ui;
                 }

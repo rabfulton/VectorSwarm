@@ -192,12 +192,114 @@ const leveldef_level* leveldef_get_level(const leveldef_db* db, int level_style)
     return &db->levels[level_style];
 }
 
+static void leveldef_init_builtin_boid_profiles(leveldef_db* db) {
+    leveldef_boid_profile* p;
+    if (!db) {
+        return;
+    }
+    db->profile_count = 0;
+
+    if (db->profile_count < LEVELDEF_MAX_BOID_PROFILES) {
+        p = &db->profiles[db->profile_count++];
+        memset(p, 0, sizeof(*p));
+        snprintf(p->name, sizeof(p->name), "FIREFLY");
+        snprintf(p->wave_name, sizeof(p->wave_name), "boid swarm: firefly scatter");
+        p->count = 18;
+        p->sep_w = 2.40f;
+        p->ali_w = 0.25f;
+        p->coh_w = 0.20f;
+        p->avoid_w = 2.90f;
+        p->goal_w = 0.55f;
+        p->sep_r = 84.0f;
+        p->ali_r = 168.0f;
+        p->coh_r = 205.0f;
+        p->goal_amp = 140.0f;
+        p->goal_freq = 1.40f;
+        p->wander_w = 1.30f;
+        p->wander_freq = 2.10f;
+        p->steer_drag = 1.55f;
+        p->max_turn_rate_deg = 460.0f;
+        p->max_speed = 210.0f;
+        p->min_speed = 62.0f;
+        p->accel = 6.20f;
+        p->radius_min = 12.0f;
+        p->radius_max = 17.0f;
+        p->spawn_x01 = 0.62f;
+        p->spawn_x_span = 260.0f;
+        p->spawn_y01 = 0.50f;
+        p->spawn_y_span = 140.0f;
+    }
+
+    if (db->profile_count < LEVELDEF_MAX_BOID_PROFILES) {
+        p = &db->profiles[db->profile_count++];
+        memset(p, 0, sizeof(*p));
+        snprintf(p->name, sizeof(p->name), "FISH");
+        snprintf(p->wave_name, sizeof(p->wave_name), "boid swarm: fish school");
+        p->count = 16;
+        p->sep_w = 1.60f;
+        p->ali_w = 1.10f;
+        p->coh_w = 1.00f;
+        p->avoid_w = 2.40f;
+        p->goal_w = 1.00f;
+        p->sep_r = 104.0f;
+        p->ali_r = 290.0f;
+        p->coh_r = 345.0f;
+        p->goal_amp = 52.0f;
+        p->goal_freq = 0.45f;
+        p->wander_w = 0.22f;
+        p->wander_freq = 0.80f;
+        p->steer_drag = 1.25f;
+        p->max_turn_rate_deg = 440.0f;
+        p->max_speed = 300.0f;
+        p->min_speed = 78.0f;
+        p->accel = 7.80f;
+        p->radius_min = 12.0f;
+        p->radius_max = 17.0f;
+        p->spawn_x01 = 0.62f;
+        p->spawn_x_span = 260.0f;
+        p->spawn_y01 = 0.50f;
+        p->spawn_y_span = 140.0f;
+    }
+
+    if (db->profile_count < LEVELDEF_MAX_BOID_PROFILES) {
+        p = &db->profiles[db->profile_count++];
+        memset(p, 0, sizeof(*p));
+        snprintf(p->name, sizeof(p->name), "BIRD");
+        snprintf(p->wave_name, sizeof(p->wave_name), "boid swarm: bird flock");
+        p->count = 12;
+        p->sep_w = 1.40f;
+        p->ali_w = 1.55f;
+        p->coh_w = 0.85f;
+        p->avoid_w = 2.20f;
+        p->goal_w = 1.35f;
+        p->sep_r = 126.0f;
+        p->ali_r = 336.0f;
+        p->coh_r = 392.0f;
+        p->goal_amp = 34.0f;
+        p->goal_freq = 0.28f;
+        p->wander_w = 0.08f;
+        p->wander_freq = 0.45f;
+        p->steer_drag = 1.08f;
+        p->max_turn_rate_deg = 340.0f;
+        p->max_speed = 350.0f;
+        p->min_speed = 102.0f;
+        p->accel = 9.00f;
+        p->radius_min = 11.0f;
+        p->radius_max = 16.0f;
+        p->spawn_x01 = 0.62f;
+        p->spawn_x_span = 260.0f;
+        p->spawn_y01 = 0.50f;
+        p->spawn_y_span = 140.0f;
+    }
+}
+
 void leveldef_init_defaults(leveldef_db* db) {
     int i;
     if (!db) {
         return;
     }
     memset(db, 0, sizeof(*db));
+    leveldef_init_builtin_boid_profiles(db);
     for (i = 0; i < LEVEL_STYLE_COUNT; ++i) {
         db->levels[i].editor_length_screens = 12.0f;
         db->levels[i].wave_mode = -1;
@@ -773,8 +875,12 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_profile->wander_freq = strtof(v, NULL);
                     } else if (strcmp(k, "steer_drag") == 0) {
                         cur_profile->steer_drag = strtof(v, NULL);
+                    } else if (strcmp(k, "max_turn_rate_deg") == 0) {
+                        cur_profile->max_turn_rate_deg = strtof(v, NULL);
                     } else if (strcmp(k, "max_speed") == 0) {
                         cur_profile->max_speed = strtof(v, NULL);
+                    } else if (strcmp(k, "min_speed") == 0) {
+                        cur_profile->min_speed = strtof(v, NULL);
                     } else if (strcmp(k, "accel") == 0) {
                         cur_profile->accel = strtof(v, NULL);
                     } else if (strcmp(k, "radius_min") == 0) {
@@ -1106,8 +1212,7 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
 
 int leveldef_load_project_layout(leveldef_db* db, const char* dir_path, FILE* log_out) {
     static const char* files[] = {
-        "combat.cfg",
-        "boids.cfg"
+        "combat.cfg"
     };
     char path[512];
     int i;
