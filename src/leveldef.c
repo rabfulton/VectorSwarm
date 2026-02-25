@@ -302,6 +302,7 @@ void leveldef_init_defaults(leveldef_db* db) {
     leveldef_init_builtin_boid_profiles(db);
     for (i = 0; i < LEVEL_STYLE_COUNT; ++i) {
         db->levels[i].editor_length_screens = 12.0f;
+        db->levels[i].theme_palette = 0;
         db->levels[i].wave_mode = -1;
         db->levels[i].render_style = -1;
         db->levels[i].spawn_mode = -1;
@@ -747,6 +748,8 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                 if (sec == SEC_LEVEL && cur_level) {
                     if (strcmp(k, "level_length_screens") == 0) {
                         cur_level->editor_length_screens = strtof(v, NULL);
+                    } else if (strcmp(k, "theme_palette") == 0) {
+                        cur_level->theme_palette = atoi(v);
                     } else if (strcmp(k, "render_style") == 0) {
                         cur_level->render_style = render_style_from_name(v);
                     } else if (strcmp(k, "wave_mode") == 0) {
@@ -1121,6 +1124,12 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
         if (l->wave_cooldown_initial_s <= 0.0f || l->wave_cooldown_between_s <= 0.0f) {
             if (log_out) {
                 fprintf(log_out, "leveldef: level %d invalid wave cooldowns\n", i);
+            }
+            ok = 0;
+        }
+        if (l->theme_palette < 0 || l->theme_palette > 2) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid theme_palette (expected 0..2)\n", i);
             }
             ok = 0;
         }

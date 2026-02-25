@@ -321,6 +321,7 @@ typedef struct game_state {
     int level_index;
     char current_level_name[64];
     int render_style; /* enum level_render_style_id */
+    int level_theme_palette; /* 0=green,1=amber,2=ice from level config */
     player_state player;
     star stars[MAX_STARS];
     bullet bullets[MAX_BULLETS];

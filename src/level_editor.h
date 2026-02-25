@@ -82,6 +82,7 @@ typedef struct level_editor_state {
     int level_style;
     int level_render_style;
     int level_wave_mode;
+    int level_theme_palette;
     int level_asteroid_storm_enabled;
     float level_asteroid_storm_angle_deg;
     float level_asteroid_storm_speed;
@@ -117,6 +118,7 @@ typedef struct level_editor_state {
     float snapshot_level_length_screens;
     int snapshot_level_render_style;
     int snapshot_level_wave_mode;
+    int snapshot_level_theme_palette;
     int snapshot_level_asteroid_storm_enabled;
     float snapshot_level_asteroid_storm_angle_deg;
     float snapshot_level_asteroid_storm_speed;

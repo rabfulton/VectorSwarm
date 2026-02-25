@@ -640,7 +640,7 @@ static void menu_open_screen(app* a, int screen, int return_screen) {
         a->controls_rebinding_column = 0;
     }
     if (menu_is_screen(&a->menu, APP_SCREEN_LEVEL_EDITOR)) {
-        a->level_editor.entry_active = 1;
+        a->level_editor.entry_active = 0;
         SDL_StartTextInput();
     } else {
         a->level_editor.entry_active = 0;
@@ -659,7 +659,7 @@ static void menu_back_screen(app* a) {
         a->controls_rebinding_column = 0;
     }
     if (menu_is_screen(&a->menu, APP_SCREEN_LEVEL_EDITOR)) {
-        a->level_editor.entry_active = 1;
+        a->level_editor.entry_active = 0;
         SDL_StartTextInput();
     } else {
         a->level_editor.entry_active = 0;
@@ -669,6 +669,16 @@ static void menu_back_screen(app* a) {
 
 static int controls_ui_active(const app* a) {
     return a ? (!menu_is_gameplay(&a->menu)) : 0;
+}
+
+static int gameplay_palette_mode(const app* a) {
+    if (!a) {
+        return 0;
+    }
+    if (a->game.level_theme_palette >= 0 && a->game.level_theme_palette <= 2) {
+        return a->game.level_theme_palette;
+    }
+    return a->palette_mode;
 }
 
 static void reset_terrain_tuning(app* a) {
@@ -3248,6 +3258,7 @@ static int editor_save_trace_enabled(void) {
     }
     return cached;
 }
+
 
 static int handle_level_editor_mouse(app* a, int mouse_x, int mouse_y, int mouse_down, int mouse_pressed) {
     if (!a) {
@@ -5842,6 +5853,7 @@ static void update_gpu_particle_instances(app* a) {
     particle_instance* out = (particle_instance*)a->particle_instance_map;
     uint32_t n = 0;
     const game_state* g = &a->game;
+    const int palette_mode = gameplay_palette_mode(a);
     const int use_cyl = level_uses_cylinder_gpu(g);
     float r_sum = 0.0f;
     float r_min = 1e9f;
@@ -5987,11 +5999,11 @@ static void update_gpu_particle_instances(app* a) {
                         out[n].y = sy;
                         out[n].radius_px = fmaxf(unit_h * (0.12f + 0.20f * size_u + 0.08f * h) * sqrtf(vent_height), 1.2f);
                         out[n].kind = 3.0f; /* Vent smoke textured splat */
-                        if (a->palette_mode == 1) {
+                        if (palette_mode == 1) {
                             out[n].r = clampf(0.82f + (h2 - 0.5f) * 0.10f, 0.0f, 1.0f);
                             out[n].g = clampf(0.58f + (h - 0.5f) * 0.10f, 0.0f, 1.0f);
                             out[n].b = clampf(0.30f + (h2 - 0.5f) * 0.08f, 0.0f, 1.0f);
-                        } else if (a->palette_mode == 2) {
+                        } else if (palette_mode == 2) {
                             out[n].r = clampf(0.54f + (h2 - 0.5f) * 0.10f, 0.0f, 1.0f);
                             out[n].g = clampf(0.70f + (h - 0.5f) * 0.10f, 0.0f, 1.0f);
                             out[n].b = clampf(0.82f + (h2 - 0.5f) * 0.10f, 0.0f, 1.0f);
@@ -6103,12 +6115,13 @@ static void record_gpu_wormhole(app* a, VkCommandBuffer cmd) {
     memset(&pc, 0, sizeof(pc));
     pc.params[0] = (float)a->swapchain_extent.width;
     pc.params[1] = (float)a->swapchain_extent.height;
+    const int palette_mode = gameplay_palette_mode(a);
     float primary[3];
     float primary_dim[3];
-    if (a->palette_mode == 1) {
+    if (palette_mode == 1) {
         primary[0] = 1.00f; primary[1] = 0.68f; primary[2] = 0.24f;
         primary_dim[0] = 0.85f; primary_dim[1] = 0.52f; primary_dim[2] = 0.16f;
-    } else if (a->palette_mode == 2) {
+    } else if (palette_mode == 2) {
         primary[0] = 0.40f; primary[1] = 0.95f; primary[2] = 1.00f;
         primary_dim[0] = 0.26f; primary_dim[1] = 0.72f; primary_dim[2] = 0.92f;
     } else {
@@ -6202,10 +6215,11 @@ static void record_gpu_radar(app* a, VkCommandBuffer cmd) {
     };
     float primary[3];
     float primary_dim[3];
-    if (a->palette_mode == 1) {
+    const int palette_mode = gameplay_palette_mode(a);
+    if (palette_mode == 1) {
         primary[0] = 1.00f; primary[1] = 0.68f; primary[2] = 0.24f;
         primary_dim[0] = 0.85f; primary_dim[1] = 0.52f; primary_dim[2] = 0.16f;
-    } else if (a->palette_mode == 2) {
+    } else if (palette_mode == 2) {
         primary[0] = 0.40f; primary[1] = 0.95f; primary[2] = 1.00f;
         primary_dim[0] = 0.26f; primary_dim[1] = 0.72f; primary_dim[2] = 0.92f;
     } else {
@@ -6280,13 +6294,14 @@ static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t) {
     pc.p0[1] = (float)a->swapchain_extent.height;
     pc.p0[2] = t;
     pc.p0[3] = a->fog_alpha_scale;
+    const int palette_mode = gameplay_palette_mode(a);
 
     float primary_dim[3];
     float secondary[3];
-    if (a->palette_mode == 1) {
+    if (palette_mode == 1) {
         primary_dim[0] = 0.85f; primary_dim[1] = 0.52f; primary_dim[2] = 0.16f;
         secondary[0] = 1.00f; secondary[1] = 0.82f; secondary[2] = 0.48f;
-    } else if (a->palette_mode == 2) {
+    } else if (palette_mode == 2) {
         primary_dim[0] = 0.26f; primary_dim[1] = 0.72f; primary_dim[2] = 0.92f;
         secondary[0] = 0.72f; secondary[1] = 0.98f; secondary[2] = 1.00f;
     } else {
@@ -6373,9 +6388,10 @@ static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd) {
 
     terrain_pc pc;
     memset(&pc, 0, sizeof(pc));
-    if (a->palette_mode == 1) {
+    const int palette_mode = gameplay_palette_mode(a);
+    if (palette_mode == 1) {
         pc.color[0] = 1.0f; pc.color[1] = 0.73f; pc.color[2] = 0.34f; pc.color[3] = 1.0f;
-    } else if (a->palette_mode == 2) {
+    } else if (palette_mode == 2) {
         pc.color[0] = 0.60f; pc.color[1] = 0.88f; pc.color[2] = 1.0f; pc.color[3] = 1.0f;
     } else {
         pc.color[0] = 0.20f; pc.color[1] = 0.90f; pc.color[2] = 0.34f; pc.color[3] = 1.0f;
@@ -6466,7 +6482,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .menu_screen = a->menu.current,
         .video_menu_selected = a->video_menu_selected,
         .video_menu_fullscreen = a->video_menu_fullscreen,
-        .palette_mode = a->palette_mode,
+        .palette_mode = menu_is_gameplay(&a->menu) ? gameplay_palette_mode(a) : a->palette_mode,
         .acoustics_selected = a->acoustics_selected,
         .acoustics_page = a->acoustics_page,
         .acoustics_combat_selected = a->acoustics_combat_selected,
@@ -6542,6 +6558,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .level_editor_level_length_screens = a->level_editor.level_length_screens,
         .level_editor_wave_mode = a->level_editor.level_wave_mode,
         .level_editor_render_style = a->level_editor.level_render_style,
+        .level_editor_theme_palette = a->level_editor.level_theme_palette,
         .level_editor_asteroid_storm_enabled = a->level_editor.level_asteroid_storm_enabled,
         .level_editor_asteroid_storm_angle_deg = a->level_editor.level_asteroid_storm_angle_deg,
         .level_editor_asteroid_storm_speed = a->level_editor.level_asteroid_storm_speed,
@@ -7161,6 +7178,7 @@ int main(void) {
                     }
                 } else if (ev.key.keysym.sym == SDLK_l) {
                     if (a.menu.current == APP_SCREEN_LEVEL_EDITOR) {
+                        a.level_editor.entry_active = 0;
                         menu_back_screen(&a);
                     } else {
                         const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
@@ -7178,6 +7196,7 @@ int main(void) {
                                 (void)level_editor_load_by_name(&a.level_editor, db, cur);
                             }
                         }
+                        a.level_editor.entry_active = 0;
                         const int ret = menu_preferred_return(&a.menu);
                         menu_open_screen(&a, APP_SCREEN_LEVEL_EDITOR, ret);
                         a.show_crt_ui = 0;

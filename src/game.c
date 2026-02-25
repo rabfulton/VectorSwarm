@@ -62,6 +62,7 @@ static int strieq(const char* a, const char* b) {
     return (*a == '\0' && *b == '\0');
 }
 
+
 static const leveldef_level* current_leveldef(const game_state* g) {
     if (g && g_level_count > 0 && g->level_index >= 0 && g->level_index < g_level_count) {
         return &g_levels[g->level_index].level;
@@ -1684,6 +1685,7 @@ static void apply_level_runtime_config(game_state* g) {
         exit(1);
     }
     g->render_style = lvl->render_style;
+    g->level_theme_palette = lvl->theme_palette;
     g->wave_cooldown_s = lvl->wave_cooldown_initial_s;
     g->auto_event_mode = (lvl->event_count > 0) ? 1 : 0;
     g->auto_event_index = 0;

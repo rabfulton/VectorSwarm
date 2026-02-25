@@ -3848,6 +3848,9 @@ static void editor_sanitize_label(const char* in, char* out, size_t out_cap) {
         if (c == '_') {
             c = ' ';
         }
+        if (c >= 'a' && c <= 'z') {
+            c = (char)(c - 'a' + 'A');
+        }
         out[n++] = c;
     }
     out[n] = '\0';
@@ -3879,6 +3882,12 @@ static const char* editor_render_style_name(int style) {
     if (style == LEVEL_RENDER_FOG) return "FOG";
     if (style == LEVEL_RENDER_BLANK) return "BLANK";
     return "DEFENDER";
+}
+
+static const char* editor_theme_palette_name(int palette) {
+    if (palette == 1) return "AMBER";
+    if (palette == 2) return "ICE";
+    return "GREEN";
 }
 
 static int editor_marker_properties_text(
@@ -4272,7 +4281,9 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             for (int i = 0; i < marker_n && i < LEVEL_EDITOR_MAX_MARKERS; ++i) {
                 const int kind_i = metrics->level_editor_marker_kind[i];
                 const int track_i = metrics->level_editor_marker_track[i];
-                const int is_enemy_i = (kind_i == 2 || kind_i == 3 || kind_i == 4 || kind_i == 5 || kind_i == 6);
+                const int is_enemy_i =
+                    (kind_i == 2 || kind_i == 3 || kind_i == 4 || kind_i == 5 || kind_i == 6 ||
+                     kind_i == 10 || kind_i == 11 || kind_i == 12);
                 const int event_item_i = is_enemy_i && (track_i == 1);
                 if (event_item_i) {
                     event_n += 1;
@@ -4306,7 +4317,9 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 for (int j = 0; j < marker_n && j < LEVEL_EDITOR_MAX_MARKERS; ++j) {
                     const int kind_j = metrics->level_editor_marker_kind[j];
                     const int track_j = metrics->level_editor_marker_track[j];
-                    const int is_enemy_j = (kind_j == 2 || kind_j == 3 || kind_j == 4 || kind_j == 5 || kind_j == 6);
+                    const int is_enemy_j =
+                        (kind_j == 2 || kind_j == 3 || kind_j == 4 || kind_j == 5 || kind_j == 6 ||
+                         kind_j == 10 || kind_j == 11 || kind_j == 12);
                     const int event_item_j = is_enemy_j && (track_j == 1);
                     if (!event_item_j) {
                         continue;
@@ -4559,7 +4572,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             {
                 int selected_prop = metrics->level_editor_selected_property;
                 if (selected_prop < 0) selected_prop = 0;
-                if (selected_prop > 2) selected_prop = 2;
+                if (selected_prop > 3) selected_prop = 3;
                 char row[96];
                 const vg_rect rb0 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
                 snprintf(row, sizeof(row), "WAVE MODE      %s", editor_wave_mode_name(metrics->level_editor_wave_mode));
@@ -4572,8 +4585,13 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb2 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
-                snprintf(row, sizeof(row), "LENGTH         %.1f", metrics->level_editor_level_length_screens);
+                snprintf(row, sizeof(row), "THEME          %s", editor_theme_palette_name(metrics->level_editor_theme_palette));
                 r = vg_draw_button(ctx, rb2, row, 10.4f * ui, &frame, &text, (selected_prop == 2) ? 1 : 0);
+                if (r != VG_OK) return r;
+                ty -= 32.0f * ui;
+                const vg_rect rb3 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
+                snprintf(row, sizeof(row), "LENGTH         %.1f", metrics->level_editor_level_length_screens);
+                r = vg_draw_button(ctx, rb3, row, 10.4f * ui, &frame, &text, (selected_prop == 3) ? 1 : 0);
                 if (r != VG_OK) return r;
             }
             ty -= 34.0f * ui;
