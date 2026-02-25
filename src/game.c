@@ -447,6 +447,81 @@ int game_line_of_sight_clear(const game_state* g, float x0, float y0, float x1, 
     return 1;
 }
 
+int game_structure_segment_blocked(const game_state* g, float x0, float y0, float x1, float y1, float pad_radius) {
+    const leveldef_level* lvl;
+    float unit_w;
+    float unit_h;
+    float min_x;
+    float min_y;
+    float max_x;
+    float max_y;
+    int qmin_x;
+    int qmin_y;
+    int qmax_x;
+    int qmax_y;
+    if (!g) {
+        return 0;
+    }
+    if (g->render_style == LEVEL_RENDER_CYLINDER) {
+        return 0;
+    }
+    lvl = current_leveldef(g);
+    if (!lvl || lvl->structure_count <= 0) {
+        return 0;
+    }
+    if (pad_radius < 0.0f) {
+        pad_radius = 0.0f;
+    }
+    unit_w = g->world_w * (float)LEVELDEF_STRUCTURE_GRID_SCALE / (float)(LEVELDEF_STRUCTURE_GRID_W - 1);
+    unit_h = g->world_h * (float)LEVELDEF_STRUCTURE_GRID_SCALE / (float)(LEVELDEF_STRUCTURE_GRID_H - 1);
+    min_x = fminf(x0, x1) - pad_radius;
+    min_y = fminf(y0, y1) - pad_radius;
+    max_x = fmaxf(x0, x1) + pad_radius;
+    max_y = fmaxf(y0, y1) + pad_radius;
+    qmin_x = clampi((int)floorf(min_x / fmaxf(unit_w, 1.0e-5f)), 0, LEVELDEF_STRUCTURE_GRID_W - 1);
+    qmin_y = clampi((int)floorf(min_y / fmaxf(unit_h, 1.0e-5f)), 0, LEVELDEF_STRUCTURE_GRID_H - 1);
+    qmax_x = clampi((int)ceilf(max_x / fmaxf(unit_w, 1.0e-5f)), 0, LEVELDEF_STRUCTURE_GRID_W - 1);
+    qmax_y = clampi((int)ceilf(max_y / fmaxf(unit_h, 1.0e-5f)), 0, LEVELDEF_STRUCTURE_GRID_H - 1);
+
+    for (int i = 0; i < lvl->structure_count && i < LEVELDEF_MAX_STRUCTURES; ++i) {
+        const leveldef_structure_instance* st = &lvl->structures[i];
+        int w_units = 1;
+        int h_units = 1;
+        int q;
+        int gx0, gy0, gx1, gy1;
+        if (st->layer != 0) {
+            continue;
+        }
+        structure_prefab_dims_world(st->prefab_id, &w_units, &h_units);
+        q = ((st->rotation_quadrants % 4) + 4) % 4;
+        if ((q & 1) != 0) {
+            const int tmp = w_units;
+            w_units = h_units;
+            h_units = tmp;
+        }
+        gx0 = st->grid_x;
+        gy0 = st->grid_y;
+        gx1 = gx0 + w_units;
+        gy1 = gy0 + h_units;
+        if (gx1 < qmin_x || gx0 > qmax_x || gy1 < qmin_y || gy0 > qmax_y) {
+            continue;
+        }
+        structure_aabb_world(g, st, &min_x, &min_y, &max_x, &max_y);
+        if (segment_intersects_aabb(
+                x0,
+                y0,
+                x1,
+                y1,
+                min_x - pad_radius,
+                min_y - pad_radius,
+                max_x + pad_radius,
+                max_y + pad_radius)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 typedef struct mine_tuning {
     float activation_distance;
     float detonation_distance;
@@ -2300,11 +2375,14 @@ static void game_update_player_weapons(game_state* g, float dt, const game_input
 }
 
 static void game_update_player_bullets(game_state* g, float dt) {
+    const float su = gameplay_ui_scale(g);
     for (size_t i = 0; i < MAX_BULLETS; ++i) {
         if (!g->bullets[i].active) {
             continue;
         }
         bullet* b = &g->bullets[i];
+        const float prev_x = b->b.x;
+        const float prev_y = b->b.y;
         integrate_body(&b->b, dt);
         b->ttl_s -= dt;
         if (level_uses_cylinder(g)) {
@@ -2313,6 +2391,10 @@ static void game_update_player_bullets(game_state* g, float dt) {
             if (b->ttl_s <= 0.0f || travel >= period * (1.0f / 3.0f)) {
                 b->active = 0;
             }
+            continue;
+        }
+        if (game_structure_segment_blocked(g, prev_x, prev_y, b->b.x, b->b.y, 2.4f * su)) {
+            b->active = 0;
             continue;
         }
         if (b->ttl_s <= 0.0f || fabsf(b->b.x - g->camera_x) > g->world_w * 1.2f) {

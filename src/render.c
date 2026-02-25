@@ -3896,6 +3896,7 @@ static int editor_marker_properties_text(
     if (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 10 || kind == 11 || kind == 12) {
         const int event_item = (metrics->level_editor_marker_track[sel] == 1);
         const int boid_item = (kind == 5 || kind == 10 || kind == 11 || kind == 12);
+        const int kamikaze_item = (kind == 4);
         if (n < cap) { out_labels[n] = "TYPE"; snprintf(out_values[n], 32, "%s", editor_wave_type_name(kind)); n++; }
         if (event_item) {
             if (n < cap) { out_labels[n] = "ORDER"; snprintf(out_values[n], 32, "%d", metrics->level_editor_marker_order[sel]); n++; }
@@ -3916,6 +3917,8 @@ static int editor_marker_properties_text(
             n++;
         }
         if (boid_item && n < cap) { out_labels[n] = "MAX TURN DEG"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_marker_d[sel]); n++; }
+        if (kamikaze_item && n < cap) { out_labels[n] = "RADIUS MIN"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_kamikaze_radius_min); n++; }
+        if (kamikaze_item && n < cap) { out_labels[n] = "RADIUS MAX"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_kamikaze_radius_max); n++; }
         if (!event_item && n < cap) { out_labels[n] = "DELAY S"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_delay_s[sel]); n++; }
         return n;
     }
@@ -4452,10 +4455,10 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             if (r != VG_OK) return r;
             ty -= 28.0f * ui;
             {
-                const char* labels[8] = {0};
-                char values[8][32];
+                const char* labels[10] = {0};
+                char values[10][32];
                 memset(values, 0, sizeof(values));
-                const int pn = editor_marker_properties_text(kind, metrics, sel, labels, values, 8);
+                const int pn = editor_marker_properties_text(kind, metrics, sel, labels, values, 10);
                 int selected_prop = metrics->level_editor_selected_property;
                 if (selected_prop < 0) selected_prop = 0;
                 if (selected_prop >= pn) selected_prop = pn - 1;

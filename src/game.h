@@ -417,5 +417,6 @@ void game_structure_avoidance_vector(
     float* out_y
 );
 int game_line_of_sight_clear(const game_state* g, float x0, float y0, float x1, float y1, float radius);
+int game_structure_segment_blocked(const game_state* g, float x0, float y0, float x1, float y1, float pad_radius);
 
 #endif

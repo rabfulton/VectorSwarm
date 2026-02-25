@@ -395,6 +395,8 @@ static void level_editor_save_snapshot(level_editor_state* s) {
     s->snapshot_level_asteroid_storm_speed = s->level_asteroid_storm_speed;
     s->snapshot_level_asteroid_storm_duration_s = s->level_asteroid_storm_duration_s;
     s->snapshot_level_asteroid_storm_density = s->level_asteroid_storm_density;
+    s->snapshot_level_kamikaze_radius_min = s->level_kamikaze_radius_min;
+    s->snapshot_level_kamikaze_radius_max = s->level_kamikaze_radius_max;
     snprintf(s->snapshot_level_name, sizeof(s->snapshot_level_name), "%s", s->level_name);
     s->snapshot_marker_count = s->marker_count;
     if (s->snapshot_marker_count > LEVEL_EDITOR_MAX_MARKERS) {
@@ -940,6 +942,8 @@ static int build_level_serialized_text(
     if (wave_n > 1) {
         qsort(waves, (size_t)wave_n, sizeof(waves[0]), compare_wave_marker_ref);
     }
+    lvl.kamikaze.radius_min = fmaxf(1.0f, s->level_kamikaze_radius_min);
+    lvl.kamikaze.radius_max = fmaxf(lvl.kamikaze.radius_min, s->level_kamikaze_radius_max);
     lvl.event_count = 0;
     if (lvl.wave_mode != LEVELDEF_WAVES_CURATED) {
         for (i = 0; i < wave_n && lvl.event_count < LEVELDEF_MAX_EVENTS; ++i) {
@@ -1247,6 +1251,9 @@ static int marker_property_count(const level_editor_state* s) {
         const int ev_item = marker_is_event_item(s, &s->markers[s->selected_marker]);
         if (is_boid_wave_kind(kind)) {
             return ev_item ? 7 : 8; /* event: TYPE,ORDER,DELAY,COUNT,SPEED,ACCEL,TURN | spatial: TYPE,X,Y,COUNT,SPEED,ACCEL,TURN,DELAY */
+        }
+        if (kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
+            return ev_item ? 8 : 9; /* event: TYPE,ORDER,DELAY,COUNT,SPEED,ACCEL,R MIN,R MAX | spatial adds DELAY */
         }
         return ev_item ? 6 : 7; /* event: TYPE,ORDER,DELAY,A,B,C | spatial: TYPE,X,Y,A,B,C,DELAY */
     }
@@ -1824,6 +1831,8 @@ void level_editor_init(level_editor_state* s) {
     s->level_asteroid_storm_speed = 190.0f;
     s->level_asteroid_storm_duration_s = 12.0f;
     s->level_asteroid_storm_density = 1.0f;
+    s->level_kamikaze_radius_min = 11.0f;
+    s->level_kamikaze_radius_max = 17.0f;
     snprintf(s->level_name, sizeof(s->level_name), "%s", level_style_name(s->level_style));
     snprintf(s->status_text, sizeof(s->status_text), "ready");
     s->entry_active = 0;
@@ -1939,6 +1948,8 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
             s->level_asteroid_storm_speed = lvl->asteroid_storm_speed;
             s->level_asteroid_storm_duration_s = lvl->asteroid_storm_duration_s;
             s->level_asteroid_storm_density = lvl->asteroid_storm_density;
+            s->level_kamikaze_radius_min = lvl->kamikaze.radius_min;
+            s->level_kamikaze_radius_max = lvl->kamikaze.radius_max;
         }
     }
     build_markers(s, db, style, lvl);
@@ -2723,12 +2734,27 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             case 6:
                 if (boid_item) {
                     m->d = clampf(m->d + delta * 240.0f, 10.0f, 720.0f);
+                } else if (m->kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
+                    s->level_kamikaze_radius_min = clampf(s->level_kamikaze_radius_min + delta * 30.0f, 1.0f, 200.0f);
+                    if (s->level_kamikaze_radius_max < s->level_kamikaze_radius_min) {
+                        s->level_kamikaze_radius_max = s->level_kamikaze_radius_min;
+                    }
                 } else if (!ev_item) {
                     m->delay_s = fmaxf(0.0f, m->delay_s + delta * 40.0f);
                 }
                 break;
             case 7:
-                if (boid_item && !ev_item) {
+                if (m->kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
+                    s->level_kamikaze_radius_max = clampf(s->level_kamikaze_radius_max + delta * 30.0f, 1.0f, 240.0f);
+                    if (s->level_kamikaze_radius_max < s->level_kamikaze_radius_min) {
+                        s->level_kamikaze_radius_min = s->level_kamikaze_radius_max;
+                    }
+                } else if (boid_item && !ev_item) {
+                    m->delay_s = fmaxf(0.0f, m->delay_s + delta * 40.0f);
+                }
+                break;
+            case 8:
+                if (m->kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE && !ev_item) {
                     m->delay_s = fmaxf(0.0f, m->delay_s + delta * 40.0f);
                 }
                 break;
@@ -2887,6 +2913,8 @@ int level_editor_revert(level_editor_state* s) {
     s->level_asteroid_storm_speed = s->snapshot_level_asteroid_storm_speed;
     s->level_asteroid_storm_duration_s = s->snapshot_level_asteroid_storm_duration_s;
     s->level_asteroid_storm_density = s->snapshot_level_asteroid_storm_density;
+    s->level_kamikaze_radius_min = s->snapshot_level_kamikaze_radius_min;
+    s->level_kamikaze_radius_max = s->snapshot_level_kamikaze_radius_max;
     s->level_style = level_style_from_render_style(s->level_render_style);
     snprintf(s->level_name, sizeof(s->level_name), "%s", s->snapshot_level_name);
     s->marker_count = s->snapshot_marker_count;
@@ -2928,6 +2956,8 @@ void level_editor_new_blank(level_editor_state* s) {
     s->level_asteroid_storm_speed = 190.0f;
     s->level_asteroid_storm_duration_s = 12.0f;
     s->level_asteroid_storm_density = 1.0f;
+    s->level_kamikaze_radius_min = 11.0f;
+    s->level_kamikaze_radius_max = 17.0f;
     snprintf(s->level_name, sizeof(s->level_name), "level_blank");
     snprintf(s->status_text, sizeof(s->status_text), "new level");
 }

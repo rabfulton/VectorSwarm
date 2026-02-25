@@ -327,6 +327,39 @@ void leveldef_init_defaults(leveldef_db* db) {
         b->asteroid_storm_speed = 520.0f;
         b->asteroid_storm_duration_s = 10.0f;
         b->asteroid_storm_density = 1.0f;
+        /* Keep blank levels fully usable as authored levels even when
+         * per-wave tuning keys are omitted in config files. */
+        b->sine.count = 10;
+        b->sine.start_x01 = 0.70f;
+        b->sine.spacing_x = 44.0f;
+        b->sine.home_y01 = 0.52f;
+        b->sine.phase_step = 0.55f;
+        b->sine.form_amp = 92.0f;
+        b->sine.form_freq = 1.80f;
+        b->sine.break_delay_base = 1.10f;
+        b->sine.break_delay_step = 0.16f;
+        b->sine.max_speed = 285.0f;
+        b->sine.accel = 6.8f;
+        b->v.count = 11;
+        b->v.start_x01 = 0.70f;
+        b->v.spacing_x = 32.0f;
+        b->v.home_y01 = 0.55f;
+        b->v.home_y_step = 18.0f;
+        b->v.phase_step = 0.35f;
+        b->v.form_amp = 10.0f;
+        b->v.form_freq = 1.20f;
+        b->v.break_delay_min = 0.90f;
+        b->v.break_delay_rand = 1.80f;
+        b->v.max_speed = 295.0f;
+        b->v.accel = 7.5f;
+        b->kamikaze.count = 9;
+        b->kamikaze.start_x01 = 0.70f;
+        b->kamikaze.spacing_x = 34.0f;
+        b->kamikaze.y_margin = 64.0f;
+        b->kamikaze.max_speed = 360.0f;
+        b->kamikaze.accel = 9.0f;
+        b->kamikaze.radius_min = 11.0f;
+        b->kamikaze.radius_max = 17.0f;
     }
 }
 

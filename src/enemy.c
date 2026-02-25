@@ -69,6 +69,15 @@ static float frand_range(float lo, float hi) {
     return lo + (hi - lo) * frand01();
 }
 
+static float hash01_u32(uint32_t x) {
+    x ^= x >> 16;
+    x *= 0x7feb352dU;
+    x ^= x >> 15;
+    x *= 0x846ca68bU;
+    x ^= x >> 16;
+    return (float)(x & 0x00ffffffU) / 16777215.0f;
+}
+
 static float clampf(float v, float lo, float hi) {
     if (v < lo) {
         return lo;
@@ -584,7 +593,8 @@ static void enemy_assign_combat_loadout(game_state* g, enemy* e, const leveldef_
         e->armed = (frand01() < armed_p) ? 1 : 0;
         e->weapon_id = (frand01() < spread_p) ? ENEMY_WEAPON_SPREAD : ENEMY_WEAPON_PULSE;
     } else if (e->archetype == ENEMY_ARCH_KAMIKAZE) {
-        e->armed = (frand01() < t.armed_probability[arch]) ? 1 : 0;
+        const float kamikaze_fire_p = clampf(t.armed_probability[arch] * 0.02f, 0.0f, 1.0f);
+        e->armed = (frand01() < kamikaze_fire_p) ? 1 : 0;
         e->weapon_id = ENEMY_WEAPON_BURST;
     } else {
         e->armed = (frand01() < t.armed_probability[arch]) ? 1 : 0;
@@ -933,11 +943,19 @@ void enemy_spawn_curated_enemy(
         e->slot_index = i;
         e->b.x = g->world_w * ce->x01 + (float)i * 18.0f * su;
         e->b.y = g->world_h * ce->y01 + frands1() * 10.0f * su;
-        enemy_assign_combat_loadout(g, e, db);
 
         if (ce->kind == 4) {
+            const float slot = (float)i - 0.5f * (float)(count - 1);
+            const float base_x = g->world_w * ce->x01;
+            const float base_y = g->world_h * ce->y01;
+            const float spread_x = fmaxf(24.0f * su, g->world_w * 0.030f);
+            const float jitter_x = (frand01() - 0.5f) * fmaxf(10.0f * su, g->world_w * 0.010f);
+            const float jitter_y = (frand01() - 0.5f) * fmaxf(26.0f * su, g->world_h * 0.060f);
             e->archetype = ENEMY_ARCH_KAMIKAZE;
             e->state = ENEMY_STATE_KAMIKAZE_COIL;
+            enemy_assign_combat_loadout(g, e, db);
+            e->b.x = base_x + slot * spread_x + jitter_x;
+            e->b.y = base_y + jitter_y;
             e->max_speed = ((ce->b > 0.0f) ? ce->b : lvl->kamikaze.max_speed) * su;
             e->accel = (ce->c > 0.0f) ? ce->c : lvl->kamikaze.accel;
             {
@@ -962,6 +980,7 @@ void enemy_spawn_curated_enemy(
             e->archetype = ENEMY_ARCH_FORMATION;
             e->state = ENEMY_STATE_FORMATION;
             e->formation_kind = (ce->kind == 3) ? ENEMY_FORMATION_V : ENEMY_FORMATION_SINE;
+            enemy_assign_combat_loadout(g, e, db);
             e->home_y = g->world_h * ce->y01;
             e->b.y = e->home_y;
             e->form_phase = (float)i * 0.4f;
@@ -1304,7 +1323,7 @@ static void update_enemy_formation(game_state* g, enemy* e, float dt, float su, 
     }
 }
 
-static void update_enemy_kamikaze(game_state* g, enemy* e, float dt, int uses_cylinder, float period) {
+static void update_enemy_kamikaze(game_state* g, enemy* e, float dt, int uses_cylinder, float period, float su) {
     const float lead = 0.12f;
     const float tx = g->player.b.x + g->player.b.vx * lead;
     const float ty = g->player.b.y + g->player.b.vy * lead;
@@ -1322,6 +1341,25 @@ static void update_enemy_kamikaze(game_state* g, enemy* e, float dt, int uses_cy
         g->player.b.y,
         fmaxf(2.0f, e->radius * 0.28f)
     );
+    float avoid_x = 0.0f;
+    float avoid_y = 0.0f;
+    if (!uses_cylinder && g->render_style != LEVEL_RENDER_CYLINDER) {
+        game_structure_avoidance_vector(
+            g,
+            e->b.x,
+            e->b.y,
+            fmaxf(8.0f * su, e->radius),
+            fmaxf(28.0f * su, e->radius * 2.4f),
+            &avoid_x,
+            &avoid_y
+        );
+        if (fabsf(avoid_x) > 1.0e-5f || fabsf(avoid_y) > 1.0e-5f) {
+            normalize2(&avoid_x, &avoid_y);
+        } else {
+            avoid_x = 0.0f;
+            avoid_y = 0.0f;
+        }
+    }
     normalize2(&dir_x, &dir_y);
     normalize2(&player_dx, &player_dy);
     {
@@ -1349,8 +1387,31 @@ static void update_enemy_kamikaze(game_state* g, enemy* e, float dt, int uses_cy
         const int strike_range = (dist_to_player_now <= g->world_w * 0.24f) ? 1 : 0;
         const float turn_rate = clampf(dt * (strike_range ? 22.0f : 12.0f), 0.0f, 1.0f);
         {
-            const float turn_x = strike_range ? player_dx : dir_x;
-            const float turn_y = strike_range ? player_dy : dir_y;
+            float turn_x = strike_range ? player_dx : dir_x;
+            float turn_y = strike_range ? player_dy : dir_y;
+            if (!strike_range) {
+                const float far_d = g->world_w * 0.72f;
+                const float near_d = g->world_w * 0.26f;
+                const float rand_w = clampf((dist_to_player_now - near_d) / fmaxf(far_d - near_d, 1.0f), 0.0f, 1.0f);
+                if (rand_w > 0.0f) {
+                    const uint32_t tick = (uint32_t)floorf((e->ai_timer_s + (float)e->slot_index * 0.17f) * 2.5f);
+                    const uint32_t seed = (uint32_t)(e->wave_id * 73856093u) ^ (uint32_t)(e->slot_index * 19349663u) ^ tick;
+                    const float r = hash01_u32(seed);
+                    const float sign = (r < 0.5f) ? -1.0f : 1.0f;
+                    const float mag = (0.10f + 0.60f * r) * rand_w;
+                    const float px = -turn_y;
+                    const float py = turn_x;
+                    turn_x += px * sign * mag;
+                    turn_y += py * sign * mag;
+                    normalize2(&turn_x, &turn_y);
+                }
+            }
+            if (avoid_x != 0.0f || avoid_y != 0.0f) {
+                const float avoid_w = strike_range ? 0.10f : (has_los ? 0.30f : 0.55f);
+                turn_x += avoid_x * avoid_w;
+                turn_y += avoid_y * avoid_w;
+                normalize2(&turn_x, &turn_y);
+            }
             e->facing_x += (turn_x - e->facing_x) * turn_rate;
             e->facing_y += (turn_y - e->facing_y) * turn_rate;
         }
@@ -1361,13 +1422,22 @@ static void update_enemy_kamikaze(game_state* g, enemy* e, float dt, int uses_cy
             const float u = clampf(e->ai_timer_s / fmaxf(e->break_delay_s, 0.10f), 0.0f, 1.0f);
             e->kamikaze_tail = lerpf(e->kamikaze_tail_start, 0.10f, u);
         }
-        steer_to_velocity(
+        {
+            float drive_x = e->facing_x;
+            float drive_y = e->facing_y;
+            if (avoid_x != 0.0f || avoid_y != 0.0f) {
+                drive_x += avoid_x * 0.25f;
+                drive_y += avoid_y * 0.25f;
+                normalize2(&drive_x, &drive_y);
+            }
+            steer_to_velocity(
             &e->b,
-            e->facing_x * (e->max_speed * 0.10f),
-            e->facing_y * (e->max_speed * 0.10f),
+            drive_x * (e->max_speed * 0.10f),
+            drive_y * (e->max_speed * 0.10f),
             e->accel * 1.05f,
             2.7f
-        );
+            );
+        }
         {
             const float screen_x = g->world_w * 0.52f;
             const float screen_y = g->world_h * 0.52f;
@@ -1446,13 +1516,22 @@ static void update_enemy_kamikaze(game_state* g, enemy* e, float dt, int uses_cy
             normalize2(&e->facing_x, &e->facing_y);
             e->kamikaze_thrust = 0.0f;
             e->kamikaze_tail = 0.96f;
-            steer_to_velocity(
+            {
+                float drive_x = e->facing_x;
+                float drive_y = e->facing_y;
+                if (avoid_x != 0.0f || avoid_y != 0.0f) {
+                    drive_x += avoid_x * 0.20f;
+                    drive_y += avoid_y * 0.20f;
+                    normalize2(&drive_x, &drive_y);
+                }
+                steer_to_velocity(
                 &e->b,
-                e->facing_x * (e->max_speed * 0.22f),
-                e->facing_y * (e->max_speed * 0.22f),
+                drive_x * (e->max_speed * 0.22f),
+                drive_y * (e->max_speed * 0.22f),
                 e->accel * 2.2f,
                 0.55f
-            );
+                );
+            }
             if (facing_dot >= 0.96f) {
                 e->kamikaze_is_turning = 0;
                 e->ai_timer_s = 0.0f;
@@ -1467,13 +1546,22 @@ static void update_enemy_kamikaze(game_state* g, enemy* e, float dt, int uses_cy
             e->kamikaze_thrust = 1.0f;
             e->kamikaze_tail = 1.0f;
             e->ai_timer_s += dt;
-            steer_to_velocity(
+            {
+                float drive_x = e->facing_x;
+                float drive_y = e->facing_y;
+                if (avoid_x != 0.0f || avoid_y != 0.0f) {
+                    drive_x += avoid_x * 0.10f;
+                    drive_y += avoid_y * 0.10f;
+                    normalize2(&drive_x, &drive_y);
+                }
+                steer_to_velocity(
                 &e->b,
-                e->facing_x * target_v,
-                e->facing_y * target_v,
+                drive_x * target_v,
+                drive_y * target_v,
                 e->accel * 4.2f,
                 0.14f
-            );
+                );
+            }
         }
         if (e->ai_timer_s >= e->break_delay_s) {
             /* End strike into glide, not immediate coil, for smoother speed drop-off. */
@@ -1512,13 +1600,22 @@ static void update_enemy_kamikaze(game_state* g, enemy* e, float dt, int uses_cy
         }
         e->kamikaze_thrust = launch;
         e->kamikaze_tail = tail01;
-        steer_to_velocity(
+        {
+            float drive_x = e->facing_x;
+            float drive_y = e->facing_y;
+            if (avoid_x != 0.0f || avoid_y != 0.0f) {
+                drive_x += avoid_x * 0.15f;
+                drive_y += avoid_y * 0.15f;
+                normalize2(&drive_x, &drive_y);
+            }
+            steer_to_velocity(
             &e->b,
-            e->facing_x * target_v,
-            e->facing_y * target_v,
+            drive_x * target_v,
+            drive_y * target_v,
             e->accel * (1.00f + launch * 1.45f),
             0.42f + (1.0f - launch) * 1.10f
-        );
+            );
+        }
     }
     if (e->ai_timer_s >= e->break_delay_s) {
         e->state = ENEMY_STATE_KAMIKAZE_COIL;
@@ -1940,7 +2037,7 @@ void enemy_update_system(
         if (e->archetype == ENEMY_ARCH_SWARM) {
             update_enemy_swarm(g, e, dt, uses_cylinder, period, su);
         } else if (e->archetype == ENEMY_ARCH_KAMIKAZE) {
-            update_enemy_kamikaze(g, e, dt, uses_cylinder, period);
+            update_enemy_kamikaze(g, e, dt, uses_cylinder, period, su);
         } else {
             update_enemy_formation(g, e, dt, su, uses_cylinder, period);
         }
@@ -1976,7 +2073,7 @@ void enemy_update_system(
                 }
             }
             if (game_structure_circle_overlap(g, e->b.x, e->b.y, fmaxf(8.0f * su, e->radius))) {
-                if (e->archetype == ENEMY_ARCH_SWARM) {
+                if (e->archetype == ENEMY_ARCH_SWARM || e->archetype == ENEMY_ARCH_KAMIKAZE) {
                     float n_x = 0.0f;
                     float n_y = 0.0f;
                     float penetration = 0.0f;
@@ -1989,8 +2086,20 @@ void enemy_update_system(
                             e->b.vx -= 2.0f * vdot * n_x;
                             e->b.vy -= 2.0f * vdot * n_y;
                         }
-                        e->b.vx *= 0.88f;
-                        e->b.vy *= 0.88f;
+                        if (e->archetype == ENEMY_ARCH_KAMIKAZE) {
+                            e->b.vx *= 0.98f;
+                            e->b.vy *= 0.98f;
+                            {
+                                const float vv = length2(e->b.vx, e->b.vy);
+                                if (vv > 1.0e-4f) {
+                                    e->facing_x = e->b.vx / vv;
+                                    e->facing_y = e->b.vy / vv;
+                                }
+                            }
+                        } else {
+                            e->b.vx *= 0.88f;
+                            e->b.vy *= 0.88f;
+                        }
                     }
                 } else {
                     float nx = e->b.x;
@@ -2050,7 +2159,7 @@ void enemy_update_system(
                     v = length2(e->b.vx, e->b.vy);
                 }
             }
-            if (v > 1.0f) {
+            if (v > 1.0f && e->archetype != ENEMY_ARCH_KAMIKAZE) {
                 e->facing_x = e->b.vx / v;
                 e->facing_y = e->b.vy / v;
             }
@@ -2063,14 +2172,38 @@ void enemy_update_system(
             }
         }
         if (e->b.y < 26.0f * su) {
-            e->b.y = 26.0f * su;
-            if (e->b.vy < 0.0f) {
+            const float edge = 26.0f * su;
+            e->b.y = edge;
+            if (e->archetype == ENEMY_ARCH_KAMIKAZE) {
+                if (e->b.vy < 0.0f) {
+                    e->b.vy = -e->b.vy;
+                }
+                {
+                    const float vv = length2(e->b.vx, e->b.vy);
+                    if (vv > 1.0e-4f) {
+                        e->facing_x = e->b.vx / vv;
+                        e->facing_y = e->b.vy / vv;
+                    }
+                }
+            } else if (e->b.vy < 0.0f) {
                 e->b.vy = 0.0f;
             }
         }
         if (e->b.y > g->world_h - 26.0f * su) {
-            e->b.y = g->world_h - 26.0f * su;
-            if (e->b.vy > 0.0f) {
+            const float edge = g->world_h - 26.0f * su;
+            e->b.y = edge;
+            if (e->archetype == ENEMY_ARCH_KAMIKAZE) {
+                if (e->b.vy > 0.0f) {
+                    e->b.vy = -e->b.vy;
+                }
+                {
+                    const float vv = length2(e->b.vx, e->b.vy);
+                    if (vv > 1.0e-4f) {
+                        e->facing_x = e->b.vx / vv;
+                        e->facing_y = e->b.vy / vv;
+                    }
+                }
+            } else if (e->b.vy > 0.0f) {
                 e->b.vy = 0.0f;
             }
         }
@@ -2096,6 +2229,8 @@ void enemy_update_system(
         if (!b->active) {
             continue;
         }
+        const float prev_x = b->b.x;
+        const float prev_y = b->b.y;
         integrate_body(&b->b, dt);
         b->ttl_s -= dt;
         if (b->ttl_s <= 0.0f) {
@@ -2108,6 +2243,10 @@ void enemy_update_system(
                 continue;
             }
         } else if (fabsf(b->b.x - g->camera_x) > g->world_w * 1.35f) {
+            b->active = 0;
+            continue;
+        }
+        if (!uses_cylinder && game_structure_segment_blocked(g, prev_x, prev_y, b->b.x, b->b.y, b->radius)) {
             b->active = 0;
             continue;
         }
