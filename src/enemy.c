@@ -885,6 +885,10 @@ void enemy_spawn_curated_enemy(
         }
         for (int i = 0; i < count; ++i) {
             enemy* e = spawn_enemy_common(g, su);
+            const int legacy_default_override =
+                (ce->b > 0.0f && ce->c > 0.0f &&
+                 fabsf(ce->b - 190.0f) < 0.001f &&
+                 fabsf(ce->c - 90.0f) < 0.001f);
             if (!e) {
                 break;
             }
@@ -896,8 +900,8 @@ void enemy_spawn_curated_enemy(
             e->b.x = g->world_w * ce->x01 + frands1() * 14.0f * su;
             e->b.y = g->world_h * ce->y01 + frands1() * 20.0f * su;
             e->home_y = g->world_h * ce->y01;
-            e->max_speed = ((ce->b > 0.0f) ? ce->b : p->max_speed) * su;
-            e->accel = (ce->c > 0.0f) ? ce->c : p->accel;
+            e->max_speed = ((ce->b > 0.0f && !legacy_default_override) ? ce->b : p->max_speed) * su;
+            e->accel = ((ce->c > 0.0f && !legacy_default_override) ? ce->c : p->accel);
             e->radius = (p->radius_min + frand01() * fmaxf(p->radius_max - p->radius_min, 0.0f)) * su;
             e->swarm_sep_w = p->sep_w;
             e->swarm_ali_w = p->ali_w;

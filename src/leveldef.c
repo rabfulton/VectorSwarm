@@ -281,8 +281,8 @@ static void leveldef_init_builtin_boid_profiles(leveldef_db* db) {
         p->wander_freq = 0.45f;
         p->steer_drag = 1.08f;
         p->max_turn_rate_deg = 340.0f;
-        p->max_speed = 350.0f;
-        p->min_speed = 102.0f;
+        p->max_speed = 430.0f;
+        p->min_speed = 150.0f;
         p->accel = 9.00f;
         p->radius_min = 11.0f;
         p->radius_max = 16.0f;
