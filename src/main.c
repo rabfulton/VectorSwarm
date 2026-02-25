@@ -5943,8 +5943,15 @@ static void update_gpu_particle_instances(app* a) {
                 const float by = (float)st->grid_y * unit_h;
                 const float bw = unit_w;
                 const float bh = unit_h;
-                const int streams = 6;
-                const int puffs_per_stream = 14;
+                const float vent_density = (st->vent_density > 0.0f) ? st->vent_density : 1.0f;
+                const float vent_opacity = (st->vent_opacity > 0.0f) ? st->vent_opacity : 1.0f;
+                const float vent_height = (st->vent_plume_height > 0.0f) ? st->vent_plume_height : 1.0f;
+                int streams = (int)lroundf(6.0f * vent_density);
+                int puffs_per_stream = (int)lroundf(14.0f * vent_density);
+                if (streams < 2) streams = 2;
+                if (streams > 16) streams = 16;
+                if (puffs_per_stream < 4) puffs_per_stream = 4;
+                if (puffs_per_stream > 28) puffs_per_stream = 28;
                 for (int stream = 0; stream < streams; ++stream) {
                     const float stream_t = (streams > 1) ? ((float)stream / (float)(streams - 1)) : 0.5f;
                     const float vent_x = bx + bw * (0.18f + 0.64f * stream_t);
@@ -5960,7 +5967,7 @@ static void update_gpu_particle_instances(app* a) {
                             g->t * (0.095f + 0.075f * h) + (float)puff * 0.143f + h * 0.91f + stream_t * 0.37f,
                             1.0f
                         );
-                        const float rise = ph * (bh * 5.8f);
+                        const float rise = ph * (bh * 5.8f * vent_height);
                         const float swirl = sinf((ph + h) * (8.0f + 1.9f * stream_t) + (float)puff * 1.07f) *
                                             bw * (0.10f + 0.22f * ph);
                         const float spread = ((float)puff / (float)puffs_per_stream) * bw * 0.24f;
@@ -5978,7 +5985,7 @@ static void update_gpu_particle_instances(app* a) {
                         }
                         out[n].x = sx;
                         out[n].y = sy;
-                        out[n].radius_px = fmaxf(unit_h * (0.12f + 0.20f * size_u + 0.08f * h), 1.2f);
+                        out[n].radius_px = fmaxf(unit_h * (0.12f + 0.20f * size_u + 0.08f * h) * sqrtf(vent_height), 1.2f);
                         out[n].kind = 3.0f; /* Vent smoke textured splat */
                         if (a->palette_mode == 1) {
                             out[n].r = clampf(0.82f + (h2 - 0.5f) * 0.10f, 0.0f, 1.0f);
@@ -5993,7 +6000,7 @@ static void update_gpu_particle_instances(app* a) {
                             out[n].g = clampf(0.62f + (h - 0.5f) * 0.10f, 0.0f, 1.0f);
                             out[n].b = clampf(0.42f + (h2 - 0.5f) * 0.08f, 0.0f, 1.0f);
                         }
-                        out[n].a = clampf(0.18f * life_s * (0.76f + 0.24f * (1.0f - stream_t)), 0.0f, 0.35f);
+                        out[n].a = clampf(0.18f * vent_opacity * life_s * (0.76f + 0.24f * (1.0f - stream_t)), 0.0f, 0.60f);
                         out[n].dir_x = 0.04f * sinf(g->t * 0.77f + h * 4.0f);
                         out[n].dir_y = -1.0f;
                         out[n].trail = 0.06f;
@@ -6639,6 +6646,9 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         metrics.level_editor_marker_b[i] = a->level_editor.markers[i].b;
         metrics.level_editor_marker_c[i] = a->level_editor.markers[i].c;
         metrics.level_editor_marker_d[i] = a->level_editor.markers[i].d;
+        metrics.level_editor_marker_e[i] = a->level_editor.markers[i].e;
+        metrics.level_editor_marker_f[i] = a->level_editor.markers[i].f;
+        metrics.level_editor_marker_g[i] = a->level_editor.markers[i].g;
     }
     metrics.controls_selected = a->controls_selected;
     metrics.controls_selected_column = a->controls_selected_column;
@@ -7156,7 +7166,17 @@ int main(void) {
                         const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
                         const char* cur = game_current_level_name(&a.game);
                         if (cur && cur[0]) {
-                            (void)level_editor_load_by_name(&a.level_editor, db, cur);
+                            int should_reload = 1;
+                            /* Preserve unsaved editor state when reopening the editor
+                               on the same level in the same run. */
+                            if (a.level_editor.dirty &&
+                                a.level_editor.level_name[0] &&
+                                strcasecmp(a.level_editor.level_name, cur) == 0) {
+                                should_reload = 0;
+                            }
+                            if (should_reload) {
+                                (void)level_editor_load_by_name(&a.level_editor, db, cur);
+                            }
                         }
                         const int ret = menu_preferred_return(&a.menu);
                         menu_open_screen(&a, APP_SCREEN_LEVEL_EDITOR, ret);

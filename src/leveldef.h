@@ -136,6 +136,10 @@ typedef struct leveldef_structure_instance {
     int w_units;
     int h_units;
     int variant;
+    /* Optional vent tuning (used by vent prefabs). */
+    float vent_density;
+    float vent_opacity;
+    float vent_plume_height;
 } leveldef_structure_instance;
 
 typedef struct leveldef_combat_tuning {

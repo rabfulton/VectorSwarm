@@ -168,6 +168,9 @@ typedef struct render_metrics {
     float level_editor_marker_b[LEVEL_EDITOR_MAX_MARKERS];
     float level_editor_marker_c[LEVEL_EDITOR_MAX_MARKERS];
     float level_editor_marker_d[LEVEL_EDITOR_MAX_MARKERS];
+    float level_editor_marker_e[LEVEL_EDITOR_MAX_MARKERS];
+    float level_editor_marker_f[LEVEL_EDITOR_MAX_MARKERS];
+    float level_editor_marker_g[LEVEL_EDITOR_MAX_MARKERS];
     int controls_selected;
     int controls_selected_column;
     int controls_rebinding_action;

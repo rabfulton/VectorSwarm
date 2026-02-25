@@ -1491,8 +1491,11 @@ static vg_result draw_level_structures(
                 }
             }
         } else if (draw_cpu_vent_smoke && st->layer > 0 && st->prefab_id >= 7) {
-            const int streams = 5;
-            const int puffs_per_stream = 10;
+            const float vent_density = (st->vent_density > 0.0f) ? st->vent_density : 1.0f;
+            const float vent_opacity = (st->vent_opacity > 0.0f) ? st->vent_opacity : 1.0f;
+            const float vent_height = (st->vent_plume_height > 0.0f) ? st->vent_plume_height : 1.0f;
+            const int streams = clampi((int)lroundf(5.0f * vent_density), 2, 14);
+            const int puffs_per_stream = clampi((int)lroundf(10.0f * vent_density), 4, 24);
             const float vent_y = bh;
             for (int stream = 0; stream < streams; ++stream) {
                 const float stream_t = (streams > 1) ? ((float)stream / (float)(streams - 1)) : 0.5f;
@@ -1502,7 +1505,7 @@ static vg_result draw_level_structures(
                     const float h = (float)(seed & 255) / 255.0f;
                     const float h2 = (float)((seed * 131) & 255) / 255.0f;
                     const float ph = repeatf(g->t * (0.11f + 0.10f * h) + (float)puff * 0.17f + h * 0.9f + stream_t * 0.31f, 1.0f);
-                    const float rise = ph * (bh * 5.4f);
+                    const float rise = ph * (bh * 5.4f * vent_height);
                     const float swirl = sinf((ph + h) * (8.6f + 2.1f * stream_t) + (float)puff * 1.1f) * bw * (0.10f + 0.20f * ph);
                     const float spread = ((float)puff / (float)puffs_per_stream) * bw * 0.18f;
                     const float life_in = clampf(ph / 0.14f, 0.0f, 1.0f);
@@ -1513,7 +1516,7 @@ static vg_result draw_level_structures(
                     const float r_outer = fmaxf(unit_h * (0.20f + 0.36f * size_u + 0.14f * h), 1.3f);
                     const float r_mid = r_outer * (0.62f + 0.10f * h);
                     const float r_core = r_outer * 0.34f;
-                    const float base_a = 0.28f * life_s * (0.82f + 0.18f * (1.0f - stream_t));
+                    const float base_a = 0.28f * vent_opacity * life_s * (0.82f + 0.18f * (1.0f - stream_t));
                     const float tone = (h2 - 0.5f) * 0.16f;
                     const float shade_outer = 0.54f + 0.22f * h + tone;
                     const float shade_mid = 0.44f + 0.20f * h + tone * 0.85f;
@@ -3761,36 +3764,11 @@ static vg_result draw_structure_prefab_tile(
         return vg_draw_polyline(ctx, tri, 4, st, 0);
     }
     if (prefab_id == 4) {
-        const float inset_x = fminf(unit_w * 0.20f, w * 0.30f);
-        const float inset_h = fminf(unit_h * 0.54f, unit_h - 1.0f);
-        for (int row = 0; row < 3; ++row) {
-            const float cy = by + ((float)row + 0.5f) * unit_h;
-            r = structure_draw_rect_transformed(
-                ctx,
-                inset_x,
-                (cy - by) - inset_h * 0.5f,
-                fmaxf(w - 2.0f * inset_x, 1.0f),
-                inset_h,
-                bx,
-                by,
-                w,
-                h,
-                rotation_quadrants,
-                flip_x ? 1 : 0,
-                flip_y ? 1 : 0,
-                st,
-                NULL
-            );
-            if (r != VG_OK) return r;
-        }
         return VG_OK;
     }
     if (prefab_id == 5) {
         const float y0 = by + h * 0.40f;
         const float y1 = by + h * 0.60f;
-        const float c_w = fmaxf(unit_w * 0.10f, 1.5f);
-        const float c_h = fmaxf(h * 0.86f, 1.0f);
-        const float c_y = by + (h - c_h) * 0.5f;
         const vg_vec2 p0[2] = {
             structure_map_point(0.0f, y0 - by, bx, by, w, h, rotation_quadrants, flip_x, flip_y),
             structure_map_point(w, y0 - by, bx, by, w, h, rotation_quadrants, flip_x, flip_y)
@@ -3803,39 +3781,7 @@ static vg_result draw_structure_prefab_tile(
         if (r != VG_OK) return r;
         r = vg_draw_polyline(ctx, p1, 2, st, 0);
         if (r != VG_OK) return r;
-        r = structure_draw_rect_transformed(
-            ctx,
-            unit_w * 0.06f,
-            c_y - by,
-            c_w,
-            c_h,
-            bx,
-            by,
-            w,
-            h,
-            rotation_quadrants,
-            flip_x ? 1 : 0,
-            flip_y ? 1 : 0,
-            st,
-            NULL
-        );
-        if (r != VG_OK) return r;
-        return structure_draw_rect_transformed(
-            ctx,
-            w - unit_w * 0.06f - c_w,
-            c_y - by,
-            c_w,
-            c_h,
-            bx,
-            by,
-            w,
-            h,
-            rotation_quadrants,
-            flip_x ? 1 : 0,
-            flip_y ? 1 : 0,
-            st,
-            NULL
-        );
+        return VG_OK;
     }
     if (prefab_id == 6) {
         const float rr = fminf(w, h) * 0.34f;
@@ -3998,6 +3944,9 @@ static int editor_marker_properties_text(
         if (n < cap) { out_labels[n] = "LAYER"; snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_b[sel]); n++; }
         if (n < cap) { out_labels[n] = "ROT"; snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_c[sel]); n++; }
         if (n < cap) { out_labels[n] = "FLIP"; snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_d[sel]); n++; }
+        if (n < cap) { out_labels[n] = "VENT DENSITY"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_e[sel]); n++; }
+        if (n < cap) { out_labels[n] = "VENT OPACITY"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_f[sel]); n++; }
+        if (n < cap) { out_labels[n] = "VENT HEIGHT"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_g[sel]); n++; }
         return n;
     }
     if (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 10 || kind == 11 || kind == 12) {

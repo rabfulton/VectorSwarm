@@ -512,8 +512,9 @@ static int parse_structure_instance(leveldef_level* lvl, const char* value, FILE
     char buf[320];
     char* tok;
     char* save = NULL;
-    const int expected = 10;
-    char* fields[10];
+    const int expected_min = 10;
+    const int expected_max = 13;
+    char* fields[13];
     int i = 0;
     leveldef_structure_instance st;
 
@@ -525,13 +526,13 @@ static int parse_structure_instance(leveldef_level* lvl, const char* value, FILE
     buf[sizeof(buf) - 1] = '\0';
 
     tok = strtok_r(buf, ",", &save);
-    while (tok && i < expected) {
+    while (tok && i < expected_max) {
         fields[i++] = trim(tok);
         tok = strtok_r(NULL, ",", &save);
     }
-    if (i != expected) {
+    if (i < expected_min || i > expected_max) {
         if (log_out) {
-            fprintf(log_out, "leveldef: structure expects %d fields, got %d\n", expected, i);
+            fprintf(log_out, "leveldef: structure expects %d..%d fields, got %d\n", expected_min, expected_max, i);
         }
         return 0;
     }
@@ -545,6 +546,12 @@ static int parse_structure_instance(leveldef_level* lvl, const char* value, FILE
     st.w_units = (int)strtol(fields[7], NULL, 10);
     st.h_units = (int)strtol(fields[8], NULL, 10);
     st.variant = (int)strtol(fields[9], NULL, 10);
+    st.vent_density = (i >= 11) ? strtof(fields[10], NULL) : 1.0f;
+    st.vent_opacity = (i >= 12) ? strtof(fields[11], NULL) : 1.0f;
+    st.vent_plume_height = (i >= 13) ? strtof(fields[12], NULL) : 1.0f;
+    if (st.vent_density <= 0.0f) st.vent_density = 1.0f;
+    if (st.vent_opacity <= 0.0f) st.vent_opacity = 1.0f;
+    if (st.vent_plume_height <= 0.0f) st.vent_plume_height = 1.0f;
     lvl->structures[lvl->structure_count++] = st;
     return 1;
 }

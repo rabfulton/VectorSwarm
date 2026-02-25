@@ -413,24 +413,24 @@ static void level_editor_save_snapshot(level_editor_state* s) {
 
 static float marker_pick_radius01(int kind) {
     if (is_wave_kind(kind)) {
-        return 0.18f;
+        return 0.045f;
     }
     if (kind == LEVEL_EDITOR_MARKER_SEARCHLIGHT) {
-        return 0.12f;
+        return 0.040f;
     }
     if (kind == LEVEL_EDITOR_MARKER_EXIT) {
-        return 0.11f;
+        return 0.038f;
     }
     if (kind == LEVEL_EDITOR_MARKER_MINEFIELD) {
-        return 0.12f;
+        return 0.040f;
     }
     if (kind == LEVEL_EDITOR_MARKER_MISSILE) {
-        return 0.12f;
+        return 0.040f;
     }
     if (kind == LEVEL_EDITOR_MARKER_STRUCTURE) {
-        return 0.10f;
+        return 0.030f;
     }
-    return 0.08f;
+    return 0.032f;
 }
 
 static int editor_pick_trace_enabled(void) {
@@ -489,7 +489,8 @@ static int pick_spatial_marker_in_viewport(
     const level_editor_state* s,
     const level_editor_layout* l,
     float mx01,
-    float my01
+    float my01,
+    int current_selected
 ) {
     if (!s || !l) {
         return -1;
@@ -498,10 +499,92 @@ static int pick_spatial_marker_in_viewport(
     const float start_screen = s->timeline_01 * fmaxf(level_screens - 1.0f, 0.0f);
     const float view_min = start_screen / level_screens;
     const float view_max = (start_screen + 1.0f) / level_screens;
+    const float view_span = fmaxf(view_max - view_min, 1.0e-6f);
+
+    /* 1) Structure picking uses exact tile bounds in viewport coordinates. */
+    {
+        int hits[LEVEL_EDITOR_MAX_MARKERS];
+        int hit_n = 0;
+        const int gx_steps = structure_grid_x_steps_for_level(level_screens);
+        const int gy_steps = structure_grid_y_steps();
+        for (int i = 0; i < s->marker_count && hit_n < LEVEL_EDITOR_MAX_MARKERS; ++i) {
+            const level_editor_marker* m = &s->markers[i];
+            if (m->kind != LEVEL_EDITOR_MARKER_STRUCTURE) {
+                continue;
+            }
+            if (!level_editor_enemy_spatial(s) && marker_is_event_item(s, m)) {
+                continue;
+            }
+            int w_units = 1;
+            int h_units = 1;
+            int q = ((int)lroundf(m->c) % 4 + 4) % 4;
+            const int gx = clampi((int)lroundf(m->x01 * (float)gx_steps), 0, gx_steps);
+            const int gy = clampi((int)lroundf(m->y01 * (float)gy_steps), 0, gy_steps);
+            structure_prefab_dims(clampi((int)lroundf(m->a), 0, 31), &w_units, &h_units);
+            if ((q & 1) != 0) {
+                const int tmp = w_units;
+                w_units = h_units;
+                h_units = tmp;
+            }
+            const float x0 = (float)gx / (float)gx_steps;
+            const float x1 = (float)(gx + w_units) / (float)gx_steps;
+            const float y0 = (float)gy / (float)gy_steps;
+            const float y1 = (float)(gy + h_units) / (float)gy_steps;
+            if (x1 < view_min || x0 > view_max) {
+                continue;
+            }
+            const float vx0 = (x0 - view_min) / view_span;
+            const float vx1 = (x1 - view_min) / view_span;
+            const float vy0 = y0;
+            const float vy1 = y1;
+            const float min_x = fminf(vx0, vx1);
+            const float max_x = fmaxf(vx0, vx1);
+            const float min_y = fminf(vy0, vy1);
+            const float max_y = fmaxf(vy0, vy1);
+            if (mx01 >= min_x && mx01 <= max_x && my01 >= min_y && my01 <= max_y) {
+                hits[hit_n++] = i;
+            }
+        }
+        if (hit_n > 0) {
+            for (int a = 0; a < hit_n - 1; ++a) {
+                for (int b = a + 1; b < hit_n; ++b) {
+                    const int ia = hits[a];
+                    const int ib = hits[b];
+                    const int la = clampi((int)lroundf(s->markers[ia].b), 0, 1);
+                    const int lb = clampi((int)lroundf(s->markers[ib].b), 0, 1);
+                    const int swap = (lb > la) || ((lb == la) && (ib < ia));
+                    if (swap) {
+                        const int tmp = hits[a];
+                        hits[a] = hits[b];
+                        hits[b] = tmp;
+                    }
+                }
+            }
+            int cur_pos = -1;
+            for (int k = 0; k < hit_n; ++k) {
+                if (hits[k] == current_selected) {
+                    cur_pos = k;
+                    break;
+                }
+            }
+            if (editor_pick_trace_enabled()) {
+                fprintf(stderr, "[editor_pick] structure_hits=%d selected=%d next=%d\n", hit_n, current_selected, (cur_pos >= 0) ? hits[(cur_pos + 1) % hit_n] : hits[0]);
+            }
+            if (cur_pos >= 0) {
+                return hits[(cur_pos + 1) % hit_n];
+            }
+            return hits[0];
+        }
+    }
+
+    /* 2) Non-structure markers use nearest-with-threshold. */
     int best = -1;
     float best_d2 = 1.0e9f;
     for (int i = 0; i < s->marker_count; ++i) {
         const level_editor_marker* m = &s->markers[i];
+        if (m->kind == LEVEL_EDITOR_MARKER_STRUCTURE) {
+            continue;
+        }
         if (!level_editor_enemy_spatial(s) && marker_is_event_item(s, m)) {
             continue;
         }
@@ -921,6 +1004,9 @@ static int build_level_serialized_text(
             st.grid_y = clampi(st.grid_y, 0, (max_gy > 0) ? max_gy : 0);
         }
         st.variant = 0;
+        st.vent_density = fmaxf(m->e, 0.01f);
+        st.vent_opacity = fmaxf(m->f, 0.01f);
+        st.vent_plume_height = fmaxf(m->g, 0.01f);
         lvl.structures[lvl.structure_count++] = st;
     }
 
@@ -1060,7 +1146,7 @@ static int build_level_serialized_text(
     if (!appendf(out, out_cap, &used, "# anchor_x01,anchor_y01,count,spacing,activation_range,missile_speed,\n")) return 0;
     if (!appendf(out, out_cap, &used, "# missile_turn_rate_deg,missile_ttl_s,hit_radius,blast_radius\n")) return 0;
     if (!appendf(out, out_cap, &used, "# structure CSV fields:\n")) return 0;
-    if (!appendf(out, out_cap, &used, "# prefab_id,layer,grid_x,grid_y,rotation_quadrants,flip_x,flip_y,w_units,h_units,variant\n")) return 0;
+    if (!appendf(out, out_cap, &used, "# prefab_id,layer,grid_x,grid_y,rotation_quadrants,flip_x,flip_y,w_units,h_units,variant,vent_density,vent_opacity,vent_plume_height\n")) return 0;
     if (!appendf(out, out_cap, &used, "[level %s]\n", style_header_name(s->level_style))) return 0;
     if (!appendf(out, out_cap, &used, "level_length_screens=%.3f\n", lvl.editor_length_screens)) return 0;
     if (!appendf(out, out_cap, &used, "render_style=%s\n", render_style_name(lvl.render_style))) return 0;
@@ -1205,7 +1291,7 @@ static int build_level_serialized_text(
                 out,
                 out_cap,
                 &used,
-                "structure=%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
+                "structure=%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%.3f,%.3f,%.3f\n",
                 st->prefab_id,
                 st->layer,
                 st->grid_x,
@@ -1215,7 +1301,10 @@ static int build_level_serialized_text(
                 st->flip_y,
                 st->w_units,
                 st->h_units,
-                st->variant)) return 0;
+                st->variant,
+                (st->vent_density > 0.0f) ? st->vent_density : 1.0f,
+                (st->vent_opacity > 0.0f) ? st->vent_opacity : 1.0f,
+                (st->vent_plume_height > 0.0f) ? st->vent_plume_height : 1.0f)) return 0;
     }
 
     return 1;
@@ -1242,7 +1331,7 @@ static int marker_property_count(const level_editor_state* s) {
         return 6;
     }
     if (kind == LEVEL_EDITOR_MARKER_STRUCTURE) {
-        return 6;
+        return 9;
     }
     if (kind == LEVEL_EDITOR_MARKER_EXIT) {
         return 2;
@@ -1457,6 +1546,9 @@ static void push_marker(level_editor_state* s, int kind, int track, int order, f
     m->b = b;
     m->c = c;
     m->d = d;
+    m->e = 0.0f;
+    m->f = 0.0f;
+    m->g = 0.0f;
 }
 
 void level_editor_compute_layout(float w, float h, level_editor_layout* out) {
@@ -1708,6 +1800,7 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
     }
     for (int i = 0; i < lvl->structure_count; ++i) {
         const leveldef_structure_instance* st = &lvl->structures[i];
+        const int before = s->marker_count;
         push_marker(
             s,
             LEVEL_EDITOR_MARKER_STRUCTURE,
@@ -1721,6 +1814,12 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
             (float)(st->rotation_quadrants & 3),
             (float)((st->flip_x ? 1 : 0) | ((st->flip_y ? 1 : 0) << 1))
         );
+        if (s->marker_count > before) {
+            level_editor_marker* m = &s->markers[s->marker_count - 1];
+            m->e = (st->vent_density > 0.0f) ? st->vent_density : 1.0f;
+            m->f = (st->vent_opacity > 0.0f) ? st->vent_opacity : 1.0f;
+            m->g = (st->vent_plume_height > 0.0f) ? st->vent_plume_height : 1.0f;
+        }
     }
 
     const int cycle_n = lvl->wave_cycle_count;
@@ -2035,6 +2134,7 @@ static void add_marker_at_view(
     } else if (kind == LEVEL_EDITOR_MARKER_MISSILE) {
         push_marker(s, LEVEL_EDITOR_MARKER_MISSILE, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, x01, y01, 6.0f, 64.0f, 760.0f, 3.6f);
     } else if (kind == LEVEL_EDITOR_MARKER_STRUCTURE) {
+        const int before = s->marker_count;
         push_marker(
             s,
             LEVEL_EDITOR_MARKER_STRUCTURE,
@@ -2048,6 +2148,12 @@ static void add_marker_at_view(
             0.0f,
             0.0f
         );
+        if (s->marker_count > before) {
+            level_editor_marker* m = &s->markers[s->marker_count - 1];
+            m->e = 1.0f; /* vent density */
+            m->f = 1.0f; /* vent opacity */
+            m->g = 1.0f; /* vent plume height */
+        }
     }
     s->selected_marker = s->marker_count - 1;
     s->selected_property = 0;
@@ -2191,6 +2297,12 @@ static void add_structure_marker_at_view(level_editor_state* s, float mx01, floa
         0.0f,
         0.0f
     );
+    if (s->marker_count > 0) {
+        level_editor_marker* m = &s->markers[s->marker_count - 1];
+        m->e = 1.0f;
+        m->f = 1.0f;
+        m->g = 1.0f;
+    }
     s->selected_marker = s->marker_count - 1;
     s->selected_property = 0;
     mark_editor_dirty(s);
@@ -2399,7 +2511,7 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
         if (point_in_rect(mouse_x, mouse_y, l.viewport)) {
             const float mx01 = (mouse_x - l.viewport.x) / fmaxf(l.viewport.w, 1.0f);
             const float my01 = (mouse_y - l.viewport.y) / fmaxf(l.viewport.h, 1.0f);
-            const int best = pick_spatial_marker_in_viewport(s, &l, mx01, my01);
+            const int best = pick_spatial_marker_in_viewport(s, &l, mx01, my01, s->selected_marker);
             if (editor_pick_trace_enabled()) {
                 fprintf(
                     stderr,
@@ -2546,11 +2658,11 @@ void level_editor_select_property(level_editor_state* s, int delta) {
 }
 
 const char* level_editor_selected_property_name(const level_editor_state* s) {
-    static const char* names[8] = {"X", "Y", "A", "B", "C", "D", "E", "F"};
+    static const char* names[10] = {"X", "Y", "A", "B", "C", "D", "E", "F", "G", "H"};
     if (!s) {
         return "X";
     }
-    const int idx = (s->selected_property >= 0 && s->selected_property < 8) ? s->selected_property : 0;
+    const int idx = (s->selected_property >= 0 && s->selected_property < 10) ? s->selected_property : 0;
     return names[idx];
 }
 
@@ -2680,6 +2792,9 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
                 flip ^= 1;
                 m->d = (float)flip;
             } break;
+            case 6: m->e = clampf(m->e + delta * 4.0f, 0.10f, 6.00f); break;
+            case 7: m->f = clampf(m->f + delta * 4.0f, 0.10f, 6.00f); break;
+            case 8: m->g = clampf(m->g + delta * 4.0f, 0.20f, 8.00f); break;
             default: break;
         }
         m->x01 = snap_x01_level(m->x01, s->level_length_screens);
