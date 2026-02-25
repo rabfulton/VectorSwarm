@@ -1545,21 +1545,23 @@ void enemy_update_system(
         }
         integrate_body(&e->b, dt);
         if (!uses_cylinder) {
-            float avoid_x = 0.0f;
-            float avoid_y = 0.0f;
-            game_structure_avoidance_vector(
-                g,
-                e->b.x,
-                e->b.y,
-                fmaxf(8.0f * su, e->radius),
-                fmaxf(14.0f * su, e->radius * 1.4f),
-                &avoid_x,
-                &avoid_y
-            );
-            if (fabsf(avoid_x) > 1.0e-4f || fabsf(avoid_y) > 1.0e-4f) {
-                normalize2(&avoid_x, &avoid_y);
-                e->b.vx += avoid_x * (620.0f * su) * dt;
-                e->b.vy += avoid_y * (620.0f * su) * dt;
+            if (e->archetype != ENEMY_ARCH_SWARM) {
+                float avoid_x = 0.0f;
+                float avoid_y = 0.0f;
+                game_structure_avoidance_vector(
+                    g,
+                    e->b.x,
+                    e->b.y,
+                    fmaxf(8.0f * su, e->radius),
+                    fmaxf(14.0f * su, e->radius * 1.4f),
+                    &avoid_x,
+                    &avoid_y
+                );
+                if (fabsf(avoid_x) > 1.0e-4f || fabsf(avoid_y) > 1.0e-4f) {
+                    normalize2(&avoid_x, &avoid_y);
+                    e->b.vx += avoid_x * (620.0f * su) * dt;
+                    e->b.vy += avoid_y * (620.0f * su) * dt;
+                }
             }
             if (game_structure_circle_overlap(g, e->b.x, e->b.y, fmaxf(8.0f * su, e->radius))) {
                 float nx = e->b.x;
@@ -1573,8 +1575,13 @@ void enemy_update_system(
                         g->world_h * 0.45f)) {
                     e->b.x = nx;
                     e->b.y = ny;
-                    e->b.vx *= -0.35f;
-                    e->b.vy *= -0.35f;
+                    if (e->archetype == ENEMY_ARCH_SWARM) {
+                        e->b.vx *= 0.72f;
+                        e->b.vy *= 0.72f;
+                    } else {
+                        e->b.vx *= -0.35f;
+                        e->b.vy *= -0.35f;
+                    }
                 }
             }
         }

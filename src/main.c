@@ -3237,6 +3237,18 @@ static void apply_level_editor_runtime(app* a) {
     }
 }
 
+static int editor_save_trace_enabled(void) {
+    static int cached = -1;
+    if (cached >= 0) {
+        return cached;
+    }
+    {
+        const char* env = getenv("VTYPE_EDITOR_SAVE_TRACE");
+        cached = (env && env[0] && strcmp(env, "0") != 0) ? 1 : 0;
+    }
+    return cached;
+}
+
 static int handle_level_editor_mouse(app* a, int mouse_x, int mouse_y, int mouse_down, int mouse_pressed) {
     if (!a) {
         return 0;
@@ -3263,13 +3275,68 @@ static int handle_level_editor_mouse(app* a, int mouse_x, int mouse_y, int mouse
     } else if (action == 3) {
         const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
         char saved_path[LEVEL_EDITOR_PATH_CAP];
+        int pre_marker_count = a->level_editor.marker_count;
+        int pre_wave_mode = a->level_editor.level_wave_mode;
+        float pre_len = a->level_editor.level_length_screens;
+        level_editor_marker pre_markers[LEVEL_EDITOR_MAX_MARKERS];
+        if (pre_marker_count < 0) pre_marker_count = 0;
+        if (pre_marker_count > LEVEL_EDITOR_MAX_MARKERS) pre_marker_count = LEVEL_EDITOR_MAX_MARKERS;
+        if (pre_marker_count > 0) {
+            memcpy(pre_markers, a->level_editor.markers, (size_t)pre_marker_count * sizeof(level_editor_marker));
+        }
         if (level_editor_save_current(&a->level_editor, db, saved_path, sizeof(saved_path))) {
             if (!game_refresh_levels(&a->game) ||
                 !game_set_level_by_name(&a->game, a->level_editor.level_name)) {
                 set_tty_message(a, "level editor: saved, runtime sync failed");
                 return action != 0;
             }
+            {
+                const leveldef_db* db_live = (const leveldef_db*)game_leveldef_get();
+                if (!level_editor_load_by_name(&a->level_editor, db_live, a->level_editor.level_name)) {
+                    set_tty_message(a, "level editor: saved, editor reload failed");
+                    return action != 0;
+                }
+            }
             a->level_editor_applied_revision = a->level_editor.edit_revision;
+            if (editor_save_trace_enabled()) {
+                int diffs = 0;
+                fprintf(
+                    stderr,
+                    "[editor_save] pre: markers=%d wave_mode=%d len=%.3f | post: markers=%d wave_mode=%d len=%.3f\n",
+                    pre_marker_count, pre_wave_mode, pre_len,
+                    a->level_editor.marker_count, a->level_editor.level_wave_mode, a->level_editor.level_length_screens
+                );
+                if (pre_marker_count != a->level_editor.marker_count) {
+                    diffs = 1;
+                }
+                {
+                    const int cmp_n = (pre_marker_count < a->level_editor.marker_count)
+                        ? pre_marker_count : a->level_editor.marker_count;
+                    for (int i = 0; i < cmp_n; ++i) {
+                        const level_editor_marker* pm = &pre_markers[i];
+                        const level_editor_marker* qm = &a->level_editor.markers[i];
+                        if (pm->kind != qm->kind || pm->track != qm->track ||
+                            fabsf(pm->x01 - qm->x01) > 1.0e-4f || fabsf(pm->y01 - qm->y01) > 1.0e-4f ||
+                            fabsf(pm->a - qm->a) > 1.0e-4f || fabsf(pm->b - qm->b) > 1.0e-4f ||
+                            fabsf(pm->c - qm->c) > 1.0e-4f || fabsf(pm->d - qm->d) > 1.0e-4f) {
+                            fprintf(
+                                stderr,
+                                "[editor_save] marker[%d] pre{k=%d t=%d x=%.3f y=%.3f a=%.3f b=%.3f c=%.3f d=%.3f} post{k=%d t=%d x=%.3f y=%.3f a=%.3f b=%.3f c=%.3f d=%.3f}\n",
+                                i,
+                                pm->kind, pm->track, pm->x01, pm->y01, pm->a, pm->b, pm->c, pm->d,
+                                qm->kind, qm->track, qm->x01, qm->y01, qm->a, qm->b, qm->c, qm->d
+                            );
+                            diffs = 1;
+                            if (diffs > 16) {
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (!diffs) {
+                    fprintf(stderr, "[editor_save] pre/post markers identical\n");
+                }
+            }
             set_tty_message(a, "level editor: saved");
         } else {
             set_tty_message(a, a->level_editor.status_text[0] ? a->level_editor.status_text : "level editor: save failed");
@@ -3282,6 +3349,13 @@ static int handle_level_editor_mouse(app* a, int mouse_x, int mouse_y, int mouse
                 !game_set_level_by_name(&a->game, a->level_editor.level_name)) {
                 set_tty_message(a, "level editor: saved new, runtime sync failed");
                 return action != 0;
+            }
+            {
+                const leveldef_db* db_live = (const leveldef_db*)game_leveldef_get();
+                if (!level_editor_load_by_name(&a->level_editor, db_live, a->level_editor.level_name)) {
+                    set_tty_message(a, "level editor: saved new, editor reload failed");
+                    return action != 0;
+                }
             }
             a->level_editor_applied_revision = a->level_editor.edit_revision;
             set_tty_message(a, "level editor: saved new");

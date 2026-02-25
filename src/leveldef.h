@@ -221,6 +221,7 @@ typedef struct leveldef_curated_enemy {
 } leveldef_curated_enemy;
 
 typedef struct leveldef_level {
+    float editor_length_screens; /* editor/runtime normalization basis for x01-authored objects */
     int render_style; /* enum level_render_style_id */
     int wave_mode;
     int spawn_mode; /* enum leveldef_spawn_mode */

@@ -189,7 +189,7 @@ static int stristarts(const char* s, const char* prefix) {
 }
 
 static int resolve_level_file_path(const char* level_name, char* out, size_t out_cap) {
-    static const char* dirs[] = {"data/levels", "../data/levels"};
+    static const char* dirs[] = {"../data/levels", "data/levels"};
     char path[LEVEL_EDITOR_PATH_CAP];
     if (!level_name || !out || out_cap == 0) {
         return 0;
@@ -717,6 +717,8 @@ static int build_level_serialized_text(
     int i = 0;
     int found_exit = 0;
     int wave_n = 0;
+    int has_spatial_wave = 0;
+    int has_event_wave = 0;
     wave_marker_ref waves[LEVEL_EDITOR_MAX_MARKERS];
     const float level_len = fmaxf(s ? s->level_length_screens : 1.0f, 1.0f);
 
@@ -744,6 +746,7 @@ static int build_level_serialized_text(
     }
     lvl.render_style = s->level_render_style;
     lvl.wave_mode = s->level_wave_mode;
+    lvl.editor_length_screens = level_len;
     lvl.searchlight_count = 0;
     lvl.minefield_count = 0;
     lvl.missile_launcher_count = 0;
@@ -764,6 +767,13 @@ static int build_level_serialized_text(
     lvl.exit_enabled = 0;
     for (i = 0; i < s->marker_count; ++i) {
         const level_editor_marker* m = &s->markers[i];
+        if (is_wave_kind(m->kind)) {
+            if (m->track == LEVEL_EDITOR_TRACK_SPATIAL) {
+                has_spatial_wave = 1;
+            } else if (m->track == LEVEL_EDITOR_TRACK_EVENT) {
+                has_event_wave = 1;
+            }
+        }
         if (m->kind == LEVEL_EDITOR_MARKER_EXIT && !found_exit) {
             lvl.exit_enabled = 1;
             lvl.exit_x01 = m->x01 * level_len;
@@ -778,6 +788,16 @@ static int build_level_serialized_text(
             lvl.asteroid_storm_speed = fmaxf(m->c, 1.0f);
             lvl.asteroid_storm_density = fmaxf(m->d, 0.01f);
         }
+    }
+
+    /* Serialization consistency rule:
+       a level file cannot represent spatial swarm markers in non-curated mode,
+       so we normalize wave_mode before writing the config text. */
+    if (has_spatial_wave) {
+        lvl.wave_mode = LEVELDEF_WAVES_CURATED;
+    } else if (!has_event_wave && lvl.wave_mode == LEVELDEF_WAVES_CURATED) {
+        /* No wave markers at all: keep file coherent in normal mode. */
+        lvl.wave_mode = LEVELDEF_WAVES_NORMAL;
     }
 
     lvl.searchlight_count = 0;
@@ -1008,6 +1028,7 @@ static int build_level_serialized_text(
     if (!appendf(out, out_cap, &used, "# structure CSV fields:\n")) return 0;
     if (!appendf(out, out_cap, &used, "# prefab_id,layer,grid_x,grid_y,rotation_quadrants,flip_x,flip_y,w_units,h_units,variant\n")) return 0;
     if (!appendf(out, out_cap, &used, "[level %s]\n", style_header_name(s->level_style))) return 0;
+    if (!appendf(out, out_cap, &used, "level_length_screens=%.3f\n", lvl.editor_length_screens)) return 0;
     if (!appendf(out, out_cap, &used, "render_style=%s\n", render_style_name(lvl.render_style))) return 0;
     if (!appendf(out, out_cap, &used, "wave_mode=%s\n", wave_mode_name(lvl.wave_mode))) return 0;
     if (!appendf(out, out_cap, &used, "spawn_mode=%s\n", spawn_mode_name(lvl.spawn_mode))) return 0;
@@ -1871,7 +1892,11 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
                 data_len = fmaxf(data_len, sum + 1.0f);
             }
         }
-        s->level_length_screens = fmaxf(cycle_len, data_len);
+        if (lvl && lvl->editor_length_screens > 0.0f) {
+            s->level_length_screens = lvl->editor_length_screens;
+        } else {
+            s->level_length_screens = fmaxf(cycle_len, data_len);
+        }
         if (lvl) {
             s->level_render_style = lvl->render_style;
             s->level_wave_mode = lvl->wave_mode;

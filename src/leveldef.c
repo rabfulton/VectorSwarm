@@ -2,6 +2,7 @@
 
 #include <dirent.h>
 #include <ctype.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -198,6 +199,7 @@ void leveldef_init_defaults(leveldef_db* db) {
     }
     memset(db, 0, sizeof(*db));
     for (i = 0; i < LEVEL_STYLE_COUNT; ++i) {
+        db->levels[i].editor_length_screens = 12.0f;
         db->levels[i].wave_mode = -1;
         db->levels[i].render_style = -1;
         db->levels[i].spawn_mode = -1;
@@ -601,7 +603,9 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                 char* k = trim(s);
                 char* v = trim(eq + 1);
                 if (sec == SEC_LEVEL && cur_level) {
-                    if (strcmp(k, "render_style") == 0) {
+                    if (strcmp(k, "level_length_screens") == 0) {
+                        cur_level->editor_length_screens = strtof(v, NULL);
+                    } else if (strcmp(k, "render_style") == 0) {
                         cur_level->render_style = render_style_from_name(v);
                     } else if (strcmp(k, "wave_mode") == 0) {
                         cur_level->wave_mode = wave_mode_from_name(v);
@@ -959,6 +963,12 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
             l->spawn_interval_s <= 0.0f) {
             if (log_out) {
                 fprintf(log_out, "leveldef: level %d invalid spawn_interval_s\n", i);
+            }
+            ok = 0;
+        }
+        if (l->editor_length_screens <= 0.0f || !isfinite(l->editor_length_screens)) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid level_length_screens\n", i);
             }
             ok = 0;
         }

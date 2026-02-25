@@ -1,0 +1,1 @@
+/usr/bin/cc -fsanitize=address -fno-omit-frame-pointer -g -fsanitize=address -Wl,--dependency-file=CMakeFiles/vg_demo_sdl.dir/link.d CMakeFiles/vg_demo_sdl.dir/examples/demo_sdl.c.o -o vg_demo_sdl  libvg.a -lSDL2 -lm /lib/libvulkan.so
