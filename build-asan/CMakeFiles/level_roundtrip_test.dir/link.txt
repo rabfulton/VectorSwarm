@@ -1,1 +1,0 @@
-/usr/bin/cc -fsanitize=address -fno-omit-frame-pointer -g -fsanitize=address -Wl,--dependency-file=CMakeFiles/level_roundtrip_test.dir/link.d CMakeFiles/level_roundtrip_test.dir/tests/level_roundtrip_test.c.o CMakeFiles/level_roundtrip_test.dir/src/level_editor.c.o CMakeFiles/level_roundtrip_test.dir/src/leveldef.c.o -o level_roundtrip_test  -lm

@@ -1,8 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/home/rab/code/v-type/build-asan/cmake_install.cmake",
-		"/home/rab/code/v-type/build-asan/DefconDraw/cmake_install.cmake"
-	],
-	"Parallel" : false
-}
