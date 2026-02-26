@@ -797,6 +797,24 @@ static int level_uses_cylinder_render(const game_state* g) {
     return g && g->render_style == LEVEL_RENDER_CYLINDER;
 }
 
+static int level_draws_star_background(const game_state* g) {
+    const leveldef_level* lvl;
+    if (!g) {
+        return 1;
+    }
+    lvl = game_current_leveldef(g);
+    if (!lvl) {
+        return (g->render_style != LEVEL_RENDER_BLANK) ? 1 : 0;
+    }
+    if (lvl->background_style == LEVELDEF_BACKGROUND_NONE) {
+        return 0;
+    }
+    if (lvl->background_style == LEVELDEF_BACKGROUND_STARS) {
+        return 1;
+    }
+    return 0;
+}
+
 static float perlin_fade(float t) {
     return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
 }
@@ -4120,6 +4138,14 @@ static const char* editor_theme_palette_name(int palette) {
     return "GREEN";
 }
 
+static const char* editor_background_style_name(int style) {
+    if (style == LEVELDEF_BACKGROUND_NONE) return "NONE";
+    if (style == LEVELDEF_BACKGROUND_NEBULA) return "NEBULA";
+    if (style == LEVELDEF_BACKGROUND_GRID) return "GRID";
+    if (style == LEVELDEF_BACKGROUND_SOLID) return "SOLID";
+    return "STARS";
+}
+
 static int editor_marker_properties_text(
     int kind,
     const render_metrics* metrics,
@@ -4883,7 +4909,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             {
                 int selected_prop = metrics->level_editor_selected_property;
                 if (selected_prop < 0) selected_prop = 0;
-                if (selected_prop > 3) selected_prop = 3;
+                if (selected_prop > 4) selected_prop = 4;
                 char row[96];
                 const vg_rect rb0 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
                 snprintf(row, sizeof(row), "WAVE MODE      %s", editor_wave_mode_name(metrics->level_editor_wave_mode));
@@ -4901,8 +4927,13 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb3 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
-                snprintf(row, sizeof(row), "LENGTH         %.1f", metrics->level_editor_level_length_screens);
+                snprintf(row, sizeof(row), "BACKGROUND     %s", editor_background_style_name(metrics->level_editor_background_style));
                 r = draw_ui_button_shaded(ctx, rb3, row, 10.4f * ui, &frame, &text, (selected_prop == 3) ? 1 : 0);
+                if (r != VG_OK) return r;
+                ty -= 32.0f * ui;
+                const vg_rect rb4 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
+                snprintf(row, sizeof(row), "LENGTH         %.1f", metrics->level_editor_level_length_screens);
+                r = draw_ui_button_shaded(ctx, rb4, row, 10.4f * ui, &frame, &text, (selected_prop == 4) ? 1 : 0);
                 if (r != VG_OK) return r;
             }
             ty -= 34.0f * ui;
@@ -7174,6 +7205,7 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
 
     const float jx = sinf(g->t * 17.0f + 0.2f) * crt.jitter_amount * 0.75f;
     const float jy = cosf(g->t * 21.0f) * crt.jitter_amount * 0.75f;
+    const int draw_star_background = level_draws_star_background(g);
     const int background_only = (metrics->scene_phase == 1);
     const int foreground_only = (metrics->scene_phase == 2);
     const int overlay_no_clear = (metrics->scene_phase == 3);
@@ -7204,16 +7236,18 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
                 }
             }
 
-            for (size_t i = 0; i < MAX_STARS; ++i) {
-                const float su = repeatf(g->stars[i].x - g->camera_x * 0.22f, g->world_w) / fmaxf(g->world_w, 1.0f);
-                const float sx_world = g->camera_x + (su - 0.5f) * period;
-                float depth = 0.0f;
-                const vg_vec2 sp = project_cylinder_point(g, sx_world, g->stars[i].y, &depth);
-                vg_fill_style sf = star_fill;
-                sf.intensity *= 0.45f + depth * 0.9f;
-                r = vg_fill_circle(ctx, sp, g->stars[i].size * (0.5f + depth), &sf, 8);
-                if (r != VG_OK) {
-                    return r;
+            if (draw_star_background) {
+                for (size_t i = 0; i < MAX_STARS; ++i) {
+                    const float su = repeatf(g->stars[i].x - g->camera_x * 0.22f, g->world_w) / fmaxf(g->world_w, 1.0f);
+                    const float sx_world = g->camera_x + (su - 0.5f) * period;
+                    float depth = 0.0f;
+                    const vg_vec2 sp = project_cylinder_point(g, sx_world, g->stars[i].y, &depth);
+                    vg_fill_style sf = star_fill;
+                    sf.intensity *= 0.45f + depth * 0.9f;
+                    r = vg_fill_circle(ctx, sp, g->stars[i].size * (0.5f + depth), &sf, 8);
+                    if (r != VG_OK) {
+                        return r;
+                    }
                 }
             }
         }
@@ -7553,7 +7587,7 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         return VG_OK;
     }
 
-    if (!foreground_only && g->render_style != LEVEL_RENDER_BLANK) {
+    if (!foreground_only && draw_star_background) {
         for (size_t i = 0; i < MAX_STARS; ++i) {
             if (g->render_style == LEVEL_RENDER_DRIFTER_SHADED ||
                 g->render_style == LEVEL_RENDER_DRIFTER) {

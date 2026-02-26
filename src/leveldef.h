@@ -30,6 +30,14 @@ enum leveldef_spawn_mode {
     LEVELDEF_SPAWN_TIMED_SEQUENCED = 2
 };
 
+enum leveldef_background_style {
+    LEVELDEF_BACKGROUND_STARS = 0,
+    LEVELDEF_BACKGROUND_NONE = 1,
+    LEVELDEF_BACKGROUND_NEBULA = 2,
+    LEVELDEF_BACKGROUND_GRID = 3,
+    LEVELDEF_BACKGROUND_SOLID = 4
+};
+
 enum leveldef_wave_pattern_id {
     LEVELDEF_WAVE_SINE_SNAKE = 0,
     LEVELDEF_WAVE_V_FORMATION = 1,
@@ -240,6 +248,7 @@ typedef struct leveldef_curated_enemy {
 typedef struct leveldef_level {
     float editor_length_screens; /* editor/runtime normalization basis for x01-authored objects */
     int theme_palette; /* 0=green, 1=amber, 2=ice */
+    int background_style; /* enum leveldef_background_style */
     int render_style; /* enum level_render_style_id */
     int wave_mode;
     int spawn_mode; /* enum leveldef_spawn_mode */

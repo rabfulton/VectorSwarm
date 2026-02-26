@@ -152,6 +152,7 @@ typedef struct render_metrics {
     int level_editor_wave_mode;
     int level_editor_render_style;
     int level_editor_theme_palette;
+    int level_editor_background_style;
     int level_editor_asteroid_storm_enabled;
     float level_editor_asteroid_storm_angle_deg;
     float level_editor_asteroid_storm_speed;

@@ -400,6 +400,7 @@ static void level_editor_save_snapshot(level_editor_state* s) {
     s->snapshot_level_render_style = s->level_render_style;
     s->snapshot_level_wave_mode = s->level_wave_mode;
     s->snapshot_level_theme_palette = s->level_theme_palette;
+    s->snapshot_level_background_style = s->level_background_style;
     s->snapshot_level_asteroid_storm_enabled = s->level_asteroid_storm_enabled;
     s->snapshot_level_asteroid_storm_angle_deg = s->level_asteroid_storm_angle_deg;
     s->snapshot_level_asteroid_storm_speed = s->level_asteroid_storm_speed;
@@ -706,6 +707,17 @@ static const char* wave_mode_name(int mode) {
     return "normal";
 }
 
+static const char* background_style_name(int style) {
+    switch (style) {
+        case LEVELDEF_BACKGROUND_NONE: return "none";
+        case LEVELDEF_BACKGROUND_NEBULA: return "nebula";
+        case LEVELDEF_BACKGROUND_GRID: return "grid";
+        case LEVELDEF_BACKGROUND_SOLID: return "solid";
+        case LEVELDEF_BACKGROUND_STARS:
+        default: return "stars";
+    }
+}
+
 static const char* spawn_mode_name(int mode) {
     switch (mode) {
         case LEVELDEF_SPAWN_SEQUENCED_CLEAR: return "sequenced_clear";
@@ -876,6 +888,7 @@ static int build_level_serialized_text(
     lvl.render_style = s->level_render_style;
     lvl.wave_mode = s->level_wave_mode;
     lvl.theme_palette = s->level_theme_palette;
+    lvl.background_style = s->level_background_style;
     lvl.editor_length_screens = level_len;
     lvl.searchlight_count = 0;
     lvl.minefield_count = 0;
@@ -1196,6 +1209,7 @@ static int build_level_serialized_text(
     if (!appendf(out, out_cap, &used, "render_style=%s\n", render_style_name(lvl.render_style))) return 0;
     if (!appendf(out, out_cap, &used, "wave_mode=%s\n", wave_mode_name(lvl.wave_mode))) return 0;
     if (!appendf(out, out_cap, &used, "theme_palette=%d\n", clampi(lvl.theme_palette, 0, 2))) return 0;
+    if (!appendf(out, out_cap, &used, "background=%s\n", background_style_name(clampi(lvl.background_style, LEVELDEF_BACKGROUND_STARS, LEVELDEF_BACKGROUND_SOLID)))) return 0;
     if (!appendf(out, out_cap, &used, "spawn_mode=%s\n", spawn_mode_name(lvl.spawn_mode))) return 0;
     if (!appendf(out, out_cap, &used, "spawn_interval_s=%.3f\n", lvl.spawn_interval_s)) return 0;
     if (lvl.default_boid_profile >= 0 && lvl.default_boid_profile < db->profile_count) {
@@ -1375,7 +1389,7 @@ static int marker_property_count(const level_editor_state* s) {
         return 0;
     }
     if (s->selected_marker < 0 || s->selected_marker >= s->marker_count) {
-        return 4; /* WAVE MODE, RENDER STYLE, THEME, LENGTH */
+        return 5; /* WAVE MODE, RENDER STYLE, THEME, BACKGROUND, LENGTH */
     }
     const int kind = s->markers[s->selected_marker].kind;
     if (kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
@@ -2032,6 +2046,7 @@ void level_editor_init(level_editor_state* s) {
     s->level_render_style = LEVEL_RENDER_BLANK;
     s->level_wave_mode = LEVELDEF_WAVES_NORMAL;
     s->level_theme_palette = 0;
+    s->level_background_style = LEVELDEF_BACKGROUND_NONE;
     s->level_asteroid_storm_enabled = 0;
     s->level_asteroid_storm_angle_deg = 180.0f;
     s->level_asteroid_storm_speed = 190.0f;
@@ -2159,6 +2174,7 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
             s->level_render_style = lvl->render_style;
             s->level_wave_mode = lvl->wave_mode;
             s->level_theme_palette = clampi(lvl->theme_palette, 0, 2);
+            s->level_background_style = clampi(lvl->background_style, LEVELDEF_BACKGROUND_STARS, LEVELDEF_BACKGROUND_SOLID);
             s->level_asteroid_storm_enabled = lvl->asteroid_storm_enabled ? 1 : 0;
             s->level_asteroid_storm_angle_deg = lvl->asteroid_storm_angle_deg;
             s->level_asteroid_storm_speed = lvl->asteroid_storm_speed;
@@ -2166,6 +2182,10 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
             s->level_asteroid_storm_density = lvl->asteroid_storm_density;
             s->level_kamikaze_radius_min = lvl->kamikaze.radius_min;
             s->level_kamikaze_radius_max = lvl->kamikaze.radius_max;
+        } else {
+            s->level_background_style = (s->level_render_style == LEVEL_RENDER_BLANK)
+                ? LEVELDEF_BACKGROUND_NONE
+                : LEVELDEF_BACKGROUND_STARS;
         }
     }
     build_markers(s, db, style, lvl);
@@ -2836,6 +2856,14 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
                 s->level_theme_palette = (p + dir + n) % n;
             } break;
             case 3:
+            {
+                const int dir = (delta >= 0.0f) ? 1 : -1;
+                const int n = LEVELDEF_BACKGROUND_SOLID - LEVELDEF_BACKGROUND_STARS + 1;
+                int bg = clampi(s->level_background_style, LEVELDEF_BACKGROUND_STARS, LEVELDEF_BACKGROUND_SOLID);
+                bg = LEVELDEF_BACKGROUND_STARS + ((bg - LEVELDEF_BACKGROUND_STARS + dir + n) % n);
+                s->level_background_style = bg;
+            } break;
+            case 4:
                 s->level_length_screens = clampf(
                     s->level_length_screens + delta * 1.0f,
                     1.0f,
@@ -3190,6 +3218,7 @@ int level_editor_revert(level_editor_state* s) {
     s->level_render_style = s->snapshot_level_render_style;
     s->level_wave_mode = s->snapshot_level_wave_mode;
     s->level_theme_palette = s->snapshot_level_theme_palette;
+    s->level_background_style = s->snapshot_level_background_style;
     s->level_asteroid_storm_enabled = s->snapshot_level_asteroid_storm_enabled;
     s->level_asteroid_storm_angle_deg = s->snapshot_level_asteroid_storm_angle_deg;
     s->level_asteroid_storm_speed = s->snapshot_level_asteroid_storm_speed;
@@ -3234,6 +3263,7 @@ void level_editor_new_blank(level_editor_state* s) {
     s->level_render_style = LEVEL_RENDER_BLANK;
     s->level_style = LEVEL_STYLE_BLANK;
     s->level_theme_palette = 0;
+    s->level_background_style = LEVELDEF_BACKGROUND_NONE;
     s->level_asteroid_storm_enabled = 0;
     s->level_asteroid_storm_angle_deg = 180.0f;
     s->level_asteroid_storm_speed = 190.0f;
