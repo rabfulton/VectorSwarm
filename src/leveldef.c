@@ -509,6 +509,51 @@ static int parse_missile_launcher(leveldef_level* lvl, const char* value, FILE* 
     return 1;
 }
 
+static int parse_arc_node(leveldef_level* lvl, const char* value, FILE* log_out) {
+    char buf[256];
+    char* tok;
+    char* save = NULL;
+    const int expected = 7;
+    char* fields[7];
+    int i = 0;
+    leveldef_arc_node an;
+
+    if (!lvl || !value || lvl->arc_node_count >= LEVELDEF_MAX_ARC_NODES) {
+        return 0;
+    }
+    memset(&an, 0, sizeof(an));
+    strncpy(buf, value, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    tok = strtok_r(buf, ",", &save);
+    while (tok && i < expected) {
+        fields[i++] = trim(tok);
+        tok = strtok_r(NULL, ",", &save);
+    }
+    if (i != expected) {
+        if (log_out) {
+            fprintf(log_out, "leveldef: arc_node expects %d fields, got %d\n", expected, i);
+        }
+        return 0;
+    }
+
+    an.anchor_x01 = strtof(fields[0], NULL);
+    an.anchor_y01 = strtof(fields[1], NULL);
+    an.period_s = strtof(fields[2], NULL);
+    an.on_s = strtof(fields[3], NULL);
+    an.radius = strtof(fields[4], NULL);
+    an.push_accel = strtof(fields[5], NULL);
+    an.damage_interval_s = strtof(fields[6], NULL);
+    if (an.period_s <= 0.0f || an.on_s < 0.0f || an.radius <= 0.0f || an.push_accel < 0.0f || an.damage_interval_s <= 0.0f) {
+        if (log_out) {
+            fprintf(log_out, "leveldef: invalid arc_node values\n");
+        }
+        return 0;
+    }
+    lvl->arc_nodes[lvl->arc_node_count++] = an;
+    return 1;
+}
+
 static int parse_structure_instance(leveldef_level* lvl, const char* value, FILE* log_out) {
     char buf[320];
     char* tok;
@@ -705,6 +750,7 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_level->searchlight_count = 0;
                         cur_level->minefield_count = 0;
                         cur_level->missile_launcher_count = 0;
+                        cur_level->arc_node_count = 0;
                         cur_level->structure_count = 0;
                         cur_level->curated_count = 0;
                         cur_level->boid_cycle_count = 0;
@@ -882,6 +928,8 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         (void)parse_minefield(cur_level, v, log_out);
                     } else if (strcmp(k, "missile_launcher") == 0) {
                         (void)parse_missile_launcher(cur_level, v, log_out);
+                    } else if (strcmp(k, "arc_node") == 0) {
+                        (void)parse_arc_node(cur_level, v, log_out);
                     } else if (strcmp(k, "structure") == 0) {
                         (void)parse_structure_instance(cur_level, v, log_out);
                     } else if (strcmp(k, "curated_enemy") == 0) {
@@ -1233,6 +1281,28 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
                 ml->blast_radius < 0.0f) {
                 if (log_out) {
                     fprintf(log_out, "leveldef: level %d invalid missile_launcher entry\n", i);
+                }
+                ok = 0;
+                break;
+            }
+        }
+        if (l->arc_node_count < 0 || l->arc_node_count > LEVELDEF_MAX_ARC_NODES) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid arc_node_count\n", i);
+            }
+            ok = 0;
+        }
+        for (int m = 0; m < l->arc_node_count; ++m) {
+            const leveldef_arc_node* an = &l->arc_nodes[m];
+            if (an->anchor_x01 < 0.0f ||
+                an->anchor_y01 < 0.0f || an->anchor_y01 > 1.0f ||
+                an->period_s <= 0.0f ||
+                an->on_s < 0.0f ||
+                an->radius <= 0.0f ||
+                an->push_accel < 0.0f ||
+                an->damage_interval_s <= 0.0f) {
+                if (log_out) {
+                    fprintf(log_out, "leveldef: level %d invalid arc_node entry\n", i);
                 }
                 ok = 0;
                 break;

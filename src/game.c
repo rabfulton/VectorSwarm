@@ -152,6 +152,8 @@ static void update_minefields(game_state* g, float dt);
 static void minefield_apply_emp(game_state* g, float radius);
 static void configure_missile_launchers_for_level(game_state* g);
 static void update_missile_system(game_state* g, float dt);
+static void configure_arc_nodes_for_level(game_state* g);
+static void update_arc_nodes(game_state* g, float dt);
 
 static void game_queue_death_message(game_state* g) {
     if (!g || g->lives > 0) {
@@ -174,6 +176,39 @@ static float dist_sq(float ax, float ay, float bx, float by) {
     const float dx = ax - bx;
     const float dy = ay - by;
     return dx * dx + dy * dy;
+}
+
+static float point_segment_dist_sq(
+    float px,
+    float py,
+    float ax,
+    float ay,
+    float bx,
+    float by,
+    float* out_cx,
+    float* out_cy
+) {
+    const float abx = bx - ax;
+    const float aby = by - ay;
+    const float apx = px - ax;
+    const float apy = py - ay;
+    const float denom = abx * abx + aby * aby;
+    float t = 0.0f;
+    float cx = ax;
+    float cy = ay;
+    if (denom > 1.0e-6f) {
+        t = (apx * abx + apy * aby) / denom;
+        t = clampf(t, 0.0f, 1.0f);
+        cx = ax + abx * t;
+        cy = ay + aby * t;
+    }
+    if (out_cx) {
+        *out_cx = cx;
+    }
+    if (out_cy) {
+        *out_cy = cy;
+    }
+    return dist_sq(px, py, cx, cy);
 }
 
 static void structure_prefab_dims_world(int prefab_id, int* out_w, int* out_h) {
@@ -1268,6 +1303,100 @@ static void configure_missile_launchers_for_level(game_state* g) {
     }
 }
 
+static void configure_arc_nodes_for_level(game_state* g) {
+    if (!g) {
+        return;
+    }
+    memset(g->arc_nodes, 0, sizeof(g->arc_nodes));
+    g->arc_node_count = 0;
+    if (level_uses_cylinder(g)) {
+        return;
+    }
+    const leveldef_level* lvl = current_leveldef(g);
+    if (!lvl || lvl->arc_node_count <= 0) {
+        return;
+    }
+    const float su = gameplay_ui_scale(g);
+    const int n = clampi(lvl->arc_node_count, 0, MAX_ARC_NODES);
+    for (int i = 0; i < n; ++i) {
+        const leveldef_arc_node* src = &lvl->arc_nodes[i];
+        arc_node_runtime* an = &g->arc_nodes[g->arc_node_count++];
+        memset(an, 0, sizeof(*an));
+        an->active = 1;
+        an->x = src->anchor_x01 * g->world_w;
+        an->y = src->anchor_y01 * g->world_h;
+        an->period_s = fmaxf(src->period_s, 0.10f);
+        an->on_s = clampf(src->on_s, 0.0f, an->period_s);
+        an->radius = fmaxf(src->radius, 4.0f) * su;
+        an->push_accel = fmaxf(src->push_accel, 0.0f) * su;
+        an->damage_interval_s = fmaxf(src->damage_interval_s, 0.02f);
+        an->phase_s = (float)(i % 8) * 0.17f;
+        an->damage_timer_s = 0.0f;
+        an->x = clampf(an->x, 0.0f, g->world_w);
+        an->y = clampf(an->y, 0.0f, g->world_h);
+    }
+}
+
+static void update_arc_nodes(game_state* g, float dt) {
+    if (!g || g->arc_node_count < 2 || dt <= 0.0f || g->lives <= 0) {
+        return;
+    }
+    for (int i = 0; i + 1 < g->arc_node_count && i + 1 < MAX_ARC_NODES; i += 2) {
+        arc_node_runtime* a = &g->arc_nodes[i];
+        arc_node_runtime* b = &g->arc_nodes[i + 1];
+        if (!a->active || !b->active) {
+            continue;
+        }
+        const float period = fmaxf(a->period_s, 0.10f);
+        const float on_s = clampf(a->on_s, 0.0f, period);
+        if (on_s <= 0.0f) {
+            continue;
+        }
+        const float t = fmodf(g->t + a->phase_s, period);
+        const int energized = (t <= on_s);
+        if (!energized) {
+            a->damage_timer_s = 0.0f;
+            continue;
+        }
+        a->damage_timer_s -= dt;
+        float cx = 0.0f;
+        float cy = 0.0f;
+        const float d2 = point_segment_dist_sq(
+            g->player.b.x,
+            g->player.b.y,
+            a->x,
+            a->y,
+            b->x,
+            b->y,
+            &cx,
+            &cy
+        );
+        if (d2 > a->radius * a->radius) {
+            continue;
+        }
+        if (a->damage_timer_s > 0.0f) {
+            continue;
+        }
+        a->damage_timer_s = a->damage_interval_s;
+        {
+            float nx = g->player.b.x - cx;
+            float ny = g->player.b.y - cy;
+            normalize2(&nx, &ny);
+            g->player.b.vx += nx * (a->push_accel * dt);
+            g->player.b.vy += ny * (a->push_accel * dt);
+        }
+        if (!g->shield_active) {
+            g->lives -= 1;
+            if (g->lives < 0) {
+                g->lives = 0;
+            }
+            if (g->lives == 0) {
+                game_queue_death_message(g);
+            }
+        }
+    }
+}
+
 static void spawn_enemy_missile_one(game_state* g, missile_launcher* ml) {
     if (!g || !ml || !ml->active || ml->fired) {
         return;
@@ -1716,6 +1845,7 @@ static void apply_level_runtime_config(game_state* g) {
     configure_searchlights_for_level(g);
     configure_minefields_for_level(g);
     configure_missile_launchers_for_level(g);
+    configure_arc_nodes_for_level(g);
     configure_asteroid_storm_for_level(g);
     configure_exit_portal_for_level(g);
 }
@@ -1737,6 +1867,7 @@ static int set_level_index(game_state* g, int index) {
     memset(g->mines, 0, sizeof(g->mines));
     memset(g->missiles, 0, sizeof(g->missiles));
     memset(g->missile_launchers, 0, sizeof(g->missile_launchers));
+    memset(g->arc_nodes, 0, sizeof(g->arc_nodes));
     g->active_particles = 0;
     g->wave_index = 0;
     g->wave_id_alloc = 0;
@@ -1763,6 +1894,7 @@ static int set_level_index(game_state* g, int index) {
     g->mine_count = 0;
     g->missile_count = 0;
     g->missile_launcher_count = 0;
+    g->arc_node_count = 0;
     g->asteroid_storm_active = 0;
     g->asteroid_storm_completed = 0;
     g->asteroid_storm_announced = 0;
@@ -2640,6 +2772,9 @@ void game_update(game_state* g, float dt, const game_input* in) {
     update_asteroid_storm(g, dt);
     if (g->searchlight_count > 0) {
         update_searchlights(g, dt);
+    }
+    if (g->arc_node_count > 1) {
+        update_arc_nodes(g, dt);
     }
     enemy_update_system(g, &g_leveldef, dt, su, level_uses_cylinder(g), cylinder_period(g));
     update_minefields(g, dt);

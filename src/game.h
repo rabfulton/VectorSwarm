@@ -18,6 +18,7 @@
 #define MAX_MINES 256
 #define MAX_MISSILE_LAUNCHERS 64
 #define MAX_MISSILES 256
+#define MAX_ARC_NODES 64
 #define PLAYER_ALT_WEAPON_COUNT 4
 
 struct leveldef_db;
@@ -284,6 +285,19 @@ typedef struct homing_missile {
     float trail_emit_accum;
 } homing_missile;
 
+typedef struct arc_node_runtime {
+    int active;
+    float x;
+    float y;
+    float period_s;
+    float on_s;
+    float radius;
+    float push_accel;
+    float damage_interval_s;
+    float phase_s;
+    float damage_timer_s;
+} arc_node_runtime;
+
 typedef struct game_input {
     int left;
     int right;
@@ -362,6 +376,8 @@ typedef struct game_state {
     int missile_launcher_count;
     homing_missile missiles[MAX_MISSILES];
     int missile_count;
+    arc_node_runtime arc_nodes[MAX_ARC_NODES];
+    int arc_node_count;
     int exit_portal_active;
     float exit_portal_x;
     float exit_portal_y;

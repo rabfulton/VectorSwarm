@@ -22,7 +22,8 @@ enum level_editor_marker_kind {
     LEVEL_EDITOR_MARKER_ASTEROID_STORM = 6,
     LEVEL_EDITOR_MARKER_MINEFIELD = 7,
     LEVEL_EDITOR_MARKER_MISSILE = 8,
-    LEVEL_EDITOR_MARKER_STRUCTURE = 9
+    LEVEL_EDITOR_MARKER_STRUCTURE = 9,
+    LEVEL_EDITOR_MARKER_ARC_NODE = 13
 };
 
 enum level_editor_marker_track {
@@ -68,6 +69,7 @@ typedef struct level_editor_layout {
     vg_rect asteroid_button;
     vg_rect mine_button;
     vg_rect missile_button;
+    vg_rect arc_button;
     vg_rect construction_button_0;
     vg_rect construction_button_1;
     vg_rect construction_button_2;

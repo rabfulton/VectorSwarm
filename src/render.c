@@ -1141,6 +1141,87 @@ static vg_result draw_searchlights(
     return VG_OK;
 }
 
+static int arc_pair_energized(const arc_node_runtime* a, float t) {
+    if (!a || !a->active) {
+        return 0;
+    }
+    const float period = fmaxf(a->period_s, 0.10f);
+    const float on_s = clampf(a->on_s, 0.0f, period);
+    if (on_s <= 0.0f) {
+        return 0;
+    }
+    return (fmodf(t + a->phase_s, period) <= on_s) ? 1 : 0;
+}
+
+static vg_result draw_arc_nodes(
+    vg_context* ctx,
+    const game_state* g,
+    const palette_theme* pal,
+    const vg_stroke_style* land_halo,
+    const vg_stroke_style* land_main,
+    int draw_beam
+) {
+    if (!ctx || !g || !pal || !land_halo || !land_main || g->arc_node_count < 2) {
+        return VG_OK;
+    }
+    for (int i = 0; i + 1 < g->arc_node_count && i + 1 < MAX_ARC_NODES; i += 2) {
+        const arc_node_runtime* a = &g->arc_nodes[i];
+        const arc_node_runtime* b = &g->arc_nodes[i + 1];
+        if (!a->active || !b->active) {
+            continue;
+        }
+        const int energized = arc_pair_energized(a, g->t);
+        vg_stroke_style node = *land_main;
+        node.width_px *= 1.06f;
+        node.intensity *= energized ? 1.18f : 0.72f;
+        node.color = energized ? pal->secondary : pal->primary_dim;
+        const vg_vec2 p0[2] = {{a->x - 8.0f, a->y}, {a->x + 8.0f, a->y}};
+        const vg_vec2 p1[2] = {{b->x - 8.0f, b->y}, {b->x + 8.0f, b->y}};
+        vg_result r = vg_draw_polyline(ctx, p0, 2, &node, 0);
+        if (r != VG_OK) return r;
+        r = vg_draw_polyline(ctx, p1, 2, &node, 0);
+        if (r != VG_OK) return r;
+        if (!draw_beam || !energized) {
+            continue;
+        }
+        const float period = fmaxf(a->period_s, 0.10f);
+        const float on_s = clampf(a->on_s, 0.0f, period);
+        float pulse = 1.0f;
+        if (on_s > 0.0f) {
+            const float phase = fmodf(g->t + a->phase_s, period);
+            const float t_on = clampf(phase / on_s, 0.0f, 1.0f);
+            pulse = 0.65f + 0.35f * (1.0f - t_on);
+        }
+        vg_stroke_style arc_halo = *land_halo;
+        vg_stroke_style arc_main = *land_main;
+        arc_halo.width_px *= 1.10f;
+        arc_main.width_px *= 1.05f;
+        arc_halo.intensity *= (0.90f + 0.20f * pulse);
+        arc_main.intensity *= (1.00f + 0.20f * pulse);
+        arc_halo.color = pal->primary_dim;
+        arc_main.color = pal->secondary;
+        const int seg_n = 14;
+        for (int strand = 0; strand < 2; ++strand) {
+            vg_vec2 arc[14];
+            const float strand_off = (strand == 0) ? -1.2f : 1.2f;
+            for (int k = 0; k < seg_n; ++k) {
+                const float u = (float)k / (float)(seg_n - 1);
+                const float x = a->x + (b->x - a->x) * u;
+                const float y = a->y + (b->y - a->y) * u;
+                const float jag = 2.2f + 2.3f * pulse;
+                const float j0 = sinf(g->t * (42.0f + 2.0f * strand) + (float)i * 0.71f + (float)k * 1.77f);
+                const float j1 = sinf(g->t * 9.0f + (float)i * 0.43f + (float)k * 0.87f);
+                arc[k] = (vg_vec2){x, y + strand_off + j0 * jag + j1 * 1.35f};
+            }
+            vg_result r = vg_draw_polyline(ctx, arc, seg_n, &arc_halo, 0);
+            if (r != VG_OK) return r;
+            r = vg_draw_polyline(ctx, arc, seg_n, &arc_main, 0);
+            if (r != VG_OK) return r;
+        }
+    }
+    return VG_OK;
+}
+
 static vg_result draw_exit_portal(
     vg_context* ctx,
     const game_state* g,
@@ -3601,6 +3682,7 @@ static const char* level_editor_marker_name(int kind) {
         case 6: return "ASTEROID STORM";
         case 7: return "MINEFIELD";
         case 8: return "MISSILE LAUNCHER";
+        case 13: return "ARC NODE";
         case 9: return "STRUCTURE";
         default: return "MARKER";
     }
@@ -3621,6 +3703,9 @@ static vg_color level_editor_marker_color(const palette_theme* pal, int kind) {
     }
     if (kind == 8) {
         return (vg_color){1.0f, 0.34f, 0.18f, 1.0f};
+    }
+    if (kind == 13) {
+        return (vg_color){0.95f, 0.82f, 0.24f, 1.0f};
     }
     if (kind == 9) {
         return (vg_color){0.48f, 0.90f, 1.0f, 1.0f};
@@ -4042,6 +4127,16 @@ static int editor_marker_properties_text(
         if (n < cap) { out_labels[n] = "TTL S"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_d[sel]); n++; }
         return n;
     }
+    if (kind == 13) {
+        if (n < cap) { out_labels[n] = "POS X"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "POS Y"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "PERIOD S"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_a[sel]); n++; }
+        if (n < cap) { out_labels[n] = "ON S"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_b[sel]); n++; }
+        if (n < cap) { out_labels[n] = "RADIUS"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_marker_c[sel]); n++; }
+        if (n < cap) { out_labels[n] = "PUSH"; snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_d[sel]); n++; }
+        if (n < cap) { out_labels[n] = "DAMAGE INT"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_e[sel]); n++; }
+        return n;
+    }
     if (kind == 9) {
         if (n < cap) { out_labels[n] = "POS X"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
         if (n < cap) { out_labels[n] = "POS Y"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
@@ -4144,6 +4239,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     const vg_rect asteroid_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 158.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
     const vg_rect mine_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 210.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
     const vg_rect missile_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 262.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
+    const vg_rect arc_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 314.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
     const float ctb_x = construction_toolbar.x + 8.0f * ui;
     const float ctb_y = construction_toolbar.y + 3.0f * ui;
     const float ctb_w = construction_toolbar.w - 16.0f * ui;
@@ -4258,6 +4354,8 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     if (r != VG_OK) return r;
     r = draw_ui_button_shaded(ctx, missile_btn, "MISSILES", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 8 ? 1 : 0);
     if (r != VG_OK) return r;
+    r = draw_ui_button_shaded(ctx, arc_btn, "ARC NODE", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 13 ? 1 : 0);
+    if (r != VG_OK) return r;
     {
         vg_stroke_style icon = frame;
         icon.width_px = 1.2f * ui;
@@ -4322,6 +4420,27 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 {x0 + 4.0f * ui, y0 - 6.0f * ui}
             };
             r = vg_draw_polyline(ctx, tri, 4, &mis, 1);
+            if (r != VG_OK) return r;
+        }
+        {
+            vg_stroke_style as = icon;
+            const vg_vec2 seg[2] = {
+                {arc_btn.x + 10.0f * ui, arc_btn.y + arc_btn.h * 0.50f},
+                {arc_btn.x + 28.0f * ui, arc_btn.y + arc_btn.h * 0.50f}
+            };
+            const vg_vec2 n0[2] = {
+                {arc_btn.x + 10.0f * ui, arc_btn.y + arc_btn.h * 0.50f},
+                {arc_btn.x + 13.0f * ui, arc_btn.y + arc_btn.h * 0.50f}
+            };
+            const vg_vec2 n1[2] = {
+                {arc_btn.x + 25.0f * ui, arc_btn.y + arc_btn.h * 0.50f},
+                {arc_btn.x + 28.0f * ui, arc_btn.y + arc_btn.h * 0.50f}
+            };
+            r = vg_draw_polyline(ctx, seg, 2, &as, 0);
+            if (r != VG_OK) return r;
+            r = vg_draw_polyline(ctx, n0, 2, &as, 0);
+            if (r != VG_OK) return r;
+            r = vg_draw_polyline(ctx, n1, 2, &as, 0);
             if (r != VG_OK) return r;
         }
     }
@@ -4549,6 +4668,23 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                     {vx - 8.0f * sx, vy - 6.0f * sx}
                 };
                 r = vg_draw_polyline(ctx, tri, 4, &mk, 1);
+            } else if (kind == 13) {
+                const float rr = fmaxf(metrics->level_editor_marker_c[i], 8.0f * ui) * 0.16f;
+                const vg_vec2 n0[2] = {{vx - rr, vy}, {vx - rr * 0.65f, vy}};
+                const vg_vec2 n1[2] = {{vx + rr * 0.65f, vy}, {vx + rr, vy}};
+                const vg_vec2 arc[6] = {
+                    {vx - rr * 0.25f, vy},
+                    {vx - rr * 0.10f, vy - rr * 0.20f},
+                    {vx + rr * 0.05f, vy + rr * 0.12f},
+                    {vx + rr * 0.20f, vy - rr * 0.18f},
+                    {vx + rr * 0.32f, vy + rr * 0.10f},
+                    {vx + rr * 0.45f, vy}
+                };
+                r = vg_draw_polyline(ctx, n0, 2, &mk, 0);
+                if (r != VG_OK) return r;
+                r = vg_draw_polyline(ctx, n1, 2, &mk, 0);
+                if (r != VG_OK) return r;
+                r = vg_draw_polyline(ctx, arc, 6, &mk, 0);
             } else if (kind == 9) {
                 const int prefab = (int)lroundf(metrics->level_editor_marker_a[i]);
                 const int layer = (int)lroundf(metrics->level_editor_marker_b[i]);
@@ -4563,16 +4699,20 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 {
                     const float len_screens = fmaxf(metrics->level_editor_level_length_screens, 1.0f);
                     const float start_screen = clampf(metrics->level_editor_timeline_01, 0.0f, 1.0f) * fmaxf(len_screens - 1.0f, 0.0f);
+                    const float view_min_local = start_screen / len_screens;
+                    const float view_max_local = (start_screen + 1.0f) / len_screens;
+                    const float view_span_local = fmaxf(view_max_local - view_min_local, 1.0e-6f);
                     const int gx_steps_total = editor_structure_grid_steps_x(len_screens);
                     const int gy_steps = editor_structure_grid_steps_y();
-                    const int view_gx0 = clampi((int)lroundf((start_screen / len_screens) * (float)gx_steps_total), 0, gx_steps_total);
                     const int gx = clampi((int)lroundf(mx01 * (float)gx_steps_total), 0, gx_steps_total);
                     const int gy = clampi((int)lroundf(my01 * (float)gy_steps), 0, gy_steps);
-                    const float gx_span = (float)gx_steps_total / fmaxf(len_screens, 1.0f);
-                    const float cell_w = viewport.w / fmaxf(gx_span, 1.0f);
+                    const float x0 = (float)gx / (float)gx_steps_total;
+                    const float y0 = (float)gy / (float)gy_steps;
+                    const float visible_x_steps = (float)gx_steps_total * view_span_local;
+                    const float cell_w = viewport.w / fmaxf(visible_x_steps, 1.0f);
                     const float cell_h = viewport.h / (float)gy_steps;
-                    const float bx = viewport.x + (float)(gx - view_gx0) * cell_w;
-                    const float by = viewport.y + (float)gy * cell_h;
+                    const float bx = viewport.x + ((x0 - view_min_local) / view_span_local) * viewport.w;
+                    const float by = viewport.y + y0 * viewport.h;
                     vg_fill_style fill = {
                         .intensity = 0.55f,
                         .color = (vg_color){pal.primary_dim.r, pal.primary_dim.g, pal.primary_dim.b, 0.15f},
@@ -4721,7 +4861,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     );
     if (r != VG_OK) return r;
     if (metrics->level_editor_drag_active &&
-        (metrics->level_editor_drag_kind == 5 || metrics->level_editor_drag_kind == 10 || metrics->level_editor_drag_kind == 11 || metrics->level_editor_drag_kind == 12 || metrics->level_editor_drag_kind == 1 || metrics->level_editor_drag_kind == 6 || metrics->level_editor_drag_kind == 7 || metrics->level_editor_drag_kind == 8 || metrics->level_editor_drag_kind == 9)) {
+        (metrics->level_editor_drag_kind == 5 || metrics->level_editor_drag_kind == 10 || metrics->level_editor_drag_kind == 11 || metrics->level_editor_drag_kind == 12 || metrics->level_editor_drag_kind == 1 || metrics->level_editor_drag_kind == 6 || metrics->level_editor_drag_kind == 7 || metrics->level_editor_drag_kind == 8 || metrics->level_editor_drag_kind == 9 || metrics->level_editor_drag_kind == 13)) {
         vg_stroke_style gs = frame;
         gs.intensity = 1.2f;
         gs.color = level_editor_marker_color(&pal, metrics->level_editor_drag_kind);
@@ -4752,6 +4892,29 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 {metrics->level_editor_drag_x - 8.0f * sx, metrics->level_editor_drag_y - 6.0f * sx}
             };
             r = vg_draw_polyline(ctx, tri, 4, &gs, 1);
+        } else if (metrics->level_editor_drag_kind == 13) {
+            const float rr = 10.0f * ui;
+            const vg_vec2 n0[2] = {
+                {metrics->level_editor_drag_x - rr, metrics->level_editor_drag_y},
+                {metrics->level_editor_drag_x - rr * 0.65f, metrics->level_editor_drag_y}
+            };
+            const vg_vec2 n1[2] = {
+                {metrics->level_editor_drag_x + rr * 0.65f, metrics->level_editor_drag_y},
+                {metrics->level_editor_drag_x + rr, metrics->level_editor_drag_y}
+            };
+            const vg_vec2 arc[6] = {
+                {metrics->level_editor_drag_x - rr * 0.25f, metrics->level_editor_drag_y},
+                {metrics->level_editor_drag_x - rr * 0.10f, metrics->level_editor_drag_y - rr * 0.20f},
+                {metrics->level_editor_drag_x + rr * 0.05f, metrics->level_editor_drag_y + rr * 0.12f},
+                {metrics->level_editor_drag_x + rr * 0.20f, metrics->level_editor_drag_y - rr * 0.18f},
+                {metrics->level_editor_drag_x + rr * 0.32f, metrics->level_editor_drag_y + rr * 0.10f},
+                {metrics->level_editor_drag_x + rr * 0.45f, metrics->level_editor_drag_y}
+            };
+            r = vg_draw_polyline(ctx, n0, 2, &gs, 0);
+            if (r != VG_OK) return r;
+            r = vg_draw_polyline(ctx, n1, 2, &gs, 0);
+            if (r != VG_OK) return r;
+            r = vg_draw_polyline(ctx, arc, 6, &gs, 0);
         } else if (metrics->level_editor_drag_kind == 9) {
             const int prefab = metrics->level_editor_structure_tool_selected > 0
                 ? (metrics->level_editor_structure_tool_selected - 1)
@@ -4761,19 +4924,21 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             const float start_screen = clampf(metrics->level_editor_timeline_01, 0.0f, 1.0f) * fmaxf(len_screens - 1.0f, 0.0f);
             const float view_min = start_screen / len_screens;
             const float view_max = (start_screen + 1.0f) / len_screens;
+            const float view_span = fmaxf(view_max - view_min, 1.0e-6f);
             const int gx_steps_total = editor_structure_grid_steps_x(len_screens);
             const int gy_steps = editor_structure_grid_steps_y();
-            const int view_gx0 = clampi((int)lroundf((start_screen / len_screens) * (float)gx_steps_total), 0, gx_steps_total);
             const float mx01 = clampf((metrics->level_editor_drag_x - viewport.x) / fmaxf(viewport.w, 1.0f), 0.0f, 1.0f);
             const float my01 = clampf((metrics->level_editor_drag_y - viewport.y) / fmaxf(viewport.h, 1.0f), 0.0f, 1.0f);
             const float x01 = view_min + mx01 * fmaxf(view_max - view_min, 1.0e-6f);
-            const int gx = clampi((int)lroundf(x01 * (float)gx_steps_total), 0, gx_steps_total);
-            const int gy = clampi((int)lroundf(my01 * (float)gy_steps), 0, gy_steps);
-            const float gx_span = (float)gx_steps_total / fmaxf(len_screens, 1.0f);
-            const float cell_w = viewport.w / fmaxf(gx_span, 1.0f);
+            const int gx = clampi((int)floorf(x01 * (float)gx_steps_total + 1.0e-6f), 0, gx_steps_total);
+            const int gy = clampi((int)floorf(my01 * (float)gy_steps + 1.0e-6f), 0, gy_steps);
+            const float gx01 = (float)gx / (float)gx_steps_total;
+            const float gy01 = (float)gy / (float)gy_steps;
+            const float visible_x_steps = (float)gx_steps_total * view_span;
+            const float cell_w = viewport.w / fmaxf(visible_x_steps, 1.0f);
             const float cell_h = viewport.h / (float)gy_steps;
-            const float bx = viewport.x + (float)(gx - view_gx0) * cell_w;
-            const float by = viewport.y + (float)gy * cell_h;
+            const float bx = viewport.x + ((gx01 - view_min) / view_span) * viewport.w;
+            const float by = viewport.y + gy01 * viewport.h;
             gs.color = (layer == 0) ? pal.primary_dim : pal.secondary;
             {
                 vg_fill_style fill = {
@@ -7475,6 +7640,13 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
 
     if (g->searchlight_count > 0) {
         r = draw_searchlights(ctx, g, &pal, intensity_scale, &land_halo, &land_main);
+        if (r != VG_OK) {
+            (void)vg_transform_pop(ctx);
+            return r;
+        }
+    }
+    if (g->arc_node_count > 1) {
+        r = draw_arc_nodes(ctx, g, &pal, &land_halo, &land_main, metrics->use_gpu_arc ? 0 : 1);
         if (r != VG_OK) {
             (void)vg_transform_pop(ctx);
             return r;
