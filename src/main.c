@@ -6321,7 +6321,7 @@ static void update_gpu_particle_instances(app* a) {
         const leveldef_level* lvl = game_current_leveldef(g);
         if (lvl && lvl->structure_count > 0 && g->render_style != LEVEL_RENDER_CYLINDER) {
             const float unit_w = g->world_w * (float)LEVELDEF_STRUCTURE_GRID_SCALE / (float)(LEVELDEF_STRUCTURE_GRID_W - 1);
-            const float unit_h = g->world_h * (float)LEVELDEF_STRUCTURE_GRID_SCALE / (float)(LEVELDEF_STRUCTURE_GRID_H - 1);
+            const float unit_h = g->world_h / (float)((LEVELDEF_STRUCTURE_GRID_H - 1) / LEVELDEF_STRUCTURE_GRID_SCALE);
             for (int i = 0; i < lvl->structure_count && i < LEVELDEF_MAX_STRUCTURES; ++i) {
                 const leveldef_structure_instance* st = &lvl->structures[i];
                 if (st->layer <= 0 || st->prefab_id < 7) {
@@ -6768,10 +6768,13 @@ static void record_gpu_arc_beam(app* a, VkCommandBuffer cmd, float t) {
     if (!a || !cmd || !a->arc_beam_pipeline || !a->arc_beam_layout) {
         return;
     }
+    (void)t;
     const game_state* g = &a->game;
+    const float gt = g->t;
     if (g->arc_node_count < 2 || g->render_style == LEVEL_RENDER_CYLINDER) {
         return;
     }
+    static float trace_last_t = -1000.0f;
 
     set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->arc_beam_pipeline);
@@ -6790,19 +6793,28 @@ static void record_gpu_arc_beam(app* a, VkCommandBuffer cmd, float t) {
         col_hot[0] = 0.20f; col_hot[1] = 0.82f; col_hot[2] = 0.32f;
     }
 
-    const float to_shader_y = (float)a->swapchain_extent.height;
     for (int i = 0; i + 1 < g->arc_node_count && i + 1 < MAX_ARC_NODES; i += 2) {
         const arc_node_runtime* n0 = &g->arc_nodes[i];
         const arc_node_runtime* n1 = &g->arc_nodes[i + 1];
-        if (!n0->active || !n1->active || !arc_pair_energized_gpu(n0, t)) {
+        if (!n0->active || !n1->active || !arc_pair_energized_gpu(n0, gt)) {
             continue;
+        }
+        float pulse = 1.0f;
+        {
+            const float period = fmaxf(n0->period_s, 0.10f);
+            const float on_s = clampf(n0->on_s, 0.0f, period);
+            if (on_s > 0.0f) {
+                const float phase = fmodf(gt + n0->phase_s, period);
+                const float t_on = clampf(phase / on_s, 0.0f, 1.0f);
+                pulse = 0.65f + 0.35f * (1.0f - t_on);
+            }
         }
         arc_beam_pc pc;
         memset(&pc, 0, sizeof(pc));
         pc.p0[0] = (float)a->swapchain_extent.width;
         pc.p0[1] = (float)a->swapchain_extent.height;
-        pc.p0[2] = t;
-        pc.p0[3] = 1.00f;
+        pc.p0[2] = gt;
+        pc.p0[3] = 1.20f + 0.40f * pulse;
         pc.color_dim[0] = col_dim[0];
         pc.color_dim[1] = col_dim[1];
         pc.color_dim[2] = col_dim[2];
@@ -6810,9 +6822,26 @@ static void record_gpu_arc_beam(app* a, VkCommandBuffer cmd, float t) {
         pc.color_hot[1] = col_hot[1];
         pc.color_hot[2] = col_hot[2];
         pc.seg[0] = n0->x + g->world_w * 0.5f - g->camera_x;
-        pc.seg[1] = to_shader_y - (n0->y + g->world_h * 0.5f - g->camera_y);
+        pc.seg[1] = n0->y + g->world_h * 0.5f - g->camera_y;
         pc.seg[2] = n1->x + g->world_w * 0.5f - g->camera_x;
-        pc.seg[3] = to_shader_y - (n1->y + g->world_h * 0.5f - g->camera_y);
+        pc.seg[3] = n1->y + g->world_h * 0.5f - g->camera_y;
+        if (i == 0 && (gt - trace_last_t) >= 0.5f) {
+            fprintf(
+                stderr,
+                "[arc_trace] gpu_draw cam=(%.3f,%.3f) n0_world=(%.3f,%.3f) n1_world=(%.3f,%.3f) seg_screen=(%.3f,%.3f)->(%.3f,%.3f)\n",
+                g->camera_x,
+                g->camera_y,
+                n0->x,
+                n0->y,
+                n1->x,
+                n1->y,
+                pc.seg[0],
+                pc.seg[1],
+                pc.seg[2],
+                pc.seg[3]
+            );
+            trace_last_t = gt;
+        }
         pc.p1[0] = clampf(n0->radius * 0.16f, 4.0f, 22.0f);
         pc.p1[1] = clampf(n0->radius * 0.40f, 5.0f, 30.0f);
         pc.p1[2] = (float)i * 0.173f + 0.37f;

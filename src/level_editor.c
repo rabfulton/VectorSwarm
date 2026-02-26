@@ -1006,6 +1006,16 @@ static int build_level_serialized_text(
         an.push_accel = fmaxf(m->d, 0.0f);
         an.damage_interval_s = fmaxf(m->e, 0.02f);
         lvl.arc_nodes[lvl.arc_node_count++] = an;
+        fprintf(
+            stderr,
+            "[arc_trace] editor->level marker idx=%d x01=%.6f y01=%.6f level_len=%.6f save_anchor_x01=%.6f save_anchor_y01=%.6f\n",
+            i,
+            m->x01,
+            m->y01,
+            level_len,
+            an.anchor_x01,
+            an.anchor_y01
+        );
     }
     lvl.structure_count = 0;
     for (i = 0; i < s->marker_count && lvl.structure_count < LEVELDEF_MAX_STRUCTURES; ++i) {
@@ -1285,7 +1295,7 @@ static int build_level_serialized_text(
     for (i = 0; i < lvl.searchlight_count; ++i) {
         const leveldef_searchlight* sl = &lvl.searchlights[i];
         if (!appendf(out, out_cap, &used,
-            "searchlight=%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%s,%s,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
+            "searchlight=%.6f,%.6f,%.6f,%.3f,%.3f,%.3f,%.3f,%.3f,%s,%s,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
             sl->anchor_x01, sl->anchor_y01, sl->length_h01, sl->half_angle_deg, sl->sweep_center_deg,
             sl->sweep_amplitude_deg, sl->sweep_speed, sl->sweep_phase_deg, searchlight_motion_name(sl->sweep_motion),
             searchlight_source_name(sl->source_type), sl->source_radius, sl->clear_grace_s, sl->fire_interval_s,
@@ -1297,7 +1307,7 @@ static int build_level_serialized_text(
                 out,
                 out_cap,
                 &used,
-                "minefield=%.3f,%.3f,%d\n",
+                "minefield=%.6f,%.6f,%d\n",
                 mf->anchor_x01,
                 mf->anchor_y01,
                 mf->count)) return 0;
@@ -1308,7 +1318,7 @@ static int build_level_serialized_text(
                 out,
                 out_cap,
                 &used,
-                "missile_launcher=%.3f,%.3f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
+                "missile_launcher=%.6f,%.6f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
                 ml->anchor_x01,
                 ml->anchor_y01,
                 ml->count,
@@ -1326,7 +1336,7 @@ static int build_level_serialized_text(
                 out,
                 out_cap,
                 &used,
-                "arc_node=%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
+                "arc_node=%.6f,%.6f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
                 an->anchor_x01,
                 an->anchor_y01,
                 an->period_s,
@@ -1882,6 +1892,16 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
         );
         if (s->marker_count > before) {
             s->markers[s->marker_count - 1].e = an->damage_interval_s;
+            fprintf(
+                stderr,
+                "[arc_trace] level->editor arc idx=%d anchor_x01=%.6f anchor_y01=%.6f level_len=%.6f marker_x01=%.6f marker_y01=%.6f\n",
+                i,
+                an->anchor_x01,
+                an->anchor_y01,
+                fmaxf(s->level_length_screens, 1.0f),
+                s->markers[s->marker_count - 1].x01,
+                s->markers[s->marker_count - 1].y01
+            );
         }
     }
     for (int i = 0; i < lvl->structure_count; ++i) {

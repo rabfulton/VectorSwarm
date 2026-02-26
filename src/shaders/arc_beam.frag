@@ -48,9 +48,13 @@ void main() {
     vec2 base = a + ab * t;
     vec2 perp = normalize(vec2(-ab.y, ab.x));
 
-    float n0 = fbm(vec2(t * 13.0 + pc.p1.z, pc.p0.z * 13.5 + pc.p1.z * 0.37));
-    float n1 = fbm(vec2(t * 23.0 - pc.p1.z * 0.6, -pc.p0.z * 19.0 + pc.p1.z * 0.91));
-    float jag = (n0 - 0.5) * pc.p1.y + (n1 - 0.5) * (pc.p1.y * 0.65);
+    float ph = pc.p0.z;
+    float s0 = sin(ph * 43.0 + t * 22.0 + pc.p1.z * 7.1);
+    float s1 = sin(ph * 67.0 - t * 35.0 + pc.p1.z * 3.7);
+    float s2 = sin(ph * 29.0 + t * 61.0 + pc.p1.z * 11.3);
+    float jag_raw = (s0 * 0.58 + s1 * 0.30 + s2 * 0.20) * pc.p1.y;
+    float end_taper = smoothstep(0.0, 0.08, t) * smoothstep(0.0, 0.08, 1.0 - t);
+    float jag = jag_raw * end_taper;
     vec2 center = base + perp * jag;
 
     float d = length(frag - center);
@@ -58,7 +62,7 @@ void main() {
     float core = exp(-(d * d) / max(radius * radius * 0.08, 1e-4));
     float halo = exp(-(d * d) / max(radius * radius * 1.6, 1e-4));
     float edge = smoothstep(0.0, 0.05, t) * smoothstep(0.0, 0.08, 1.0 - t);
-    float flicker = 0.86 + 0.14 * sin(pc.p0.z * 41.0 + t * 33.0 + pc.p1.z * 7.0);
+    float flicker = 0.90 + 0.10 * sin(pc.p0.z * 41.0 + t * 33.0 + pc.p1.z * 7.0);
     float intensity = clamp(pc.p0.w, 0.0, 4.0);
 
     float alpha = (core * 0.92 + halo * 0.36) * edge * flicker * intensity;

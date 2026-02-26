@@ -1181,6 +1181,13 @@ static vg_result draw_arc_nodes(
         if (r != VG_OK) return r;
         r = vg_draw_polyline(ctx, p1, 2, &node, 0);
         if (r != VG_OK) return r;
+        {
+            vg_fill_style dot = make_fill(0.98f, energized ? pal->secondary : pal->primary_dim, VG_BLEND_ALPHA);
+            r = vg_fill_circle(ctx, (vg_vec2){a->x, a->y}, 1.9f, &dot, 12);
+            if (r != VG_OK) return r;
+            r = vg_fill_circle(ctx, (vg_vec2){b->x, b->y}, 1.9f, &dot, 12);
+            if (r != VG_OK) return r;
+        }
         if (!draw_beam || !energized) {
             continue;
         }
@@ -1474,7 +1481,7 @@ static vg_result draw_level_structures(
     base_fill.color.a = fminf(base_fill.color.a, 0.22f);
 
     const float unit_w = g->world_w * (float)LEVELDEF_STRUCTURE_GRID_SCALE / (float)(LEVELDEF_STRUCTURE_GRID_W - 1);
-    const float unit_h = g->world_h * (float)LEVELDEF_STRUCTURE_GRID_SCALE / (float)(LEVELDEF_STRUCTURE_GRID_H - 1);
+    const float unit_h = g->world_h / (float)((LEVELDEF_STRUCTURE_GRID_H - 1) / LEVELDEF_STRUCTURE_GRID_SCALE);
     const float view_min_x = g->camera_x - g->world_w * 0.58f;
     const float view_max_x = g->camera_x + g->world_w * 0.58f;
     const float view_min_y = g->camera_y - g->world_h * 0.58f;
@@ -4673,11 +4680,11 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 const vg_vec2 n0[2] = {{vx - rr, vy}, {vx - rr * 0.65f, vy}};
                 const vg_vec2 n1[2] = {{vx + rr * 0.65f, vy}, {vx + rr, vy}};
                 const vg_vec2 arc[6] = {
-                    {vx - rr * 0.25f, vy},
-                    {vx - rr * 0.10f, vy - rr * 0.20f},
-                    {vx + rr * 0.05f, vy + rr * 0.12f},
-                    {vx + rr * 0.20f, vy - rr * 0.18f},
-                    {vx + rr * 0.32f, vy + rr * 0.10f},
+                    {vx - rr * 0.45f, vy},
+                    {vx - rr * 0.28f, vy - rr * 0.20f},
+                    {vx - rr * 0.10f, vy + rr * 0.12f},
+                    {vx + rr * 0.10f, vy - rr * 0.18f},
+                    {vx + rr * 0.28f, vy + rr * 0.10f},
                     {vx + rr * 0.45f, vy}
                 };
                 r = vg_draw_polyline(ctx, n0, 2, &mk, 0);
@@ -4685,6 +4692,15 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 r = vg_draw_polyline(ctx, n1, 2, &mk, 0);
                 if (r != VG_OK) return r;
                 r = vg_draw_polyline(ctx, arc, 6, &mk, 0);
+                if (r != VG_OK) return r;
+                {
+                    vg_fill_style af = {
+                        .intensity = 0.95f,
+                        .color = (vg_color){mk.color.r, mk.color.g, mk.color.b, 0.98f},
+                        .blend = VG_BLEND_ALPHA
+                    };
+                    r = vg_fill_circle(ctx, (vg_vec2){vx, vy}, 1.7f * ui, &af, 12);
+                }
             } else if (kind == 9) {
                 const int prefab = (int)lroundf(metrics->level_editor_marker_a[i]);
                 const int layer = (int)lroundf(metrics->level_editor_marker_b[i]);
@@ -4903,11 +4919,11 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 {metrics->level_editor_drag_x + rr, metrics->level_editor_drag_y}
             };
             const vg_vec2 arc[6] = {
-                {metrics->level_editor_drag_x - rr * 0.25f, metrics->level_editor_drag_y},
-                {metrics->level_editor_drag_x - rr * 0.10f, metrics->level_editor_drag_y - rr * 0.20f},
-                {metrics->level_editor_drag_x + rr * 0.05f, metrics->level_editor_drag_y + rr * 0.12f},
-                {metrics->level_editor_drag_x + rr * 0.20f, metrics->level_editor_drag_y - rr * 0.18f},
-                {metrics->level_editor_drag_x + rr * 0.32f, metrics->level_editor_drag_y + rr * 0.10f},
+                {metrics->level_editor_drag_x - rr * 0.45f, metrics->level_editor_drag_y},
+                {metrics->level_editor_drag_x - rr * 0.28f, metrics->level_editor_drag_y - rr * 0.20f},
+                {metrics->level_editor_drag_x - rr * 0.10f, metrics->level_editor_drag_y + rr * 0.12f},
+                {metrics->level_editor_drag_x + rr * 0.10f, metrics->level_editor_drag_y - rr * 0.18f},
+                {metrics->level_editor_drag_x + rr * 0.28f, metrics->level_editor_drag_y + rr * 0.10f},
                 {metrics->level_editor_drag_x + rr * 0.45f, metrics->level_editor_drag_y}
             };
             r = vg_draw_polyline(ctx, n0, 2, &gs, 0);
@@ -4915,6 +4931,15 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             r = vg_draw_polyline(ctx, n1, 2, &gs, 0);
             if (r != VG_OK) return r;
             r = vg_draw_polyline(ctx, arc, 6, &gs, 0);
+            if (r != VG_OK) return r;
+            {
+                vg_fill_style af = {
+                    .intensity = 0.95f,
+                    .color = (vg_color){gs.color.r, gs.color.g, gs.color.b, 0.98f},
+                    .blend = VG_BLEND_ALPHA
+                };
+                r = vg_fill_circle(ctx, (vg_vec2){metrics->level_editor_drag_x, metrics->level_editor_drag_y}, 1.7f * ui, &af, 12);
+            }
         } else if (metrics->level_editor_drag_kind == 9) {
             const int prefab = metrics->level_editor_structure_tool_selected > 0
                 ? (metrics->level_editor_structure_tool_selected - 1)

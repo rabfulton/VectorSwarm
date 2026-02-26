@@ -248,7 +248,7 @@ static void structure_aabb_world(
     }
     structure_prefab_dims_world(st->prefab_id, &w_units, &h_units);
     unit_w = g->world_w * (float)LEVELDEF_STRUCTURE_GRID_SCALE / (float)(LEVELDEF_STRUCTURE_GRID_W - 1);
-    unit_h = g->world_h * (float)LEVELDEF_STRUCTURE_GRID_SCALE / (float)(LEVELDEF_STRUCTURE_GRID_H - 1);
+    unit_h = g->world_h / (float)((LEVELDEF_STRUCTURE_GRID_H - 1) / LEVELDEF_STRUCTURE_GRID_SCALE);
     bx = (float)st->grid_x * unit_w;
     by = (float)st->grid_y * unit_h;
     bw = unit_w * (float)w_units;
@@ -509,7 +509,7 @@ int game_structure_segment_blocked(const game_state* g, float x0, float y0, floa
         pad_radius = 0.0f;
     }
     unit_w = g->world_w * (float)LEVELDEF_STRUCTURE_GRID_SCALE / (float)(LEVELDEF_STRUCTURE_GRID_W - 1);
-    unit_h = g->world_h * (float)LEVELDEF_STRUCTURE_GRID_SCALE / (float)(LEVELDEF_STRUCTURE_GRID_H - 1);
+    unit_h = g->world_h / (float)((LEVELDEF_STRUCTURE_GRID_H - 1) / LEVELDEF_STRUCTURE_GRID_SCALE);
     min_x = fminf(x0, x1) - pad_radius;
     min_y = fminf(y0, y1) - pad_radius;
     max_x = fmaxf(x0, x1) + pad_radius;
@@ -1332,8 +1332,18 @@ static void configure_arc_nodes_for_level(game_state* g) {
         an->damage_interval_s = fmaxf(src->damage_interval_s, 0.02f);
         an->phase_s = (float)(i % 8) * 0.17f;
         an->damage_timer_s = 0.0f;
-        an->x = clampf(an->x, 0.0f, g->world_w);
-        an->y = clampf(an->y, 0.0f, g->world_h);
+        fprintf(
+            stderr,
+            "[arc_trace] game_config level='%s' idx=%d anchor_x01=%.6f anchor_y01=%.6f world=(%.3f,%.3f) world_size=(%.1f,%.1f)\n",
+            g->current_level_name,
+            i,
+            src->anchor_x01,
+            src->anchor_y01,
+            an->x,
+            an->y,
+            g->world_w,
+            g->world_h
+        );
     }
 }
 
