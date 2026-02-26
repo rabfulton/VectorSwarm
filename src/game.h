@@ -250,12 +250,16 @@ typedef enum missile_owner_type {
 
 typedef struct missile_launcher {
     int active;
+    int triggered;
     int fired;
+    int launched_count;
     float anchor_x;
     float anchor_y;
     int count;
     float spacing;
     float activation_range;
+    float launch_interval_s;
+    float launch_timer_s;
     float missile_speed;
     float missile_turn_rate_deg;
     float missile_ttl_s;

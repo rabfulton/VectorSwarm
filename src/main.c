@@ -7069,6 +7069,16 @@ int main(void) {
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_QUIT) {
                 running = 0;
+            } else if (ev.type == SDL_KEYDOWN && ev.key.repeat &&
+                       menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR) &&
+                       (ev.key.keysym.sym == SDLK_LEFT || ev.key.keysym.sym == SDLK_RIGHT)) {
+                const float step = (ev.key.keysym.mod & KMOD_SHIFT) ? 10.0f : 1.0f;
+                if (ev.key.keysym.sym == SDLK_LEFT) {
+                    level_editor_adjust_selected_property(&a.level_editor, -step);
+                } else {
+                    level_editor_adjust_selected_property(&a.level_editor, step);
+                }
+                apply_level_editor_runtime(&a);
             } else if (ev.type == SDL_KEYDOWN && !ev.key.repeat) {
                 if (menu_is_screen(&a.menu, APP_SCREEN_CONTROLS) && a.controls_rebinding_action >= 0) {
                     if (ev.key.keysym.sym == SDLK_ESCAPE) {
@@ -7339,9 +7349,9 @@ int main(void) {
                 } else if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR) && ev.key.keysym.sym == SDLK_BACKSPACE) {
                     level_editor_backspace(&a.level_editor);
                 } else if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR) && ev.key.keysym.sym == SDLK_UP) {
-                    level_editor_select_marker(&a.level_editor, -1);
+                    level_editor_select_property(&a.level_editor, -1);
                 } else if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR) && ev.key.keysym.sym == SDLK_DOWN) {
-                    level_editor_select_marker(&a.level_editor, 1);
+                    level_editor_select_property(&a.level_editor, 1);
                 } else if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR) && ev.key.keysym.sym == SDLK_TAB) {
                     level_editor_select_property(&a.level_editor, 1);
                 } else if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR) && ev.key.keysym.sym == SDLK_COMMA) {
@@ -7353,11 +7363,11 @@ int main(void) {
                     (void)level_editor_cycle_level(&a.level_editor, db, 1);
                     apply_level_editor_runtime(&a);
                 } else if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR) && ev.key.keysym.sym == SDLK_LEFT) {
-                    const float step = (ev.key.keysym.mod & KMOD_SHIFT) ? 0.05f : 0.01f;
+                    const float step = (ev.key.keysym.mod & KMOD_SHIFT) ? 10.0f : 1.0f;
                     level_editor_adjust_selected_property(&a.level_editor, -step);
                     apply_level_editor_runtime(&a);
                 } else if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR) && ev.key.keysym.sym == SDLK_RIGHT) {
-                    const float step = (ev.key.keysym.mod & KMOD_SHIFT) ? 0.05f : 0.01f;
+                    const float step = (ev.key.keysym.mod & KMOD_SHIFT) ? 10.0f : 1.0f;
                     level_editor_adjust_selected_property(&a.level_editor, step);
                     apply_level_editor_runtime(&a);
                 } else if (menu_is_screen(&a.menu, APP_SCREEN_LEVEL_EDITOR) && ev.key.keysym.sym == SDLK_r) {

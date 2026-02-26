@@ -1242,12 +1242,16 @@ static void configure_missile_launchers_for_level(game_state* g) {
         missile_launcher* ml = &g->missile_launchers[g->missile_launcher_count++];
         memset(ml, 0, sizeof(*ml));
         ml->active = 1;
+        ml->triggered = 0;
         ml->fired = 0;
+        ml->launched_count = 0;
         ml->anchor_x = d->anchor_x01 * g->world_w;
         ml->anchor_y = d->anchor_y01 * g->world_h;
         ml->count = clampi(d->count, 1, 24);
         ml->spacing = fmaxf(d->spacing, 0.0f) * su;
         ml->activation_range = fmaxf(d->activation_range, 20.0f) * su;
+        ml->launch_interval_s = 0.5f;
+        ml->launch_timer_s = 0.0f;
         ml->missile_speed = fmaxf(d->missile_speed, 10.0f);
         ml->missile_turn_rate_deg = fmaxf(d->missile_turn_rate_deg, 1.0f);
         ml->missile_ttl_s = fmaxf(d->missile_ttl_s, 0.1f);
@@ -1264,33 +1268,38 @@ static void configure_missile_launchers_for_level(game_state* g) {
     }
 }
 
-static void spawn_enemy_missile_row(game_state* g, missile_launcher* ml) {
+static void spawn_enemy_missile_one(game_state* g, missile_launcher* ml) {
     if (!g || !ml || !ml->active || ml->fired) {
+        return;
+    }
+    if (ml->launched_count < 0 || ml->launched_count >= ml->count) {
+        ml->fired = 1;
         return;
     }
     const float su = gameplay_ui_scale(g);
     const float half = ((float)ml->count - 1.0f) * 0.5f;
-    for (int k = 0; k < ml->count; ++k) {
-        homing_missile* m = alloc_missile(g);
-        if (!m) {
-            break;
-        }
-        const float slot = ((float)k - half);
-        m->owner = MISSILE_OWNER_ENEMY;
-        m->b.x = ml->anchor_x + slot * ml->spacing;
-        m->b.y = ml->anchor_y;
-        m->heading_rad = 1.57079632679f;
-        m->speed = ml->missile_speed * su;
-        m->turn_rate_rad_s = deg_to_rad(ml->missile_turn_rate_deg);
-        m->ttl_s = ml->missile_ttl_s;
-        m->hit_radius = ml->hit_radius * su;
-        m->blast_radius = ml->blast_radius * su;
-        m->radius = 10.0f * su;
-        m->trail_emit_accum = 0.0f;
-        m->b.vx = cosf(m->heading_rad) * m->speed;
-        m->b.vy = sinf(m->heading_rad) * m->speed;
+    homing_missile* m = alloc_missile(g);
+    if (!m) {
+        return;
     }
-    ml->fired = 1;
+    const float slot = ((float)ml->launched_count - half);
+    m->owner = MISSILE_OWNER_ENEMY;
+    m->b.x = ml->anchor_x + slot * ml->spacing;
+    m->b.y = ml->anchor_y;
+    m->heading_rad = 1.57079632679f;
+    m->speed = ml->missile_speed * su;
+    m->turn_rate_rad_s = deg_to_rad(ml->missile_turn_rate_deg);
+    m->ttl_s = ml->missile_ttl_s;
+    m->hit_radius = ml->hit_radius * su;
+    m->blast_radius = ml->blast_radius * su;
+    m->radius = 10.0f * su;
+    m->trail_emit_accum = 0.0f;
+    m->b.vx = cosf(m->heading_rad) * m->speed;
+    m->b.vy = sinf(m->heading_rad) * m->speed;
+    ml->launched_count += 1;
+    if (ml->launched_count >= ml->count) {
+        ml->fired = 1;
+    }
 }
 
 static void spawn_player_missile(game_state* g) {
@@ -1342,15 +1351,25 @@ static void update_missile_system(game_state* g, float dt) {
             if (!ml->active || ml->fired) {
                 continue;
             }
-            if (dist_sq(g->player.b.x, g->player.b.y, ml->anchor_x, ml->anchor_y) <= ml->activation_range * ml->activation_range &&
-                game_line_of_sight_clear(
-                    g,
-                    ml->anchor_x,
-                    ml->anchor_y,
-                    g->player.b.x,
-                    g->player.b.y,
-                    5.0f * gameplay_ui_scale(g))) {
-                spawn_enemy_missile_row(g, ml);
+            if (!ml->triggered) {
+                if (dist_sq(g->player.b.x, g->player.b.y, ml->anchor_x, ml->anchor_y) <= ml->activation_range * ml->activation_range &&
+                    game_line_of_sight_clear(
+                        g,
+                        ml->anchor_x,
+                        ml->anchor_y,
+                        g->player.b.x,
+                        g->player.b.y,
+                        5.0f * gameplay_ui_scale(g))) {
+                    ml->triggered = 1;
+                    ml->launch_timer_s = 0.0f;
+                }
+            }
+            if (ml->triggered && !ml->fired) {
+                ml->launch_timer_s -= dt;
+                if (ml->launch_timer_s <= 0.0f) {
+                    spawn_enemy_missile_one(g, ml);
+                    ml->launch_timer_s += fmaxf(0.05f, ml->launch_interval_s);
+                }
             }
         }
     }

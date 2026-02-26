@@ -925,9 +925,9 @@ static int build_level_serialized_text(
             continue;
         }
         memset(&sl, 0, sizeof(sl));
-        sl.sweep_motion = SEARCHLIGHT_MOTION_PENDULUM;
-        sl.source_type = SEARCHLIGHT_SOURCE_DOME;
-        sl.source_radius = 14.0f;
+        sl.sweep_motion = clampi((int)lroundf(m->g), SEARCHLIGHT_MOTION_LINEAR, SEARCHLIGHT_MOTION_SPIN);
+        sl.source_type = clampi((int)lroundf(m->e), SEARCHLIGHT_SOURCE_DOME, SEARCHLIGHT_SOURCE_ORB);
+        sl.source_radius = (m->f > 0.0f) ? m->f : 14.0f;
         sl.clear_grace_s = 2.0f;
         sl.fire_interval_s = 0.08f;
         sl.projectile_speed = 900.0f;
@@ -939,7 +939,7 @@ static int build_level_serialized_text(
         sl.length_h01 = m->a;
         sl.half_angle_deg = m->b;
         sl.sweep_speed = m->c;
-        sl.sweep_amplitude_deg = m->d;
+        sl.sweep_amplitude_deg = m->d * 0.5f;
         lvl.searchlights[searchlight_n++] = sl;
     }
     lvl.searchlight_count = searchlight_n;
@@ -1325,7 +1325,7 @@ static int marker_property_count(const level_editor_state* s) {
         return 6; /* event: ORDER,DELAY,DUR,ANGLE,SPEED,DENSITY | spatial: X,Y,DUR,ANGLE,SPEED,DENSITY */
     }
     if (kind == LEVEL_EDITOR_MARKER_SEARCHLIGHT) {
-        return 6;
+        return 9;
     }
     if (kind == LEVEL_EDITOR_MARKER_MINEFIELD) {
         return 3;
@@ -1755,6 +1755,7 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
 
     for (int i = 0; i < lvl->searchlight_count; ++i) {
         const leveldef_searchlight* sl = &lvl->searchlights[i];
+        const int before = s->marker_count;
         push_marker(
             s,
             LEVEL_EDITOR_MARKER_SEARCHLIGHT,
@@ -1766,8 +1767,14 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
             sl->length_h01,
             sl->half_angle_deg,
             sl->sweep_speed,
-            sl->sweep_amplitude_deg
+            sl->sweep_amplitude_deg * 2.0f
         );
+        if (s->marker_count > before) {
+            level_editor_marker* m = &s->markers[s->marker_count - 1];
+            m->e = (float)sl->source_type;
+            m->f = sl->source_radius;
+            m->g = (float)sl->sweep_motion;
+        }
     }
     for (int i = 0; i < lvl->minefield_count; ++i) {
         const leveldef_minefield* mf = &lvl->minefields[i];
@@ -2120,7 +2127,14 @@ static void add_marker_at_view(
     const float x01 = view_min + clampf(view_x01, 0.0f, 1.0f) * fmaxf(view_max - view_min, 1.0e-6f);
     const float y01 = clampf(view_y01, 0.0f, 1.0f);
     if (kind == LEVEL_EDITOR_MARKER_SEARCHLIGHT) {
+        const int before = s->marker_count;
         push_marker(s, LEVEL_EDITOR_MARKER_SEARCHLIGHT, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, x01, y01, 0.36f, 12.0f, 1.2f, 45.0f);
+        if (s->marker_count > before) {
+            level_editor_marker* m = &s->markers[s->marker_count - 1];
+            m->e = (float)SEARCHLIGHT_SOURCE_DOME;
+            m->f = 14.0f;
+            m->g = (float)SEARCHLIGHT_MOTION_PENDULUM;
+        }
     } else if (is_boid_wave_kind(kind)) {
         if (s->level_wave_mode != LEVELDEF_WAVES_CURATED) {
             s->level_wave_mode = LEVELDEF_WAVES_CURATED;
@@ -2180,7 +2194,14 @@ static void add_spatial_marker_at_x01(level_editor_state* s, int kind, float x01
     const float xx = clampf(x01, 0.0f, 1.0f);
     const float yy = clampf(y01, 0.0f, 1.0f);
     if (kind == LEVEL_EDITOR_MARKER_SEARCHLIGHT) {
+        const int before = s->marker_count;
         push_marker(s, LEVEL_EDITOR_MARKER_SEARCHLIGHT, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, xx, yy, 0.36f, 12.0f, 1.2f, 45.0f);
+        if (s->marker_count > before) {
+            level_editor_marker* m = &s->markers[s->marker_count - 1];
+            m->e = (float)SEARCHLIGHT_SOURCE_DOME;
+            m->f = 14.0f;
+            m->g = (float)SEARCHLIGHT_MOTION_PENDULUM;
+        }
     } else if (is_boid_wave_kind(kind)) {
         if (s->level_wave_mode != LEVELDEF_WAVES_CURATED) {
             s->level_wave_mode = LEVELDEF_WAVES_CURATED;
@@ -2723,7 +2744,7 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             } break;
             case 3:
                 s->level_length_screens = clampf(
-                    s->level_length_screens + delta * 20.0f,
+                    s->level_length_screens + delta * 1.0f,
                     1.0f,
                     400.0f
                 );
@@ -2744,13 +2765,13 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
                 else move_marker_x(s, s->selected_marker, delta);
                 break;
             case 1:
-                if (ev_item) m->delay_s = fmaxf(0.0f, m->delay_s + delta * 20.0f);
+                if (ev_item) m->delay_s = fmaxf(0.0f, m->delay_s + delta * 0.1f);
                 else m->y01 = clampf(m->y01 + delta, 0.0f, 1.0f);
                 break;
-            case 2: m->a = fmaxf(0.01f, m->a + delta * 60.0f); break;
-            case 3: m->b += delta * 180.0f; break;
-            case 4: m->c = clampf(m->c + delta * 480.0f, 1.0f, 4000.0f); break;
-            case 5: m->d = clampf(m->d + delta * 6.0f, 0.01f, 8.0f); break;
+            case 2: m->a = fmaxf(0.01f, m->a + delta * 0.5f); break;
+            case 3: m->b += delta * 1.0f; break;
+            case 4: m->c = clampf(m->c + delta * 10.0f, 1.0f, 4000.0f); break;
+            case 5: m->d = clampf(m->d + delta * 0.05f, 0.01f, 8.0f); break;
             default: break;
         }
         mark_editor_dirty(s);
@@ -2761,10 +2782,25 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
         switch (s->selected_property) {
             case 0: move_marker_x(s, s->selected_marker, delta); break;
             case 1: m->y01 = clampf(m->y01 + delta, 0.0f, 1.0f); break;
-            case 2: m->a += delta; break;
-            case 3: m->b += delta * 20.0f; break;
-            case 4: m->c += delta * 5.0f; break;
-            case 5: m->d += delta * 20.0f; break;
+            case 2: m->a = clampf(m->a + delta * 0.01f, 0.05f, 2.5f); break;
+            case 3: m->b = clampf(m->b + delta * 1.0f, 1.0f, 179.0f); break;
+            case 4: m->c = clampf(m->c + delta * 0.1f, 0.01f, 50.0f); break;
+            case 5: m->d = clampf(m->d + delta * 1.0f, 0.0f, 360.0f); break;
+            case 6: {
+                const int dir = (delta >= 0.0f) ? 1 : -1;
+                const int n = 3;
+                int mode = clampi((int)lroundf(m->g), 0, n - 1);
+                mode = (mode + dir + n) % n;
+                m->g = (float)mode;
+            } break;
+            case 7: {
+                const int dir = (delta >= 0.0f) ? 1 : -1;
+                const int n = 2;
+                int src = clampi((int)lroundf(m->e), 0, n - 1);
+                src = (src + dir + n) % n;
+                m->e = (float)src;
+            } break;
+            case 8: m->f = clampf(m->f + delta * 1.0f, 4.0f, 120.0f); break;
             default: break;
         }
         mark_editor_dirty(s);
@@ -2774,7 +2810,7 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
         switch (s->selected_property) {
             case 0: move_marker_x(s, s->selected_marker, delta); break;
             case 1: m->y01 = clampf(m->y01 + delta, 0.0f, 1.0f); break;
-            case 2: m->a = clampf(m->a + delta * 24.0f, 1.0f, 128.0f); break;
+            case 2: m->a = clampf(m->a + delta * 1.0f, 1.0f, 128.0f); break;
             default: break;
         }
         mark_editor_dirty(s);
@@ -2784,10 +2820,10 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
         switch (s->selected_property) {
             case 0: move_marker_x(s, s->selected_marker, delta); break;
             case 1: m->y01 = clampf(m->y01 + delta, 0.0f, 1.0f); break;
-            case 2: m->a = clampf(m->a + delta * 24.0f, 1.0f, 128.0f); break;
-            case 3: m->b = clampf(m->b + delta * 220.0f, 0.0f, 400.0f); break;
-            case 4: m->c = clampf(m->c + delta * 900.0f, 20.0f, 2500.0f); break;
-            case 5: m->d = clampf(m->d + delta * 10.0f, 0.20f, 30.0f); break;
+            case 2: m->a = clampf(m->a + delta * 1.0f, 1.0f, 128.0f); break;
+            case 3: m->b = clampf(m->b + delta * 5.0f, 0.0f, 400.0f); break;
+            case 4: m->c = clampf(m->c + delta * 10.0f, 20.0f, 2500.0f); break;
+            case 5: m->d = clampf(m->d + delta * 0.1f, 0.20f, 30.0f); break;
             default: break;
         }
         mark_editor_dirty(s);
@@ -2812,9 +2848,9 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
                 flip ^= 1;
                 m->d = (float)flip;
             } break;
-            case 6: m->e = clampf(m->e + delta * 4.0f, 0.10f, 6.00f); break;
-            case 7: m->f = clampf(m->f + delta * 4.0f, 0.10f, 6.00f); break;
-            case 8: m->g = clampf(m->g + delta * 4.0f, 0.20f, 8.00f); break;
+            case 6: m->e = clampf(m->e + delta * 0.1f, 0.10f, 6.00f); break;
+            case 7: m->f = clampf(m->f + delta * 0.1f, 0.10f, 6.00f); break;
+            case 8: m->g = clampf(m->g + delta * 0.1f, 0.20f, 8.00f); break;
             default: break;
         }
         m->x01 = snap_x01_level(m->x01, s->level_length_screens);
@@ -2860,37 +2896,37 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
                 else move_marker_x(s, s->selected_marker, delta);
                 break;
             case 2:
-                if (ev_item) m->delay_s = fmaxf(0.0f, m->delay_s + delta * 20.0f);
+                if (ev_item) m->delay_s = fmaxf(0.0f, m->delay_s + delta * 0.1f);
                 else m->y01 = clampf(m->y01 + delta, 0.0f, 1.0f);
                 break;
-            case 3: m->a += delta * 80.0f; break;
-            case 4: m->b += delta * 30.0f; break;
-            case 5: m->c += delta * 30.0f; break;
+            case 3: m->a += delta * 1.0f; break;
+            case 4: m->b += delta * 5.0f; break;
+            case 5: m->c += delta * 5.0f; break;
             case 6:
                 if (boid_item) {
-                    m->d = clampf(m->d + delta * 240.0f, 10.0f, 720.0f);
+                    m->d = clampf(m->d + delta * 1.0f, 10.0f, 720.0f);
                 } else if (m->kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
-                    s->level_kamikaze_radius_min = clampf(s->level_kamikaze_radius_min + delta * 30.0f, 1.0f, 200.0f);
+                    s->level_kamikaze_radius_min = clampf(s->level_kamikaze_radius_min + delta * 1.0f, 1.0f, 200.0f);
                     if (s->level_kamikaze_radius_max < s->level_kamikaze_radius_min) {
                         s->level_kamikaze_radius_max = s->level_kamikaze_radius_min;
                     }
                 } else if (!ev_item) {
-                    m->delay_s = fmaxf(0.0f, m->delay_s + delta * 40.0f);
+                    m->delay_s = fmaxf(0.0f, m->delay_s + delta * 0.1f);
                 }
                 break;
             case 7:
                 if (m->kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
-                    s->level_kamikaze_radius_max = clampf(s->level_kamikaze_radius_max + delta * 30.0f, 1.0f, 240.0f);
+                    s->level_kamikaze_radius_max = clampf(s->level_kamikaze_radius_max + delta * 1.0f, 1.0f, 240.0f);
                     if (s->level_kamikaze_radius_max < s->level_kamikaze_radius_min) {
                         s->level_kamikaze_radius_min = s->level_kamikaze_radius_max;
                     }
                 } else if (boid_item && !ev_item) {
-                    m->delay_s = fmaxf(0.0f, m->delay_s + delta * 40.0f);
+                    m->delay_s = fmaxf(0.0f, m->delay_s + delta * 0.1f);
                 }
                 break;
             case 8:
                 if (m->kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE && !ev_item) {
-                    m->delay_s = fmaxf(0.0f, m->delay_s + delta * 40.0f);
+                    m->delay_s = fmaxf(0.0f, m->delay_s + delta * 0.1f);
                 }
                 break;
             default: break;

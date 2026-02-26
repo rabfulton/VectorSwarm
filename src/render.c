@@ -1676,6 +1676,9 @@ static vg_result draw_missile_system(
             l_main.color = (vg_color){1.0f, 0.32f, 0.32f, 0.96f};
             const float half = ((float)ml->count - 1.0f) * 0.5f;
             for (int k = 0; k < ml->count; ++k) {
+                if (k < ml->launched_count) {
+                    continue;
+                }
                 const float slot = (float)k - half;
                 const float x = ml->anchor_x + slot * ml->spacing;
                 const float y = ml->anchor_y;
@@ -3875,6 +3878,19 @@ static const char* editor_wave_mode_name(int mode) {
     return "NORMAL";
 }
 
+static const char* editor_searchlight_motion_name(float v) {
+    const int mode = (int)lroundf(v);
+    if (mode == 0) return "LINEAR";
+    if (mode == 2) return "SPIN";
+    return "PENDULUM";
+}
+
+static const char* editor_searchlight_source_name(float v) {
+    const int src = (int)lroundf(v);
+    if (src == 1) return "ORB";
+    return "DOME";
+}
+
 static const char* editor_render_style_name(int style) {
     if (style == LEVEL_RENDER_CYLINDER) return "CYLINDER";
     if (style == LEVEL_RENDER_DRIFTER) return "DRIFTER";
@@ -3903,17 +3919,20 @@ static int editor_marker_properties_text(
     }
     int n = 0;
     if (kind == 1) {
-        if (n < cap) { out_labels[n] = "POS X01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
-        if (n < cap) { out_labels[n] = "POS Y01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
-        if (n < cap) { out_labels[n] = "LENGTH H01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_a[sel]); n++; }
-        if (n < cap) { out_labels[n] = "HALF ANGLE DEG"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_b[sel]); n++; }
-        if (n < cap) { out_labels[n] = "SWEEP SPEED"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_c[sel]); n++; }
-        if (n < cap) { out_labels[n] = "SWEEP AMP DEG"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_d[sel]); n++; }
+        if (n < cap) { out_labels[n] = "POS X"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "POS Y"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "LENGTH"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_a[sel]); n++; }
+        if (n < cap) { out_labels[n] = "BEAM WIDTH"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_marker_b[sel]); n++; }
+        if (n < cap) { out_labels[n] = "SWEEP SPEED"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_c[sel]); n++; }
+        if (n < cap) { out_labels[n] = "SWEEP ANGLE"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_marker_d[sel]); n++; }
+        if (n < cap) { out_labels[n] = "TYPE"; snprintf(out_values[n], 32, "%s", editor_searchlight_motion_name(metrics->level_editor_marker_g[sel])); n++; }
+        if (n < cap) { out_labels[n] = "SOURCE"; snprintf(out_values[n], 32, "%s", editor_searchlight_source_name(metrics->level_editor_marker_e[sel])); n++; }
+        if (n < cap) { out_labels[n] = "SIZE"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_marker_f[sel]); n++; }
         return n;
     }
     if (kind == 0) {
-        if (n < cap) { out_labels[n] = "POS X01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
-        if (n < cap) { out_labels[n] = "POS Y01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "POS X"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "POS Y"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
         return n;
     }
     if (kind == 6) {
@@ -3922,8 +3941,8 @@ static int editor_marker_properties_text(
             if (n < cap) { out_labels[n] = "ORDER"; snprintf(out_values[n], 32, "%d", metrics->level_editor_marker_order[sel]); n++; }
             if (n < cap) { out_labels[n] = "DELAY S"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_delay_s[sel]); n++; }
         } else {
-            if (n < cap) { out_labels[n] = "POS X01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
-            if (n < cap) { out_labels[n] = "POS Y01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
+            if (n < cap) { out_labels[n] = "POS X"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
+            if (n < cap) { out_labels[n] = "POS Y"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
         }
         if (n < cap) { out_labels[n] = "DURATION S"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_a[sel]); n++; }
         if (n < cap) { out_labels[n] = "ANGLE DEG"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_marker_b[sel]); n++; }
@@ -3932,14 +3951,14 @@ static int editor_marker_properties_text(
         return n;
     }
     if (kind == 7) {
-        if (n < cap) { out_labels[n] = "POS X01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
-        if (n < cap) { out_labels[n] = "POS Y01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "POS X"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "POS Y"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
         if (n < cap) { out_labels[n] = "COUNT"; snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_a[sel]); n++; }
         return n;
     }
     if (kind == 8) {
-        if (n < cap) { out_labels[n] = "POS X01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
-        if (n < cap) { out_labels[n] = "POS Y01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "POS X"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "POS Y"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
         if (n < cap) { out_labels[n] = "COUNT"; snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_a[sel]); n++; }
         if (n < cap) { out_labels[n] = "SPACING"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_marker_b[sel]); n++; }
         if (n < cap) { out_labels[n] = "ACT RANGE"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_marker_c[sel]); n++; }
@@ -3947,8 +3966,8 @@ static int editor_marker_properties_text(
         return n;
     }
     if (kind == 9) {
-        if (n < cap) { out_labels[n] = "POS X01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
-        if (n < cap) { out_labels[n] = "POS Y01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "POS X"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "POS Y"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
         if (n < cap) { out_labels[n] = "PREFAB"; snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_a[sel]); n++; }
         if (n < cap) { out_labels[n] = "LAYER"; snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_b[sel]); n++; }
         if (n < cap) { out_labels[n] = "ROT"; snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_c[sel]); n++; }
@@ -3967,8 +3986,8 @@ static int editor_marker_properties_text(
             if (n < cap) { out_labels[n] = "ORDER"; snprintf(out_values[n], 32, "%d", metrics->level_editor_marker_order[sel]); n++; }
             if (n < cap) { out_labels[n] = "DELAY S"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_delay_s[sel]); n++; }
         } else {
-            if (n < cap) { out_labels[n] = "POS X01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
-            if (n < cap) { out_labels[n] = "POS Y01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
+            if (n < cap) { out_labels[n] = "POS X"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
+            if (n < cap) { out_labels[n] = "POS Y"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
         }
         if (n < cap) { out_labels[n] = "COUNT"; snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_a[sel]); n++; }
         if (n < cap) {
@@ -3988,8 +4007,8 @@ static int editor_marker_properties_text(
         return n;
     }
 
-    if (n < cap) { out_labels[n] = "POS X01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
-    if (n < cap) { out_labels[n] = "POS Y01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
+    if (n < cap) { out_labels[n] = "POS X"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
+    if (n < cap) { out_labels[n] = "POS Y"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
     if (kind == 1) {
         if (n < cap) { out_labels[n] = "LENGTH H01"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_a[sel]); n++; }
         if (n < cap) { out_labels[n] = "HALF ANGLE DEG"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_b[sel]); n++; }
@@ -4360,12 +4379,26 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             const float vy = viewport.y + my01 * viewport.h;
             const float glyph_scale = (i == selected) ? 1.20f : 1.0f;
             if (kind == 1) {
-                const float len = fmaxf(metrics->level_editor_marker_a[i] * viewport.h, 24.0f * ui);
+                const float len = fmaxf(metrics->level_editor_marker_a[i] * viewport.h, 8.0f * ui);
                 const float half_deg = fmaxf(metrics->level_editor_marker_b[i], 2.0f);
                 const float sweep_speed = metrics->level_editor_marker_c[i];
-                const float sweep_amp = fmaxf(metrics->level_editor_marker_d[i], 1.0f);
+                const float sweep_angle_deg = fmaxf(metrics->level_editor_marker_d[i], 0.0f);
+                const float sweep_amp = sweep_angle_deg * 0.5f;
+                const int sweep_type = clampi((int)lroundf(metrics->level_editor_marker_g[i]), 0, 2);
                 const float base = 1.5707963f;
-                const float a_center = base + sinf(t_s * sweep_speed) * (sweep_amp * (3.14159265f / 180.0f));
+                const float phase = t_s * sweep_speed;
+                float q = 0.0f;
+                if (sweep_type == 2) {
+                    q = 0.0f;
+                } else if (sweep_type == 0) {
+                    const float tri = (2.0f / 3.14159265359f) * asinf(sinf(phase));
+                    q = clampf(tri, -1.0f, 1.0f);
+                } else {
+                    q = sinf(phase);
+                }
+                const float a_center = (sweep_type == 2)
+                    ? (base + phase)
+                    : (base + q * (sweep_amp * (3.14159265f / 180.0f)));
                 const float half = half_deg * (3.14159265f / 180.0f);
                 const float a0 = a_center - half;
                 const float a1 = a_center + half;
