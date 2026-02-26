@@ -185,7 +185,9 @@ typedef enum game_audio_event_type {
     GAME_AUDIO_EVENT_ENEMY_FIRE = 1,
     GAME_AUDIO_EVENT_EXPLOSION = 2,
     GAME_AUDIO_EVENT_SEARCHLIGHT_FIRE = 3,
-    GAME_AUDIO_EVENT_EMP = 4
+    GAME_AUDIO_EVENT_EMP = 4,
+    GAME_AUDIO_EVENT_LIGHTNING = 5,
+    GAME_AUDIO_EVENT_FX2 = 6
 } game_audio_event_type;
 
 typedef struct game_audio_event {
@@ -296,6 +298,8 @@ typedef struct arc_node_runtime {
     float damage_interval_s;
     float phase_s;
     float damage_timer_s;
+    float sound_timer_s;
+    int energized_prev;
 } arc_node_runtime;
 
 typedef struct game_input {
@@ -384,6 +388,9 @@ typedef struct game_state {
     float exit_portal_radius;
     float shield_time_remaining_s;
     int shield_active;
+    int lightning_active;
+    float lightning_audio_gain;
+    float lightning_audio_pan;
     float shield_radius;
     float mine_push_ax;
     float mine_push_ay;

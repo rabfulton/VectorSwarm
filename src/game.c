@@ -37,6 +37,11 @@ static float clampf(float v, float lo, float hi) {
     return v;
 }
 
+static float smoothstepf(float edge0, float edge1, float x) {
+    const float t = clampf((x - edge0) / (edge1 - edge0), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
 static leveldef_db g_leveldef;
 static int g_leveldef_ready = 0;
 static char g_level_dir[256];
@@ -1332,6 +1337,8 @@ static void configure_arc_nodes_for_level(game_state* g) {
         an->damage_interval_s = fmaxf(src->damage_interval_s, 0.02f);
         an->phase_s = (float)(i % 8) * 0.17f;
         an->damage_timer_s = 0.0f;
+        an->sound_timer_s = 0.0f;
+        an->energized_prev = 0;
         fprintf(
             stderr,
             "[arc_trace] game_config level='%s' idx=%d anchor_x01=%.6f anchor_y01=%.6f world=(%.3f,%.3f) world_size=(%.1f,%.1f)\n",
@@ -1351,6 +1358,9 @@ static void update_arc_nodes(game_state* g, float dt) {
     if (!g || g->arc_node_count < 2 || dt <= 0.0f || g->lives <= 0) {
         return;
     }
+    g->lightning_active = 0;
+    g->lightning_audio_gain = 0.0f;
+    g->lightning_audio_pan = 0.0f;
     for (int i = 0; i + 1 < g->arc_node_count && i + 1 < MAX_ARC_NODES; i += 2) {
         arc_node_runtime* a = &g->arc_nodes[i];
         arc_node_runtime* b = &g->arc_nodes[i + 1];
@@ -1366,9 +1376,10 @@ static void update_arc_nodes(game_state* g, float dt) {
         const int energized = (t <= on_s);
         if (!energized) {
             a->damage_timer_s = 0.0f;
+            a->sound_timer_s = 0.0f;
+            a->energized_prev = 0;
             continue;
         }
-        a->damage_timer_s -= dt;
         float cx = 0.0f;
         float cy = 0.0f;
         const float d2 = point_segment_dist_sq(
@@ -1381,6 +1392,39 @@ static void update_arc_nodes(game_state* g, float dt) {
             &cx,
             &cy
         );
+        {
+            float sx = 0.0f;
+            float sy = 0.0f;
+            const float d2_screen = point_segment_dist_sq(
+                g->camera_x,
+                g->camera_y,
+                a->x,
+                a->y,
+                b->x,
+                b->y,
+                &sx,
+                &sy
+            );
+        const float hear_radius = fmaxf(a->radius * 2.2f, g->world_w * 1.20f);
+        const float full_radius = fmaxf(a->radius * 0.65f, g->world_w * 0.08f);
+            const float d = sqrtf(fmaxf(d2_screen, 0.0f));
+        const float near01 = 1.0f - smoothstepf(full_radius, hear_radius, d);
+        const int audible = (near01 > 0.0f);
+        if (audible) {
+            g->lightning_active = 1;
+            if (near01 > g->lightning_audio_gain) {
+                const float gate_x = 0.5f * (a->x + b->x);
+                const float pan = clampf((gate_x - g->player.b.x) / (g->world_w * 0.45f), -1.0f, 1.0f);
+                g->lightning_audio_gain = near01;
+                g->lightning_audio_pan = pan;
+            }
+            if (!a->energized_prev) {
+                game_push_audio_event(g, GAME_AUDIO_EVENT_LIGHTNING, 0.5f * (a->x + b->x), 0.5f * (a->y + b->y));
+            }
+        }
+        }
+        a->energized_prev = 1;
+        a->damage_timer_s -= dt;
         if (d2 > a->radius * a->radius) {
             continue;
         }
@@ -1895,6 +1939,9 @@ static int set_level_index(game_state* g, int index) {
     g->mine_push_ay = 0.0f;
     g->mine_push_time_s = 0.0f;
     g->shield_active = 0;
+    g->lightning_active = 0;
+    g->lightning_audio_gain = 0.0f;
+    g->lightning_audio_pan = 0.0f;
     g->emp_effect_active = 0;
     g->emp_effect_t = 0.0f;
     g->emp_effect_duration_s = 0.0f;
@@ -2318,6 +2365,9 @@ void game_init(game_state* g, float world_w, float world_h) {
     g->alt_weapon_ammo[PLAYER_ALT_WEAPON_REAR_GUN] = 180;
     g->shield_time_remaining_s = 20.0f;
     g->shield_active = 0;
+    g->lightning_active = 0;
+    g->lightning_audio_gain = 0.0f;
+    g->lightning_audio_pan = 0.0f;
     g->emp_effect_active = 0;
     g->emp_effect_t = 0.0f;
     g->emp_effect_duration_s = 0.0f;
@@ -2783,6 +2833,9 @@ void game_update(game_state* g, float dt, const game_input* in) {
     if (g->searchlight_count > 0) {
         update_searchlights(g, dt);
     }
+    g->lightning_active = 0;
+    g->lightning_audio_gain = 0.0f;
+    g->lightning_audio_pan = 0.0f;
     if (g->arc_node_count > 1) {
         update_arc_nodes(g, dt);
     }
@@ -2962,6 +3015,9 @@ void game_set_alt_weapon(game_state* g, int weapon_id) {
     g->alt_weapon_equipped = clampi(weapon_id, 0, PLAYER_ALT_WEAPON_COUNT - 1);
     if (g->alt_weapon_equipped != PLAYER_ALT_WEAPON_SHIELD) {
         g->shield_active = 0;
+        g->lightning_active = 0;
+        g->lightning_audio_gain = 0.0f;
+        g->lightning_audio_pan = 0.0f;
     }
 }
 

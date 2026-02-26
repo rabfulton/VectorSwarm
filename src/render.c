@@ -2210,11 +2210,18 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
     static const char* equip_aux_labels[8] = {
         "LEVEL", "PITCH HZ", "ATTACK MS", "RELEASE MS", "NOISE MIX", "FM DEPTH", "FM RATE", "CUTOFF KHZ"
     };
+    static const char* fx_lightning_labels[8] = {
+        "LEVEL", "PITCH HZ", "ATTACK MS", "DECAY MS", "CRACKLE", "FM DEPTH", "FM RATE", "CUTOFF KHZ"
+    };
+    static const char* fx_future_labels[8] = {
+        "LEVEL", "PITCH HZ", "ATTACK MS", "DECAY MS", "NOISE MIX", "FM DEPTH", "FM RATE", "CUTOFF KHZ"
+    };
     const int page = metrics->acoustics_page;
     const int combat_page = (page == 1);
     const int equipment_page = (page == 2);
-    const int mixtape_page = (page == 3);
-    const int row_count_right = equipment_page ? 8 : (combat_page ? 8 : 6);
+    const int effects_page = (page == 3);
+    const int mixtape_page = (page == 4);
+    const int row_count_right = (equipment_page || combat_page || effects_page) ? 8 : 6;
     const palette_theme pal = get_palette_theme(metrics->palette_mode);
 
     const float ui = ui_reference_scale(w, h);
@@ -2242,11 +2249,12 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         const float values[1] = {v_disp};
         const float value_col_width_px = acoustics_compute_value_col_width(ui, 11.5f * ui, values, 1);
         const acoustics_ui_layout l = make_acoustics_ui_layout(w, h, value_col_width_px, 1, 1);
-        const vg_rect page_btns[4] = {
+        const vg_rect page_btns[5] = {
             {l.panel[0].x, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.14f, l.panel[0].h * 0.042f},
             {l.panel[0].x + l.panel[0].w * 0.16f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.18f, l.panel[0].h * 0.042f},
-            {l.panel[0].x + l.panel[0].w * 0.36f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.24f, l.panel[0].h * 0.042f},
-            {l.panel[0].x + l.panel[0].w * 0.62f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.19f, l.panel[0].h * 0.042f}
+            {l.panel[0].x + l.panel[0].w * 0.36f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.20f, l.panel[0].h * 0.042f},
+            {l.panel[0].x + l.panel[0].w * 0.58f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.18f, l.panel[0].h * 0.042f},
+            {l.panel[0].x + l.panel[0].w * 0.78f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.19f, l.panel[0].h * 0.042f}
         };
         vg_ui_slider_item vol_item[1];
         vol_item[0].label = "MUSIC VOL";
@@ -2445,8 +2453,8 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
             );
             if (r != VG_OK) return r;
         }
-        for (int i = 0; i < 4; ++i) {
-            static const char* page_labels[4] = {"SHIP", "COMBAT", "EQUIPMENT", "MIXTAPE"};
+        for (int i = 0; i < 5; ++i) {
+            static const char* page_labels[5] = {"SHIP", "COMBAT", "EQUIPMENT", "EFFECTS", "MIXTAPE"};
             r = draw_ui_button_shaded(ctx, page_btns[i], page_labels[i], 10.8f * ui, &panel, &text, (page == i) ? 1 : 0);
             if (r != VG_OK) return r;
         }
@@ -2468,7 +2476,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
             thr_items[i].value_display = metrics->acoustics_combat_display[8 + i];
             thr_items[i].selected = (metrics->acoustics_combat_selected == (8 + i)) ? 1 : 0;
         }
-    } else if (!equipment_page) {
+    } else if (!equipment_page && !effects_page) {
         for (int i = 0; i < 8; ++i) {
             fire_items[i].label = synth_fire_labels[i];
             fire_items[i].value_01 = metrics->acoustics_value_01[i];
@@ -2482,32 +2490,42 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
             thr_items[i].selected = (metrics->acoustics_selected == (8 + i)) ? 1 : 0;
         }
     } else {
+        const float* v01 = effects_page ? metrics->acoustics_effects_value_01 : metrics->acoustics_equipment_value_01;
+        const float* disp = effects_page ? metrics->acoustics_effects_display : metrics->acoustics_equipment_display;
+        const int selected = effects_page ? metrics->acoustics_effects_selected : metrics->acoustics_equipment_selected;
+        const char** left_labels = effects_page ? fx_lightning_labels : equip_shield_labels;
+        const char** right_labels = effects_page ? fx_future_labels : equip_aux_labels;
         for (int i = 0; i < 8; ++i) {
-            fire_items[i].label = equip_shield_labels[i];
-            fire_items[i].value_01 = metrics->acoustics_equipment_value_01[i];
-            fire_items[i].value_display = metrics->acoustics_equipment_display[i];
-            fire_items[i].selected = (metrics->acoustics_equipment_selected == i) ? 1 : 0;
+            fire_items[i].label = left_labels[i];
+            fire_items[i].value_01 = v01[i];
+            fire_items[i].value_display = disp[i];
+            fire_items[i].selected = (selected == i) ? 1 : 0;
         }
         for (int i = 0; i < 8; ++i) {
-            thr_items[i].label = equip_aux_labels[i];
-            thr_items[i].value_01 = metrics->acoustics_equipment_value_01[8 + i];
-            thr_items[i].value_display = metrics->acoustics_equipment_display[8 + i];
-            thr_items[i].selected = (metrics->acoustics_equipment_selected == (8 + i)) ? 1 : 0;
+            thr_items[i].label = right_labels[i];
+            thr_items[i].value_01 = v01[8 + i];
+            thr_items[i].value_display = disp[8 + i];
+            thr_items[i].selected = (selected == (8 + i)) ? 1 : 0;
         }
     }
 
     const float value_col_width_px = acoustics_compute_value_col_width(
         ui,
         11.5f * ui,
-        combat_page ? metrics->acoustics_combat_display : (equipment_page ? metrics->acoustics_equipment_display : metrics->acoustics_display),
-        combat_page ? ACOUSTICS_COMBAT_SLIDER_COUNT : (equipment_page ? ACOUSTICS_EQUIPMENT_SLIDER_COUNT : ACOUSTICS_SLIDER_COUNT)
+        combat_page ? metrics->acoustics_combat_display
+                    : (equipment_page ? metrics->acoustics_equipment_display
+                                      : (effects_page ? metrics->acoustics_effects_display : metrics->acoustics_display)),
+        combat_page ? ACOUSTICS_COMBAT_SLIDER_COUNT
+                    : (equipment_page ? ACOUSTICS_EQUIPMENT_SLIDER_COUNT
+                                      : (effects_page ? ACOUSTICS_EFFECTS_SLIDER_COUNT : ACOUSTICS_SLIDER_COUNT))
     );
     const acoustics_ui_layout l = make_acoustics_ui_layout(w, h, value_col_width_px, 8, row_count_right);
-    const vg_rect page_btns[4] = {
+    const vg_rect page_btns[5] = {
         {l.panel[0].x, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.14f, l.panel[0].h * 0.042f},
         {l.panel[0].x + l.panel[0].w * 0.16f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.18f, l.panel[0].h * 0.042f},
-        {l.panel[0].x + l.panel[0].w * 0.36f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.24f, l.panel[0].h * 0.042f},
-        {l.panel[0].x + l.panel[0].w * 0.62f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.19f, l.panel[0].h * 0.042f}
+        {l.panel[0].x + l.panel[0].w * 0.36f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.20f, l.panel[0].h * 0.042f},
+        {l.panel[0].x + l.panel[0].w * 0.58f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.18f, l.panel[0].h * 0.042f},
+        {l.panel[0].x + l.panel[0].w * 0.78f, l.panel[0].y + l.panel[0].h + 10.0f * ui, l.panel[0].w * 0.19f, l.panel[0].h * 0.042f}
     };
     const vg_rect fire_rect = l.panel[0];
     const vg_rect thr_rect = l.panel[1];
@@ -2519,7 +2537,11 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
 
     vg_ui_slider_panel_desc fire = {
         .rect = fire_rect,
-        .title_line_0 = equipment_page ? "SHIPYARD ACOUSTICS - SHIELD" : (combat_page ? "SHIPYARD ACOUSTICS - ENEMY FIRE" : "SHIPYARD ACOUSTICS - FIRE"),
+        .title_line_0 = effects_page
+                            ? "SHIPYARD ACOUSTICS - LIGHTNING"
+                            : (equipment_page ? "SHIPYARD ACOUSTICS - SHIELD"
+                                              : (combat_page ? "SHIPYARD ACOUSTICS - ENEMY FIRE"
+                                                             : "SHIPYARD ACOUSTICS - FIRE")),
         .title_line_1 = "Q/E OR PAGE BUTTONS  ARROWS OR MOUSE TO TUNE",
         .footer_line = NULL,
         .items = fire_items,
@@ -2536,7 +2558,11 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
     };
     vg_ui_slider_panel_desc thr = fire;
     thr.rect = thr_rect;
-    thr.title_line_0 = equipment_page ? "SHIPYARD ACOUSTICS - EMP" : (combat_page ? "SHIPYARD ACOUSTICS - EXPLOSION" : "SHIPYARD ACOUSTICS - THRUST");
+    thr.title_line_0 = effects_page
+                           ? "SHIPYARD ACOUSTICS - FUTURE FX"
+                           : (equipment_page ? "SHIPYARD ACOUSTICS - EMP"
+                                             : (combat_page ? "SHIPYARD ACOUSTICS - EXPLOSION"
+                                                            : "SHIPYARD ACOUSTICS - THRUST"));
     thr.items = thr_items;
     thr.item_count = (size_t)row_count_right;
 
@@ -2577,8 +2603,8 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         return r;
     }
 
-    for (int i = 0; i < 4; ++i) {
-        static const char* page_labels[4] = {"SHIP", "COMBAT", "EQUIPMENT", "MIXTAPE"};
+    for (int i = 0; i < 5; ++i) {
+        static const char* page_labels[5] = {"SHIP", "COMBAT", "EQUIPMENT", "EFFECTS", "MIXTAPE"};
         r = draw_ui_button_shaded(
             ctx,
             page_btns[i],
@@ -2594,8 +2620,12 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
     }
 
     {
-        const char* fire_test = equipment_page ? "TEST SHIELD" : (combat_page ? "TEST ENEMY" : "TEST FIRE");
-        const char* thr_test = equipment_page ? "TEST EMP" : (combat_page ? "TEST BOOM" : "TEST THRUST");
+        const char* fire_test = effects_page
+                                    ? "LIGHTNING"
+                                    : (equipment_page ? "TEST SHIELD" : (combat_page ? "TEST ENEMY" : "TEST FIRE"));
+        const char* thr_test = effects_page
+                                   ? "TEST FUTURE"
+                                   : (equipment_page ? "TEST EMP" : (combat_page ? "TEST BOOM" : "TEST THRUST"));
         r = draw_ui_button_shaded(ctx, fire_btn, fire_test, 11.5f * ui, &panel, &text, 0);
         if (r != VG_OK) {
             return r;
@@ -2660,7 +2690,9 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         }
         r = draw_text_vector_glow(
             ctx,
-            equipment_page ? "SHIELD PREVIEW" : (combat_page ? "ENEMY SHOT PREVIEW" : "ENV + PITCH SWEEP"),
+            effects_page
+                ? "LIGHTNING PREVIEW"
+                : (equipment_page ? "SHIELD PREVIEW" : (combat_page ? "ENEMY SHOT PREVIEW" : "ENV + PITCH SWEEP")),
             (vg_vec2){fire_display.x + 8.0f * ui, fire_display.y + fire_display.h - 16.0f * ui},
             10.5f * ui,
             0.7f * ui,
@@ -2674,11 +2706,17 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         enum { FIRE_TRACE_SAMPLES = 96 };
         vg_vec2 amp_line[FIRE_TRACE_SAMPLES];
         vg_vec2 pitch_line[FIRE_TRACE_SAMPLES];
-        const float* fire_preview = combat_page ? metrics->acoustics_combat_display : (equipment_page ? metrics->acoustics_equipment_display : metrics->acoustics_display);
+        const float* fire_preview = combat_page
+                                        ? metrics->acoustics_combat_display
+                                        : (equipment_page
+                                               ? metrics->acoustics_equipment_display
+                                               : (effects_page ? metrics->acoustics_effects_display : metrics->acoustics_display));
         const float a_ms = fire_preview[2];
         const float d_ms = fire_preview[3] + (equipment_page ? fire_preview[3] : 0.0f);
-        const float sweep_st = equipment_page ? (fire_preview[5] / 60.0f) : fire_preview[6];
-        const float sweep_d_ms = equipment_page ? (1000.0f / fmaxf(0.1f, fire_preview[6])) : fire_preview[7];
+        const float sweep_st = effects_page ? 0.0f : (equipment_page ? (fire_preview[5] / 60.0f) : fire_preview[6]);
+        const float sweep_d_ms = effects_page ? 220.0f : (equipment_page ? (1000.0f / fmaxf(0.1f, fire_preview[6])) : fire_preview[7]);
+        const float fx_fm_depth = effects_page ? fire_preview[5] : 0.0f;
+        const float fx_fm_rate = effects_page ? fire_preview[6] : 0.0f;
         for (int i = 0; i < FIRE_TRACE_SAMPLES; ++i) {
             const float t = (float)i / (float)(FIRE_TRACE_SAMPLES - 1);
             const float x = fire_display.x + 8.0f * ui + (fire_display.w - 16.0f * ui) * t;
@@ -2691,6 +2729,13 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
                 if (amp < 0.0f) amp = 0.0f;
             }
             float p = 0.5f + (sweep_st / 24.0f) * expf(-t * (280.0f / (sweep_d_ms + 1.0f))) * 0.35f;
+            if (effects_page) {
+                const float depth01 = clampf(fx_fm_depth / 960.0f, 0.0f, 1.0f);
+                const float rate01 = clampf(fx_fm_rate / 3000.0f, 0.0f, 1.0f);
+                const float cyc = 1.0f + 6.0f * rate01;
+                p = 0.5f + sinf(t * cyc * 6.28318530718f) * (0.06f + 0.26f * depth01);
+            }
+            p = clampf(p, 0.04f, 0.96f);
             amp_line[i] = (vg_vec2){x, fire_display.y + 8.0f * ui + amp * (fire_display.h - 20.0f * ui)};
             pitch_line[i] = (vg_vec2){x, fire_display.y + 8.0f * ui + p * (fire_display.h - 20.0f * ui)};
         }

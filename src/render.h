@@ -10,6 +10,7 @@
 #define ACOUSTICS_SLIDER_COUNT 14
 #define ACOUSTICS_COMBAT_SLIDER_COUNT 16
 #define ACOUSTICS_EQUIPMENT_SLIDER_COUNT 16
+#define ACOUSTICS_EFFECTS_SLIDER_COUNT 16
 #define ACOUSTICS_SCOPE_SAMPLES 192
 #define ACOUSTICS_SLOT_COUNT 5
 #define MIXTAPE_MAX_TRACKS 128
@@ -67,6 +68,7 @@ typedef struct render_metrics {
     int acoustics_page;
     int acoustics_combat_selected;
     int acoustics_equipment_selected;
+    int acoustics_effects_selected;
     int acoustics_mixtape_selected;
     int acoustics_fire_slot_selected;
     int acoustics_thr_slot_selected;
@@ -86,6 +88,8 @@ typedef struct render_metrics {
     float acoustics_combat_display[ACOUSTICS_COMBAT_SLIDER_COUNT];
     float acoustics_equipment_value_01[ACOUSTICS_EQUIPMENT_SLIDER_COUNT];
     float acoustics_equipment_display[ACOUSTICS_EQUIPMENT_SLIDER_COUNT];
+    float acoustics_effects_value_01[ACOUSTICS_EFFECTS_SLIDER_COUNT];
+    float acoustics_effects_display[ACOUSTICS_EFFECTS_SLIDER_COUNT];
     float acoustics_mixtape_volume_01;
     float acoustics_mixtape_volume_display;
     int acoustics_mixtape_track_index;
