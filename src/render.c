@@ -1996,6 +1996,32 @@ static vg_result draw_beam_trace(
     return vg_draw_polyline(ctx, points, point_count, &core, 0);
 }
 
+static vg_result draw_ui_button_shaded(
+    vg_context* ctx,
+    vg_rect rect,
+    const char* label,
+    float size_px,
+    const vg_stroke_style* frame,
+    const vg_stroke_style* text,
+    int selected
+) {
+    if (!ctx || !frame || !text) {
+        return VG_ERROR_INVALID_ARGUMENT;
+    }
+    if (selected) {
+        vg_fill_style fill = {
+            .intensity = 0.55f,
+            .color = (vg_color){frame->color.r, frame->color.g, frame->color.b, 0.26f},
+            .blend = VG_BLEND_ALPHA
+        };
+        vg_result fr = vg_fill_rect(ctx, rect, &fill);
+        if (fr != VG_OK) {
+            return fr;
+        }
+    }
+    return vg_draw_button(ctx, rect, label, size_px, frame, text, 0);
+}
+
 static vg_result draw_crt_debug_ui(vg_context* ctx, float w, float h, const vg_crt_profile* crt, int selected) {
     static const char* labels[12] = {
         "BLOOM STRENGTH", "BLOOM RADIUS", "PERSISTENCE", "JITTER",
@@ -2280,9 +2306,60 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
                 }
             }
         }
+        if (metrics->acoustics_mixtape_drag_active) {
+            const int target = metrics->acoustics_mixtape_drag_target;
+            if (target == 1 || target == 2) {
+                const vg_rect zone = (target == 1) ? l.panel[0] : l.panel[1];
+                const vg_rect ghost = {
+                    zone.x + 5.0f * ui,
+                    zone.y + 5.0f * ui,
+                    zone.w - 10.0f * ui,
+                    zone.h - 10.0f * ui
+                };
+                vg_fill_style ghost_fill = {
+                    .intensity = 0.30f,
+                    .color = (vg_color){pal.primary.r, pal.primary.g, pal.primary.b, 0.12f},
+                    .blend = VG_BLEND_ALPHA
+                };
+                vg_stroke_style ghost_stroke = panel;
+                ghost_stroke.width_px = 1.0f * ui;
+                ghost_stroke.intensity = 1.12f;
+                r = vg_fill_rect(ctx, ghost, &ghost_fill);
+                if (r != VG_OK) return r;
+                r = vg_draw_rect(ctx, ghost, &ghost_stroke);
+                if (r != VG_OK) return r;
+            }
+        }
+        {
+            const vg_rect randomize_btn = {
+                l.panel[1].x + l.panel[1].w * 0.52f,
+                l.panel[1].y + 12.0f * ui,
+                l.panel[1].w * 0.40f,
+                26.0f * ui
+            };
+            if (metrics->acoustics_mixtape_randomize) {
+                vg_fill_style on_fill = {
+                    .intensity = 0.55f,
+                    .color = (vg_color){pal.primary_dim.r, pal.primary_dim.g, pal.primary_dim.b, 0.30f},
+                    .blend = VG_BLEND_ALPHA
+                };
+                r = vg_fill_rect(ctx, randomize_btn, &on_fill);
+                if (r != VG_OK) return r;
+            }
+            r = draw_ui_button_shaded(
+                ctx,
+                randomize_btn,
+                "RANDOM",
+                10.2f * ui,
+                &panel,
+                &text,
+                0
+            );
+            if (r != VG_OK) return r;
+        }
         for (int i = 0; i < 4; ++i) {
             static const char* page_labels[4] = {"SHIP", "COMBAT", "EQUIPMENT", "MIXTAPE"};
-            r = vg_draw_button(ctx, page_btns[i], page_labels[i], 10.8f * ui, &panel, &text, (page == i) ? 1 : 0);
+            r = draw_ui_button_shaded(ctx, page_btns[i], page_labels[i], 10.8f * ui, &panel, &text, (page == i) ? 1 : 0);
             if (r != VG_OK) return r;
         }
         return VG_OK;
@@ -2414,7 +2491,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
 
     for (int i = 0; i < 4; ++i) {
         static const char* page_labels[4] = {"SHIP", "COMBAT", "EQUIPMENT", "MIXTAPE"};
-        r = vg_draw_button(
+        r = draw_ui_button_shaded(
             ctx,
             page_btns[i],
             page_labels[i],
@@ -2431,19 +2508,19 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
     {
         const char* fire_test = equipment_page ? "TEST SHIELD" : (combat_page ? "TEST ENEMY" : "TEST FIRE");
         const char* thr_test = equipment_page ? "TEST EMP" : (combat_page ? "TEST BOOM" : "TEST THRUST");
-        r = vg_draw_button(ctx, fire_btn, fire_test, 11.5f * ui, &panel, &text, 0);
+        r = draw_ui_button_shaded(ctx, fire_btn, fire_test, 11.5f * ui, &panel, &text, 0);
         if (r != VG_OK) {
             return r;
         }
-        r = vg_draw_button(ctx, thr_btn, thr_test, 11.5f * ui, &panel, &text, 0);
+        r = draw_ui_button_shaded(ctx, thr_btn, thr_test, 11.5f * ui, &panel, &text, 0);
         if (r != VG_OK) {
             return r;
         }
-        r = vg_draw_button(ctx, fire_save_btn, "SAVE", 11.0f * ui, &panel, &text, 0);
+        r = draw_ui_button_shaded(ctx, fire_save_btn, "SAVE", 11.0f * ui, &panel, &text, 0);
         if (r != VG_OK) {
             return r;
         }
-        r = vg_draw_button(ctx, thr_save_btn, "SAVE", 11.0f * ui, &panel, &text, 0);
+        r = draw_ui_button_shaded(ctx, thr_save_btn, "SAVE", 11.0f * ui, &panel, &text, 0);
         if (r != VG_OK) {
             return r;
         }
@@ -2455,7 +2532,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
             if ((metrics->acoustics_fire_slot_defined[i] == 0) && (metrics->acoustics_fire_slot_selected != i)) {
                 slot_text.intensity *= 0.55f;
             }
-            r = vg_draw_button(
+            r = draw_ui_button_shaded(
                 ctx,
                 l.slot_button[0][i],
                 label,
@@ -2471,7 +2548,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
             if ((metrics->acoustics_thr_slot_defined[i] == 0) && (metrics->acoustics_thr_slot_selected != i)) {
                 slot_text.intensity *= 0.55f;
             }
-            r = vg_draw_button(
+            r = draw_ui_button_shaded(
                 ctx,
                 l.slot_button[1][i],
                 label,
@@ -4129,21 +4206,21 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     r = draw_text_vector_glow(ctx, "TIMELINE", (vg_vec2){timeline.x + 10.0f * ui, timeline.y + timeline.h - 14.0f * ui}, 11.6f * ui, 0.82f * ui, &frame, &text);
     if (r != VG_OK) return r;
 
-    r = vg_draw_button(ctx, load_btn, "REVERT", 10.6f * ui, &frame, &text, 0);
+    r = draw_ui_button_shaded(ctx, load_btn, "REVERT", 10.6f * ui, &frame, &text, 0);
     if (r != VG_OK) return r;
-    r = vg_draw_button(ctx, del_btn, "DELETE", 10.6f * ui, &frame, &text, 0);
+    r = draw_ui_button_shaded(ctx, del_btn, "DELETE", 10.6f * ui, &frame, &text, 0);
     if (r != VG_OK) return r;
-    r = vg_draw_button(ctx, new_btn, "NEW", 11.0f * ui, &frame, &text, 0);
+    r = draw_ui_button_shaded(ctx, new_btn, "NEW", 11.0f * ui, &frame, &text, 0);
     if (r != VG_OK) return r;
-    r = vg_draw_button(ctx, save_btn, "SAVE", 11.0f * ui, &frame, &text, 0);
+    r = draw_ui_button_shaded(ctx, save_btn, "SAVE", 11.0f * ui, &frame, &text, 0);
     if (r != VG_OK) return r;
-    r = vg_draw_button(ctx, save_new_btn, "SAVE NEW", 10.4f * ui, &frame, &text, 0);
+    r = draw_ui_button_shaded(ctx, save_new_btn, "SAVE NEW", 10.4f * ui, &frame, &text, 0);
     if (r != VG_OK) return r;
-    r = vg_draw_button(ctx, prev_btn, "", 12.6f * ui, &frame, &text, 0);
+    r = draw_ui_button_shaded(ctx, prev_btn, "", 12.6f * ui, &frame, &text, 0);
     if (r != VG_OK) return r;
-    r = vg_draw_button(ctx, name_box, level_name_disp, 11.4f * ui, &frame, &text, 0);
+    r = draw_ui_button_shaded(ctx, name_box, level_name_disp, 11.4f * ui, &frame, &text, 0);
     if (r != VG_OK) return r;
-    r = vg_draw_button(ctx, next_btn, "", 12.6f * ui, &frame, &text, 0);
+    r = draw_ui_button_shaded(ctx, next_btn, "", 12.6f * ui, &frame, &text, 0);
     if (r != VG_OK) return r;
     vg_stroke_style layer1_frame = frame;
     vg_stroke_style layer1_text = text;
@@ -4155,31 +4232,31 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     layer2_frame.color = pal.secondary;
     layer2_frame.intensity *= 1.12f;
     layer2_text.color = pal.primary;
-    r = vg_draw_button(ctx, ctb_btn0, "PANEL SQ", 9.8f * ui, &layer1_frame, &layer1_text, metrics->level_editor_structure_tool_selected == 1 ? 1 : 0);
+    r = draw_ui_button_shaded(ctx, ctb_btn0, "PANEL SQ", 9.8f * ui, &layer1_frame, &layer1_text, metrics->level_editor_structure_tool_selected == 1 ? 1 : 0);
     if (r != VG_OK) return r;
-    r = vg_draw_button(ctx, ctb_btn1, "INSET SQ", 9.8f * ui, &layer1_frame, &layer1_text, metrics->level_editor_structure_tool_selected == 2 ? 1 : 0);
+    r = draw_ui_button_shaded(ctx, ctb_btn1, "INSET SQ", 9.8f * ui, &layer1_frame, &layer1_text, metrics->level_editor_structure_tool_selected == 2 ? 1 : 0);
     if (r != VG_OK) return r;
-    r = vg_draw_button(ctx, ctb_btn2, "X BRACE", 9.8f * ui, &layer1_frame, &layer1_text, metrics->level_editor_structure_tool_selected == 3 ? 1 : 0);
+    r = draw_ui_button_shaded(ctx, ctb_btn2, "X BRACE", 9.8f * ui, &layer1_frame, &layer1_text, metrics->level_editor_structure_tool_selected == 3 ? 1 : 0);
     if (r != VG_OK) return r;
-    r = vg_draw_button(ctx, ctb_btn3, "TRI", 9.8f * ui, &layer1_frame, &layer1_text, metrics->level_editor_structure_tool_selected == 4 ? 1 : 0);
+    r = draw_ui_button_shaded(ctx, ctb_btn3, "TRI", 9.8f * ui, &layer1_frame, &layer1_text, metrics->level_editor_structure_tool_selected == 4 ? 1 : 0);
     if (r != VG_OK) return r;
-    r = vg_draw_button(ctx, ctb_btn4, "TRIPLE", 9.8f * ui, &layer1_frame, &layer1_text, metrics->level_editor_structure_tool_selected == 5 ? 1 : 0);
+    r = draw_ui_button_shaded(ctx, ctb_btn4, "TRIPLE", 9.8f * ui, &layer1_frame, &layer1_text, metrics->level_editor_structure_tool_selected == 5 ? 1 : 0);
     if (r != VG_OK) return r;
-    r = vg_draw_button(ctx, ctb_btn5, "PIPE", 9.8f * ui, &layer2_frame, &layer2_text, metrics->level_editor_structure_tool_selected == 6 ? 1 : 0);
+    r = draw_ui_button_shaded(ctx, ctb_btn5, "PIPE", 9.8f * ui, &layer2_frame, &layer2_text, metrics->level_editor_structure_tool_selected == 6 ? 1 : 0);
     if (r != VG_OK) return r;
-    r = vg_draw_button(ctx, ctb_btn6, "VALVE", 9.8f * ui, &layer2_frame, &layer2_text, metrics->level_editor_structure_tool_selected == 7 ? 1 : 0);
+    r = draw_ui_button_shaded(ctx, ctb_btn6, "VALVE", 9.8f * ui, &layer2_frame, &layer2_text, metrics->level_editor_structure_tool_selected == 7 ? 1 : 0);
     if (r != VG_OK) return r;
-    r = vg_draw_button(ctx, ctb_btn7, "VENT", 9.8f * ui, &layer2_frame, &layer2_text, metrics->level_editor_structure_tool_selected == 8 ? 1 : 0);
+    r = draw_ui_button_shaded(ctx, ctb_btn7, "VENT", 9.8f * ui, &layer2_frame, &layer2_text, metrics->level_editor_structure_tool_selected == 8 ? 1 : 0);
     if (r != VG_OK) return r;
-    r = vg_draw_button(ctx, swarm_btn, "SWARM", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 5 ? 1 : 0);
+    r = draw_ui_button_shaded(ctx, swarm_btn, "SWARM", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 5 ? 1 : 0);
     if (r != VG_OK) return r;
-    r = vg_draw_button(ctx, watcher_btn, "WATCHER", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 1 ? 1 : 0);
+    r = draw_ui_button_shaded(ctx, watcher_btn, "WATCHER", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 1 ? 1 : 0);
     if (r != VG_OK) return r;
-    r = vg_draw_button(ctx, asteroid_btn, "ASTEROID", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 6 ? 1 : 0);
+    r = draw_ui_button_shaded(ctx, asteroid_btn, "ASTEROID", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 6 ? 1 : 0);
     if (r != VG_OK) return r;
-    r = vg_draw_button(ctx, mine_btn, "MINEFIELD", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 7 ? 1 : 0);
+    r = draw_ui_button_shaded(ctx, mine_btn, "MINEFIELD", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 7 ? 1 : 0);
     if (r != VG_OK) return r;
-    r = vg_draw_button(ctx, missile_btn, "MISSILES", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 8 ? 1 : 0);
+    r = draw_ui_button_shaded(ctx, missile_btn, "MISSILES", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 8 ? 1 : 0);
     if (r != VG_OK) return r;
     {
         vg_stroke_style icon = frame;
@@ -4574,7 +4651,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                     const float value_w = vg_measure_text(values[i], row_text_px, tracking);
                     const vg_vec2 label_pos = {rb.x + pad, text_y};
                     const vg_vec2 value_pos = {rb.x + rb.w - pad - value_w, text_y};
-                    r = vg_draw_button(ctx, rb, "", row_text_px, &frame, &text, (i == selected_prop) ? 1 : 0);
+                    r = draw_ui_button_shaded(ctx, rb, "", row_text_px, &frame, &text, (i == selected_prop) ? 1 : 0);
                     if (r != VG_OK) return r;
                     if (i == selected_prop) {
                         row_text.intensity *= 1.12f;
@@ -4609,22 +4686,22 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 char row[96];
                 const vg_rect rb0 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
                 snprintf(row, sizeof(row), "WAVE MODE      %s", editor_wave_mode_name(metrics->level_editor_wave_mode));
-                r = vg_draw_button(ctx, rb0, row, 10.4f * ui, &frame, &text, (selected_prop == 0) ? 1 : 0);
+                r = draw_ui_button_shaded(ctx, rb0, row, 10.4f * ui, &frame, &text, (selected_prop == 0) ? 1 : 0);
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb1 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
                 snprintf(row, sizeof(row), "RENDER STYLE   %s", editor_render_style_name(metrics->level_editor_render_style));
-                r = vg_draw_button(ctx, rb1, row, 10.4f * ui, &frame, &text, (selected_prop == 1) ? 1 : 0);
+                r = draw_ui_button_shaded(ctx, rb1, row, 10.4f * ui, &frame, &text, (selected_prop == 1) ? 1 : 0);
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb2 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
                 snprintf(row, sizeof(row), "THEME          %s", editor_theme_palette_name(metrics->level_editor_theme_palette));
-                r = vg_draw_button(ctx, rb2, row, 10.4f * ui, &frame, &text, (selected_prop == 2) ? 1 : 0);
+                r = draw_ui_button_shaded(ctx, rb2, row, 10.4f * ui, &frame, &text, (selected_prop == 2) ? 1 : 0);
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb3 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
                 snprintf(row, sizeof(row), "LENGTH         %.1f", metrics->level_editor_level_length_screens);
-                r = vg_draw_button(ctx, rb3, row, 10.4f * ui, &frame, &text, (selected_prop == 3) ? 1 : 0);
+                r = draw_ui_button_shaded(ctx, rb3, row, 10.4f * ui, &frame, &text, (selected_prop == 3) ? 1 : 0);
                 if (r != VG_OK) return r;
             }
             ty -= 34.0f * ui;

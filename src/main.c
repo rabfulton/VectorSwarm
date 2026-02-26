@@ -371,8 +371,16 @@ typedef struct app {
     int acoustics_mixtape_prev_left;
     int acoustics_mixtape_prev_right;
     int acoustics_mixtape_prev_fire;
+    int acoustics_mixtape_drag_active;
+    int acoustics_mixtape_drag_source; /* 0=none,1=library,2=playlist */
+    int acoustics_mixtape_drag_index;
+    int acoustics_mixtape_drag_target; /* 0=none,1=library,2=playlist */
     int mod_playlist_indices[MAX_MOD_TRACKS];
     int mod_playlist_count;
+    int mod_playlist_randomize;
+    int mod_playlist_order[MAX_MOD_TRACKS];
+    int mod_playlist_order_count;
+    int mod_playlist_order_pos;
     char mod_playlist_path[PATH_MAX];
     uint32_t thruster_test_frames_left;
     uint32_t shield_test_frames_left;
@@ -1445,6 +1453,66 @@ static void build_default_playlist_path(app* a) {
     snprintf(a->mod_playlist_path, sizeof(a->mod_playlist_path), "../data/playlist.cfg");
 }
 
+static uint32_t mixtape_rand_u32(uint32_t* state) {
+    uint32_t x = state ? *state : 0u;
+    if (x == 0u) {
+        x = 0x6d2b79f5u;
+    }
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    if (state) {
+        *state = x;
+    }
+    return x;
+}
+
+static void mixtape_shuffle_ints(int* v, int n, uint32_t* state) {
+    if (!v || n <= 1 || !state) {
+        return;
+    }
+    for (int i = n - 1; i > 0; --i) {
+        const uint32_t r = mixtape_rand_u32(state);
+        const int j = (int)(r % (uint32_t)(i + 1));
+        const int t = v[i];
+        v[i] = v[j];
+        v[j] = t;
+    }
+}
+
+static void mixtape_rebuild_play_order(app* a) {
+    if (!a) {
+        return;
+    }
+    const int current_track = a->mod_track_index;
+    a->mod_playlist_order_count = 0;
+    a->mod_playlist_order_pos = 0;
+    for (int i = 0; i < a->mod_playlist_count && i < MAX_MOD_TRACKS; ++i) {
+        const int idx = a->mod_playlist_indices[i];
+        if (idx < 0 || idx >= a->mod_track_count) {
+            continue;
+        }
+        a->mod_playlist_order[a->mod_playlist_order_count++] = idx;
+    }
+    if (a->mod_playlist_order_count <= 0) {
+        return;
+    }
+    if (a->mod_playlist_randomize) {
+        uint32_t seed = a->audio_rng ^ (uint32_t)SDL_GetTicks() ^ 0x9e3779b9u;
+        if (seed == 0u) {
+            seed = 1u;
+        }
+        mixtape_shuffle_ints(a->mod_playlist_order, a->mod_playlist_order_count, &seed);
+        a->audio_rng ^= seed;
+    }
+    for (int i = 0; i < a->mod_playlist_order_count; ++i) {
+        if (a->mod_playlist_order[i] == current_track) {
+            a->mod_playlist_order_pos = i;
+            break;
+        }
+    }
+}
+
 static int save_mod_playlist(app* a) {
     if (!a) {
         return 0;
@@ -1462,6 +1530,7 @@ static int save_mod_playlist(app* a) {
         return 0;
     }
     fprintf(f, "playlist_count=%d\n", a->mod_playlist_count);
+    fprintf(f, "randomize=%d\n", a->mod_playlist_randomize ? 1 : 0);
     for (int i = 0; i < a->mod_playlist_count; ++i) {
         const int idx = a->mod_playlist_indices[i];
         if (idx < 0 || idx >= a->mod_track_count) {
@@ -1489,6 +1558,7 @@ static void mixtape_playlist_add_internal(app* a, int track_idx, int persist) {
     a->mod_playlist_indices[a->mod_playlist_count] = track_idx;
     a->acoustics_mixtape_playlist_selected = a->mod_playlist_count;
     a->mod_playlist_count += 1;
+    mixtape_rebuild_play_order(a);
     if (persist) {
         (void)save_mod_playlist(a);
     }
@@ -1522,7 +1592,19 @@ static void mixtape_playlist_remove_selected(app* a) {
     if (a->acoustics_mixtape_playlist_selected < 0) {
         a->acoustics_mixtape_playlist_selected = 0;
     }
+    mixtape_rebuild_play_order(a);
     (void)save_mod_playlist(a);
+}
+
+static void mixtape_playlist_remove_at(app* a, int row) {
+    if (!a || a->mod_playlist_count <= 0) {
+        return;
+    }
+    if (row < 0 || row >= a->mod_playlist_count) {
+        return;
+    }
+    a->acoustics_mixtape_playlist_selected = row;
+    mixtape_playlist_remove_selected(a);
 }
 
 static void load_mod_playlist(app* a) {
@@ -1531,6 +1613,8 @@ static void load_mod_playlist(app* a) {
         return;
     }
     a->mod_playlist_count = 0;
+    a->mod_playlist_order_count = 0;
+    a->mod_playlist_order_pos = 0;
     a->acoustics_mixtape_playlist_selected = 0;
     for (int i = 0; i < (int)(sizeof(candidates) / sizeof(candidates[0])); ++i) {
         FILE* f = fopen(candidates[i], "rb");
@@ -1540,6 +1624,11 @@ static void load_mod_playlist(app* a) {
         char line[PATH_MAX + 32];
         snprintf(a->mod_playlist_path, sizeof(a->mod_playlist_path), "%s", candidates[i]);
         while (fgets(line, sizeof(line), f)) {
+            if (strncmp(line, "randomize=", 10) == 0) {
+                const int v = atoi(line + 10);
+                a->mod_playlist_randomize = (v != 0) ? 1 : 0;
+                continue;
+            }
             if (strncmp(line, "track=", 6) == 0) {
                 char* p = line + 6;
                 size_t n = strlen(p);
@@ -1560,6 +1649,7 @@ static void load_mod_playlist(app* a) {
     if (a->mod_playlist_count <= 0 && a->mod_track_count > 0) {
         mixtape_playlist_add(a, 0);
     }
+    mixtape_rebuild_play_order(a);
 }
 
 static void discover_mod_tracks(app* a) {
@@ -1656,8 +1746,31 @@ static int mod_load_track_locked(app* a, int track_idx, int autoplay) {
     a->mod_module = mod;
     a->mod_track_index = track_idx;
     a->mod_music_playing = autoplay ? 1 : 0;
-    openmpt_module_set_repeat_count(a->mod_module, -1);
+    for (int i = 0; i < a->mod_playlist_order_count; ++i) {
+        if (a->mod_playlist_order[i] == track_idx) {
+            a->mod_playlist_order_pos = i;
+            break;
+        }
+    }
+    openmpt_module_set_repeat_count(a->mod_module, 0);
     return 1;
+}
+
+static int mod_advance_playlist_locked(app* a) {
+    if (!a || a->mod_track_count <= 0) {
+        return 0;
+    }
+    if (a->mod_playlist_order_count <= 0) {
+        return mod_load_track_locked(a, a->mod_track_index, 1);
+    }
+    a->mod_playlist_order_pos = (a->mod_playlist_order_pos + 1) % a->mod_playlist_order_count;
+    {
+        const int next_idx = a->mod_playlist_order[a->mod_playlist_order_pos];
+        if (next_idx < 0 || next_idx >= a->mod_track_count) {
+            return 0;
+        }
+        return mod_load_track_locked(a, next_idx, 1);
+    }
 }
 #endif
 
@@ -1734,8 +1847,15 @@ static void mod_sync_gameplay_playlist(app* a) {
     if (a->mod_track_count <= 0 || a->mod_playlist_count <= 0) {
         return;
     }
+    if (a->mod_playlist_order_count <= 0) {
+        mixtape_rebuild_play_order(a);
+    }
     if (!playlist_contains_track(a, a->mod_track_index)) {
-        const int idx = a->mod_playlist_indices[0];
+        int idx = a->mod_playlist_indices[0];
+        if (a->mod_playlist_order_count > 0) {
+            idx = a->mod_playlist_order[0];
+            a->mod_playlist_order_pos = 0;
+        }
         if (idx >= 0 && idx < a->mod_track_count) {
             (void)mod_load_track(a, idx, 1);
         }
@@ -1925,38 +2045,65 @@ static int handle_acoustics_ui_mouse(app* a, int mouse_x, int mouse_y, int set_v
         }
     }
     if (a->acoustics_page == ACOUSTICS_PAGE_MIXTAPE) {
-        const float text_size = 10.4f * ui;
-        const float row_h = 16.0f * ui;
-        const float list_top_y = l.panel[0].y + l.panel[0].h * 0.70f;
-        const float lib_x = l.panel[0].x + 12.0f * ui;
-        const float lib_w = l.panel[0].w - 24.0f * ui;
-        const float play_x = l.panel[1].x + 12.0f * ui;
-        const float play_w = l.panel[1].w - 24.0f * ui;
+        const float row_h = 19.0f * ui;
+        const float side_margin = 30.0f * ui;
+        const float list_top_y = l.panel[0].y + l.panel[0].h - 74.0f * ui;
+        const float list_bot_y = l.panel[0].y + 30.0f * ui;
+        const int max_rows = (int)((list_top_y - list_bot_y) / row_h);
+        int start_left = 0;
+        int start_right = 0;
+        const float lib_x = l.panel[0].x + side_margin;
+        const float lib_w = l.panel[0].w - side_margin * 2.0f;
+        const float play_x = l.panel[1].x + side_margin;
+        const float play_w = l.panel[1].w - side_margin * 2.0f;
+        const vg_rect randomize_btn = {
+            l.panel[1].x + l.panel[1].w * 0.52f,
+            l.panel[1].y + 12.0f * ui,
+            l.panel[1].w * 0.40f,
+            26.0f * ui
+        };
 
-        if (mx >= lib_x && mx <= lib_x + lib_w && my <= list_top_y && my >= l.panel[0].y + 14.0f * ui) {
-            const int idx = (int)((list_top_y - my) / row_h);
-            if (idx >= 0 && idx < a->mod_track_count) {
+        if (a->mod_track_index >= max_rows && max_rows > 0) {
+            start_left = a->mod_track_index - (max_rows - 1);
+        }
+        if (a->acoustics_mixtape_playlist_selected >= max_rows && max_rows > 0) {
+            start_right = a->acoustics_mixtape_playlist_selected - (max_rows - 1);
+        }
+
+        if (mx >= randomize_btn.x && mx <= randomize_btn.x + randomize_btn.w &&
+            my >= randomize_btn.y && my <= randomize_btn.y + randomize_btn.h) {
+            if (set_value) {
+                a->mod_playlist_randomize = !a->mod_playlist_randomize;
+                mixtape_rebuild_play_order(a);
+                (void)save_mod_playlist(a);
+            }
+            return 1;
+        }
+
+        if (mx >= lib_x && mx <= lib_x + lib_w && my <= list_top_y && my >= list_bot_y) {
+            const int row = (int)(((list_top_y - my) / row_h) + 0.5f);
+            const int idx = start_left + row;
+            if (row >= 0 && row < max_rows && idx >= 0 && idx < a->mod_track_count) {
                 if (set_value) {
                     a->acoustics_mixtape_focus = 0;
                     if (idx != a->mod_track_index) {
                         (void)mod_load_track(a, idx, 1);
                     }
-                    mixtape_playlist_add(a, idx);
                 }
                 return 1;
             }
         }
-        if (mx >= play_x && mx <= play_x + play_w && my <= list_top_y && my >= l.panel[1].y + 14.0f * ui) {
-            const int row = (int)((list_top_y - my) / row_h);
-            if (row >= 0 && row < a->mod_playlist_count) {
-                const int idx = a->mod_playlist_indices[row];
+        if (mx >= play_x && mx <= play_x + play_w && my <= list_top_y && my >= list_bot_y) {
+            const int row = (int)(((list_top_y - my) / row_h) + 0.5f);
+            const int item = start_right + row;
+            if (row >= 0 && row < max_rows && item >= 0 && item < a->mod_playlist_count) {
+                const int idx = a->mod_playlist_indices[item];
                 if (set_value) {
                     a->acoustics_mixtape_focus = 1;
-                    a->acoustics_mixtape_playlist_selected = row;
+                    a->acoustics_mixtape_playlist_selected = item;
                     if (idx >= 0 && idx < a->mod_track_count && idx != a->mod_track_index) {
                         (void)mod_load_track(a, idx, 1);
                     }
-                    mixtape_playlist_remove_selected(a);
                 }
                 return 1;
             }
@@ -2099,6 +2246,94 @@ static int handle_acoustics_ui_mouse(app* a, int mouse_x, int mouse_y, int set_v
         }
         return 1;
     }
+    return 0;
+}
+
+enum mixtape_hit_zone {
+    MIXTAPE_HIT_NONE = 0,
+    MIXTAPE_HIT_LIBRARY = 1,
+    MIXTAPE_HIT_PLAYLIST = 2,
+    MIXTAPE_HIT_RANDOMIZE = 3
+};
+
+static int mixtape_hit_test(app* a, int mouse_x, int mouse_y, int* out_zone, int* out_index) {
+    if (!a || a->acoustics_page != ACOUSTICS_PAGE_MIXTAPE) {
+        return 0;
+    }
+    const float w = (float)a->swapchain_extent.width;
+    const float h = (float)a->swapchain_extent.height;
+    const float ui = ui_reference_scale(w, h);
+    const float values[1] = {a->mod_music_volume_01};
+    const float value_col_width_px = acoustics_compute_value_col_width(ui, 11.5f * ui, values, 1);
+    const acoustics_ui_layout l = make_acoustics_ui_layout(w, h, value_col_width_px, 1, 1);
+    float mx = 0.0f;
+    float my = 0.0f;
+    map_mouse_to_scene_coords(a, mouse_x, mouse_y, &mx, &my);
+    const float row_h = 19.0f * ui;
+    const float side_margin = 30.0f * ui;
+    const float list_top_y = l.panel[0].y + l.panel[0].h - 74.0f * ui;
+    const float list_bot_y = l.panel[0].y + 30.0f * ui;
+    const int max_rows = (int)((list_top_y - list_bot_y) / row_h);
+    int start_left = 0;
+    int start_right = 0;
+    const float lib_x = l.panel[0].x + side_margin;
+    const float lib_w = l.panel[0].w - side_margin * 2.0f;
+    const float play_x = l.panel[1].x + side_margin;
+    const float play_w = l.panel[1].w - side_margin * 2.0f;
+    const vg_rect randomize_btn = {
+        l.panel[1].x + l.panel[1].w * 0.52f,
+        l.panel[1].y + 12.0f * ui,
+        l.panel[1].w * 0.40f,
+        26.0f * ui
+    };
+
+    if (a->mod_track_index >= max_rows && max_rows > 0) {
+        start_left = a->mod_track_index - (max_rows - 1);
+    }
+    if (a->acoustics_mixtape_playlist_selected >= max_rows && max_rows > 0) {
+        start_right = a->acoustics_mixtape_playlist_selected - (max_rows - 1);
+    }
+
+    if (mx >= randomize_btn.x && mx <= randomize_btn.x + randomize_btn.w &&
+        my >= randomize_btn.y && my <= randomize_btn.y + randomize_btn.h) {
+        if (out_zone) *out_zone = MIXTAPE_HIT_RANDOMIZE;
+        if (out_index) *out_index = -1;
+        return 1;
+    }
+    if (mx >= lib_x && mx <= lib_x + lib_w && my <= list_top_y && my >= list_bot_y) {
+        const int row = (int)(((list_top_y - my) / row_h) + 0.5f);
+        const int idx = start_left + row;
+        if (out_zone) *out_zone = MIXTAPE_HIT_LIBRARY;
+        if (row >= 0 && row < max_rows && idx >= 0 && idx < a->mod_track_count) {
+            if (out_index) *out_index = idx;
+        } else if (out_index) {
+            *out_index = -1;
+        }
+        return 1;
+    }
+    if (mx >= lib_x && mx <= lib_x + lib_w && my < list_bot_y && my >= l.panel[0].y + 14.0f * ui) {
+        if (out_zone) *out_zone = MIXTAPE_HIT_LIBRARY;
+        if (out_index) *out_index = -1;
+        return 1;
+    }
+    if (mx >= play_x && mx <= play_x + play_w && my <= list_top_y && my >= list_bot_y) {
+        const int row = (int)(((list_top_y - my) / row_h) + 0.5f);
+        const int item = start_right + row;
+        if (out_zone) *out_zone = MIXTAPE_HIT_PLAYLIST;
+        if (row >= 0 && row < max_rows && item >= 0 && item < a->mod_playlist_count) {
+            if (out_index) *out_index = item;
+        } else if (out_index) {
+            *out_index = -1;
+        }
+        return 1;
+    }
+    if (mx >= play_x && mx <= play_x + play_w && my < list_bot_y && my >= l.panel[1].y + 14.0f * ui) {
+        if (out_zone) *out_zone = MIXTAPE_HIT_PLAYLIST;
+        if (out_index) *out_index = -1;
+        return 1;
+    }
+    if (out_zone) *out_zone = MIXTAPE_HIT_NONE;
+    if (out_index) *out_index = -1;
     return 0;
 }
 
@@ -2344,16 +2579,25 @@ static void audio_callback(void* userdata, Uint8* stream, int len) {
         );
 #if V_TYPE_HAS_OPENMPT
         if (a->mod_module && a->mod_music_playing) {
-            const size_t got = openmpt_module_read_float_stereo(
-                a->mod_module,
-                (int32_t)((a->audio_have.freq > 0) ? a->audio_have.freq : 48000),
-                (size_t)n,
-                a->audio_mix_tmp_e,
-                a->audio_mix_tmp_f
-            );
-            if (got < (size_t)n) {
-                memset(a->audio_mix_tmp_e + got, 0, sizeof(float) * (n - (uint32_t)got));
-                memset(a->audio_mix_tmp_f + got, 0, sizeof(float) * (n - (uint32_t)got));
+            const int32_t sr = (int32_t)((a->audio_have.freq > 0) ? a->audio_have.freq : 48000);
+            uint32_t music_off = 0u;
+            memset(a->audio_mix_tmp_e, 0, sizeof(float) * n);
+            memset(a->audio_mix_tmp_f, 0, sizeof(float) * n);
+            while (music_off < n && a->mod_module && a->mod_music_playing) {
+                const size_t req = (size_t)(n - music_off);
+                const size_t got = openmpt_module_read_float_stereo(
+                    a->mod_module,
+                    sr,
+                    req,
+                    a->audio_mix_tmp_e + music_off,
+                    a->audio_mix_tmp_f + music_off
+                );
+                music_off += (uint32_t)got;
+                if (got < req) {
+                    if (!mod_advance_playlist_locked(a)) {
+                        break;
+                    }
+                }
             }
             {
                 const float mod_gain = clampf(a->mod_music_volume_01, 0.0f, 1.0f) * 0.60f;
@@ -6636,6 +6880,10 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
     metrics.acoustics_mixtape_focus = a->acoustics_mixtape_focus;
     metrics.acoustics_mixtape_playlist_selected = a->acoustics_mixtape_playlist_selected;
     metrics.acoustics_mixtape_playlist_count = a->mod_playlist_count;
+    metrics.acoustics_mixtape_randomize = a->mod_playlist_randomize;
+    metrics.acoustics_mixtape_drag_active = a->acoustics_mixtape_drag_active;
+    metrics.acoustics_mixtape_drag_source = a->acoustics_mixtape_drag_source;
+    metrics.acoustics_mixtape_drag_target = a->acoustics_mixtape_drag_target;
     for (int i = 0; i < MIXTAPE_MAX_TRACKS; ++i) {
         metrics.acoustics_mixtape_playlist_indices[i] = (i < a->mod_playlist_count) ? a->mod_playlist_indices[i] : -1;
         if (i < a->mod_track_count) {
@@ -6978,12 +7226,24 @@ int main(void) {
     a.acoustics_mixtape_prev_left = 0;
     a.acoustics_mixtape_prev_right = 0;
     a.acoustics_mixtape_prev_fire = 0;
+    a.acoustics_mixtape_drag_active = 0;
+    a.acoustics_mixtape_drag_source = MIXTAPE_HIT_NONE;
+    a.acoustics_mixtape_drag_index = -1;
+    a.acoustics_mixtape_drag_target = MIXTAPE_HIT_NONE;
     a.mod_playlist_count = 0;
+    a.mod_playlist_randomize = 0;
+    a.mod_playlist_order_count = 0;
+    a.mod_playlist_order_pos = 0;
     build_default_playlist_path(&a);
     discover_mod_tracks(&a);
     load_mod_playlist(&a);
     if (a.mod_playlist_count > 0) {
-        a.mod_track_index = a.mod_playlist_indices[0];
+        if (a.mod_playlist_order_count > 0) {
+            a.mod_track_index = a.mod_playlist_order[0];
+            a.mod_playlist_order_pos = 0;
+        } else {
+            a.mod_track_index = a.mod_playlist_indices[0];
+        }
     }
     if (a.audio_ready && a.mod_track_count > 0) {
         int start_track = a.mod_track_index;
@@ -7524,6 +7784,23 @@ int main(void) {
                     a.crt_ui_mouse_drag = 0;
                 } else if (menu_is_screen(&a.menu, APP_SCREEN_ACOUSTICS) && handle_acoustics_ui_mouse(&a, ev.button.x, ev.button.y, 1)) {
                     a.acoustics_mouse_drag = 1;
+                    if (a.acoustics_page == ACOUSTICS_PAGE_MIXTAPE) {
+                        int zone = MIXTAPE_HIT_NONE;
+                        int index = -1;
+                        if (mixtape_hit_test(&a, ev.button.x, ev.button.y, &zone, &index) &&
+                            (zone == MIXTAPE_HIT_LIBRARY || zone == MIXTAPE_HIT_PLAYLIST) &&
+                            index >= 0) {
+                            a.acoustics_mixtape_drag_active = 1;
+                            a.acoustics_mixtape_drag_source = zone;
+                            a.acoustics_mixtape_drag_index = index;
+                            a.acoustics_mixtape_drag_target = zone;
+                        } else {
+                            a.acoustics_mixtape_drag_active = 0;
+                            a.acoustics_mixtape_drag_source = MIXTAPE_HIT_NONE;
+                            a.acoustics_mixtape_drag_index = -1;
+                            a.acoustics_mixtape_drag_target = MIXTAPE_HIT_NONE;
+                        }
+                    }
                 } else if (a.show_crt_ui && handle_crt_ui_mouse(&a, ev.button.x, ev.button.y, 1)) {
                     a.crt_ui_mouse_drag = 1;
                 }
@@ -7551,6 +7828,29 @@ int main(void) {
                 }
                 a.crt_ui_mouse_drag = 0;
                 a.acoustics_mouse_drag = 0;
+                if (menu_is_screen(&a.menu, APP_SCREEN_ACOUSTICS) &&
+                    a.acoustics_page == ACOUSTICS_PAGE_MIXTAPE &&
+                    a.acoustics_mixtape_drag_active) {
+                    int zone = MIXTAPE_HIT_NONE;
+                    int index = -1;
+                    (void)mixtape_hit_test(&a, ev.button.x, ev.button.y, &zone, &index);
+                    a.acoustics_mixtape_drag_target = zone;
+                    if (a.acoustics_mixtape_drag_source == MIXTAPE_HIT_LIBRARY &&
+                        a.acoustics_mixtape_drag_target == MIXTAPE_HIT_PLAYLIST &&
+                        a.acoustics_mixtape_drag_index >= 0 &&
+                        a.acoustics_mixtape_drag_index < a.mod_track_count) {
+                        mixtape_playlist_add(&a, a.acoustics_mixtape_drag_index);
+                    } else if (a.acoustics_mixtape_drag_source == MIXTAPE_HIT_PLAYLIST &&
+                               a.acoustics_mixtape_drag_target == MIXTAPE_HIT_LIBRARY &&
+                               a.acoustics_mixtape_drag_index >= 0 &&
+                               a.acoustics_mixtape_drag_index < a.mod_playlist_count) {
+                        mixtape_playlist_remove_at(&a, a.acoustics_mixtape_drag_index);
+                    }
+                }
+                a.acoustics_mixtape_drag_active = 0;
+                a.acoustics_mixtape_drag_source = MIXTAPE_HIT_NONE;
+                a.acoustics_mixtape_drag_index = -1;
+                a.acoustics_mixtape_drag_target = MIXTAPE_HIT_NONE;
                 a.level_editor.timeline_drag = 0;
             } else if (ev.type == SDL_MOUSEMOTION) {
                 if (menu_is_screen(&a.menu, APP_SCREEN_VIDEO) && a.video_menu_dial_drag >= 0) {
@@ -7566,7 +7866,14 @@ int main(void) {
                         0
                     );
                 } else if (menu_is_screen(&a.menu, APP_SCREEN_ACOUSTICS) && a.acoustics_mouse_drag) {
-                    (void)handle_acoustics_ui_mouse(&a, ev.motion.x, ev.motion.y, 1);
+                    if (a.acoustics_page == ACOUSTICS_PAGE_MIXTAPE && a.acoustics_mixtape_drag_active) {
+                        int zone = MIXTAPE_HIT_NONE;
+                        int index = -1;
+                        (void)mixtape_hit_test(&a, ev.motion.x, ev.motion.y, &zone, &index);
+                        a.acoustics_mixtape_drag_target = zone;
+                    } else {
+                        (void)handle_acoustics_ui_mouse(&a, ev.motion.x, ev.motion.y, 1);
+                    }
                 } else if (a.show_crt_ui && a.crt_ui_mouse_drag) {
                     (void)handle_crt_ui_mouse(&a, ev.motion.x, ev.motion.y, 1);
                 }

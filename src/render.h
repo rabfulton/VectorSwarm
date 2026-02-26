@@ -95,6 +95,10 @@ typedef struct render_metrics {
     int acoustics_mixtape_focus; /* 0=library(left), 1=playlist(right) */
     int acoustics_mixtape_playlist_selected;
     int acoustics_mixtape_playlist_count;
+    int acoustics_mixtape_randomize;
+    int acoustics_mixtape_drag_active;
+    int acoustics_mixtape_drag_source;
+    int acoustics_mixtape_drag_target;
     int acoustics_mixtape_playlist_indices[MIXTAPE_MAX_TRACKS];
     char acoustics_mixtape_track_labels[MIXTAPE_MAX_TRACKS][MIXTAPE_LABEL_CAP];
     const void* acoustics_tape_svg_asset;
