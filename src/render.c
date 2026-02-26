@@ -1772,7 +1772,7 @@ static vg_result draw_teletype_overlay(
     int row = 0;
     const float x0 = safe.x + safe.w * 0.025f;
     const float y0 = safe.y + safe.h - 34.0f * ui;
-    const float lh = 17.0f * ui;
+    const float lh = 20.0f * ui;
 
     for (size_t i = 0;; ++i) {
         const char c = text[i];
