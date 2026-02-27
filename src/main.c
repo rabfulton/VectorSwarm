@@ -71,6 +71,7 @@
 #include "fog_frag_spv.h"
 #include "grid_vert_spv.h"
 #include "grid_frag_spv.h"
+#include "grid_sim_frag_spv.h"
 #include "arc_beam_vert_spv.h"
 #include "arc_beam_frag_spv.h"
 #endif
@@ -83,6 +84,8 @@
 #define TERRAIN_ROWS 24
 #define TERRAIN_COLS 70
 #define RADAR_GPU_MAX_VERTS 4096
+#define GRID_STATE_W 160
+#define GRID_STATE_H 90
 #define MAX_MOD_TRACKS 128
 
 enum control_action_id {
@@ -175,12 +178,20 @@ typedef struct fog_pc {
 } fog_pc;
 
 typedef struct grid_pc {
-    float p0[4];      /* x=viewport_w, y=viewport_h, z=camera_x, w=camera_y */
-    float p1[4];      /* x=world_w, y=world_h, z=grid_dx, w=grid_dy */
+    float p0[4];      /* x=viewport_w, y=viewport_h, z=grid_dx, w=grid_dy */
+    float p1[4];      /* x=distort_gain, y=strain_gain, z=state_w, w=state_h */
     float p2[4];      /* rgb=dim_color, w=intensity */
-    float p3[4];      /* rgb=bright_color, w=source_count */
-    float src[4][4];  /* x=world_x, y=world_y, z=amp_px, w=radius_px */
+    float p3[4];      /* rgb=bright_color, w=line_boost */
+    float p4[4];      /* x=camera_x, y=camera_y, z=world_w, w=world_h */
 } grid_pc;
+
+typedef struct grid_sim_pc {
+    float p0[4];      /* x=state_w, y=state_h, z=dt_s, w=init_state */
+    float p1[4];      /* x=spring_k, y=neighbor_coupling, z=damping, w=impulse_gain */
+    float p2[4];      /* x=max_disp, y=max_vel, z=epsilon_zero, w=source_count */
+    float p3[4];      /* x=cam_dx_px, y=cam_dy_px */
+    float src[8][4];  /* x=px, y=py, z=amp_px, w=radius_px */
+} grid_sim_pc;
 
 typedef struct arc_beam_pc {
     float p0[4];        /* x=viewport_w, y=viewport_h, z=time_s, w=intensity */
@@ -271,6 +282,33 @@ typedef struct app {
     VkPipeline fog_pipeline;
     VkPipelineLayout grid_layout;
     VkPipeline grid_pipeline;
+    VkPipelineLayout grid_sim_layout;
+    VkPipeline grid_sim_pipeline;
+    VkRenderPass grid_state_render_pass;
+    VkImage grid_state_image[2];
+    VkDeviceMemory grid_state_memory[2];
+    VkImageView grid_state_view[2];
+    VkFramebuffer grid_state_fb[2];
+    VkSampler grid_state_sampler;
+    VkDescriptorSetLayout grid_state_desc_layout;
+    VkDescriptorPool grid_state_desc_pool;
+    VkDescriptorSet grid_state_desc_set[2];
+    uint32_t grid_state_curr;
+    int grid_state_initialized;
+    float grid_prev_camera_x;
+    float grid_prev_camera_y;
+    float grid_sim_accum_s;
+    float grid_sim_hz;
+    float grid_sim_spring_k;
+    float grid_sim_neighbor_coupling;
+    float grid_sim_damping;
+    float grid_sim_impulse_gain;
+    float grid_sim_max_disp_px;
+    float grid_sim_max_vel_px_s;
+    float grid_sim_epsilon;
+    float grid_render_distort_gain;
+    float grid_render_strain_gain;
+    float grid_line_boost;
     VkPipelineLayout arc_beam_layout;
     VkPipeline arc_beam_pipeline;
     VkBuffer wormhole_tri_vertex_buffer;
@@ -328,6 +366,9 @@ typedef struct app {
     float fog_light_gain;
     float fog_alpha_scale;
     char fog_tuning_text[224];
+    int grid_tuning_enabled; /* VTYPE_GRID_TUNING */
+    int grid_tuning_show;
+    char grid_tuning_text[256];
 
     VkCommandPool command_pool;
     VkCommandBuffer command_buffers[APP_MAX_SWAPCHAIN_IMAGES];
@@ -735,6 +776,8 @@ static int gameplay_palette_mode(const app* a) {
     return a->palette_mode;
 }
 
+static void reset_grid_sim_state(app* a);
+
 static void reset_terrain_tuning(app* a) {
     if (!a) {
         return;
@@ -810,6 +853,122 @@ static void sync_fog_tuning_text(app* a) {
         a->fog_light_gain,
         a->fog_alpha_scale
     );
+}
+
+static void reset_grid_tuning(app* a) {
+    if (!a) {
+        return;
+    }
+    a->grid_sim_hz = 120.0f;
+    a->grid_sim_spring_k = 24.5f;
+    a->grid_sim_neighbor_coupling = 10.0f;
+    a->grid_sim_damping = 6.25f;
+    a->grid_sim_impulse_gain = 11.0f;
+    a->grid_sim_max_disp_px = 42.0f;
+    a->grid_sim_max_vel_px_s = 900.0f;
+    a->grid_sim_epsilon = 0.0008f;
+    a->grid_render_distort_gain = 2.1f;
+    a->grid_render_strain_gain = 0.040f;
+    a->grid_line_boost = 1.0f;
+}
+
+static void sync_grid_tuning_text(app* a) {
+    if (!a) {
+        return;
+    }
+    snprintf(
+        a->grid_tuning_text,
+        sizeof(a->grid_tuning_text),
+        "GRID TUNE k %.2f n %.2f damp %.2f imp %.2f distort %.2f (KP* hud, KP Enter dump, KP . reset)",
+        a->grid_sim_spring_k,
+        a->grid_sim_neighbor_coupling,
+        a->grid_sim_damping,
+        a->grid_sim_impulse_gain,
+        a->grid_render_distort_gain
+    );
+}
+
+static void print_grid_tuning(const app* a) {
+    if (!a) {
+        return;
+    }
+    printf(
+        "[grid_tune] hz=%.6ff spring_k=%.6ff neighbor=%.6ff damping=%.6ff impulse=%.6ff max_disp=%.6ff max_vel=%.6ff eps=%.6ff distort=%.6ff strain=%.6ff line=%.6ff\n",
+        a->grid_sim_hz,
+        a->grid_sim_spring_k,
+        a->grid_sim_neighbor_coupling,
+        a->grid_sim_damping,
+        a->grid_sim_impulse_gain,
+        a->grid_sim_max_disp_px,
+        a->grid_sim_max_vel_px_s,
+        a->grid_sim_epsilon,
+        a->grid_render_distort_gain,
+        a->grid_render_strain_gain,
+        a->grid_line_boost
+    );
+    fflush(stdout);
+}
+
+static int handle_grid_tuning_key(app* a, SDL_Keycode key) {
+    if (!a || !a->grid_tuning_enabled || !menu_is_gameplay(&a->menu)) {
+        return 0;
+    }
+    {
+        const leveldef_level* lvl = game_current_leveldef(&a->game);
+        if (!lvl || lvl->background_style != LEVELDEF_BACKGROUND_GRID) {
+            return 0;
+        }
+    }
+    int handled = 1;
+    switch (key) {
+        case SDLK_KP_7: a->grid_sim_spring_k += 0.5f; break;
+        case SDLK_KP_4: a->grid_sim_spring_k -= 0.5f; break;
+        case SDLK_KP_8: a->grid_sim_neighbor_coupling += 0.5f; break;
+        case SDLK_KP_5: a->grid_sim_neighbor_coupling -= 0.5f; break;
+        case SDLK_KP_9: a->grid_sim_damping += 0.25f; break;
+        case SDLK_KP_6: a->grid_sim_damping -= 0.25f; break;
+        case SDLK_KP_2: a->grid_sim_impulse_gain += 0.25f; break;
+        case SDLK_KP_1: a->grid_sim_impulse_gain -= 0.25f; break;
+        case SDLK_KP_3: a->grid_render_distort_gain += 0.05f; break;
+        case SDLK_KP_0: a->grid_render_distort_gain -= 0.05f; break;
+        case SDLK_KP_MULTIPLY:
+            a->grid_tuning_show = !a->grid_tuning_show;
+            set_tty_message(a, a->grid_tuning_show ? "grid tune hud: on" : "grid tune hud: off");
+            break;
+        case SDLK_KP_PERIOD:
+            reset_grid_tuning(a);
+            reset_grid_sim_state(a);
+            set_tty_message(a, "grid tuning reset");
+            break;
+        case SDLK_KP_ENTER:
+            print_grid_tuning(a);
+            set_tty_message(a, "grid tuning dumped to stdout");
+            break;
+        default:
+            handled = 0;
+            break;
+    }
+    if (!handled) {
+        return 0;
+    }
+    a->grid_sim_spring_k = clampf(a->grid_sim_spring_k, 2.0f, 64.0f);
+    a->grid_sim_neighbor_coupling = clampf(a->grid_sim_neighbor_coupling, 0.0f, 64.0f);
+    a->grid_sim_damping = clampf(a->grid_sim_damping, 0.5f, 24.0f);
+    a->grid_sim_impulse_gain = clampf(a->grid_sim_impulse_gain, 0.0f, 24.0f);
+    a->grid_render_distort_gain = clampf(a->grid_render_distort_gain, 0.0f, 3.0f);
+    sync_grid_tuning_text(a);
+    return 1;
+}
+
+static void reset_grid_sim_state(app* a) {
+    if (!a) {
+        return;
+    }
+    a->grid_state_curr = 0u;
+    a->grid_state_initialized = 0;
+    a->grid_sim_accum_s = 0.0f;
+    a->grid_prev_camera_x = 0.0f;
+    a->grid_prev_camera_y = 0.0f;
 }
 
 static void print_fog_tuning(const app* a) {
@@ -1948,6 +2107,7 @@ static int create_radar_resources(app* a);
 static int create_fog_resources(app* a);
 static int create_grid_resources(app* a);
 static int create_arc_beam_resources(app* a);
+static void reset_grid_sim_state(app* a);
 static int create_vg_context(app* a);
 static void set_tty_message(app* a, const char* msg);
 static void update_gpu_high_plains_vertices(app* a);
@@ -1958,6 +2118,7 @@ static void record_gpu_particles_bloom(app* a, VkCommandBuffer cmd);
 static void record_gpu_wormhole(app* a, VkCommandBuffer cmd);
 static void record_gpu_radar(app* a, VkCommandBuffer cmd);
 static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t);
+static void record_gpu_grid_sim(app* a, VkCommandBuffer cmd, float dt);
 static void record_gpu_grid(app* a, VkCommandBuffer cmd);
 static void record_gpu_arc_beam(app* a, VkCommandBuffer cmd, float t);
 static void reset_terrain_tuning(app* a);
@@ -4226,6 +4387,7 @@ static void cleanup(app* a) {
     if (a->radar_pipeline) vkDestroyPipeline(a->device, a->radar_pipeline, NULL);
     if (a->fog_pipeline) vkDestroyPipeline(a->device, a->fog_pipeline, NULL);
     if (a->grid_pipeline) vkDestroyPipeline(a->device, a->grid_pipeline, NULL);
+    if (a->grid_sim_pipeline) vkDestroyPipeline(a->device, a->grid_sim_pipeline, NULL);
     if (a->arc_beam_pipeline) vkDestroyPipeline(a->device, a->arc_beam_pipeline, NULL);
     if (a->post_layout) vkDestroyPipelineLayout(a->device, a->post_layout, NULL);
     if (a->terrain_layout) vkDestroyPipelineLayout(a->device, a->terrain_layout, NULL);
@@ -4234,25 +4396,37 @@ static void cleanup(app* a) {
     if (a->radar_layout) vkDestroyPipelineLayout(a->device, a->radar_layout, NULL);
     if (a->fog_layout) vkDestroyPipelineLayout(a->device, a->fog_layout, NULL);
     if (a->grid_layout) vkDestroyPipelineLayout(a->device, a->grid_layout, NULL);
+    if (a->grid_sim_layout) vkDestroyPipelineLayout(a->device, a->grid_sim_layout, NULL);
     if (a->arc_beam_layout) vkDestroyPipelineLayout(a->device, a->arc_beam_layout, NULL);
+    if (a->grid_state_desc_pool) vkDestroyDescriptorPool(a->device, a->grid_state_desc_pool, NULL);
+    if (a->grid_state_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->grid_state_desc_layout, NULL);
+    if (a->grid_state_sampler) vkDestroySampler(a->device, a->grid_state_sampler, NULL);
     if (a->post_desc_pool) vkDestroyDescriptorPool(a->device, a->post_desc_pool, NULL);
     if (a->post_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->post_desc_layout, NULL);
     if (a->post_sampler) vkDestroySampler(a->device, a->post_sampler, NULL);
 
     if (a->scene_fb) vkDestroyFramebuffer(a->device, a->scene_fb, NULL);
     if (a->bloom_fb) vkDestroyFramebuffer(a->device, a->bloom_fb, NULL);
+    if (a->grid_state_fb[0]) vkDestroyFramebuffer(a->device, a->grid_state_fb[0], NULL);
+    if (a->grid_state_fb[1]) vkDestroyFramebuffer(a->device, a->grid_state_fb[1], NULL);
     if (a->scene_view) vkDestroyImageView(a->device, a->scene_view, NULL);
     if (a->scene_depth_view) vkDestroyImageView(a->device, a->scene_depth_view, NULL);
     if (a->scene_msaa_view) vkDestroyImageView(a->device, a->scene_msaa_view, NULL);
     if (a->bloom_view) vkDestroyImageView(a->device, a->bloom_view, NULL);
+    if (a->grid_state_view[0]) vkDestroyImageView(a->device, a->grid_state_view[0], NULL);
+    if (a->grid_state_view[1]) vkDestroyImageView(a->device, a->grid_state_view[1], NULL);
     if (a->scene_image) vkDestroyImage(a->device, a->scene_image, NULL);
     if (a->scene_depth_image) vkDestroyImage(a->device, a->scene_depth_image, NULL);
     if (a->scene_msaa_image) vkDestroyImage(a->device, a->scene_msaa_image, NULL);
     if (a->bloom_image) vkDestroyImage(a->device, a->bloom_image, NULL);
+    if (a->grid_state_image[0]) vkDestroyImage(a->device, a->grid_state_image[0], NULL);
+    if (a->grid_state_image[1]) vkDestroyImage(a->device, a->grid_state_image[1], NULL);
     if (a->scene_memory) vkFreeMemory(a->device, a->scene_memory, NULL);
     if (a->scene_depth_memory) vkFreeMemory(a->device, a->scene_depth_memory, NULL);
     if (a->scene_msaa_memory) vkFreeMemory(a->device, a->scene_msaa_memory, NULL);
     if (a->bloom_memory) vkFreeMemory(a->device, a->bloom_memory, NULL);
+    if (a->grid_state_memory[0]) vkFreeMemory(a->device, a->grid_state_memory[0], NULL);
+    if (a->grid_state_memory[1]) vkFreeMemory(a->device, a->grid_state_memory[1], NULL);
     if (a->terrain_vertex_map && a->terrain_vertex_memory) {
         vkUnmapMemory(a->device, a->terrain_vertex_memory);
         a->terrain_vertex_map = NULL;
@@ -4305,6 +4479,7 @@ static void cleanup(app* a) {
 
     if (a->scene_render_pass) vkDestroyRenderPass(a->device, a->scene_render_pass, NULL);
     if (a->bloom_render_pass) vkDestroyRenderPass(a->device, a->bloom_render_pass, NULL);
+    if (a->grid_state_render_pass) vkDestroyRenderPass(a->device, a->grid_state_render_pass, NULL);
     if (a->present_render_pass) vkDestroyRenderPass(a->device, a->present_render_pass, NULL);
     if (a->swapchain) vkDestroySwapchainKHR(a->device, a->swapchain, NULL);
 
@@ -4403,6 +4578,10 @@ static void destroy_render_runtime(app* a) {
         vkDestroyPipeline(a->device, a->grid_pipeline, NULL);
         a->grid_pipeline = VK_NULL_HANDLE;
     }
+    if (a->grid_sim_pipeline) {
+        vkDestroyPipeline(a->device, a->grid_sim_pipeline, NULL);
+        a->grid_sim_pipeline = VK_NULL_HANDLE;
+    }
     if (a->arc_beam_pipeline) {
         vkDestroyPipeline(a->device, a->arc_beam_pipeline, NULL);
         a->arc_beam_pipeline = VK_NULL_HANDLE;
@@ -4435,6 +4614,10 @@ static void destroy_render_runtime(app* a) {
         vkDestroyPipelineLayout(a->device, a->grid_layout, NULL);
         a->grid_layout = VK_NULL_HANDLE;
     }
+    if (a->grid_sim_layout) {
+        vkDestroyPipelineLayout(a->device, a->grid_sim_layout, NULL);
+        a->grid_sim_layout = VK_NULL_HANDLE;
+    }
     if (a->arc_beam_layout) {
         vkDestroyPipelineLayout(a->device, a->arc_beam_layout, NULL);
         a->arc_beam_layout = VK_NULL_HANDLE;
@@ -4443,13 +4626,25 @@ static void destroy_render_runtime(app* a) {
         vkDestroyDescriptorPool(a->device, a->post_desc_pool, NULL);
         a->post_desc_pool = VK_NULL_HANDLE;
     }
+    if (a->grid_state_desc_pool) {
+        vkDestroyDescriptorPool(a->device, a->grid_state_desc_pool, NULL);
+        a->grid_state_desc_pool = VK_NULL_HANDLE;
+    }
     if (a->post_desc_layout) {
         vkDestroyDescriptorSetLayout(a->device, a->post_desc_layout, NULL);
         a->post_desc_layout = VK_NULL_HANDLE;
     }
+    if (a->grid_state_desc_layout) {
+        vkDestroyDescriptorSetLayout(a->device, a->grid_state_desc_layout, NULL);
+        a->grid_state_desc_layout = VK_NULL_HANDLE;
+    }
     if (a->post_sampler) {
         vkDestroySampler(a->device, a->post_sampler, NULL);
         a->post_sampler = VK_NULL_HANDLE;
+    }
+    if (a->grid_state_sampler) {
+        vkDestroySampler(a->device, a->grid_state_sampler, NULL);
+        a->grid_state_sampler = VK_NULL_HANDLE;
     }
     if (a->scene_fb) {
         vkDestroyFramebuffer(a->device, a->scene_fb, NULL);
@@ -4458,6 +4653,14 @@ static void destroy_render_runtime(app* a) {
     if (a->bloom_fb) {
         vkDestroyFramebuffer(a->device, a->bloom_fb, NULL);
         a->bloom_fb = VK_NULL_HANDLE;
+    }
+    if (a->grid_state_fb[0]) {
+        vkDestroyFramebuffer(a->device, a->grid_state_fb[0], NULL);
+        a->grid_state_fb[0] = VK_NULL_HANDLE;
+    }
+    if (a->grid_state_fb[1]) {
+        vkDestroyFramebuffer(a->device, a->grid_state_fb[1], NULL);
+        a->grid_state_fb[1] = VK_NULL_HANDLE;
     }
     if (a->scene_view) {
         vkDestroyImageView(a->device, a->scene_view, NULL);
@@ -4475,6 +4678,14 @@ static void destroy_render_runtime(app* a) {
         vkDestroyImageView(a->device, a->bloom_view, NULL);
         a->bloom_view = VK_NULL_HANDLE;
     }
+    if (a->grid_state_view[0]) {
+        vkDestroyImageView(a->device, a->grid_state_view[0], NULL);
+        a->grid_state_view[0] = VK_NULL_HANDLE;
+    }
+    if (a->grid_state_view[1]) {
+        vkDestroyImageView(a->device, a->grid_state_view[1], NULL);
+        a->grid_state_view[1] = VK_NULL_HANDLE;
+    }
     if (a->scene_image) {
         vkDestroyImage(a->device, a->scene_image, NULL);
         a->scene_image = VK_NULL_HANDLE;
@@ -4491,6 +4702,14 @@ static void destroy_render_runtime(app* a) {
         vkDestroyImage(a->device, a->bloom_image, NULL);
         a->bloom_image = VK_NULL_HANDLE;
     }
+    if (a->grid_state_image[0]) {
+        vkDestroyImage(a->device, a->grid_state_image[0], NULL);
+        a->grid_state_image[0] = VK_NULL_HANDLE;
+    }
+    if (a->grid_state_image[1]) {
+        vkDestroyImage(a->device, a->grid_state_image[1], NULL);
+        a->grid_state_image[1] = VK_NULL_HANDLE;
+    }
     if (a->scene_memory) {
         vkFreeMemory(a->device, a->scene_memory, NULL);
         a->scene_memory = VK_NULL_HANDLE;
@@ -4506,6 +4725,14 @@ static void destroy_render_runtime(app* a) {
     if (a->bloom_memory) {
         vkFreeMemory(a->device, a->bloom_memory, NULL);
         a->bloom_memory = VK_NULL_HANDLE;
+    }
+    if (a->grid_state_memory[0]) {
+        vkFreeMemory(a->device, a->grid_state_memory[0], NULL);
+        a->grid_state_memory[0] = VK_NULL_HANDLE;
+    }
+    if (a->grid_state_memory[1]) {
+        vkFreeMemory(a->device, a->grid_state_memory[1], NULL);
+        a->grid_state_memory[1] = VK_NULL_HANDLE;
     }
     if (a->terrain_vertex_map && a->terrain_vertex_memory) {
         vkUnmapMemory(a->device, a->terrain_vertex_memory);
@@ -4617,6 +4844,10 @@ static void destroy_render_runtime(app* a) {
         vkDestroyRenderPass(a->device, a->bloom_render_pass, NULL);
         a->bloom_render_pass = VK_NULL_HANDLE;
     }
+    if (a->grid_state_render_pass) {
+        vkDestroyRenderPass(a->device, a->grid_state_render_pass, NULL);
+        a->grid_state_render_pass = VK_NULL_HANDLE;
+    }
     if (a->present_render_pass) {
         vkDestroyRenderPass(a->device, a->present_render_pass, NULL);
         a->present_render_pass = VK_NULL_HANDLE;
@@ -4678,6 +4909,7 @@ static int recreate_render_runtime(app* a) {
         vg_set_crt_profile(a->vg, &saved_crt);
     }
     game_set_world_size(&a->game, (float)a->swapchain_extent.width, (float)a->swapchain_extent.height);
+    reset_grid_sim_state(a);
     a->force_clear_frames = 2;
     return 1;
 }
@@ -5071,6 +5303,21 @@ static int create_render_passes(app* a) {
     VkRenderPassCreateInfo bloom_rp = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO, .attachmentCount = 1, .pAttachments = &bloom_att, .subpassCount = 1, .pSubpasses = &bloom_sub};
     if (!check_vk(vkCreateRenderPass(a->device, &bloom_rp, NULL, &a->bloom_render_pass), "vkCreateRenderPass(bloom)")) return 0;
 
+    VkAttachmentDescription grid_state_att = {
+        .format = VK_FORMAT_R16G16B16A16_SFLOAT,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        .finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    };
+    VkAttachmentReference grid_state_ref = {.attachment = 0, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkSubpassDescription grid_state_sub = {.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS, .colorAttachmentCount = 1, .pColorAttachments = &grid_state_ref};
+    VkRenderPassCreateInfo grid_state_rp = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO, .attachmentCount = 1, .pAttachments = &grid_state_att, .subpassCount = 1, .pSubpasses = &grid_state_sub};
+    if (!check_vk(vkCreateRenderPass(a->device, &grid_state_rp, NULL, &a->grid_state_render_pass), "vkCreateRenderPass(grid state)")) return 0;
+
     VkAttachmentDescription present_att = {
         .format = a->swapchain_format,
         .samples = VK_SAMPLE_COUNT_1_BIT,
@@ -5095,6 +5342,16 @@ static int create_offscreen_targets(app* a) {
 
     if (!create_image_2d(a, w, h, a->swapchain_format, usage, VK_SAMPLE_COUNT_1_BIT, &a->scene_image, &a->scene_memory, &a->scene_view)) return 0;
     if (!create_image_2d(a, w, h, a->swapchain_format, usage, VK_SAMPLE_COUNT_1_BIT, &a->bloom_image, &a->bloom_memory, &a->bloom_view)) return 0;
+    if (!create_image_2d(
+            a, GRID_STATE_W, GRID_STATE_H, VK_FORMAT_R16G16B16A16_SFLOAT,
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            VK_SAMPLE_COUNT_1_BIT,
+            &a->grid_state_image[0], &a->grid_state_memory[0], &a->grid_state_view[0])) return 0;
+    if (!create_image_2d(
+            a, GRID_STATE_W, GRID_STATE_H, VK_FORMAT_R16G16B16A16_SFLOAT,
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            VK_SAMPLE_COUNT_1_BIT,
+            &a->grid_state_image[1], &a->grid_state_memory[1], &a->grid_state_view[1])) return 0;
     if (!create_depth_image_2d(a, w, h, a->scene_depth_format, samples, &a->scene_depth_image, &a->scene_depth_memory, &a->scene_depth_view)) return 0;
     if (samples != VK_SAMPLE_COUNT_1_BIT) {
         VkImageUsageFlags msaa_usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
@@ -5116,7 +5373,15 @@ static int create_offscreen_targets(app* a) {
 
     VkImageView bloom_att[] = {a->bloom_view};
     VkFramebufferCreateInfo bloom_fb = {.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO, .renderPass = a->bloom_render_pass, .attachmentCount = 1, .pAttachments = bloom_att, .width = w, .height = h, .layers = 1};
-    return check_vk(vkCreateFramebuffer(a->device, &bloom_fb, NULL, &a->bloom_fb), "vkCreateFramebuffer(bloom)");
+    if (!check_vk(vkCreateFramebuffer(a->device, &bloom_fb, NULL, &a->bloom_fb), "vkCreateFramebuffer(bloom)")) return 0;
+
+    VkImageView grid_att0[] = {a->grid_state_view[0]};
+    VkImageView grid_att1[] = {a->grid_state_view[1]};
+    VkFramebufferCreateInfo grid_fb0 = {.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO, .renderPass = a->grid_state_render_pass, .attachmentCount = 1, .pAttachments = grid_att0, .width = GRID_STATE_W, .height = GRID_STATE_H, .layers = 1};
+    VkFramebufferCreateInfo grid_fb1 = {.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO, .renderPass = a->grid_state_render_pass, .attachmentCount = 1, .pAttachments = grid_att1, .width = GRID_STATE_W, .height = GRID_STATE_H, .layers = 1};
+    if (!check_vk(vkCreateFramebuffer(a->device, &grid_fb0, NULL, &a->grid_state_fb[0]), "vkCreateFramebuffer(grid0)")) return 0;
+    if (!check_vk(vkCreateFramebuffer(a->device, &grid_fb1, NULL, &a->grid_state_fb[1]), "vkCreateFramebuffer(grid1)")) return 0;
+    return 1;
 }
 
 static int create_present_framebuffers(app* a) {
@@ -6177,49 +6442,109 @@ static int create_grid_resources(app* a) {
         return 0;
     }
 
-    VkPushConstantRange pc = {
-        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-        .offset = 0,
-        .size = sizeof(grid_pc)
+    VkSamplerCreateInfo sampler = {
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .magFilter = VK_FILTER_LINEAR,
+        .minFilter = VK_FILTER_LINEAR,
+        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
+        .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .maxLod = 1.0f
     };
-    VkPipelineLayoutCreateInfo pli = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-        .pushConstantRangeCount = 1,
-        .pPushConstantRanges = &pc
-    };
-    if (!check_vk(vkCreatePipelineLayout(a->device, &pli, NULL, &a->grid_layout), "vkCreatePipelineLayout(grid)")) {
+    if (!check_vk(vkCreateSampler(a->device, &sampler, NULL, &a->grid_state_sampler), "vkCreateSampler(grid state)")) {
         return 0;
     }
 
-    VkShaderModuleCreateInfo vs_ci = {
-        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-        .codeSize = v_type_grid_vert_spv_len,
-        .pCode = (const uint32_t*)v_type_grid_vert_spv
+    VkDescriptorSetLayoutBinding binding = {
+        .binding = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT
     };
-    VkShaderModuleCreateInfo fs_ci = {
-        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-        .codeSize = v_type_grid_frag_spv_len,
-        .pCode = (const uint32_t*)v_type_grid_frag_spv
+    VkDescriptorSetLayoutCreateInfo dsl = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 1,
+        .pBindings = &binding
     };
-    VkShaderModule vs = VK_NULL_HANDLE;
-    VkShaderModule fs = VK_NULL_HANDLE;
-    if (!check_vk(vkCreateShaderModule(a->device, &vs_ci, NULL, &vs), "vkCreateShaderModule(grid vs)")) {
+    if (!check_vk(vkCreateDescriptorSetLayout(a->device, &dsl, NULL, &a->grid_state_desc_layout), "vkCreateDescriptorSetLayout(grid state)")) {
         return 0;
     }
+    VkDescriptorPoolSize pool_size = {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 2};
+    VkDescriptorPoolCreateInfo pool = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, .poolSizeCount = 1, .pPoolSizes = &pool_size, .maxSets = 2};
+    if (!check_vk(vkCreateDescriptorPool(a->device, &pool, NULL, &a->grid_state_desc_pool), "vkCreateDescriptorPool(grid state)")) {
+        return 0;
+    }
+    VkDescriptorSetLayout layouts[2] = {a->grid_state_desc_layout, a->grid_state_desc_layout};
+    VkDescriptorSetAllocateInfo alloc = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .descriptorPool = a->grid_state_desc_pool,
+        .descriptorSetCount = 2,
+        .pSetLayouts = layouts
+    };
+    if (!check_vk(vkAllocateDescriptorSets(a->device, &alloc, a->grid_state_desc_set), "vkAllocateDescriptorSets(grid state)")) {
+        return 0;
+    }
+    for (int i = 0; i < 2; ++i) {
+        VkDescriptorImageInfo info = {
+            .sampler = a->grid_state_sampler,
+            .imageView = a->grid_state_view[i],
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        };
+        VkWriteDescriptorSet write = {
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = a->grid_state_desc_set[i],
+            .dstBinding = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .pImageInfo = &info
+        };
+        vkUpdateDescriptorSets(a->device, 1, &write, 0, NULL);
+    }
+
+    VkPushConstantRange render_pc = {.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 0, .size = sizeof(grid_pc)};
+    VkPipelineLayoutCreateInfo render_pli = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = &a->grid_state_desc_layout,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &render_pc
+    };
+    if (!check_vk(vkCreatePipelineLayout(a->device, &render_pli, NULL, &a->grid_layout), "vkCreatePipelineLayout(grid render)")) {
+        return 0;
+    }
+
+    VkPushConstantRange sim_pc = {.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 0, .size = sizeof(grid_sim_pc)};
+    VkPipelineLayoutCreateInfo sim_pli = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = &a->grid_state_desc_layout,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &sim_pc
+    };
+    if (!check_vk(vkCreatePipelineLayout(a->device, &sim_pli, NULL, &a->grid_sim_layout), "vkCreatePipelineLayout(grid sim)")) {
+        return 0;
+    }
+
+    VkShaderModuleCreateInfo vs_ci = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = v_type_grid_vert_spv_len, .pCode = (const uint32_t*)v_type_grid_vert_spv};
+    VkShaderModuleCreateInfo fs_ci = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = v_type_grid_frag_spv_len, .pCode = (const uint32_t*)v_type_grid_frag_spv};
+    VkShaderModuleCreateInfo fs_sim_ci = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = v_type_grid_sim_frag_spv_len, .pCode = (const uint32_t*)v_type_grid_sim_frag_spv};
+    VkShaderModule vs = VK_NULL_HANDLE;
+    VkShaderModule fs = VK_NULL_HANDLE;
+    VkShaderModule fs_sim = VK_NULL_HANDLE;
+    if (!check_vk(vkCreateShaderModule(a->device, &vs_ci, NULL, &vs), "vkCreateShaderModule(grid vs)")) return 0;
     if (!check_vk(vkCreateShaderModule(a->device, &fs_ci, NULL, &fs), "vkCreateShaderModule(grid fs)")) {
         vkDestroyShaderModule(a->device, vs, NULL);
         return 0;
     }
+    if (!check_vk(vkCreateShaderModule(a->device, &fs_sim_ci, NULL, &fs_sim), "vkCreateShaderModule(grid sim fs)")) {
+        vkDestroyShaderModule(a->device, fs, NULL);
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
 
-    VkPipelineShaderStageCreateInfo stages[2] = {
-        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vs, .pName = "main"},
-        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = fs, .pName = "main"}
-    };
     VkPipelineVertexInputStateCreateInfo vi = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-    VkPipelineInputAssemblyStateCreateInfo ia = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
-    };
+    VkPipelineInputAssemblyStateCreateInfo ia = {.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO, .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST};
     VkPipelineViewportStateCreateInfo vp = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .scissorCount = 1};
     VkPipelineRasterizationStateCreateInfo rs = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
@@ -6228,8 +6553,9 @@ static int create_grid_resources(app* a) {
         .cullMode = VK_CULL_MODE_NONE,
         .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE
     };
-    VkPipelineMultisampleStateCreateInfo ms = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .rasterizationSamples = scene_samples(a)};
-    VkPipelineColorBlendAttachmentState cb_att = {
+    VkPipelineMultisampleStateCreateInfo ms_scene = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .rasterizationSamples = scene_samples(a)};
+    VkPipelineMultisampleStateCreateInfo ms_single = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT};
+    VkPipelineColorBlendAttachmentState cb_render = {
         .blendEnable = VK_TRUE,
         .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
         .dstColorBlendFactor = VK_BLEND_FACTOR_ONE,
@@ -6237,18 +6563,32 @@ static int create_grid_resources(app* a) {
         .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
         .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
         .alphaBlendOp = VK_BLEND_OP_ADD,
-        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
     };
-    VkPipelineColorBlendStateCreateInfo cb = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1, .pAttachments = &cb_att};
+    VkPipelineColorBlendAttachmentState cb_sim = {
+        .blendEnable = VK_FALSE,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ZERO,
+        .colorBlendOp = VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+        .alphaBlendOp = VK_BLEND_OP_ADD,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
+    };
+    VkPipelineColorBlendStateCreateInfo cb = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1};
     VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
     VkPipelineDynamicStateCreateInfo ds = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .dynamicStateCount = 2, .pDynamicStates = dyn};
-    VkPipelineDepthStencilStateCreateInfo depth = {
+    VkPipelineDepthStencilStateCreateInfo depth_off = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
         .depthTestEnable = VK_FALSE,
         .depthWriteEnable = VK_FALSE,
         .depthCompareOp = VK_COMPARE_OP_ALWAYS
     };
+    VkPipelineShaderStageCreateInfo stages[2] = {
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vs, .pName = "main"},
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = fs, .pName = "main"}
+    };
+    cb.pAttachments = &cb_render;
     VkGraphicsPipelineCreateInfo gp = {
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .stageCount = 2,
@@ -6257,22 +6597,37 @@ static int create_grid_resources(app* a) {
         .pInputAssemblyState = &ia,
         .pViewportState = &vp,
         .pRasterizationState = &rs,
-        .pMultisampleState = &ms,
-        .pDepthStencilState = &depth,
+        .pMultisampleState = &ms_scene,
+        .pDepthStencilState = &depth_off,
         .pColorBlendState = &cb,
         .pDynamicState = &ds,
         .layout = a->grid_layout,
         .renderPass = a->scene_render_pass,
         .subpass = 0
     };
-    if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->grid_pipeline), "vkCreateGraphicsPipelines(grid)")) {
+    if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->grid_pipeline), "vkCreateGraphicsPipelines(grid render)")) {
+        vkDestroyShaderModule(a->device, fs_sim, NULL);
         vkDestroyShaderModule(a->device, fs, NULL);
         vkDestroyShaderModule(a->device, vs, NULL);
         return 0;
     }
 
+    stages[1].module = fs_sim;
+    cb.pAttachments = &cb_sim;
+    gp.pMultisampleState = &ms_single;
+    gp.layout = a->grid_sim_layout;
+    gp.renderPass = a->grid_state_render_pass;
+    if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->grid_sim_pipeline), "vkCreateGraphicsPipelines(grid sim)")) {
+        vkDestroyShaderModule(a->device, fs_sim, NULL);
+        vkDestroyShaderModule(a->device, fs, NULL);
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+
+    vkDestroyShaderModule(a->device, fs_sim, NULL);
     vkDestroyShaderModule(a->device, fs, NULL);
     vkDestroyShaderModule(a->device, vs, NULL);
+    reset_grid_sim_state(a);
     return 1;
 #endif
 }
@@ -7035,6 +7390,164 @@ static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t) {
 #endif
 }
 
+static int gather_grid_sim_sources(const app* a, float out_src[8][4]) {
+    int n = 0;
+    if (!a || !out_src) {
+        return 0;
+    }
+    const float world_w = a->game.world_w;
+    const float world_h = a->game.world_h;
+    const float cx = a->game.camera_x;
+    const float cy = a->game.camera_y;
+    const float viewport_h = (float)a->swapchain_extent.height;
+
+    const float x_min = cx - world_w * 0.75f;
+    const float x_max = cx + world_w * 0.75f;
+    const float y_min = -world_h * 0.25f;
+    const float y_max = world_h * 1.25f;
+
+    out_src[n][0] = a->game.player.b.x + world_w * 0.5f - cx;
+    out_src[n][1] = viewport_h - (a->game.player.b.y + world_h * 0.5f - cy);
+    out_src[n][2] = 52.0f;
+    out_src[n][3] = fmaxf(world_h * 0.18f, 90.0f);
+    n++;
+
+    for (int i = 0; i < MAX_ENEMIES && n < 8; ++i) {
+        if (!a->game.enemies[i].active) {
+            continue;
+        }
+        if (a->game.enemies[i].b.x < x_min || a->game.enemies[i].b.x > x_max ||
+            a->game.enemies[i].b.y < y_min || a->game.enemies[i].b.y > y_max) {
+            continue;
+        }
+        out_src[n][0] = a->game.enemies[i].b.x + world_w * 0.5f - cx;
+        out_src[n][1] = viewport_h - (a->game.enemies[i].b.y + world_h * 0.5f - cy);
+        out_src[n][2] = 34.0f;
+        out_src[n][3] = fmaxf(a->game.enemies[i].radius * 5.2f, 70.0f);
+        n++;
+    }
+    for (int i = 0; i < MAX_PARTICLES && n < 8; ++i) {
+        const particle* p = &a->game.particles[i];
+        if (!p->active || p->type != PARTICLE_FLASH || p->life_s <= 1.0e-4f) {
+            continue;
+        }
+        if (p->b.x < x_min || p->b.x > x_max || p->b.y < y_min || p->b.y > y_max) {
+            continue;
+        }
+        const float t = clampf(1.0f - p->age_s / p->life_s, 0.0f, 1.0f);
+        out_src[n][0] = p->b.x + world_w * 0.5f - cx;
+        out_src[n][1] = viewport_h - (p->b.y + world_h * 0.5f - cy);
+        out_src[n][2] = 180.0f * t;
+        out_src[n][3] = fmaxf(p->size * 20.0f, world_h * 0.22f);
+        n++;
+    }
+    if (a->game.emp_effect_active && n < 8) {
+        const float t = clampf(
+            1.0f - (a->game.emp_effect_t / fmaxf(a->game.emp_effect_duration_s, 1.0e-3f)),
+            0.0f,
+            1.0f
+        );
+        out_src[n][0] = a->game.emp_effect_x + world_w * 0.5f - cx;
+        out_src[n][1] = viewport_h - (a->game.emp_effect_y + world_h * 0.5f - cy);
+        out_src[n][2] = 190.0f * t;
+        out_src[n][3] = fmaxf(a->game.emp_blast_radius * 1.2f, world_h * 0.26f);
+        n++;
+    }
+    return n;
+}
+
+static void record_gpu_grid_sim(app* a, VkCommandBuffer cmd, float dt) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    (void)cmd;
+    (void)dt;
+#else
+    if (!a || !cmd || !a->grid_sim_pipeline || !a->grid_sim_layout || !a->grid_state_render_pass) {
+        return;
+    }
+    const leveldef_level* lvl = game_current_leveldef(&a->game);
+    if (!lvl || lvl->background_style != LEVELDEF_BACKGROUND_GRID) {
+        reset_grid_sim_state(a);
+        return;
+    }
+
+    const float hz = fmaxf(a->grid_sim_hz, 30.0f);
+    const float step_s = 1.0f / hz;
+    const float dt_clamped = clampf(dt, 0.0f, 0.050f);
+    a->grid_sim_accum_s += dt_clamped;
+    int steps = (int)floorf(a->grid_sim_accum_s / step_s);
+    if (steps > 8) {
+        steps = 8;
+        a->grid_sim_accum_s = step_s;
+    }
+    if (steps <= 0) {
+        return;
+    }
+    a->grid_sim_accum_s -= step_s * (float)steps;
+
+    float cam_dx = 0.0f;
+    float cam_dy = 0.0f;
+    if (a->grid_state_initialized) {
+        cam_dx = a->game.camera_x - a->grid_prev_camera_x;
+        cam_dy = a->game.camera_y - a->grid_prev_camera_y;
+    }
+    a->grid_prev_camera_x = a->game.camera_x;
+    a->grid_prev_camera_y = a->game.camera_y;
+
+    float src[8][4] = {{0}};
+    const int src_n = gather_grid_sim_sources(a, src);
+    for (int step = 0; step < steps; ++step) {
+        const uint32_t prev = a->grid_state_curr;
+        const uint32_t next = 1u - prev;
+
+        VkClearValue clear;
+        memset(&clear, 0, sizeof(clear));
+        VkRenderPassBeginInfo rp = {
+            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+            .renderPass = a->grid_state_render_pass,
+            .framebuffer = a->grid_state_fb[next],
+            .renderArea = {.offset = {0, 0}, .extent = {GRID_STATE_W, GRID_STATE_H}},
+            .clearValueCount = 1,
+            .pClearValues = &clear
+        };
+        vkCmdBeginRenderPass(cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
+        set_viewport_scissor(cmd, GRID_STATE_W, GRID_STATE_H);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->grid_sim_pipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->grid_sim_layout, 0, 1, &a->grid_state_desc_set[prev], 0, NULL);
+
+        grid_sim_pc pc;
+        memset(&pc, 0, sizeof(pc));
+        pc.p0[0] = (float)GRID_STATE_W;
+        pc.p0[1] = (float)GRID_STATE_H;
+        pc.p0[2] = step_s;
+        pc.p0[3] = (a->grid_state_initialized || step > 0) ? 0.0f : 1.0f;
+        pc.p1[0] = a->grid_sim_spring_k;
+        pc.p1[1] = a->grid_sim_neighbor_coupling;
+        pc.p1[2] = a->grid_sim_damping;
+        pc.p1[3] = a->grid_sim_impulse_gain;
+        pc.p2[0] = a->grid_sim_max_disp_px;
+        pc.p2[1] = a->grid_sim_max_vel_px_s;
+        pc.p2[2] = a->grid_sim_epsilon;
+        pc.p2[3] = (float)src_n;
+        pc.p3[0] = (step == 0) ? (cam_dx * ((float)GRID_STATE_W / fmaxf((float)a->swapchain_extent.width, 1.0f))) : 0.0f;
+        pc.p3[1] = (step == 0) ? ((-cam_dy) * ((float)GRID_STATE_H / fmaxf((float)a->swapchain_extent.height, 1.0f))) : 0.0f;
+        pc.p3[2] = (float)a->swapchain_extent.width;
+        pc.p3[3] = (float)a->swapchain_extent.height;
+        for (int i = 0; i < src_n && i < 8; ++i) {
+            pc.src[i][0] = src[i][0];
+            pc.src[i][1] = src[i][1];
+            pc.src[i][2] = src[i][2];
+            pc.src[i][3] = src[i][3];
+        }
+        vkCmdPushConstants(cmd, a->grid_sim_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+        vkCmdEndRenderPass(cmd);
+        a->grid_state_curr = next;
+        a->grid_state_initialized = 1;
+    }
+#endif
+}
+
 static void record_gpu_grid(app* a, VkCommandBuffer cmd) {
 #if !V_TYPE_HAS_TERRAIN_SHADERS
     (void)a;
@@ -7048,20 +7561,26 @@ static void record_gpu_grid(app* a, VkCommandBuffer cmd) {
         return;
     }
 
+    if (!a->grid_state_initialized) {
+        return;
+    }
+
     grid_pc pc;
     memset(&pc, 0, sizeof(pc));
     const float world_w = a->game.world_w;
     const float world_h = a->game.world_h;
-    const float cx = a->game.camera_x;
-    const float cy = a->game.camera_y;
     pc.p0[0] = (float)a->swapchain_extent.width;
     pc.p0[1] = (float)a->swapchain_extent.height;
-    pc.p0[2] = cx;
-    pc.p0[3] = cy;
-    pc.p1[0] = world_w;
-    pc.p1[1] = world_h;
-    pc.p1[2] = fmaxf(world_w / 28.0f, 26.0f);
-    pc.p1[3] = fmaxf(world_h / 22.0f, 24.0f);
+    pc.p0[2] = fmaxf(world_w / 28.0f, 26.0f);
+    pc.p0[3] = fmaxf(world_h / 22.0f, 24.0f);
+    pc.p1[0] = a->grid_render_distort_gain;
+    pc.p1[1] = a->grid_render_strain_gain;
+    pc.p1[2] = (float)GRID_STATE_W;
+    pc.p1[3] = (float)GRID_STATE_H;
+    pc.p4[0] = a->game.camera_x;
+    pc.p4[1] = a->game.camera_y;
+    pc.p4[2] = world_w;
+    pc.p4[3] = world_h;
 
     const int palette_mode = gameplay_palette_mode(a);
     if (palette_mode == 1) {
@@ -7075,64 +7594,11 @@ static void record_gpu_grid(app* a, VkCommandBuffer cmd) {
         pc.p3[0] = 0.13f; pc.p3[1] = 0.66f; pc.p3[2] = 0.25f;
     }
     pc.p2[3] = 1.0f;
-
-    int src_n = 0;
-    pc.src[src_n][0] = a->game.player.b.x;
-    pc.src[src_n][1] = a->game.player.b.y;
-    pc.src[src_n][2] = 52.0f;
-    pc.src[src_n][3] = fmaxf(world_h * 0.18f, 90.0f);
-    src_n++;
-
-    const float x_min = cx - world_w * 0.75f;
-    const float x_max = cx + world_w * 0.75f;
-    const float y_min = -world_h * 0.25f;
-    const float y_max = world_h * 1.25f;
-
-    for (int i = 0; i < MAX_ENEMIES && src_n < 4; ++i) {
-        if (!a->game.enemies[i].active) {
-            continue;
-        }
-        if (a->game.enemies[i].b.x < x_min || a->game.enemies[i].b.x > x_max ||
-            a->game.enemies[i].b.y < y_min || a->game.enemies[i].b.y > y_max) {
-            continue;
-        }
-        pc.src[src_n][0] = a->game.enemies[i].b.x;
-        pc.src[src_n][1] = a->game.enemies[i].b.y;
-        pc.src[src_n][2] = 34.0f;
-        pc.src[src_n][3] = fmaxf(a->game.enemies[i].radius * 5.2f, 70.0f);
-        src_n++;
-    }
-    for (int i = 0; i < MAX_PARTICLES && src_n < 4; ++i) {
-        const particle* p = &a->game.particles[i];
-        if (!p->active || p->type != PARTICLE_FLASH || p->life_s <= 1.0e-4f) {
-            continue;
-        }
-        if (p->b.x < x_min || p->b.x > x_max || p->b.y < y_min || p->b.y > y_max) {
-            continue;
-        }
-        const float t = clampf(1.0f - p->age_s / p->life_s, 0.0f, 1.0f);
-        pc.src[src_n][0] = p->b.x;
-        pc.src[src_n][1] = p->b.y;
-        pc.src[src_n][2] = 180.0f * t;
-        pc.src[src_n][3] = fmaxf(p->size * 20.0f, world_h * 0.22f);
-        src_n++;
-    }
-    if (a->game.emp_effect_active && src_n < 4) {
-        const float t = clampf(
-            1.0f - (a->game.emp_effect_t / fmaxf(a->game.emp_effect_duration_s, 1.0e-3f)),
-            0.0f,
-            1.0f
-        );
-        pc.src[src_n][0] = a->game.emp_effect_x;
-        pc.src[src_n][1] = a->game.emp_effect_y;
-        pc.src[src_n][2] = 190.0f * t;
-        pc.src[src_n][3] = fmaxf(a->game.emp_blast_radius * 1.2f, world_h * 0.26f);
-        src_n++;
-    }
-    pc.p3[3] = (float)src_n;
+    pc.p3[3] = a->grid_line_boost;
 
     set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->grid_pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->grid_layout, 0, 1, &a->grid_state_desc_set[a->grid_state_curr], 0, NULL);
     vkCmdPushConstants(cmd, a->grid_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
 #endif
@@ -7311,6 +7777,16 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
     if (!check_vk(vkResetCommandBuffer(cmd, 0), "vkResetCommandBuffer")) return 0;
     VkCommandBufferBeginInfo begin = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     if (!check_vk(vkBeginCommandBuffer(cmd, &begin), "vkBeginCommandBuffer")) return 0;
+    {
+        const int in_gameplay_scene = menu_is_gameplay(&a->menu);
+        const leveldef_level* lvl_bg = game_current_leveldef(&a->game);
+        const int use_gpu_grid = (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_GRID) ? 1 : 0;
+        if (in_gameplay_scene && use_gpu_grid) {
+            record_gpu_grid_sim(a, cmd, dt);
+        } else {
+            reset_grid_sim_state(a);
+        }
+    }
 
     VkClearValue scene_clear[3];
     memset(scene_clear, 0, sizeof(scene_clear));
@@ -7342,6 +7818,13 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         fprintf(stderr, "VG failure: vg_begin_frame -> %s (%d)\n", vg_result_string(vr), (int)vr);
         return 0;
     }
+    const leveldef_level* lvl_tune = game_current_leveldef(&a->game);
+    const int show_grid_tune =
+        a->grid_tuning_enabled &&
+        a->grid_tuning_show &&
+        menu_is_gameplay(&a->menu) &&
+        lvl_tune &&
+        lvl_tune->background_style == LEVELDEF_BACKGROUND_GRID;
     render_metrics metrics = {
         .fps = fps,
         .dt = dt,
@@ -7409,7 +7892,9 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .opening_ship_spin_axis = a->opening_ship_spin_axis,
         .surveillance_svg_asset = a->surveillance_svg_asset,
         .acoustics_tape_svg_asset = a->tape_svg_asset,
-        .terrain_tuning_text = (a->fog_tuning_enabled &&
+        .terrain_tuning_text = show_grid_tune
+            ? a->grid_tuning_text
+            : ((a->fog_tuning_enabled &&
                                 a->fog_tuning_show &&
                                 a->game.render_style == LEVEL_RENDER_FOG &&
                                 menu_is_gameplay(&a->menu))
@@ -7421,7 +7906,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
                 : ((a->terrain_tuning_enabled &&
                     a->terrain_tuning_show &&
                     a->game.render_style == LEVEL_RENDER_DRIFTER_SHADED)
-                    ? a->terrain_tuning_text : NULL)),
+                    ? a->terrain_tuning_text : NULL))),
         .use_gpu_particles = 0,
         .use_gpu_terrain = 0,
         .use_gpu_wormhole = 0,
@@ -7788,6 +8273,8 @@ int main(void) {
     a.terrain_tuning_show = 1;
     a.fog_tuning_enabled = env_flag_enabled("VTYPE_FOG_TUNING");
     a.fog_tuning_show = 1;
+    a.grid_tuning_enabled = env_flag_enabled("VTYPE_GRID_TUNING");
+    a.grid_tuning_show = 1;
     a.particle_tuning_enabled = env_flag_enabled("VTYPE_PARTICLE_TRACE");
     a.particle_tuning_show = 1;
     a.particle_bloom_enabled = 1;
@@ -7797,6 +8284,9 @@ int main(void) {
     a.use_gpu_arc = 1;
     a.use_gpu_particles = !env_flag_enabled("VTYPE_DISABLE_GPU_PARTICLES");
     a.disable_scene_split = env_flag_enabled("VTYPE_DISABLE_SCENE_SPLIT");
+    reset_grid_tuning(&a);
+    sync_grid_tuning_text(&a);
+    reset_grid_sim_state(&a);
     reset_terrain_tuning(&a);
     sync_terrain_tuning_text(&a);
     reset_fog_tuning(&a);
@@ -8313,6 +8803,10 @@ int main(void) {
                     a.show_crt_ui = !a.show_crt_ui;
                 } else if (ev.key.keysym.sym == SDLK_r) {
                     restart_pressed = 1;
+                } else if (a.grid_tuning_enabled &&
+                           menu_is_gameplay(&a.menu) &&
+                           handle_grid_tuning_key(&a, ev.key.keysym.sym)) {
+                    /* handled by grid tuning controls */
                 } else if (a.fog_tuning_enabled &&
                            menu_is_gameplay(&a.menu) &&
                            handle_fog_tuning_key(&a, ev.key.keysym.sym)) {

@@ -68,6 +68,38 @@ When enabled, controls are active only on `FOG_OF_WAR`, and only when no menu ov
 - Fog noise is world-anchored (camera movement flies through fog instead of dragging it with the screen).
 - Fog tuning keys are checked before particle and terrain tuning keys.
 
+## Grid Tuning (Grid Background Levels)
+
+Grid spring-simulation tuning is disabled by default.
+
+Enable it by setting:
+
+`VTYPE_GRID_TUNING=1`
+
+Example:
+
+```bash
+VTYPE_GRID_TUNING=1 ./build/VectorSwarm
+```
+
+When enabled, controls are active only on levels using `background=grid`, and only when no menu overlay is open.
+
+### Numpad Controls
+
+- `KP7 / KP4`: spring stiffness (`spring_k`) up/down
+- `KP8 / KP5`: neighbor coupling up/down
+- `KP9 / KP6`: damping up/down
+- `KP2 / KP1`: impulse gain up/down
+- `KP3 / KP0`: render distortion gain up/down
+- `KP*`: toggle grid tuning HUD
+- `KP.`: reset grid tuning defaults
+- `KP Enter`: print current grid tuning values to stdout
+
+### Notes
+
+- The simulation uses fixed-step updates and epsilon zeroing to avoid unstable low-amplitude drift.
+- Grid tuning keys are checked before fog, particle, and terrain tuning keys.
+
 ## Particle Tuning / Trace
 
 Particle trace and live explosion-particle tuning are disabled by default.
