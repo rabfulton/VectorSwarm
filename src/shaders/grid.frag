@@ -14,11 +14,14 @@ layout(push_constant) uniform GridPC {
 } pc;
 
 float line_band(float coord, float spacing) {
-    float cell = coord / max(spacing, 1.0);
+    float s = max(spacing, 1.0);
+    float cell = coord / s;
     float frac_v = fract(cell);
-    float d = abs(frac_v - 0.5) * max(spacing, 1.0);
-    float aa = max(fwidth(coord), 0.5);
-    return 1.0 - smoothstep(0.55 + aa * 0.35, 1.65 + aa * 0.75, d);
+    float d_px = min(frac_v, 1.0 - frac_v) * s;
+    float aa_px = max(fwidth(coord), 0.65);
+    const float line_px = 0.72;
+    float half_w_px = 0.5 * line_px;
+    return 1.0 - smoothstep(half_w_px, half_w_px + aa_px, d_px);
 }
 
 void main() {

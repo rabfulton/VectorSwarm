@@ -1339,18 +1339,6 @@ static void configure_arc_nodes_for_level(game_state* g) {
         an->damage_timer_s = 0.0f;
         an->sound_timer_s = 0.0f;
         an->energized_prev = 0;
-        fprintf(
-            stderr,
-            "[arc_trace] game_config level='%s' idx=%d anchor_x01=%.6f anchor_y01=%.6f world=(%.3f,%.3f) world_size=(%.1f,%.1f)\n",
-            g->current_level_name,
-            i,
-            src->anchor_x01,
-            src->anchor_y01,
-            an->x,
-            an->y,
-            g->world_w,
-            g->world_h
-        );
     }
 }
 
@@ -3000,9 +2988,11 @@ int game_apply_level_override(game_state* g, const struct leveldef_level* level,
         return 0;
     }
     g_levels[g->level_index].level = *level;
-    if (level_name && level_name[0]) {
-        snprintf(g_levels[g->level_index].name, sizeof(g_levels[g->level_index].name), "%s", level_name);
-        snprintf(g->current_level_name, sizeof(g->current_level_name), "%s", level_name);
+    (void)level_name;
+    /* Keep discovered filename identity stable. Runtime level overrides are
+       data-only and must not rename the active discovered level entry. */
+    if (g_levels[g->level_index].name[0] != '\0') {
+        snprintf(g->current_level_name, sizeof(g->current_level_name), "%s", g_levels[g->level_index].name);
     }
     apply_level_runtime_config(g);
     return 1;

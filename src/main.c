@@ -869,7 +869,7 @@ static void reset_grid_tuning(app* a) {
     a->grid_sim_epsilon = 0.0008f;
     a->grid_render_distort_gain = 2.1f;
     a->grid_render_strain_gain = 0.040f;
-    a->grid_line_boost = 1.0f;
+    a->grid_line_boost = 0.72f;
 }
 
 static void sync_grid_tuning_text(app* a) {
@@ -3835,19 +3835,6 @@ static void apply_level_editor_runtime(app* a) {
     }
 }
 
-static int editor_save_trace_enabled(void) {
-    static int cached = -1;
-    if (cached >= 0) {
-        return cached;
-    }
-    {
-        const char* env = getenv("VTYPE_EDITOR_SAVE_TRACE");
-        cached = (env && env[0] && strcmp(env, "0") != 0) ? 1 : 0;
-    }
-    return cached;
-}
-
-
 static int handle_level_editor_mouse(app* a, int mouse_x, int mouse_y, int mouse_down, int mouse_pressed) {
     if (!a) {
         return 0;
@@ -3874,15 +3861,6 @@ static int handle_level_editor_mouse(app* a, int mouse_x, int mouse_y, int mouse
     } else if (action == 3) {
         const leveldef_db* db = (const leveldef_db*)game_leveldef_get();
         char saved_path[LEVEL_EDITOR_PATH_CAP];
-        int pre_marker_count = a->level_editor.marker_count;
-        int pre_wave_mode = a->level_editor.level_wave_mode;
-        float pre_len = a->level_editor.level_length_screens;
-        level_editor_marker pre_markers[LEVEL_EDITOR_MAX_MARKERS];
-        if (pre_marker_count < 0) pre_marker_count = 0;
-        if (pre_marker_count > LEVEL_EDITOR_MAX_MARKERS) pre_marker_count = LEVEL_EDITOR_MAX_MARKERS;
-        if (pre_marker_count > 0) {
-            memcpy(pre_markers, a->level_editor.markers, (size_t)pre_marker_count * sizeof(level_editor_marker));
-        }
         if (level_editor_save_current(&a->level_editor, db, saved_path, sizeof(saved_path))) {
             if (!game_refresh_levels(&a->game) ||
                 !game_set_level_by_name(&a->game, a->level_editor.level_name)) {
@@ -3897,45 +3875,6 @@ static int handle_level_editor_mouse(app* a, int mouse_x, int mouse_y, int mouse
                 }
             }
             a->level_editor_applied_revision = a->level_editor.edit_revision;
-            if (editor_save_trace_enabled()) {
-                int diffs = 0;
-                fprintf(
-                    stderr,
-                    "[editor_save] pre: markers=%d wave_mode=%d len=%.3f | post: markers=%d wave_mode=%d len=%.3f\n",
-                    pre_marker_count, pre_wave_mode, pre_len,
-                    a->level_editor.marker_count, a->level_editor.level_wave_mode, a->level_editor.level_length_screens
-                );
-                if (pre_marker_count != a->level_editor.marker_count) {
-                    diffs = 1;
-                }
-                {
-                    const int cmp_n = (pre_marker_count < a->level_editor.marker_count)
-                        ? pre_marker_count : a->level_editor.marker_count;
-                    for (int i = 0; i < cmp_n; ++i) {
-                        const level_editor_marker* pm = &pre_markers[i];
-                        const level_editor_marker* qm = &a->level_editor.markers[i];
-                        if (pm->kind != qm->kind || pm->track != qm->track ||
-                            fabsf(pm->x01 - qm->x01) > 1.0e-4f || fabsf(pm->y01 - qm->y01) > 1.0e-4f ||
-                            fabsf(pm->a - qm->a) > 1.0e-4f || fabsf(pm->b - qm->b) > 1.0e-4f ||
-                            fabsf(pm->c - qm->c) > 1.0e-4f || fabsf(pm->d - qm->d) > 1.0e-4f) {
-                            fprintf(
-                                stderr,
-                                "[editor_save] marker[%d] pre{k=%d t=%d x=%.3f y=%.3f a=%.3f b=%.3f c=%.3f d=%.3f} post{k=%d t=%d x=%.3f y=%.3f a=%.3f b=%.3f c=%.3f d=%.3f}\n",
-                                i,
-                                pm->kind, pm->track, pm->x01, pm->y01, pm->a, pm->b, pm->c, pm->d,
-                                qm->kind, qm->track, qm->x01, qm->y01, qm->a, qm->b, qm->c, qm->d
-                            );
-                            diffs = 1;
-                            if (diffs > 16) {
-                                break;
-                            }
-                        }
-                    }
-                }
-                if (!diffs) {
-                    fprintf(stderr, "[editor_save] pre/post markers identical\n");
-                }
-            }
             set_tty_message(a, "level editor: saved");
         } else {
             set_tty_message(a, a->level_editor.status_text[0] ? a->level_editor.status_text : "level editor: save failed");
@@ -7571,8 +7510,11 @@ static void record_gpu_grid(app* a, VkCommandBuffer cmd) {
     const float world_h = a->game.world_h;
     pc.p0[0] = (float)a->swapchain_extent.width;
     pc.p0[1] = (float)a->swapchain_extent.height;
-    pc.p0[2] = fmaxf(world_w / 28.0f, 26.0f);
-    pc.p0[3] = fmaxf(world_h / 22.0f, 24.0f);
+    {
+        const float base = fmaxf(fminf(world_w, world_h) / 24.0f, 24.0f);
+        pc.p0[2] = base;
+        pc.p0[3] = base;
+    }
     pc.p1[0] = a->grid_render_distort_gain;
     pc.p1[1] = a->grid_render_strain_gain;
     pc.p1[2] = (float)GRID_STATE_W;
@@ -7631,8 +7573,6 @@ static void record_gpu_arc_beam(app* a, VkCommandBuffer cmd, float t) {
     if (g->arc_node_count < 2 || g->render_style == LEVEL_RENDER_CYLINDER) {
         return;
     }
-    static float trace_last_t = -1000.0f;
-
     set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->arc_beam_pipeline);
 
@@ -7682,23 +7622,6 @@ static void record_gpu_arc_beam(app* a, VkCommandBuffer cmd, float t) {
         pc.seg[1] = n0->y + g->world_h * 0.5f - g->camera_y;
         pc.seg[2] = n1->x + g->world_w * 0.5f - g->camera_x;
         pc.seg[3] = n1->y + g->world_h * 0.5f - g->camera_y;
-        if (i == 0 && (gt - trace_last_t) >= 0.5f) {
-            fprintf(
-                stderr,
-                "[arc_trace] gpu_draw cam=(%.3f,%.3f) n0_world=(%.3f,%.3f) n1_world=(%.3f,%.3f) seg_screen=(%.3f,%.3f)->(%.3f,%.3f)\n",
-                g->camera_x,
-                g->camera_y,
-                n0->x,
-                n0->y,
-                n1->x,
-                n1->y,
-                pc.seg[0],
-                pc.seg[1],
-                pc.seg[2],
-                pc.seg[3]
-            );
-            trace_last_t = gt;
-        }
         pc.p1[0] = clampf(n0->radius * 0.16f, 4.0f, 22.0f);
         pc.p1[1] = clampf(n0->radius * 0.40f, 5.0f, 30.0f);
         pc.p1[2] = (float)i * 0.173f + 0.37f;

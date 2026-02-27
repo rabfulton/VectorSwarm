@@ -1050,16 +1050,6 @@ static int build_level_serialized_text(
         an.push_accel = fmaxf(m->d, 0.0f);
         an.damage_interval_s = fmaxf(m->e, 0.02f);
         lvl.arc_nodes[lvl.arc_node_count++] = an;
-        fprintf(
-            stderr,
-            "[arc_trace] editor->level marker idx=%d x01=%.6f y01=%.6f level_len=%.6f save_anchor_x01=%.6f save_anchor_y01=%.6f\n",
-            i,
-            m->x01,
-            m->y01,
-            level_len,
-            an.anchor_x01,
-            an.anchor_y01
-        );
     }
     lvl.window_mask_count = 0;
     for (i = 0; i < s->marker_count && lvl.window_mask_count < LEVELDEF_MAX_WINDOW_MASKS; ++i) {
@@ -1976,16 +1966,6 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
         );
         if (s->marker_count > before) {
             s->markers[s->marker_count - 1].e = an->damage_interval_s;
-            fprintf(
-                stderr,
-                "[arc_trace] level->editor arc idx=%d anchor_x01=%.6f anchor_y01=%.6f level_len=%.6f marker_x01=%.6f marker_y01=%.6f\n",
-                i,
-                an->anchor_x01,
-                an->anchor_y01,
-                fmaxf(s->level_length_screens, 1.0f),
-                s->markers[s->marker_count - 1].x01,
-                s->markers[s->marker_count - 1].y01
-            );
         }
     }
     for (int i = 0; i < lvl->window_mask_count; ++i) {
@@ -2182,16 +2162,11 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
     if (name && name[0] != '\0') {
         snprintf(requested_name, sizeof(requested_name), "%s", name);
     }
-    style = level_style_from_name_loose(requested_name[0] ? requested_name : s->level_name);
-    if (style < 0 || style >= LEVEL_STYLE_COUNT) {
-        snprintf(s->status_text, sizeof(s->status_text), "unknown level name");
-        return 0;
-    }
     memset(&loaded_level, 0, sizeof(loaded_level));
     if (requested_name[0]) {
         snprintf(s->level_name, sizeof(s->level_name), "%s", requested_name);
     } else {
-        snprintf(s->level_name, sizeof(s->level_name), "%s", level_style_name(style));
+        snprintf(s->level_name, sizeof(s->level_name), "%s", level_style_name(s->level_style));
     }
     s->source_path[0] = '\0';
     s->source_text[0] = '\0';
@@ -2200,6 +2175,11 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
         lvl = &loaded_level;
         (void)read_file_text(s->source_path, s->source_text, sizeof(s->source_text));
     } else {
+        style = level_style_from_name_loose(requested_name[0] ? requested_name : s->level_name);
+        if (style < 0 || style >= LEVEL_STYLE_COUNT) {
+            snprintf(s->status_text, sizeof(s->status_text), "unknown level name");
+            return 0;
+        }
         lvl = leveldef_get_level(db, style);
     }
     s->level_style = style;
