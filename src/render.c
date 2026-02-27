@@ -827,7 +827,7 @@ static int level_background_mask_style(const game_state* g) {
     return clampi(lvl->background_mask_style, LEVELDEF_BG_MASK_NONE, LEVELDEF_BG_MASK_WINDOWS);
 }
 
-static int point_in_window_trapezoid(float px, float py, float cx, float cy, float width, float height) {
+static int point_in_window_trapezoid(float px, float py, float cx, float cy, float width, float height, int flip_vertical) {
     const float hh = height * 0.5f;
     const float dy = py - cy;
     if (fabsf(dy) > hh) {
@@ -835,8 +835,8 @@ static int point_in_window_trapezoid(float px, float py, float cx, float cy, flo
     }
     /* Match draw order: frame uses +Y as top edge (half_top), -Y as bottom edge (half_bottom). */
     const float t = (hh - dy) / fmaxf(height, 1.0e-5f);
-    const float half_top = width * 0.50f;
-    const float half_bottom = width * 0.44f;
+    const float half_top = width * (flip_vertical ? 0.44f : 0.50f);
+    const float half_bottom = width * (flip_vertical ? 0.50f : 0.44f);
     const float half_w = lerpf(half_top, half_bottom, t);
     return fabsf(px - cx) <= half_w;
 }
@@ -853,20 +853,10 @@ static vg_result draw_background_window_mask_overlays(
     if (level_background_mask_style(g) != LEVELDEF_BG_MASK_WINDOWS) {
         return VG_OK;
     }
-
-    const float spacing = g->world_w * 1.55f;
-    const float offset = g->world_w * 0.75f;
-    const float cy = g->world_h * 0.50f;
-    const float ww = g->world_w * 0.74f;
-    const float wh = g->world_h * 0.22f;
-    const float hh = wh * 0.5f;
-    const float half_top = ww * 0.50f;
-    const float half_bottom = ww * 0.44f;
-
-    const float world_left = g->camera_x - g->world_w;
-    const float world_right = g->camera_x + g->world_w * 2.0f;
-    const int k0 = (int)floorf((world_left - offset) / fmaxf(spacing, 1.0f)) - 1;
-    const int k1 = (int)ceilf((world_right - offset) / fmaxf(spacing, 1.0f)) + 1;
+    const leveldef_level* lvl = game_current_leveldef(g);
+    if (!lvl || lvl->window_mask_count <= 0) {
+        return VG_OK;
+    }
 
     vg_stroke_style sh = *halo;
     vg_stroke_style sm = *main;
@@ -877,10 +867,18 @@ static vg_result draw_background_window_mask_overlays(
     sh.width_px *= 1.12f;
     sm.width_px *= 1.06f;
 
-    for (int k = k0; k <= k1; ++k) {
-        const float center_world_x = offset + (float)k * spacing;
-        const float cx = center_world_x - g->camera_x;
-        if (cx < -ww || cx > g->world_w + ww) {
+    for (int i = 0; i < lvl->window_mask_count && i < LEVELDEF_MAX_WINDOW_MASKS; ++i) {
+        const leveldef_window_mask* wm = &lvl->window_masks[i];
+        const float center_world_x = wm->anchor_x01 * g->world_w;
+        const float cx = center_world_x - g->camera_x + g->world_w * 0.5f;
+        const float cy = wm->anchor_y01 * g->world_h;
+        const float ww = wm->width_h01 * g->world_w;
+        const float wh = wm->height_v01 * g->world_h;
+        const float hh = wh * 0.5f;
+        const int flip_vertical = (wm->flip_vertical != 0) ? 1 : 0;
+        const float half_top = ww * (flip_vertical ? 0.44f : 0.50f);
+        const float half_bottom = ww * (flip_vertical ? 0.50f : 0.44f);
+        if (cx < -ww || cx > g->world_w + ww || ww <= 0.0f || wh <= 0.0f) {
             continue;
         }
         const vg_vec2 frame[5] = {
@@ -915,18 +913,18 @@ static int star_visible_with_mask(const game_state* g, float sx, float sy) {
         return 1;
     }
     if (mask == LEVELDEF_BG_MASK_WINDOWS) {
-        const float spacing = g->world_w * 1.55f;
-        const float offset = g->world_w * 0.75f;
-        const float wx = sx + g->camera_x;
-        const float cy = g->world_h * 0.50f;
-        const float ww = g->world_w * 0.74f;
-        const float wh = g->world_h * 0.22f;
-        const float idx_f = floorf((wx - offset) / fmaxf(spacing, 1.0f) + 0.5f);
-        const int idx = (int)idx_f;
-        for (int j = -1; j <= 1; ++j) {
-            const float center_world_x = offset + ((float)idx + (float)j) * spacing;
-            const float center_screen_x = center_world_x - g->camera_x;
-            if (point_in_window_trapezoid(sx, sy, center_screen_x, cy, ww, wh)) {
+        const leveldef_level* lvl = game_current_leveldef(g);
+        if (!lvl || lvl->window_mask_count <= 0) {
+            return 0;
+        }
+        for (int i = 0; i < lvl->window_mask_count && i < LEVELDEF_MAX_WINDOW_MASKS; ++i) {
+            const leveldef_window_mask* wm = &lvl->window_masks[i];
+            const float center_world_x = wm->anchor_x01 * g->world_w;
+            const float center_screen_x = center_world_x - g->camera_x + g->world_w * 0.5f;
+            const float center_screen_y = wm->anchor_y01 * g->world_h;
+            const float ww = wm->width_h01 * g->world_w;
+            const float wh = wm->height_v01 * g->world_h;
+            if (point_in_window_trapezoid(sx, sy, center_screen_x, center_screen_y, ww, wh, wm->flip_vertical)) {
                 return 1;
             }
         }
@@ -3873,6 +3871,7 @@ static const char* level_editor_marker_name(int kind) {
         case 7: return "MINEFIELD";
         case 8: return "MISSILE LAUNCHER";
         case 13: return "ARC NODE";
+        case 14: return "WINDOW MASK";
         case 9: return "STRUCTURE";
         default: return "MARKER";
     }
@@ -3896,6 +3895,9 @@ static vg_color level_editor_marker_color(const palette_theme* pal, int kind) {
     }
     if (kind == 13) {
         return (vg_color){0.95f, 0.82f, 0.24f, 1.0f};
+    }
+    if (kind == 14) {
+        return (vg_color){0.62f, 0.90f, 1.0f, 1.0f};
     }
     if (kind == 9) {
         return (vg_color){0.48f, 0.90f, 1.0f, 1.0f};
@@ -4341,6 +4343,14 @@ static int editor_marker_properties_text(
         if (n < cap) { out_labels[n] = "DAMAGE INT"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_e[sel]); n++; }
         return n;
     }
+    if (kind == 14) {
+        if (n < cap) { out_labels[n] = "POS X"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "POS Y"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "WIDTH"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_a[sel]); n++; }
+        if (n < cap) { out_labels[n] = "HEIGHT"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_b[sel]); n++; }
+        if (n < cap) { out_labels[n] = "FLIP V"; snprintf(out_values[n], 32, "%s", (metrics->level_editor_marker_c[sel] >= 0.5f) ? "YES" : "NO"); n++; }
+        return n;
+    }
     if (kind == 9) {
         if (n < cap) { out_labels[n] = "POS X"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
         if (n < cap) { out_labels[n] = "POS Y"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
@@ -4444,6 +4454,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     const vg_rect mine_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 210.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
     const vg_rect missile_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 262.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
     const vg_rect arc_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 314.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
+    const vg_rect window_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 366.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
     const float ctb_x = construction_toolbar.x + 8.0f * ui;
     const float ctb_y = construction_toolbar.y + 3.0f * ui;
     const float ctb_w = construction_toolbar.w - 16.0f * ui;
@@ -4560,6 +4571,10 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     if (r != VG_OK) return r;
     r = draw_ui_button_shaded(ctx, arc_btn, "ARC NODE", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 13 ? 1 : 0);
     if (r != VG_OK) return r;
+    if (metrics->level_editor_background_mask_style == LEVELDEF_BG_MASK_WINDOWS) {
+        r = draw_ui_button_shaded(ctx, window_btn, "WINDOW", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 14 ? 1 : 0);
+        if (r != VG_OK) return r;
+    }
     {
         vg_stroke_style icon = frame;
         icon.width_px = 1.2f * ui;
@@ -4645,6 +4660,22 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             r = vg_draw_polyline(ctx, n0, 2, &as, 0);
             if (r != VG_OK) return r;
             r = vg_draw_polyline(ctx, n1, 2, &as, 0);
+            if (r != VG_OK) return r;
+        }
+        if (metrics->level_editor_background_mask_style == LEVELDEF_BG_MASK_WINDOWS) {
+            vg_stroke_style ws = icon;
+            const float cx = window_btn.x + 20.0f * ui;
+            const float cy = window_btn.y + window_btn.h * 0.50f;
+            const float ww = 18.0f * ui;
+            const float wh = 12.0f * ui;
+            const vg_vec2 trap[5] = {
+                {cx - ww * 0.50f, cy + wh * 0.50f},
+                {cx + ww * 0.50f, cy + wh * 0.50f},
+                {cx + ww * 0.44f, cy - wh * 0.50f},
+                {cx - ww * 0.44f, cy - wh * 0.50f},
+                {cx - ww * 0.50f, cy + wh * 0.50f}
+            };
+            r = vg_draw_polyline(ctx, trap, 5, &ws, 0);
             if (r != VG_OK) return r;
         }
     }
@@ -4898,6 +4929,20 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                     };
                     r = vg_fill_circle(ctx, (vg_vec2){vx, vy}, 1.7f * ui, &af, 12);
                 }
+            } else if (kind == 14) {
+                const float ww = fmaxf(metrics->level_editor_marker_a[i] * viewport.w, 12.0f * ui);
+                const float wh = fmaxf(metrics->level_editor_marker_b[i] * viewport.h, 8.0f * ui);
+                const int flip_vertical = (metrics->level_editor_marker_c[i] >= 0.5f) ? 1 : 0;
+                const float half_top = ww * (flip_vertical ? 0.44f : 0.50f);
+                const float half_bottom = ww * (flip_vertical ? 0.50f : 0.44f);
+                const vg_vec2 trap[5] = {
+                    {vx - half_top, vy + wh * 0.5f},
+                    {vx + half_top, vy + wh * 0.5f},
+                    {vx + half_bottom, vy - wh * 0.5f},
+                    {vx - half_bottom, vy - wh * 0.5f},
+                    {vx - half_top, vy + wh * 0.5f}
+                };
+                r = vg_draw_polyline(ctx, trap, 5, &mk, 0);
             } else if (kind == 9) {
                 const int prefab = (int)lroundf(metrics->level_editor_marker_a[i]);
                 const int layer = (int)lroundf(metrics->level_editor_marker_b[i]);
@@ -5084,7 +5129,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     );
     if (r != VG_OK) return r;
     if (metrics->level_editor_drag_active &&
-        (metrics->level_editor_drag_kind == 5 || metrics->level_editor_drag_kind == 10 || metrics->level_editor_drag_kind == 11 || metrics->level_editor_drag_kind == 12 || metrics->level_editor_drag_kind == 1 || metrics->level_editor_drag_kind == 6 || metrics->level_editor_drag_kind == 7 || metrics->level_editor_drag_kind == 8 || metrics->level_editor_drag_kind == 9 || metrics->level_editor_drag_kind == 13)) {
+        (metrics->level_editor_drag_kind == 5 || metrics->level_editor_drag_kind == 10 || metrics->level_editor_drag_kind == 11 || metrics->level_editor_drag_kind == 12 || metrics->level_editor_drag_kind == 1 || metrics->level_editor_drag_kind == 6 || metrics->level_editor_drag_kind == 7 || metrics->level_editor_drag_kind == 8 || metrics->level_editor_drag_kind == 9 || metrics->level_editor_drag_kind == 13 || metrics->level_editor_drag_kind == 14)) {
         vg_stroke_style gs = frame;
         gs.intensity = 1.2f;
         gs.color = level_editor_marker_color(&pal, metrics->level_editor_drag_kind);
@@ -5147,6 +5192,20 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 };
                 r = vg_fill_circle(ctx, (vg_vec2){metrics->level_editor_drag_x, metrics->level_editor_drag_y}, 1.7f * ui, &af, 12);
             }
+        } else if (metrics->level_editor_drag_kind == 14) {
+            const float cx = metrics->level_editor_drag_x;
+            const float cy = metrics->level_editor_drag_y;
+            const float ww = 26.0f * ui;
+            const float wh = 16.0f * ui;
+            const vg_vec2 trap[5] = {
+                {cx - ww * 0.50f, cy + wh * 0.50f},
+                {cx + ww * 0.50f, cy + wh * 0.50f},
+                {cx + ww * 0.44f, cy - wh * 0.50f},
+                {cx - ww * 0.44f, cy - wh * 0.50f},
+                {cx - ww * 0.50f, cy + wh * 0.50f}
+            };
+            r = vg_draw_polyline(ctx, trap, 5, &gs, 0);
+            if (r != VG_OK) return r;
         } else if (metrics->level_editor_drag_kind == 9) {
             const int prefab = metrics->level_editor_structure_tool_selected > 0
                 ? (metrics->level_editor_structure_tool_selected - 1)

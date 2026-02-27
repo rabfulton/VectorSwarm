@@ -442,6 +442,9 @@ static float marker_pick_radius01(int kind) {
     if (kind == LEVEL_EDITOR_MARKER_ARC_NODE) {
         return 0.040f;
     }
+    if (kind == LEVEL_EDITOR_MARKER_WINDOW_MASK) {
+        return 0.042f;
+    }
     if (kind == LEVEL_EDITOR_MARKER_STRUCTURE) {
         return 0.030f;
     }
@@ -610,6 +613,21 @@ static int pick_spatial_marker_in_viewport(
         const float vy = m->y01;
         const float dx = vx - mx01;
         const float dy = vy - my01;
+        if (m->kind == LEVEL_EDITOR_MARKER_WINDOW_MASK) {
+            const float ww = fmaxf(m->a, 0.02f);
+            const float wh = fmaxf(m->b, 0.02f);
+            const float hh = wh * 0.5f;
+            const float tt = (hh - (my01 - vy)) / fmaxf(wh, 1.0e-6f);
+            const int flip_vertical = (m->c >= 0.5f) ? 1 : 0;
+            const float half_top = ww * (flip_vertical ? 0.44f : 0.50f);
+            const float half_bottom = ww * (flip_vertical ? 0.50f : 0.44f);
+            const float t_clamped = clampf(tt, 0.0f, 1.0f);
+            const float half_w = half_top + (half_bottom - half_top) * t_clamped;
+            const int inside = (fabsf(my01 - vy) <= hh) && (fabsf(mx01 - vx) <= half_w);
+            if (inside) {
+                return i;
+            }
+        }
         const float d2 = dx * dx + dy * dy;
         if (editor_pick_trace_enabled()) {
             fprintf(
@@ -786,6 +804,7 @@ static const char* marker_kind_name(int kind) {
     if (kind == LEVEL_EDITOR_MARKER_MINEFIELD) return "minefield";
     if (kind == LEVEL_EDITOR_MARKER_MISSILE) return "missile_launcher";
     if (kind == LEVEL_EDITOR_MARKER_ARC_NODE) return "arc_node";
+    if (kind == LEVEL_EDITOR_MARKER_WINDOW_MASK) return "window_mask";
     if (kind == LEVEL_EDITOR_MARKER_STRUCTURE) return "structure";
     if (kind == LEVEL_EDITOR_MARKER_BOID_FISH) return "swarm_fish";
     if (kind == LEVEL_EDITOR_MARKER_BOID_FIREFLY) return "swarm_firefly";
@@ -905,6 +924,7 @@ static int build_level_serialized_text(
     lvl.minefield_count = 0;
     lvl.missile_launcher_count = 0;
     lvl.arc_node_count = 0;
+    lvl.window_mask_count = 0;
     lvl.structure_count = 0;
     lvl.event_count = 0;
     lvl.curated_count = 0;
@@ -1040,6 +1060,21 @@ static int build_level_serialized_text(
             an.anchor_x01,
             an.anchor_y01
         );
+    }
+    lvl.window_mask_count = 0;
+    for (i = 0; i < s->marker_count && lvl.window_mask_count < LEVELDEF_MAX_WINDOW_MASKS; ++i) {
+        const level_editor_marker* m = &s->markers[i];
+        leveldef_window_mask wm;
+        if (m->kind != LEVEL_EDITOR_MARKER_WINDOW_MASK || m->track != LEVEL_EDITOR_TRACK_SPATIAL) {
+            continue;
+        }
+        memset(&wm, 0, sizeof(wm));
+        wm.anchor_x01 = m->x01 * level_len;
+        wm.anchor_y01 = m->y01;
+        wm.width_h01 = fmaxf(m->a, 0.02f);
+        wm.height_v01 = fmaxf(m->b, 0.02f);
+        wm.flip_vertical = (m->c >= 0.5f) ? 1 : 0;
+        lvl.window_masks[lvl.window_mask_count++] = wm;
     }
     lvl.structure_count = 0;
     for (i = 0; i < s->marker_count && lvl.structure_count < LEVELDEF_MAX_STRUCTURES; ++i) {
@@ -1213,6 +1248,7 @@ static int build_level_serialized_text(
     if (!appendf(out, out_cap, &used, "# anchor_x01,anchor_y01,count,spacing,activation_range,missile_speed,\n")) return 0;
     if (!appendf(out, out_cap, &used, "# missile_turn_rate_deg,missile_ttl_s,hit_radius,blast_radius\n")) return 0;
     if (!appendf(out, out_cap, &used, "# arc_node CSV fields: anchor_x01,anchor_y01,period_s,on_s,radius,push_accel,damage_interval_s\n")) return 0;
+    if (!appendf(out, out_cap, &used, "# window_mask CSV fields: anchor_x01,anchor_y01,width_h01,height_v01,flip_vertical\n")) return 0;
     if (!appendf(out, out_cap, &used, "# structure CSV fields:\n")) return 0;
     if (!appendf(out, out_cap, &used, "# prefab_id,layer,grid_x,grid_y,rotation_quadrants,flip_x,flip_y,w_units,h_units,variant,vent_density,vent_opacity,vent_plume_height\n")) return 0;
     if (!appendf(out, out_cap, &used, "[level %s]\n", style_header_name(s->level_style))) return 0;
@@ -1242,6 +1278,19 @@ static int build_level_serialized_text(
     if (!appendf(out, out_cap, &used, "asteroid_storm_speed=%.3f\n", lvl.asteroid_storm_speed)) return 0;
     if (!appendf(out, out_cap, &used, "asteroid_storm_duration_s=%.3f\n", lvl.asteroid_storm_duration_s)) return 0;
     if (!appendf(out, out_cap, &used, "asteroid_storm_density=%.3f\n", lvl.asteroid_storm_density)) return 0;
+    for (i = 0; i < lvl.window_mask_count; ++i) {
+        const leveldef_window_mask* wm = &lvl.window_masks[i];
+        if (!appendf(
+                out,
+                out_cap,
+                &used,
+                "window_mask=%.3f,%.3f,%.3f,%.3f,%d\n",
+                wm->anchor_x01,
+                wm->anchor_y01,
+                wm->width_h01,
+                wm->height_v01,
+                wm->flip_vertical ? 1 : 0)) return 0;
+    }
 
     if (lvl.wave_mode == LEVELDEF_WAVES_CURATED) {
         for (i = 0; i < lvl.curated_count; ++i) {
@@ -1418,6 +1467,9 @@ static int marker_property_count(const level_editor_state* s) {
     }
     if (kind == LEVEL_EDITOR_MARKER_ARC_NODE) {
         return 7;
+    }
+    if (kind == LEVEL_EDITOR_MARKER_WINDOW_MASK) {
+        return 5;
     }
     if (kind == LEVEL_EDITOR_MARKER_STRUCTURE) {
         return 9;
@@ -1765,6 +1817,12 @@ void level_editor_compute_layout(float w, float h, level_editor_layout* out) {
         out->entities.w - 16.0f * ui,
         42.0f * ui
     };
+    out->window_button = (vg_rect){
+        out->entities.x + 8.0f * ui,
+        out->entities.y + out->entities.h - 366.0f * ui,
+        out->entities.w - 16.0f * ui,
+        42.0f * ui
+    };
     {
         const float tb_x = out->construction_toolbar.x + 8.0f * ui;
         const float tb_y = out->construction_toolbar.y + 3.0f * ui;
@@ -1928,6 +1986,26 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
                 s->markers[s->marker_count - 1].x01,
                 s->markers[s->marker_count - 1].y01
             );
+        }
+    }
+    for (int i = 0; i < lvl->window_mask_count; ++i) {
+        const leveldef_window_mask* wm = &lvl->window_masks[i];
+        const int before = s->marker_count;
+        push_marker(
+            s,
+            LEVEL_EDITOR_MARKER_WINDOW_MASK,
+            LEVEL_EDITOR_TRACK_SPATIAL,
+            1,
+            0.0f,
+            wm->anchor_x01 / fmaxf(s->level_length_screens, 1.0f),
+            wm->anchor_y01,
+            wm->width_h01,
+            wm->height_v01,
+            wm->flip_vertical ? 1.0f : 0.0f,
+            0.0f
+        );
+        if (s->marker_count > before) {
+            s->markers[s->marker_count - 1].d = 0.0f;
         }
     }
     for (int i = 0; i < lvl->structure_count; ++i) {
@@ -2167,6 +2245,9 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
             for (int i = 0; i < lvl->arc_node_count; ++i) {
                 data_len = fmaxf(data_len, lvl->arc_nodes[i].anchor_x01 + 0.5f);
             }
+            for (int i = 0; i < lvl->window_mask_count; ++i) {
+                data_len = fmaxf(data_len, lvl->window_masks[i].anchor_x01 + 0.5f);
+            }
             for (int i = 0; i < lvl->curated_count; ++i) {
                 data_len = fmaxf(data_len, lvl->curated[i].x01 + 0.5f);
             }
@@ -2301,6 +2382,8 @@ static void add_marker_at_view(
         if (s->marker_count > before) {
             s->markers[s->marker_count - 1].e = 0.35f;
         }
+    } else if (kind == LEVEL_EDITOR_MARKER_WINDOW_MASK) {
+        push_marker(s, LEVEL_EDITOR_MARKER_WINDOW_MASK, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, x01, 0.50f, 0.74f, 0.22f, 0.0f, 0.0f);
     } else if (kind == LEVEL_EDITOR_MARKER_STRUCTURE) {
         const int before = s->marker_count;
         push_marker(
@@ -2374,6 +2457,8 @@ static void add_spatial_marker_at_x01(level_editor_state* s, int kind, float x01
         if (s->marker_count > before) {
             s->markers[s->marker_count - 1].e = 0.35f;
         }
+    } else if (kind == LEVEL_EDITOR_MARKER_WINDOW_MASK) {
+        push_marker(s, LEVEL_EDITOR_MARKER_WINDOW_MASK, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, xx, 0.50f, 0.74f, 0.22f, 0.0f, 0.0f);
     } else {
         return;
     }
@@ -2654,6 +2739,15 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
             s->entity_drag_y = mouse_y;
             return 1;
         }
+        if (s->level_background_mask_style == LEVELDEF_BG_MASK_WINDOWS &&
+            point_in_rect(mouse_x, mouse_y, l.window_button)) {
+            s->entity_tool_selected = LEVEL_EDITOR_MARKER_WINDOW_MASK;
+            s->entity_drag_active = 1;
+            s->entity_drag_kind = LEVEL_EDITOR_MARKER_WINDOW_MASK;
+            s->entity_drag_x = mouse_x;
+            s->entity_drag_y = mouse_y;
+            return 1;
+        }
         if (point_in_rect(mouse_x, mouse_y, l.timeline_window) || point_in_rect(mouse_x, mouse_y, l.timeline_track)) {
             s->timeline_drag = 1;
         }
@@ -2705,7 +2799,8 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
                        s->entity_tool_selected == LEVEL_EDITOR_MARKER_ASTEROID_STORM ||
                        s->entity_tool_selected == LEVEL_EDITOR_MARKER_MINEFIELD ||
                        s->entity_tool_selected == LEVEL_EDITOR_MARKER_MISSILE ||
-                       s->entity_tool_selected == LEVEL_EDITOR_MARKER_ARC_NODE) {
+                       s->entity_tool_selected == LEVEL_EDITOR_MARKER_ARC_NODE ||
+                       s->entity_tool_selected == LEVEL_EDITOR_MARKER_WINDOW_MASK) {
                 if (best >= 0) {
                     s->selected_marker = best;
                 } else {
@@ -2778,12 +2873,17 @@ int level_editor_handle_mouse_release(level_editor_state* s, float mouse_x, floa
             s->entity_drag_kind == LEVEL_EDITOR_MARKER_MINEFIELD ||
             s->entity_drag_kind == LEVEL_EDITOR_MARKER_MISSILE ||
             s->entity_drag_kind == LEVEL_EDITOR_MARKER_ARC_NODE ||
+            s->entity_drag_kind == LEVEL_EDITOR_MARKER_WINDOW_MASK ||
             s->entity_drag_kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
+            const float default_y01 =
+                (is_boid_wave_kind(s->entity_drag_kind) || s->entity_drag_kind == LEVEL_EDITOR_MARKER_WINDOW_MASK)
+                    ? 0.50f
+                    : 0.10f;
             add_spatial_marker_at_x01(
                 s,
                 s->entity_drag_kind,
                 tx01,
-                (is_boid_wave_kind(s->entity_drag_kind)) ? 0.50f : 0.10f
+                default_y01
             );
         }
     } else if (point_in_rect(mouse_x, mouse_y, l.timeline_enemy_track)) {
@@ -2988,6 +3088,21 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             case 4: m->c = clampf(m->c + delta * 2.0f, 4.0f, 400.0f); break;
             case 5: m->d = clampf(m->d + delta * 50.0f, 0.0f, 20000.0f); break;
             case 6: m->e = clampf(m->e + delta * 0.02f, 0.02f, 3.00f); break;
+            default: break;
+        }
+        mark_editor_dirty(s);
+        return;
+    }
+    if (m->kind == LEVEL_EDITOR_MARKER_WINDOW_MASK) {
+        const float gx_step = 1.0f / (float)structure_grid_x_steps_for_level(s->level_length_screens);
+        const float gy_step = 1.0f / (float)structure_grid_y_steps();
+        const float coarse = (fabsf(delta) >= 9.0f) ? 1.0f : 0.25f;
+        switch (s->selected_property) {
+            case 0: m->x01 = clampf(m->x01 + ((delta >= 0.0f) ? gx_step * coarse : -gx_step * coarse), 0.0f, 1.0f); break;
+            case 1: m->y01 = clampf(m->y01 + ((delta >= 0.0f) ? gy_step * coarse : -gy_step * coarse), 0.0f, 1.0f); break;
+            case 2: m->a = clampf(m->a + delta * 0.02f, 0.05f, 1.50f); break;
+            case 3: m->b = clampf(m->b + delta * 0.02f, 0.04f, 1.00f); break;
+            case 4: m->c = (m->c >= 0.5f) ? 0.0f : 1.0f; break;
             default: break;
         }
         mark_editor_dirty(s);

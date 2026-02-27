@@ -13,6 +13,7 @@
 #define LEVELDEF_MAX_MINEFIELDS 32
 #define LEVELDEF_MAX_MISSILE_LAUNCHERS 32
 #define LEVELDEF_MAX_ARC_NODES 64
+#define LEVELDEF_MAX_WINDOW_MASKS 128
 #define LEVELDEF_MAX_STRUCTURES 512
 #define LEVELDEF_STRUCTURE_GRID_W 64
 #define LEVELDEF_STRUCTURE_GRID_H 36
@@ -149,6 +150,14 @@ typedef struct leveldef_arc_node {
     float push_accel;
     float damage_interval_s;
 } leveldef_arc_node;
+
+typedef struct leveldef_window_mask {
+    float anchor_x01;
+    float anchor_y01;
+    float width_h01;
+    float height_v01;
+    int flip_vertical;
+} leveldef_window_mask;
 
 typedef struct leveldef_structure_instance {
     int prefab_id;
@@ -293,6 +302,8 @@ typedef struct leveldef_level {
     leveldef_missile_launcher missile_launchers[LEVELDEF_MAX_MISSILE_LAUNCHERS];
     int arc_node_count;
     leveldef_arc_node arc_nodes[LEVELDEF_MAX_ARC_NODES];
+    int window_mask_count;
+    leveldef_window_mask window_masks[LEVELDEF_MAX_WINDOW_MASKS];
     int structure_count;
     leveldef_structure_instance structures[LEVELDEF_MAX_STRUCTURES];
 } leveldef_level;

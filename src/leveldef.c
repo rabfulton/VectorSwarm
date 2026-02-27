@@ -580,6 +580,49 @@ static int parse_arc_node(leveldef_level* lvl, const char* value, FILE* log_out)
     return 1;
 }
 
+static int parse_window_mask(leveldef_level* lvl, const char* value, FILE* log_out) {
+    char buf[256];
+    char* tok;
+    char* save = NULL;
+    const int expected = 5;
+    char* fields[5];
+    int i = 0;
+    leveldef_window_mask wm;
+
+    if (!lvl || !value || lvl->window_mask_count >= LEVELDEF_MAX_WINDOW_MASKS) {
+        return 0;
+    }
+    memset(&wm, 0, sizeof(wm));
+    strncpy(buf, value, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    tok = strtok_r(buf, ",", &save);
+    while (tok && i < expected) {
+        fields[i++] = trim(tok);
+        tok = strtok_r(NULL, ",", &save);
+    }
+    if (i != expected) {
+        if (log_out) {
+            fprintf(log_out, "leveldef: window_mask expects %d fields, got %d\n", expected, i);
+        }
+        return 0;
+    }
+
+    wm.anchor_x01 = strtof(fields[0], NULL);
+    wm.anchor_y01 = strtof(fields[1], NULL);
+    wm.width_h01 = strtof(fields[2], NULL);
+    wm.height_v01 = strtof(fields[3], NULL);
+    wm.flip_vertical = atoi(fields[4]) ? 1 : 0;
+    if (wm.width_h01 <= 0.0f || wm.height_v01 <= 0.0f) {
+        if (log_out) {
+            fprintf(log_out, "leveldef: window_mask width/height must be > 0\n");
+        }
+        return 0;
+    }
+    lvl->window_masks[lvl->window_mask_count++] = wm;
+    return 1;
+}
+
 static int parse_structure_instance(leveldef_level* lvl, const char* value, FILE* log_out) {
     char buf[320];
     char* tok;
@@ -777,6 +820,7 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_level->minefield_count = 0;
                         cur_level->missile_launcher_count = 0;
                         cur_level->arc_node_count = 0;
+                        cur_level->window_mask_count = 0;
                         cur_level->structure_count = 0;
                         cur_level->curated_count = 0;
                         cur_level->boid_cycle_count = 0;
@@ -960,6 +1004,8 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         (void)parse_missile_launcher(cur_level, v, log_out);
                     } else if (strcmp(k, "arc_node") == 0) {
                         (void)parse_arc_node(cur_level, v, log_out);
+                    } else if (strcmp(k, "window_mask") == 0) {
+                        (void)parse_window_mask(cur_level, v, log_out);
                     } else if (strcmp(k, "structure") == 0) {
                         (void)parse_structure_instance(cur_level, v, log_out);
                     } else if (strcmp(k, "curated_enemy") == 0) {
@@ -1348,6 +1394,21 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
                 }
                 ok = 0;
                 break;
+            }
+        }
+        if (l->window_mask_count < 0 || l->window_mask_count > LEVELDEF_MAX_WINDOW_MASKS) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid window_mask_count\n", i);
+            }
+            ok = 0;
+        }
+        for (int m = 0; m < l->window_mask_count; ++m) {
+            const leveldef_window_mask* wm = &l->window_masks[m];
+            if (wm->width_h01 <= 0.0f || wm->height_v01 <= 0.0f || !isfinite(wm->anchor_x01) || !isfinite(wm->anchor_y01)) {
+                if (log_out) {
+                    fprintf(log_out, "leveldef: level %d window_mask[%d] invalid\n", i, m);
+                }
+                ok = 0;
             }
         }
         if (l->structure_count < 0 || l->structure_count > LEVELDEF_MAX_STRUCTURES) {
