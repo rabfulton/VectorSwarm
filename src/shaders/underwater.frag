@@ -43,6 +43,7 @@ float fbm(vec2 p) {
 }
 
 float bubble_field(vec2 world_px, float t, float bubble_rate) {
+    float tile_w = max(pc.p4.z, 1.0);
     float d = 0.0;
     const int emit_n = 7;
     for (int i = 0; i < emit_n; ++i) {
@@ -52,13 +53,14 @@ float bubble_field(vec2 world_px, float t, float bubble_rate) {
         float cycle = 6.0 + fi * 0.77;
         float phase = fract((t * (0.10 + 0.03 * fi) * max(bubble_rate, 0.0)) + hash12(vec2(fi, 11.2)));
         float y01 = 1.0 - phase;
-        float x01 = ex + sin((phase * 7.1 + fi * 1.37) * 3.14159265) * (0.012 + 0.008 * fi);
+        float x01 = ex + sin((phase * 1.8 + fi * 0.41) * 3.14159265) * (0.012 + 0.008 * fi);
         vec2 c = vec2(x01 * pc.p4.z, y01 * pc.p4.w);
         vec2 delta = world_px - c;
+        delta.x -= tile_w * round(delta.x / tile_w);
         float r = mix(6.0, 18.0, hash12(vec2(fi, floor(t / cycle) + 3.0)));
         float dd = length(delta);
         float ring = exp(-pow((dd - r) / max(r * 0.20, 1.0), 2.0));
-        d += 0.22 * ring;
+        d += 0.36 * ring;
     }
     return clamp(d, 0.0, 1.0);
 }
@@ -166,10 +168,10 @@ void main() {
     vec3 col_b = pc.p2.rgb;
     float shift = pc.p4.y;
     vec3 col = mix(col_a, col_b, clamp(shade + shift * 0.20, 0.0, 1.0));
-    col += vec3(0.55, 0.72, 0.88) * (0.24 * bubbles + 0.18 * ca);
+    col += vec3(0.55, 0.72, 0.88) * (0.42 * bubbles + 0.18 * ca);
     col = mix(col, kelp.rgb + col * 0.15, kelp.a);
 
-    float alpha = clamp((0.07 + 0.20 * haze + 0.14 * ca + 0.18 * bubbles) * max(pc.p2.w, 0.0), 0.0, 0.55);
+    float alpha = clamp((0.07 + 0.20 * haze + 0.14 * ca + 0.30 * bubbles) * max(pc.p2.w, 0.0), 0.0, 0.60);
     alpha = clamp(alpha + kelp.a * max(pc.p2.w, 0.0), 0.0, 0.65);
     out_color = vec4(col, alpha);
 }
