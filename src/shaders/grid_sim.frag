@@ -46,16 +46,32 @@ void main() {
     int src_n = clamp(int(pc.p2.w + 0.5), 0, 8);
     for (int i = 0; i < src_n; ++i) {
         vec2 d = node_px - pc.src[i].xy;
+        float amp = pc.src[i].z;
         float r = max(pc.src[i].w, 1.0);
-        float r2 = r * r;
-        float q = dot(d, d) / r2;
-        if (q > 7.5) {
-            continue;
+        float dist2 = dot(d, d);
+        float dist = sqrt(max(dist2, 1.0));
+        float fall = 0.0;
+        if (amp < 0.0) {
+            /* EMP shockwave ring: radius in src.w, amplitude in -src.z. */
+            float band = max(r * 0.10, 6.0);
+            float dr = abs(dist - r);
+            float q = (dr * dr) / max(band * band, 1.0);
+            if (q > 9.0) {
+                continue;
+            }
+            fall = exp(-q);
+            amp = -amp;
+        } else {
+            float r2 = r * r;
+            float q = dist2 / r2;
+            if (q > 7.5) {
+                continue;
+            }
+            fall = exp(-q);
         }
-        float fall = exp(-q);
         float inv_len = inversesqrt(max(dot(d, d), 1.0));
         vec2 dir = d * inv_len;
-        impulse += dir * (pc.src[i].z * fall);
+        impulse += dir * (amp * fall);
     }
 
     float dt = max(pc.p0.z, 0.0);

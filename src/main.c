@@ -7351,6 +7351,57 @@ static int gather_grid_sim_sources(const app* a, float out_src[8][4]) {
     out_src[n][3] = fmaxf(world_h * 0.18f, 90.0f);
     n++;
 
+    if (a->game.emp_effect_active && n < 8) {
+        const float u = clampf(
+            a->game.emp_effect_t / fmaxf(a->game.emp_effect_duration_s, 1.0e-3f),
+            0.0f,
+            1.0f
+        );
+        out_src[n][0] = a->game.emp_effect_x + world_w * 0.5f - cx;
+        out_src[n][1] = viewport_h - (a->game.emp_effect_y + world_h * 0.5f - cy);
+        /* Negative amplitude marks a shockwave ring source in grid_sim.frag. */
+        out_src[n][2] = -320.0f * (1.0f - 0.28f * u);
+        out_src[n][3] = fmaxf(a->game.emp_blast_radius * (0.08f + 1.05f * u), world_h * 0.05f);
+        n++;
+    }
+
+    for (int i = 0; i < MAX_MINES && n < 8; ++i) {
+        const mine* m = &a->game.mines[i];
+        if (!m->active) {
+            continue;
+        }
+        if (m->b.x < x_min || m->b.x > x_max ||
+            m->b.y < y_min || m->b.y > y_max) {
+            continue;
+        }
+        out_src[n][0] = m->b.x + world_w * 0.5f - cx;
+        out_src[n][1] = viewport_h - (m->b.y + world_h * 0.5f - cy);
+        out_src[n][2] = 44.0f;
+        out_src[n][3] = fmaxf(m->radius * 7.5f, 84.0f);
+        n++;
+    }
+
+    for (int i = 0; i < MAX_MISSILES && n < 8; ++i) {
+        const homing_missile* m = &a->game.missiles[i];
+        if (!m->active) {
+            continue;
+        }
+        if (m->b.x < x_min || m->b.x > x_max ||
+            m->b.y < y_min || m->b.y > y_max) {
+            continue;
+        }
+        out_src[n][0] = m->b.x + world_w * 0.5f - cx;
+        out_src[n][1] = viewport_h - (m->b.y + world_h * 0.5f - cy);
+        if (m->owner == MISSILE_OWNER_PLAYER) {
+            out_src[n][2] = 56.0f;
+            out_src[n][3] = fmaxf(m->blast_radius * 1.20f, 96.0f);
+        } else {
+            out_src[n][2] = 50.0f;
+            out_src[n][3] = fmaxf(m->blast_radius * 1.05f, 92.0f);
+        }
+        n++;
+    }
+
     for (int i = 0; i < MAX_ENEMIES && n < 8; ++i) {
         if (!a->game.enemies[i].active) {
             continue;
@@ -7378,18 +7429,6 @@ static int gather_grid_sim_sources(const app* a, float out_src[8][4]) {
         out_src[n][1] = viewport_h - (p->b.y + world_h * 0.5f - cy);
         out_src[n][2] = 180.0f * t;
         out_src[n][3] = fmaxf(p->size * 20.0f, world_h * 0.22f);
-        n++;
-    }
-    if (a->game.emp_effect_active && n < 8) {
-        const float t = clampf(
-            1.0f - (a->game.emp_effect_t / fmaxf(a->game.emp_effect_duration_s, 1.0e-3f)),
-            0.0f,
-            1.0f
-        );
-        out_src[n][0] = a->game.emp_effect_x + world_w * 0.5f - cx;
-        out_src[n][1] = viewport_h - (a->game.emp_effect_y + world_h * 0.5f - cy);
-        out_src[n][2] = 190.0f * t;
-        out_src[n][3] = fmaxf(a->game.emp_blast_radius * 1.2f, world_h * 0.26f);
         n++;
     }
     return n;
