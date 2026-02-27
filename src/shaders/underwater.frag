@@ -83,6 +83,7 @@ vec4 kelp_field(vec2 world_px, float t) {
         float layer_density = clamp(kelp_density * (0.7 + 0.45 * (1.0 - lf)), 0.0, 1.0);
         float layer_parallax = (0.15 + 0.55 * lf) * parallax;
         vec2 wp = world_px + vec2(pc.p3.x * layer_parallax, 0.0);
+        float tile_w = max(pc.p4.z, 1.0);
         float y01 = wp.y / max(pc.p4.w, 1.0);
         float base_y01 = 1.02;
 
@@ -97,7 +98,7 @@ vec4 kelp_field(vec2 world_px, float t) {
             x01 += (hash12(vec2(fi, 73.0 + lf * 17.0)) - 0.5) * (0.06 + 0.02 * lf);
             float x0 = x01 * pc.p4.z;
 
-            float h01 = (0.22 + 0.26 * seed) * kelp_height * (0.78 + 0.3 * (1.0 - lf));
+            float h01 = (0.22 + 0.26 * seed) * kelp_height * (0.82 + 0.34 * lf);
             h01 = max(h01, 0.05);
             float y_top01 = base_y01 - h01;
             if (y01 < y_top01 || y01 > base_y01) {
@@ -110,16 +111,18 @@ vec4 kelp_field(vec2 world_px, float t) {
             float bend_px = bend * (6.0 + 15.0 * sway_amp) * pow(along, 1.25) * (0.95 - 0.25 * lf);
             float cx = x0 + bend_px;
 
-            float width = mix(2.0, 10.0, 1.0 - along) * (1.0 - 0.35 * lf);
-            float d = abs(wp.x - cx);
+            float width = mix(2.0, 10.0, 1.0 - along) * (0.82 + 0.24 * lf);
+            float dx = wp.x - cx;
+            dx -= tile_w * round(dx / tile_w);
+            float d = abs(dx);
             float body = 1.0 - smoothstep(width * 0.70, width, d);
             body *= smoothstep(0.02, 0.12, along) * smoothstep(1.0, 0.86, along);
 
             float rib = 1.0 - smoothstep(0.0, width * 0.28, d);
-            vec3 stem_col = mix(pc.p1.rgb * 0.85, pc.p2.rgb * 0.55, 0.25 + 0.55 * lf);
-            stem_col *= 0.65 + 0.55 * rib;
+            vec3 stem_col = mix(pc.p1.rgb * 0.70, pc.p2.rgb * 1.05, 0.25 + 0.55 * lf);
+            stem_col *= (0.58 + 0.78 * lf) * (0.68 + 0.52 * rib);
 
-            float alpha = body * (0.14 + 0.22 * (1.0 - lf));
+            float alpha = body * (0.10 + 0.26 * lf);
             accum_col += stem_col * alpha * (1.0 - accum_a);
             accum_a += alpha * (1.0 - accum_a);
             if (accum_a > 0.98) {
