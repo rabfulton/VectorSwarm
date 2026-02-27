@@ -841,6 +841,106 @@ static int point_in_window_trapezoid(float px, float py, float cx, float cy, flo
     return fabsf(px - cx) <= half_w;
 }
 
+static vg_result draw_window_frame_scifi(
+    vg_context* ctx,
+    float cx,
+    float cy,
+    float width,
+    float height,
+    int flip_vertical,
+    float inset_px,
+    const vg_stroke_style* style
+) {
+    if (!ctx || !style) {
+        return VG_OK;
+    }
+    if (width <= 2.0f || height <= 2.0f) {
+        return VG_OK;
+    }
+    const float ww = fmaxf(2.0f, width - inset_px * 2.0f);
+    const float wh = fmaxf(2.0f, height - inset_px * 2.0f);
+    const float hh = wh * 0.5f;
+    const float half_top = ww * (flip_vertical ? 0.44f : 0.50f);
+    const float half_bottom = ww * (flip_vertical ? 0.50f : 0.44f);
+    const float notch = fmaxf(2.0f, wh * 0.11f);
+    const float bevel = fmaxf(2.0f, wh * 0.16f);
+    const vg_vec2 frame[15] = {
+        {cx - half_top,            cy + hh},
+        {cx - half_top * 0.52f,    cy + hh},
+        {cx - half_top * 0.44f,    cy + hh + notch},
+        {cx + half_top * 0.44f,    cy + hh + notch},
+        {cx + half_top * 0.52f,    cy + hh},
+        {cx + half_top,            cy + hh},
+        {cx + half_bottom,         cy - hh + bevel},
+        {cx + half_bottom,         cy - hh},
+        {cx + half_bottom * 0.10f, cy - hh},
+        {cx + half_bottom * 0.02f, cy - hh - notch * 0.80f},
+        {cx - half_bottom * 0.18f, cy - hh - notch * 0.80f},
+        {cx - half_bottom * 0.26f, cy - hh},
+        {cx - half_bottom * 0.88f, cy - hh},
+        {cx - half_bottom,         cy - hh + bevel},
+        {cx - half_top,            cy + hh}
+    };
+    return vg_draw_polyline(ctx, frame, 15, style, 0);
+}
+
+static vg_result draw_window_frame_accents(
+    vg_context* ctx,
+    float cx,
+    float cy,
+    float width,
+    float height,
+    int flip_vertical,
+    float inset_px,
+    const vg_stroke_style* style
+) {
+    if (!ctx || !style) {
+        return VG_OK;
+    }
+    const float ww = fmaxf(2.0f, width - inset_px * 2.0f);
+    const float wh = fmaxf(2.0f, height - inset_px * 2.0f);
+    const float hh = wh * 0.5f;
+    const float half_top = ww * (flip_vertical ? 0.44f : 0.50f);
+    const float half_bottom = ww * (flip_vertical ? 0.50f : 0.44f);
+    const float notch = fmaxf(2.0f, wh * 0.11f);
+    const float top_notch_l = cx - half_top * 0.44f;
+    const float top_notch_r = cx + half_top * 0.44f;
+    const float bottom_notch_l = cx - half_bottom * 0.18f;
+    const float bottom_notch_r = cx + half_bottom * 0.02f;
+    const float top_y = cy + hh + notch * 0.70f;
+    const float bottom_y = cy - hh - notch * 0.70f;
+    const vg_vec2 top_l[2] = {
+        {cx - half_top, top_y},
+        {cx - half_top * 0.54f, top_y}
+    };
+    const vg_vec2 top_r[2] = {
+        {cx + half_top * 0.54f, top_y},
+        {cx + half_top, top_y}
+    };
+    const vg_vec2 top_mid[2] = {
+        {top_notch_l + (top_notch_r - top_notch_l) * 0.10f, top_y},
+        {top_notch_l + (top_notch_r - top_notch_l) * 0.90f, top_y}
+    };
+    const vg_vec2 bottom_l[2] = {
+        {cx - half_bottom * 0.90f, bottom_y},
+        {bottom_notch_l - (half_bottom * 0.10f), bottom_y}
+    };
+    const vg_vec2 bottom_r[2] = {
+        {bottom_notch_r + (half_bottom * 0.10f), bottom_y},
+        {cx + half_bottom * 0.90f, bottom_y}
+    };
+    vg_result r = vg_draw_polyline(ctx, top_l, 2, style, 0);
+    if (r != VG_OK) return r;
+    r = vg_draw_polyline(ctx, top_mid, 2, style, 0);
+    if (r != VG_OK) return r;
+    r = vg_draw_polyline(ctx, top_r, 2, style, 0);
+    if (r != VG_OK) return r;
+    r = vg_draw_polyline(ctx, bottom_l, 2, style, 0);
+    if (r != VG_OK) return r;
+    r = vg_draw_polyline(ctx, bottom_r, 2, style, 0);
+    return r;
+}
+
 static vg_result draw_background_window_mask_overlays(
     vg_context* ctx,
     const game_state* g,
@@ -866,6 +966,20 @@ static vg_result draw_background_window_mask_overlays(
     sm.color.a *= 0.62f;
     sh.width_px *= 1.12f;
     sm.width_px *= 1.06f;
+    vg_stroke_style ih = sh;
+    vg_stroke_style im = sm;
+    ih.intensity *= 0.34f;
+    im.intensity *= 0.42f;
+    ih.color.a *= 0.40f;
+    im.color.a *= 0.48f;
+    ih.color.r *= 0.58f;
+    ih.color.g *= 0.58f;
+    ih.color.b *= 0.58f;
+    im.color.r *= 0.62f;
+    im.color.g *= 0.62f;
+    im.color.b *= 0.62f;
+    ih.width_px *= 0.92f;
+    im.width_px *= 0.88f;
 
     for (int i = 0; i < lvl->window_mask_count && i < LEVELDEF_MAX_WINDOW_MASKS; ++i) {
         const leveldef_window_mask* wm = &lvl->window_masks[i];
@@ -876,23 +990,44 @@ static vg_result draw_background_window_mask_overlays(
         const float wh = wm->height_v01 * g->world_h;
         const float hh = wh * 0.5f;
         const int flip_vertical = (wm->flip_vertical != 0) ? 1 : 0;
-        const float half_top = ww * (flip_vertical ? 0.44f : 0.50f);
-        const float half_bottom = ww * (flip_vertical ? 0.50f : 0.44f);
         if (cx < -ww || cx > g->world_w + ww || ww <= 0.0f || wh <= 0.0f) {
             continue;
         }
-        const vg_vec2 frame[5] = {
-            {cx - half_top, cy + hh},
-            {cx + half_top, cy + hh},
-            {cx + half_bottom, cy - hh},
-            {cx - half_bottom, cy - hh},
-            {cx - half_top, cy + hh}
-        };
-        vg_result r = vg_draw_polyline(ctx, frame, 5, &sh, 0);
+        const float outer_pad = fmaxf(2.0f, fminf(ww, wh) * 0.065f);
+        const float inner_inset = fmaxf(2.0f, fminf(ww, wh) * 0.060f);
+        const float frame_ww = ww + outer_pad * 2.0f;
+        const float frame_wh = wh + outer_pad * 2.0f;
+        vg_result r = draw_window_frame_scifi(ctx, cx, cy, frame_ww, frame_wh, flip_vertical, 0.0f, &sh);
         if (r != VG_OK) {
             return r;
         }
-        r = vg_draw_polyline(ctx, frame, 5, &sm, 0);
+        r = draw_window_frame_scifi(ctx, cx, cy, frame_ww, frame_wh, flip_vertical, 0.0f, &sm);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = draw_window_frame_scifi(ctx, cx, cy, frame_ww, frame_wh, flip_vertical, inner_inset, &ih);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = draw_window_frame_scifi(ctx, cx, cy, frame_ww, frame_wh, flip_vertical, inner_inset, &im);
+        if (r != VG_OK) {
+            return r;
+        }
+        {
+            vg_stroke_style ah = sh;
+            vg_stroke_style am = sm;
+            ah.width_px *= 1.85f;
+            am.width_px *= 1.65f;
+            ah.intensity *= 1.24f;
+            am.intensity *= 1.20f;
+            ah.color.a *= 0.88f;
+            am.color.a *= 0.84f;
+            r = draw_window_frame_accents(ctx, cx, cy, frame_ww, frame_wh, flip_vertical, 0.0f, &ah);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = draw_window_frame_accents(ctx, cx, cy, frame_ww, frame_wh, flip_vertical, 0.0f, &am);
+        }
         if (r != VG_OK) {
             return r;
         }
@@ -924,7 +1059,10 @@ static int star_visible_with_mask(const game_state* g, float sx, float sy) {
             const float center_screen_y = wm->anchor_y01 * g->world_h;
             const float ww = wm->width_h01 * g->world_w;
             const float wh = wm->height_v01 * g->world_h;
-            if (point_in_window_trapezoid(sx, sy, center_screen_x, center_screen_y, ww, wh, wm->flip_vertical)) {
+            const float clip_inset = fmaxf(1.0f, fminf(ww, wh) * 0.04f);
+            const float clip_ww = fmaxf(2.0f, ww - 2.0f * clip_inset);
+            const float clip_wh = fmaxf(2.0f, wh - 2.0f * clip_inset);
+            if (point_in_window_trapezoid(sx, sy, center_screen_x, center_screen_y, clip_ww, clip_wh, wm->flip_vertical)) {
                 return 1;
             }
         }
