@@ -69,6 +69,7 @@
 #include "radar_line_frag_spv.h"
 #include "fog_vert_spv.h"
 #include "fog_frag_spv.h"
+#include "underwater_frag_spv.h"
 #include "grid_vert_spv.h"
 #include "grid_frag_spv.h"
 #include "grid_sim_frag_spv.h"
@@ -177,6 +178,14 @@ typedef struct fog_pc {
     float emit[4][4]; /* x=sx, y=sy, z=radius_px, w=power*light_gain */
 } fog_pc;
 
+typedef struct underwater_pc {
+    float p0[4];      /* x=viewport_w, y=viewport_h, z=time_s, w=density */
+    float p1[4];      /* rgb=primary_dim, w=caustic_strength */
+    float p2[4];      /* rgb=secondary, w=haze_alpha */
+    float p3[4];      /* x=world_origin_x, y=world_origin_y, z=caustic_scale, w=current_speed */
+    float p4[4];      /* x=bubble_rate, y=palette_shift, z=world_w, w=world_h */
+} underwater_pc;
+
 typedef struct grid_pc {
     float p0[4];      /* x=viewport_w, y=viewport_h, z=grid_dx, w=grid_dy */
     float p1[4];      /* x=distort_gain, y=strain_gain, z=state_w, w=state_h */
@@ -280,6 +289,8 @@ typedef struct app {
     VkPipeline radar_pipeline;
     VkPipelineLayout fog_layout;
     VkPipeline fog_pipeline;
+    VkPipelineLayout underwater_layout;
+    VkPipeline underwater_pipeline;
     VkPipelineLayout grid_layout;
     VkPipeline grid_pipeline;
     VkPipelineLayout grid_sim_layout;
@@ -2105,6 +2116,7 @@ static int create_particle_resources(app* a);
 static int create_wormhole_resources(app* a);
 static int create_radar_resources(app* a);
 static int create_fog_resources(app* a);
+static int create_underwater_resources(app* a);
 static int create_grid_resources(app* a);
 static int create_arc_beam_resources(app* a);
 static void reset_grid_sim_state(app* a);
@@ -2118,6 +2130,7 @@ static void record_gpu_particles_bloom(app* a, VkCommandBuffer cmd);
 static void record_gpu_wormhole(app* a, VkCommandBuffer cmd);
 static void record_gpu_radar(app* a, VkCommandBuffer cmd);
 static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t);
+static void record_gpu_underwater(app* a, VkCommandBuffer cmd, float t);
 static void record_gpu_grid_sim(app* a, VkCommandBuffer cmd, float dt);
 static void record_gpu_grid(app* a, VkCommandBuffer cmd);
 static void record_gpu_arc_beam(app* a, VkCommandBuffer cmd, float t);
@@ -4325,6 +4338,7 @@ static void cleanup(app* a) {
     if (a->radar_fill_pipeline) vkDestroyPipeline(a->device, a->radar_fill_pipeline, NULL);
     if (a->radar_pipeline) vkDestroyPipeline(a->device, a->radar_pipeline, NULL);
     if (a->fog_pipeline) vkDestroyPipeline(a->device, a->fog_pipeline, NULL);
+    if (a->underwater_pipeline) vkDestroyPipeline(a->device, a->underwater_pipeline, NULL);
     if (a->grid_pipeline) vkDestroyPipeline(a->device, a->grid_pipeline, NULL);
     if (a->grid_sim_pipeline) vkDestroyPipeline(a->device, a->grid_sim_pipeline, NULL);
     if (a->arc_beam_pipeline) vkDestroyPipeline(a->device, a->arc_beam_pipeline, NULL);
@@ -4334,6 +4348,7 @@ static void cleanup(app* a) {
     if (a->wormhole_line_layout) vkDestroyPipelineLayout(a->device, a->wormhole_line_layout, NULL);
     if (a->radar_layout) vkDestroyPipelineLayout(a->device, a->radar_layout, NULL);
     if (a->fog_layout) vkDestroyPipelineLayout(a->device, a->fog_layout, NULL);
+    if (a->underwater_layout) vkDestroyPipelineLayout(a->device, a->underwater_layout, NULL);
     if (a->grid_layout) vkDestroyPipelineLayout(a->device, a->grid_layout, NULL);
     if (a->grid_sim_layout) vkDestroyPipelineLayout(a->device, a->grid_sim_layout, NULL);
     if (a->arc_beam_layout) vkDestroyPipelineLayout(a->device, a->arc_beam_layout, NULL);
@@ -4513,6 +4528,10 @@ static void destroy_render_runtime(app* a) {
         vkDestroyPipeline(a->device, a->fog_pipeline, NULL);
         a->fog_pipeline = VK_NULL_HANDLE;
     }
+    if (a->underwater_pipeline) {
+        vkDestroyPipeline(a->device, a->underwater_pipeline, NULL);
+        a->underwater_pipeline = VK_NULL_HANDLE;
+    }
     if (a->grid_pipeline) {
         vkDestroyPipeline(a->device, a->grid_pipeline, NULL);
         a->grid_pipeline = VK_NULL_HANDLE;
@@ -4548,6 +4567,10 @@ static void destroy_render_runtime(app* a) {
     if (a->fog_layout) {
         vkDestroyPipelineLayout(a->device, a->fog_layout, NULL);
         a->fog_layout = VK_NULL_HANDLE;
+    }
+    if (a->underwater_layout) {
+        vkDestroyPipelineLayout(a->device, a->underwater_layout, NULL);
+        a->underwater_layout = VK_NULL_HANDLE;
     }
     if (a->grid_layout) {
         vkDestroyPipelineLayout(a->device, a->grid_layout, NULL);
@@ -4839,6 +4862,7 @@ static int recreate_render_runtime(app* a) {
         !create_wormhole_resources(a) ||
         !create_radar_resources(a) ||
         !create_fog_resources(a) ||
+        !create_underwater_resources(a) ||
         !create_grid_resources(a) ||
         !create_arc_beam_resources(a) ||
         !create_vg_context(a)) {
@@ -6372,6 +6396,115 @@ static int create_fog_resources(app* a) {
 #endif
 }
 
+static int create_underwater_resources(app* a) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    return 1;
+#else
+    if (!a) {
+        return 0;
+    }
+
+    VkPushConstantRange pc = {
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .offset = 0,
+        .size = sizeof(underwater_pc)
+    };
+    VkPipelineLayoutCreateInfo pli = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &pc
+    };
+    if (!check_vk(vkCreatePipelineLayout(a->device, &pli, NULL, &a->underwater_layout), "vkCreatePipelineLayout(underwater)")) {
+        return 0;
+    }
+
+    VkShaderModuleCreateInfo vs_ci = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = v_type_fog_vert_spv_len,
+        .pCode = (const uint32_t*)v_type_fog_vert_spv
+    };
+    VkShaderModuleCreateInfo fs_ci = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = v_type_underwater_frag_spv_len,
+        .pCode = (const uint32_t*)v_type_underwater_frag_spv
+    };
+    VkShaderModule vs = VK_NULL_HANDLE;
+    VkShaderModule fs = VK_NULL_HANDLE;
+    if (!check_vk(vkCreateShaderModule(a->device, &vs_ci, NULL, &vs), "vkCreateShaderModule(underwater vs)")) {
+        return 0;
+    }
+    if (!check_vk(vkCreateShaderModule(a->device, &fs_ci, NULL, &fs), "vkCreateShaderModule(underwater fs)")) {
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+
+    VkPipelineShaderStageCreateInfo stages[2] = {
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vs, .pName = "main"},
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = fs, .pName = "main"}
+    };
+    VkPipelineVertexInputStateCreateInfo vi = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    VkPipelineInputAssemblyStateCreateInfo ia = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
+    };
+    VkPipelineViewportStateCreateInfo vp = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .scissorCount = 1};
+    VkPipelineRasterizationStateCreateInfo rs = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .lineWidth = 1.0f,
+        .cullMode = VK_CULL_MODE_NONE,
+        .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE
+    };
+    VkPipelineMultisampleStateCreateInfo ms = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .rasterizationSamples = scene_samples(a)};
+    VkPipelineColorBlendAttachmentState cb_att = {
+        .blendEnable = VK_TRUE,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .colorBlendOp = VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .alphaBlendOp = VK_BLEND_OP_ADD,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
+    };
+    VkPipelineColorBlendStateCreateInfo cb = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1, .pAttachments = &cb_att};
+    VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo ds = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .dynamicStateCount = 2, .pDynamicStates = dyn};
+    VkPipelineDepthStencilStateCreateInfo depth = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .depthTestEnable = VK_FALSE,
+        .depthWriteEnable = VK_FALSE,
+        .depthCompareOp = VK_COMPARE_OP_ALWAYS
+    };
+    VkGraphicsPipelineCreateInfo gp = {
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .stageCount = 2,
+        .pStages = stages,
+        .pVertexInputState = &vi,
+        .pInputAssemblyState = &ia,
+        .pViewportState = &vp,
+        .pRasterizationState = &rs,
+        .pMultisampleState = &ms,
+        .pDepthStencilState = &depth,
+        .pColorBlendState = &cb,
+        .pDynamicState = &ds,
+        .layout = a->underwater_layout,
+        .renderPass = a->scene_render_pass,
+        .subpass = 0
+    };
+    if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->underwater_pipeline), "vkCreateGraphicsPipelines(underwater)")) {
+        vkDestroyShaderModule(a->device, fs, NULL);
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+
+    vkDestroyShaderModule(a->device, fs, NULL);
+    vkDestroyShaderModule(a->device, vs, NULL);
+    return 1;
+#endif
+}
+
 static int create_grid_resources(app* a) {
 #if !V_TYPE_HAS_TERRAIN_SHADERS
     (void)a;
@@ -7329,6 +7462,60 @@ static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t) {
 #endif
 }
 
+static void record_gpu_underwater(app* a, VkCommandBuffer cmd, float t) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    (void)cmd;
+    (void)t;
+#else
+    if (!a || !cmd || !a->underwater_pipeline || !a->underwater_layout) {
+        return;
+    }
+    const leveldef_level* lvl = game_current_leveldef(&a->game);
+    if (!lvl || lvl->background_style != LEVELDEF_BACKGROUND_UNDERWATER) {
+        return;
+    }
+
+    underwater_pc pc;
+    memset(&pc, 0, sizeof(pc));
+    const float world_w = a->game.world_w;
+    const float world_h = a->game.world_h;
+    const float cx = a->game.camera_x;
+    const float cy = a->game.camera_y;
+    pc.p0[0] = (float)a->swapchain_extent.width;
+    pc.p0[1] = (float)a->swapchain_extent.height;
+    pc.p0[2] = t;
+    pc.p0[3] = fmaxf(lvl->underwater_density, 0.0f);
+    const int palette_mode = gameplay_palette_mode(a);
+
+    if (palette_mode == 1) {
+        pc.p1[0] = 0.28f; pc.p1[1] = 0.42f; pc.p1[2] = 0.30f;
+        pc.p2[0] = 0.72f; pc.p2[1] = 0.86f; pc.p2[2] = 0.78f;
+    } else if (palette_mode == 2) {
+        pc.p1[0] = 0.08f; pc.p1[1] = 0.28f; pc.p1[2] = 0.34f;
+        pc.p2[0] = 0.66f; pc.p2[1] = 0.90f; pc.p2[2] = 0.96f;
+    } else {
+        pc.p1[0] = 0.06f; pc.p1[1] = 0.22f; pc.p1[2] = 0.16f;
+        pc.p2[0] = 0.36f; pc.p2[1] = 0.70f; pc.p2[2] = 0.56f;
+    }
+    pc.p1[3] = fmaxf(lvl->underwater_caustic_strength, 0.0f);
+    pc.p2[3] = fmaxf(lvl->underwater_haze_alpha, 0.0f);
+    pc.p3[0] = cx - world_w * 0.5f;
+    pc.p3[1] = cy - world_h * 0.5f;
+    pc.p3[2] = fmaxf(lvl->underwater_caustic_scale, 0.05f);
+    pc.p3[3] = fmaxf(lvl->underwater_current_speed, 0.0f);
+    pc.p4[0] = fmaxf(lvl->underwater_bubble_rate, 0.0f);
+    pc.p4[1] = lvl->underwater_palette_shift;
+    pc.p4[2] = world_w;
+    pc.p4[3] = world_h;
+
+    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_pipeline);
+    vkCmdPushConstants(cmd, a->underwater_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+#endif
+}
+
 static int gather_grid_sim_sources(const app* a, float out_src[8][4]) {
     int n = 0;
     if (!a || !out_src) {
@@ -8033,13 +8220,14 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             (a->game.render_style != LEVEL_RENDER_CYLINDER) &&
             a->game.arc_node_count > 1;
         const int use_gpu_particles = a->use_gpu_particles;
-        const int use_gpu_fog = (a->game.render_style == LEVEL_RENDER_FOG) ? 1 : 0;
         const leveldef_level* lvl_bg = game_current_leveldef(&a->game);
+        const int use_gpu_fog = (a->game.render_style == LEVEL_RENDER_FOG) ? 1 : 0;
+        const int use_gpu_underwater = (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_UNDERWATER) ? 1 : 0;
         const int use_gpu_grid = (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_GRID) ? 1 : 0;
         const int need_mid_scene_gpu = (use_gpu_terrain || use_gpu_wormhole || use_gpu_radar || use_gpu_arc || use_gpu_grid);
         const int split_scene =
             in_gameplay_scene &&
-            (need_mid_scene_gpu || use_gpu_fog || (use_gpu_particles && !a->disable_scene_split));
+            (need_mid_scene_gpu || use_gpu_fog || use_gpu_underwater || (use_gpu_particles && !a->disable_scene_split));
         if (in_gameplay_scene && use_gpu_terrain) {
             /* IMPORTANT: high-plains terrain flickers with split scene phases
                (background-only + foreground-only). Keep this known-stable order:
@@ -8097,6 +8285,9 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             }
             if (use_gpu_fog) {
                 record_gpu_fog(a, cmd, t);
+            }
+            if (use_gpu_underwater) {
+                record_gpu_underwater(a, cmd, t);
             }
 
             metrics.scene_phase = 2; /* foreground-only */
@@ -8413,6 +8604,7 @@ int main(void) {
         !create_wormhole_resources(&a) ||
         !create_radar_resources(&a) ||
         !create_fog_resources(&a) ||
+        !create_underwater_resources(&a) ||
         !create_grid_resources(&a) ||
         !create_arc_beam_resources(&a) ||
         !create_vg_context(&a)) {

@@ -36,7 +36,8 @@ enum leveldef_background_style {
     LEVELDEF_BACKGROUND_NONE = 1,
     LEVELDEF_BACKGROUND_NEBULA = 2,
     LEVELDEF_BACKGROUND_GRID = 3,
-    LEVELDEF_BACKGROUND_SOLID = 4
+    LEVELDEF_BACKGROUND_SOLID = 4,
+    LEVELDEF_BACKGROUND_UNDERWATER = 5
 };
 
 enum leveldef_background_mask_style {
@@ -265,6 +266,13 @@ typedef struct leveldef_level {
     int theme_palette; /* 0=green, 1=amber, 2=ice */
     int background_style; /* enum leveldef_background_style */
     int background_mask_style; /* enum leveldef_background_mask_style */
+    float underwater_density;
+    float underwater_caustic_strength;
+    float underwater_caustic_scale;
+    float underwater_bubble_rate;
+    float underwater_haze_alpha;
+    float underwater_current_speed;
+    float underwater_palette_shift;
     int render_style; /* enum level_render_style_id */
     int wave_mode;
     int spawn_mode; /* enum leveldef_spawn_mode */

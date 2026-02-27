@@ -126,6 +126,7 @@ static int background_style_from_name(const char* name) {
     if (strcmp(name, "nebula") == 0) return LEVELDEF_BACKGROUND_NEBULA;
     if (strcmp(name, "grid") == 0) return LEVELDEF_BACKGROUND_GRID;
     if (strcmp(name, "solid") == 0) return LEVELDEF_BACKGROUND_SOLID;
+    if (strcmp(name, "underwater") == 0) return LEVELDEF_BACKGROUND_UNDERWATER;
     return -1;
 }
 
@@ -327,6 +328,13 @@ void leveldef_init_defaults(leveldef_db* db) {
         db->levels[i].theme_palette = 0;
         db->levels[i].background_style = LEVELDEF_BACKGROUND_STARS;
         db->levels[i].background_mask_style = LEVELDEF_BG_MASK_NONE;
+        db->levels[i].underwater_density = 1.0f;
+        db->levels[i].underwater_caustic_strength = 1.0f;
+        db->levels[i].underwater_caustic_scale = 1.0f;
+        db->levels[i].underwater_bubble_rate = 1.0f;
+        db->levels[i].underwater_haze_alpha = 1.0f;
+        db->levels[i].underwater_current_speed = 1.0f;
+        db->levels[i].underwater_palette_shift = 0.0f;
         db->levels[i].wave_mode = -1;
         db->levels[i].render_style = -1;
         db->levels[i].spawn_mode = -1;
@@ -870,6 +878,20 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_level->background_style = background_style_from_name(v);
                     } else if (strcmp(k, "background_mask") == 0) {
                         cur_level->background_mask_style = background_mask_style_from_name(v);
+                    } else if (strcmp(k, "underwater.density") == 0) {
+                        cur_level->underwater_density = strtof(v, NULL);
+                    } else if (strcmp(k, "underwater.caustic_strength") == 0) {
+                        cur_level->underwater_caustic_strength = strtof(v, NULL);
+                    } else if (strcmp(k, "underwater.caustic_scale") == 0) {
+                        cur_level->underwater_caustic_scale = strtof(v, NULL);
+                    } else if (strcmp(k, "underwater.bubble_rate") == 0) {
+                        cur_level->underwater_bubble_rate = strtof(v, NULL);
+                    } else if (strcmp(k, "underwater.haze_alpha") == 0) {
+                        cur_level->underwater_haze_alpha = strtof(v, NULL);
+                    } else if (strcmp(k, "underwater.current_speed") == 0) {
+                        cur_level->underwater_current_speed = strtof(v, NULL);
+                    } else if (strcmp(k, "underwater.palette_shift") == 0) {
+                        cur_level->underwater_palette_shift = strtof(v, NULL);
                     } else if (strcmp(k, "render_style") == 0) {
                         cur_level->render_style = render_style_from_name(v);
                     } else if (strcmp(k, "wave_mode") == 0) {
@@ -1257,9 +1279,21 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
             }
             ok = 0;
         }
-        if (l->background_style < LEVELDEF_BACKGROUND_STARS || l->background_style > LEVELDEF_BACKGROUND_SOLID) {
+        if (l->background_style < LEVELDEF_BACKGROUND_STARS || l->background_style > LEVELDEF_BACKGROUND_UNDERWATER) {
             if (log_out) {
-                fprintf(log_out, "leveldef: level %d invalid background (expected stars|none|nebula|grid|solid)\n", i);
+                fprintf(log_out, "leveldef: level %d invalid background (expected stars|none|nebula|grid|solid|underwater)\n", i);
+            }
+            ok = 0;
+        }
+        if (l->underwater_density < 0.0f || !isfinite(l->underwater_density) ||
+            l->underwater_caustic_strength < 0.0f || !isfinite(l->underwater_caustic_strength) ||
+            l->underwater_caustic_scale <= 0.0f || !isfinite(l->underwater_caustic_scale) ||
+            l->underwater_bubble_rate < 0.0f || !isfinite(l->underwater_bubble_rate) ||
+            l->underwater_haze_alpha < 0.0f || !isfinite(l->underwater_haze_alpha) ||
+            l->underwater_current_speed < 0.0f || !isfinite(l->underwater_current_speed) ||
+            !isfinite(l->underwater_palette_shift)) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid underwater tuning values\n", i);
             }
             ok = 0;
         }
