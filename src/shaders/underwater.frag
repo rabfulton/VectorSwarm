@@ -9,6 +9,8 @@ layout(push_constant) uniform UnderwaterPC {
     vec4 p2; /* rgb=secondary, w=haze_alpha */
     vec4 p3; /* x=world_origin_x, y=world_origin_y, z=caustic_scale, w=current_speed */
     vec4 p4; /* x=bubble_rate, y=palette_shift, z=world_w, w=world_h */
+    vec4 p5; /* x=kelp_density, y=kelp_sway_amp, z=kelp_sway_speed, w=kelp_height */
+    vec4 p6; /* x=kelp_parallax_strength */
 } pc;
 
 float hash12(vec2 p) {
@@ -61,6 +63,74 @@ float bubble_field(vec2 world_px, float t, float bubble_rate) {
     return clamp(d, 0.0, 1.0);
 }
 
+vec4 kelp_field(vec2 world_px, float t) {
+    float kelp_density = max(pc.p5.x, 0.0);
+    float sway_amp = max(pc.p5.y, 0.0);
+    float sway_speed = max(pc.p5.z, 0.0);
+    float kelp_height = max(pc.p5.w, 0.05);
+    float parallax = max(pc.p6.x, 0.0);
+    if (kelp_density <= 0.0) {
+        return vec4(0.0);
+    }
+
+    const int layers = 3;
+    const int stems_per_layer = 26;
+    vec3 accum_col = vec3(0.0);
+    float accum_a = 0.0;
+
+    for (int layer = 0; layer < layers; ++layer) {
+        float lf = float(layer) / float(max(layers - 1, 1));
+        float layer_density = clamp(kelp_density * (0.7 + 0.45 * (1.0 - lf)), 0.0, 1.0);
+        float layer_parallax = (0.15 + 0.55 * lf) * parallax;
+        vec2 wp = world_px + vec2(pc.p3.x * layer_parallax, 0.0);
+        float y01 = wp.y / max(pc.p4.w, 1.0);
+        float base_y01 = 1.02;
+
+        for (int i = 0; i < stems_per_layer; ++i) {
+            float fi = float(i);
+            float seed = hash12(vec2(fi, 31.0 + 11.0 * lf));
+            if (seed > layer_density) {
+                continue;
+            }
+
+            float x01 = (fi + 0.5) / float(stems_per_layer);
+            x01 += (hash12(vec2(fi, 73.0 + lf * 17.0)) - 0.5) * (0.06 + 0.02 * lf);
+            float x0 = x01 * pc.p4.z;
+
+            float h01 = (0.22 + 0.26 * seed) * kelp_height * (0.78 + 0.3 * (1.0 - lf));
+            h01 = max(h01, 0.05);
+            float y_top01 = base_y01 - h01;
+            if (y01 < y_top01 || y01 > base_y01) {
+                continue;
+            }
+
+            float along = clamp((base_y01 - y01) / h01, 0.0, 1.0);
+            float bend = sin(t * (0.55 + 0.35 * sway_speed) + fi * 0.87 + lf * 1.2 + along * 3.9);
+            bend += 0.45 * sin(t * (1.15 + 0.45 * sway_speed) + fi * 1.31 + along * 7.2);
+            float bend_px = bend * (6.0 + 15.0 * sway_amp) * pow(along, 1.25) * (0.95 - 0.25 * lf);
+            float cx = x0 + bend_px;
+
+            float width = mix(2.0, 10.0, 1.0 - along) * (1.0 - 0.35 * lf);
+            float d = abs(wp.x - cx);
+            float body = 1.0 - smoothstep(width * 0.70, width, d);
+            body *= smoothstep(0.02, 0.12, along) * smoothstep(1.0, 0.86, along);
+
+            float rib = 1.0 - smoothstep(0.0, width * 0.28, d);
+            vec3 stem_col = mix(pc.p1.rgb * 0.85, pc.p2.rgb * 0.55, 0.25 + 0.55 * lf);
+            stem_col *= 0.65 + 0.55 * rib;
+
+            float alpha = body * (0.14 + 0.22 * (1.0 - lf));
+            accum_col += stem_col * alpha * (1.0 - accum_a);
+            accum_a += alpha * (1.0 - accum_a);
+            if (accum_a > 0.98) {
+                break;
+            }
+        }
+    }
+
+    return vec4(accum_col, clamp(accum_a, 0.0, 0.65));
+}
+
 void main() {
     vec2 frag_px = vec2(gl_FragCoord.xy);
     float w = max(pc.p0.x, 1.0);
@@ -86,6 +156,7 @@ void main() {
     ca *= max(pc.p1.w, 0.0) * density;
 
     float bubbles = bubble_field(world_px, t, pc.p4.x) * density;
+    vec4 kelp = kelp_field(world_px, t) * density;
     float shade = clamp(0.18 + haze * 0.75 + ca * 0.60, 0.0, 1.0);
 
     vec3 col_a = pc.p1.rgb;
@@ -93,7 +164,9 @@ void main() {
     float shift = pc.p4.y;
     vec3 col = mix(col_a, col_b, clamp(shade + shift * 0.20, 0.0, 1.0));
     col += vec3(0.55, 0.72, 0.88) * (0.24 * bubbles + 0.18 * ca);
+    col = mix(col, kelp.rgb + col * 0.15, kelp.a);
 
     float alpha = clamp((0.07 + 0.20 * haze + 0.14 * ca + 0.18 * bubbles) * max(pc.p2.w, 0.0), 0.0, 0.55);
+    alpha = clamp(alpha + kelp.a * max(pc.p2.w, 0.0), 0.0, 0.65);
     out_color = vec4(col, alpha);
 }

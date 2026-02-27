@@ -184,6 +184,8 @@ typedef struct underwater_pc {
     float p2[4];      /* rgb=secondary, w=haze_alpha */
     float p3[4];      /* x=world_origin_x, y=world_origin_y, z=caustic_scale, w=current_speed */
     float p4[4];      /* x=bubble_rate, y=palette_shift, z=world_w, w=world_h */
+    float p5[4];      /* x=kelp_density, y=kelp_sway_amp, z=kelp_sway_speed, w=kelp_height */
+    float p6[4];      /* x=kelp_parallax_strength */
 } underwater_pc;
 
 typedef struct grid_pc {
@@ -7508,6 +7510,11 @@ static void record_gpu_underwater(app* a, VkCommandBuffer cmd, float t) {
     pc.p4[1] = lvl->underwater_palette_shift;
     pc.p4[2] = world_w;
     pc.p4[3] = world_h;
+    pc.p5[0] = fmaxf(lvl->underwater_kelp_density, 0.0f);
+    pc.p5[1] = fmaxf(lvl->underwater_kelp_sway_amp, 0.0f);
+    pc.p5[2] = fmaxf(lvl->underwater_kelp_sway_speed, 0.0f);
+    pc.p5[3] = fmaxf(lvl->underwater_kelp_height, 0.1f);
+    pc.p6[0] = fmaxf(lvl->underwater_kelp_parallax_strength, 0.0f);
 
     set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_pipeline);
