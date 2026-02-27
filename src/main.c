@@ -69,6 +69,8 @@
 #include "radar_line_frag_spv.h"
 #include "fog_vert_spv.h"
 #include "fog_frag_spv.h"
+#include "grid_vert_spv.h"
+#include "grid_frag_spv.h"
 #include "arc_beam_vert_spv.h"
 #include "arc_beam_frag_spv.h"
 #endif
@@ -172,6 +174,14 @@ typedef struct fog_pc {
     float emit[4][4]; /* x=sx, y=sy, z=radius_px, w=power*light_gain */
 } fog_pc;
 
+typedef struct grid_pc {
+    float p0[4];      /* x=viewport_w, y=viewport_h, z=camera_x, w=camera_y */
+    float p1[4];      /* x=world_w, y=world_h, z=grid_dx, w=grid_dy */
+    float p2[4];      /* rgb=dim_color, w=intensity */
+    float p3[4];      /* rgb=bright_color, w=source_count */
+    float src[4][4];  /* x=world_x, y=world_y, z=amp_px, w=radius_px */
+} grid_pc;
+
 typedef struct arc_beam_pc {
     float p0[4];        /* x=viewport_w, y=viewport_h, z=time_s, w=intensity */
     float color_dim[4]; /* rgb */
@@ -259,6 +269,8 @@ typedef struct app {
     VkPipeline radar_pipeline;
     VkPipelineLayout fog_layout;
     VkPipeline fog_pipeline;
+    VkPipelineLayout grid_layout;
+    VkPipeline grid_pipeline;
     VkPipelineLayout arc_beam_layout;
     VkPipeline arc_beam_pipeline;
     VkBuffer wormhole_tri_vertex_buffer;
@@ -1934,6 +1946,7 @@ static int create_particle_resources(app* a);
 static int create_wormhole_resources(app* a);
 static int create_radar_resources(app* a);
 static int create_fog_resources(app* a);
+static int create_grid_resources(app* a);
 static int create_arc_beam_resources(app* a);
 static int create_vg_context(app* a);
 static void set_tty_message(app* a, const char* msg);
@@ -1945,6 +1958,7 @@ static void record_gpu_particles_bloom(app* a, VkCommandBuffer cmd);
 static void record_gpu_wormhole(app* a, VkCommandBuffer cmd);
 static void record_gpu_radar(app* a, VkCommandBuffer cmd);
 static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t);
+static void record_gpu_grid(app* a, VkCommandBuffer cmd);
 static void record_gpu_arc_beam(app* a, VkCommandBuffer cmd, float t);
 static void reset_terrain_tuning(app* a);
 static void sync_terrain_tuning_text(app* a);
@@ -4211,6 +4225,7 @@ static void cleanup(app* a) {
     if (a->radar_fill_pipeline) vkDestroyPipeline(a->device, a->radar_fill_pipeline, NULL);
     if (a->radar_pipeline) vkDestroyPipeline(a->device, a->radar_pipeline, NULL);
     if (a->fog_pipeline) vkDestroyPipeline(a->device, a->fog_pipeline, NULL);
+    if (a->grid_pipeline) vkDestroyPipeline(a->device, a->grid_pipeline, NULL);
     if (a->arc_beam_pipeline) vkDestroyPipeline(a->device, a->arc_beam_pipeline, NULL);
     if (a->post_layout) vkDestroyPipelineLayout(a->device, a->post_layout, NULL);
     if (a->terrain_layout) vkDestroyPipelineLayout(a->device, a->terrain_layout, NULL);
@@ -4218,6 +4233,7 @@ static void cleanup(app* a) {
     if (a->wormhole_line_layout) vkDestroyPipelineLayout(a->device, a->wormhole_line_layout, NULL);
     if (a->radar_layout) vkDestroyPipelineLayout(a->device, a->radar_layout, NULL);
     if (a->fog_layout) vkDestroyPipelineLayout(a->device, a->fog_layout, NULL);
+    if (a->grid_layout) vkDestroyPipelineLayout(a->device, a->grid_layout, NULL);
     if (a->arc_beam_layout) vkDestroyPipelineLayout(a->device, a->arc_beam_layout, NULL);
     if (a->post_desc_pool) vkDestroyDescriptorPool(a->device, a->post_desc_pool, NULL);
     if (a->post_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->post_desc_layout, NULL);
@@ -4383,6 +4399,10 @@ static void destroy_render_runtime(app* a) {
         vkDestroyPipeline(a->device, a->fog_pipeline, NULL);
         a->fog_pipeline = VK_NULL_HANDLE;
     }
+    if (a->grid_pipeline) {
+        vkDestroyPipeline(a->device, a->grid_pipeline, NULL);
+        a->grid_pipeline = VK_NULL_HANDLE;
+    }
     if (a->arc_beam_pipeline) {
         vkDestroyPipeline(a->device, a->arc_beam_pipeline, NULL);
         a->arc_beam_pipeline = VK_NULL_HANDLE;
@@ -4410,6 +4430,10 @@ static void destroy_render_runtime(app* a) {
     if (a->fog_layout) {
         vkDestroyPipelineLayout(a->device, a->fog_layout, NULL);
         a->fog_layout = VK_NULL_HANDLE;
+    }
+    if (a->grid_layout) {
+        vkDestroyPipelineLayout(a->device, a->grid_layout, NULL);
+        a->grid_layout = VK_NULL_HANDLE;
     }
     if (a->arc_beam_layout) {
         vkDestroyPipelineLayout(a->device, a->arc_beam_layout, NULL);
@@ -4645,6 +4669,7 @@ static int recreate_render_runtime(app* a) {
         !create_wormhole_resources(a) ||
         !create_radar_resources(a) ||
         !create_fog_resources(a) ||
+        !create_grid_resources(a) ||
         !create_arc_beam_resources(a) ||
         !create_vg_context(a)) {
         return 0;
@@ -6143,6 +6168,115 @@ static int create_fog_resources(app* a) {
 #endif
 }
 
+static int create_grid_resources(app* a) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    return 1;
+#else
+    if (!a) {
+        return 0;
+    }
+
+    VkPushConstantRange pc = {
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .offset = 0,
+        .size = sizeof(grid_pc)
+    };
+    VkPipelineLayoutCreateInfo pli = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &pc
+    };
+    if (!check_vk(vkCreatePipelineLayout(a->device, &pli, NULL, &a->grid_layout), "vkCreatePipelineLayout(grid)")) {
+        return 0;
+    }
+
+    VkShaderModuleCreateInfo vs_ci = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = v_type_grid_vert_spv_len,
+        .pCode = (const uint32_t*)v_type_grid_vert_spv
+    };
+    VkShaderModuleCreateInfo fs_ci = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = v_type_grid_frag_spv_len,
+        .pCode = (const uint32_t*)v_type_grid_frag_spv
+    };
+    VkShaderModule vs = VK_NULL_HANDLE;
+    VkShaderModule fs = VK_NULL_HANDLE;
+    if (!check_vk(vkCreateShaderModule(a->device, &vs_ci, NULL, &vs), "vkCreateShaderModule(grid vs)")) {
+        return 0;
+    }
+    if (!check_vk(vkCreateShaderModule(a->device, &fs_ci, NULL, &fs), "vkCreateShaderModule(grid fs)")) {
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+
+    VkPipelineShaderStageCreateInfo stages[2] = {
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vs, .pName = "main"},
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = fs, .pName = "main"}
+    };
+    VkPipelineVertexInputStateCreateInfo vi = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    VkPipelineInputAssemblyStateCreateInfo ia = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
+    };
+    VkPipelineViewportStateCreateInfo vp = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .scissorCount = 1};
+    VkPipelineRasterizationStateCreateInfo rs = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .lineWidth = 1.0f,
+        .cullMode = VK_CULL_MODE_NONE,
+        .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE
+    };
+    VkPipelineMultisampleStateCreateInfo ms = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .rasterizationSamples = scene_samples(a)};
+    VkPipelineColorBlendAttachmentState cb_att = {
+        .blendEnable = VK_TRUE,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE,
+        .colorBlendOp = VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .alphaBlendOp = VK_BLEND_OP_ADD,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
+    };
+    VkPipelineColorBlendStateCreateInfo cb = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1, .pAttachments = &cb_att};
+    VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo ds = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .dynamicStateCount = 2, .pDynamicStates = dyn};
+    VkPipelineDepthStencilStateCreateInfo depth = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .depthTestEnable = VK_FALSE,
+        .depthWriteEnable = VK_FALSE,
+        .depthCompareOp = VK_COMPARE_OP_ALWAYS
+    };
+    VkGraphicsPipelineCreateInfo gp = {
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .stageCount = 2,
+        .pStages = stages,
+        .pVertexInputState = &vi,
+        .pInputAssemblyState = &ia,
+        .pViewportState = &vp,
+        .pRasterizationState = &rs,
+        .pMultisampleState = &ms,
+        .pDepthStencilState = &depth,
+        .pColorBlendState = &cb,
+        .pDynamicState = &ds,
+        .layout = a->grid_layout,
+        .renderPass = a->scene_render_pass,
+        .subpass = 0
+    };
+    if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->grid_pipeline), "vkCreateGraphicsPipelines(grid)")) {
+        vkDestroyShaderModule(a->device, fs, NULL);
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+
+    vkDestroyShaderModule(a->device, fs, NULL);
+    vkDestroyShaderModule(a->device, vs, NULL);
+    return 1;
+#endif
+}
+
 static int create_arc_beam_resources(app* a) {
 #if !V_TYPE_HAS_TERRAIN_SHADERS
     (void)a;
@@ -6901,6 +7035,109 @@ static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t) {
 #endif
 }
 
+static void record_gpu_grid(app* a, VkCommandBuffer cmd) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    (void)cmd;
+#else
+    if (!a || !cmd || !a->grid_pipeline || !a->grid_layout) {
+        return;
+    }
+    const leveldef_level* lvl = game_current_leveldef(&a->game);
+    if (!lvl || lvl->background_style != LEVELDEF_BACKGROUND_GRID) {
+        return;
+    }
+
+    grid_pc pc;
+    memset(&pc, 0, sizeof(pc));
+    const float world_w = a->game.world_w;
+    const float world_h = a->game.world_h;
+    const float cx = a->game.camera_x;
+    const float cy = a->game.camera_y;
+    pc.p0[0] = (float)a->swapchain_extent.width;
+    pc.p0[1] = (float)a->swapchain_extent.height;
+    pc.p0[2] = cx;
+    pc.p0[3] = cy;
+    pc.p1[0] = world_w;
+    pc.p1[1] = world_h;
+    pc.p1[2] = fmaxf(world_w / 28.0f, 26.0f);
+    pc.p1[3] = fmaxf(world_h / 22.0f, 24.0f);
+
+    const int palette_mode = gameplay_palette_mode(a);
+    if (palette_mode == 1) {
+        pc.p2[0] = 0.56f; pc.p2[1] = 0.38f; pc.p2[2] = 0.12f;
+        pc.p3[0] = 1.00f; pc.p3[1] = 0.82f; pc.p3[2] = 0.48f;
+    } else if (palette_mode == 2) {
+        pc.p2[0] = 0.14f; pc.p2[1] = 0.34f; pc.p2[2] = 0.44f;
+        pc.p3[0] = 0.72f; pc.p3[1] = 0.98f; pc.p3[2] = 1.00f;
+    } else {
+        pc.p2[0] = 0.02f; pc.p2[1] = 0.26f; pc.p2[2] = 0.08f;
+        pc.p3[0] = 0.13f; pc.p3[1] = 0.66f; pc.p3[2] = 0.25f;
+    }
+    pc.p2[3] = 1.0f;
+
+    int src_n = 0;
+    pc.src[src_n][0] = a->game.player.b.x;
+    pc.src[src_n][1] = a->game.player.b.y;
+    pc.src[src_n][2] = 52.0f;
+    pc.src[src_n][3] = fmaxf(world_h * 0.18f, 90.0f);
+    src_n++;
+
+    const float x_min = cx - world_w * 0.75f;
+    const float x_max = cx + world_w * 0.75f;
+    const float y_min = -world_h * 0.25f;
+    const float y_max = world_h * 1.25f;
+
+    for (int i = 0; i < MAX_ENEMIES && src_n < 4; ++i) {
+        if (!a->game.enemies[i].active) {
+            continue;
+        }
+        if (a->game.enemies[i].b.x < x_min || a->game.enemies[i].b.x > x_max ||
+            a->game.enemies[i].b.y < y_min || a->game.enemies[i].b.y > y_max) {
+            continue;
+        }
+        pc.src[src_n][0] = a->game.enemies[i].b.x;
+        pc.src[src_n][1] = a->game.enemies[i].b.y;
+        pc.src[src_n][2] = 34.0f;
+        pc.src[src_n][3] = fmaxf(a->game.enemies[i].radius * 5.2f, 70.0f);
+        src_n++;
+    }
+    for (int i = 0; i < MAX_PARTICLES && src_n < 4; ++i) {
+        const particle* p = &a->game.particles[i];
+        if (!p->active || p->type != PARTICLE_FLASH || p->life_s <= 1.0e-4f) {
+            continue;
+        }
+        if (p->b.x < x_min || p->b.x > x_max || p->b.y < y_min || p->b.y > y_max) {
+            continue;
+        }
+        const float t = clampf(1.0f - p->age_s / p->life_s, 0.0f, 1.0f);
+        pc.src[src_n][0] = p->b.x;
+        pc.src[src_n][1] = p->b.y;
+        pc.src[src_n][2] = 180.0f * t;
+        pc.src[src_n][3] = fmaxf(p->size * 20.0f, world_h * 0.22f);
+        src_n++;
+    }
+    if (a->game.emp_effect_active && src_n < 4) {
+        const float t = clampf(
+            1.0f - (a->game.emp_effect_t / fmaxf(a->game.emp_effect_duration_s, 1.0e-3f)),
+            0.0f,
+            1.0f
+        );
+        pc.src[src_n][0] = a->game.emp_effect_x;
+        pc.src[src_n][1] = a->game.emp_effect_y;
+        pc.src[src_n][2] = 190.0f * t;
+        pc.src[src_n][3] = fmaxf(a->game.emp_blast_radius * 1.2f, world_h * 0.26f);
+        src_n++;
+    }
+    pc.p3[3] = (float)src_n;
+
+    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->grid_pipeline);
+    vkCmdPushConstants(cmd, a->grid_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+#endif
+}
+
 static int arc_pair_energized_gpu(const arc_node_runtime* node, float t) {
     if (!node || !node->active) {
         return 0;
@@ -7350,7 +7587,9 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             a->game.arc_node_count > 1;
         const int use_gpu_particles = a->use_gpu_particles;
         const int use_gpu_fog = (a->game.render_style == LEVEL_RENDER_FOG) ? 1 : 0;
-        const int need_mid_scene_gpu = (use_gpu_terrain || use_gpu_wormhole || use_gpu_radar || use_gpu_arc);
+        const leveldef_level* lvl_bg = game_current_leveldef(&a->game);
+        const int use_gpu_grid = (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_GRID) ? 1 : 0;
+        const int need_mid_scene_gpu = (use_gpu_terrain || use_gpu_wormhole || use_gpu_radar || use_gpu_arc || use_gpu_grid);
         const int split_scene =
             in_gameplay_scene &&
             (need_mid_scene_gpu || use_gpu_fog || (use_gpu_particles && !a->disable_scene_split));
@@ -7405,6 +7644,9 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             }
             if (use_gpu_arc) {
                 record_gpu_arc_beam(a, cmd, t);
+            }
+            if (use_gpu_grid) {
+                record_gpu_grid(a, cmd);
             }
             if (use_gpu_fog) {
                 record_gpu_fog(a, cmd, t);
@@ -7719,6 +7961,7 @@ int main(void) {
         !create_wormhole_resources(&a) ||
         !create_radar_resources(&a) ||
         !create_fog_resources(&a) ||
+        !create_grid_resources(&a) ||
         !create_arc_beam_resources(&a) ||
         !create_vg_context(&a)) {
         cleanup(&a);
