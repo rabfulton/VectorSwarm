@@ -7199,6 +7199,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .level_editor_render_style = a->level_editor.level_render_style,
         .level_editor_theme_palette = a->level_editor.level_theme_palette,
         .level_editor_background_style = a->level_editor.level_background_style,
+        .level_editor_background_mask_style = a->level_editor.level_background_mask_style,
         .level_editor_asteroid_storm_enabled = a->level_editor.level_asteroid_storm_enabled,
         .level_editor_asteroid_storm_angle_deg = a->level_editor.level_asteroid_storm_angle_deg,
         .level_editor_asteroid_storm_speed = a->level_editor.level_asteroid_storm_speed,

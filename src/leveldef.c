@@ -129,6 +129,16 @@ static int background_style_from_name(const char* name) {
     return -1;
 }
 
+static int background_mask_style_from_name(const char* name) {
+    if (!name) {
+        return -1;
+    }
+    if (strcmp(name, "none") == 0) return LEVELDEF_BG_MASK_NONE;
+    if (strcmp(name, "terrain") == 0) return LEVELDEF_BG_MASK_TERRAIN;
+    if (strcmp(name, "windows") == 0) return LEVELDEF_BG_MASK_WINDOWS;
+    return -1;
+}
+
 static int has_prefix(const char* s, const char* prefix) {
     if (!s || !prefix) return 0;
     while (*prefix) {
@@ -316,6 +326,7 @@ void leveldef_init_defaults(leveldef_db* db) {
         db->levels[i].editor_length_screens = 12.0f;
         db->levels[i].theme_palette = 0;
         db->levels[i].background_style = LEVELDEF_BACKGROUND_STARS;
+        db->levels[i].background_mask_style = LEVELDEF_BG_MASK_NONE;
         db->levels[i].wave_mode = -1;
         db->levels[i].render_style = -1;
         db->levels[i].spawn_mode = -1;
@@ -325,6 +336,7 @@ void leveldef_init_defaults(leveldef_db* db) {
         leveldef_level* b = &db->levels[LEVEL_STYLE_BLANK];
         b->render_style = LEVEL_RENDER_BLANK;
         b->background_style = LEVELDEF_BACKGROUND_NONE;
+        b->background_mask_style = LEVELDEF_BG_MASK_NONE;
         b->wave_mode = LEVELDEF_WAVES_NORMAL;
         b->spawn_mode = LEVELDEF_SPAWN_SEQUENCED_CLEAR;
         b->spawn_interval_s = 2.0f;
@@ -812,6 +824,8 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_level->theme_palette = atoi(v);
                     } else if (strcmp(k, "background") == 0) {
                         cur_level->background_style = background_style_from_name(v);
+                    } else if (strcmp(k, "background_mask") == 0) {
+                        cur_level->background_mask_style = background_mask_style_from_name(v);
                     } else if (strcmp(k, "render_style") == 0) {
                         cur_level->render_style = render_style_from_name(v);
                     } else if (strcmp(k, "wave_mode") == 0) {
@@ -1200,6 +1214,12 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
         if (l->background_style < LEVELDEF_BACKGROUND_STARS || l->background_style > LEVELDEF_BACKGROUND_SOLID) {
             if (log_out) {
                 fprintf(log_out, "leveldef: level %d invalid background (expected stars|none|nebula|grid|solid)\n", i);
+            }
+            ok = 0;
+        }
+        if (l->background_mask_style < LEVELDEF_BG_MASK_NONE || l->background_mask_style > LEVELDEF_BG_MASK_WINDOWS) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid background_mask (expected none|terrain|windows)\n", i);
             }
             ok = 0;
         }

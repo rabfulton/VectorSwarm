@@ -815,6 +815,126 @@ static int level_draws_star_background(const game_state* g) {
     return 0;
 }
 
+static int level_background_mask_style(const game_state* g) {
+    const leveldef_level* lvl;
+    if (!g) {
+        return LEVELDEF_BG_MASK_NONE;
+    }
+    lvl = game_current_leveldef(g);
+    if (!lvl) {
+        return LEVELDEF_BG_MASK_NONE;
+    }
+    return clampi(lvl->background_mask_style, LEVELDEF_BG_MASK_NONE, LEVELDEF_BG_MASK_WINDOWS);
+}
+
+static int point_in_window_trapezoid(float px, float py, float cx, float cy, float width, float height) {
+    const float hh = height * 0.5f;
+    const float dy = py - cy;
+    if (fabsf(dy) > hh) {
+        return 0;
+    }
+    /* Match draw order: frame uses +Y as top edge (half_top), -Y as bottom edge (half_bottom). */
+    const float t = (hh - dy) / fmaxf(height, 1.0e-5f);
+    const float half_top = width * 0.50f;
+    const float half_bottom = width * 0.44f;
+    const float half_w = lerpf(half_top, half_bottom, t);
+    return fabsf(px - cx) <= half_w;
+}
+
+static vg_result draw_background_window_mask_overlays(
+    vg_context* ctx,
+    const game_state* g,
+    const vg_stroke_style* halo,
+    const vg_stroke_style* main
+) {
+    if (!ctx || !g || !halo || !main) {
+        return VG_OK;
+    }
+    if (level_background_mask_style(g) != LEVELDEF_BG_MASK_WINDOWS) {
+        return VG_OK;
+    }
+
+    const float spacing = g->world_w * 1.55f;
+    const float offset = g->world_w * 0.75f;
+    const float cy = g->world_h * 0.50f;
+    const float ww = g->world_w * 0.74f;
+    const float wh = g->world_h * 0.22f;
+    const float hh = wh * 0.5f;
+    const float half_top = ww * 0.50f;
+    const float half_bottom = ww * 0.44f;
+
+    const float world_left = g->camera_x - g->world_w;
+    const float world_right = g->camera_x + g->world_w * 2.0f;
+    const int k0 = (int)floorf((world_left - offset) / fmaxf(spacing, 1.0f)) - 1;
+    const int k1 = (int)ceilf((world_right - offset) / fmaxf(spacing, 1.0f)) + 1;
+
+    vg_stroke_style sh = *halo;
+    vg_stroke_style sm = *main;
+    sh.intensity *= 0.46f;
+    sm.intensity *= 0.56f;
+    sh.color.a *= 0.46f;
+    sm.color.a *= 0.62f;
+    sh.width_px *= 1.12f;
+    sm.width_px *= 1.06f;
+
+    for (int k = k0; k <= k1; ++k) {
+        const float center_world_x = offset + (float)k * spacing;
+        const float cx = center_world_x - g->camera_x;
+        if (cx < -ww || cx > g->world_w + ww) {
+            continue;
+        }
+        const vg_vec2 frame[5] = {
+            {cx - half_top, cy + hh},
+            {cx + half_top, cy + hh},
+            {cx + half_bottom, cy - hh},
+            {cx - half_bottom, cy - hh},
+            {cx - half_top, cy + hh}
+        };
+        vg_result r = vg_draw_polyline(ctx, frame, 5, &sh, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_draw_polyline(ctx, frame, 5, &sm, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+    }
+
+    return VG_OK;
+}
+
+static int star_visible_with_mask(const game_state* g, float sx, float sy) {
+    const int mask = level_background_mask_style(g);
+    if (!g || mask == LEVELDEF_BG_MASK_NONE) {
+        return 1;
+    }
+    if (mask == LEVELDEF_BG_MASK_TERRAIN) {
+        if (g->render_style == LEVEL_RENDER_DRIFTER || g->render_style == LEVEL_RENDER_DRIFTER_SHADED) {
+            return (sy >= g->world_h * 0.40f) ? 1 : 0;
+        }
+        return 1;
+    }
+    if (mask == LEVELDEF_BG_MASK_WINDOWS) {
+        const float spacing = g->world_w * 1.55f;
+        const float offset = g->world_w * 0.75f;
+        const float wx = sx + g->camera_x;
+        const float cy = g->world_h * 0.50f;
+        const float ww = g->world_w * 0.74f;
+        const float wh = g->world_h * 0.22f;
+        const float idx_f = floorf((wx - offset) / fmaxf(spacing, 1.0f) + 0.5f);
+        const int idx = (int)idx_f;
+        for (int j = -1; j <= 1; ++j) {
+            const float center_world_x = offset + ((float)idx + (float)j) * spacing;
+            const float center_screen_x = center_world_x - g->camera_x;
+            if (point_in_window_trapezoid(sx, sy, center_screen_x, cy, ww, wh)) {
+                return 1;
+            }
+        }
+        return 0;
+    }
+    return 1;
+}
+
 static float perlin_fade(float t) {
     return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
 }
@@ -4146,6 +4266,12 @@ static const char* editor_background_style_name(int style) {
     return "STARS";
 }
 
+static const char* editor_background_mask_style_name(int style) {
+    if (style == LEVELDEF_BG_MASK_TERRAIN) return "TERRAIN";
+    if (style == LEVELDEF_BG_MASK_WINDOWS) return "WINDOWS";
+    return "NONE";
+}
+
 static int editor_marker_properties_text(
     int kind,
     const render_metrics* metrics,
@@ -4909,7 +5035,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             {
                 int selected_prop = metrics->level_editor_selected_property;
                 if (selected_prop < 0) selected_prop = 0;
-                if (selected_prop > 4) selected_prop = 4;
+                if (selected_prop > 5) selected_prop = 5;
                 char row[96];
                 const vg_rect rb0 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
                 snprintf(row, sizeof(row), "WAVE MODE      %s", editor_wave_mode_name(metrics->level_editor_wave_mode));
@@ -4932,8 +5058,13 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb4 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
-                snprintf(row, sizeof(row), "LENGTH         %.1f", metrics->level_editor_level_length_screens);
+                snprintf(row, sizeof(row), "BG MASK        %s", editor_background_mask_style_name(metrics->level_editor_background_mask_style));
                 r = draw_ui_button_shaded(ctx, rb4, row, 10.4f * ui, &frame, &text, (selected_prop == 4) ? 1 : 0);
+                if (r != VG_OK) return r;
+                ty -= 32.0f * ui;
+                const vg_rect rb5 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
+                snprintf(row, sizeof(row), "LENGTH         %.1f", metrics->level_editor_level_length_screens);
+                r = draw_ui_button_shaded(ctx, rb5, row, 10.4f * ui, &frame, &text, (selected_prop == 5) ? 1 : 0);
                 if (r != VG_OK) return r;
             }
             ty -= 34.0f * ui;
@@ -7242,6 +7373,9 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
                     const float sx_world = g->camera_x + (su - 0.5f) * period;
                     float depth = 0.0f;
                     const vg_vec2 sp = project_cylinder_point(g, sx_world, g->stars[i].y, &depth);
+                    if (!star_visible_with_mask(g, sp.x, sp.y)) {
+                        continue;
+                    }
                     vg_fill_style sf = star_fill;
                     sf.intensity *= 0.45f + depth * 0.9f;
                     r = vg_fill_circle(ctx, sp, g->stars[i].size * (0.5f + depth), &sf, 8);
@@ -7249,6 +7383,10 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
                         return r;
                     }
                 }
+            }
+            r = draw_background_window_mask_overlays(ctx, g, &land_halo, &land_main);
+            if (r != VG_OK) {
+                return r;
             }
         }
 
@@ -7589,13 +7727,6 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
 
     if (!foreground_only && draw_star_background) {
         for (size_t i = 0; i < MAX_STARS; ++i) {
-            if (g->render_style == LEVEL_RENDER_DRIFTER_SHADED ||
-                g->render_style == LEVEL_RENDER_DRIFTER) {
-                /* Keep stars behind terrain band in drifter levels, independent of depth state. */
-                if (g->stars[i].y < g->world_h * 0.40f) {
-                    continue;
-                }
-            }
             const float speed_u = (g->stars[i].speed - 50.0f) / 190.0f;
             float u = speed_u;
             if (u < 0.0f) {
@@ -7623,6 +7754,13 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
                 {stx, ty},
                 {sx, g->stars[i].y}
             };
+            const int vis_head = star_visible_with_mask(g, sx, g->stars[i].y);
+            const int vis_tail = star_visible_with_mask(g, stx, ty);
+            if (!vis_head) {
+                continue;
+            }
+            /* Keep mask strict: if trail exits the window, skip the streak. */
+            const int draw_streak = vis_head && vis_tail;
             const vg_vec2 mid = {
                 seg[0].x + (seg[1].x - seg[0].x) * 0.55f,
                 seg[0].y + (seg[1].y - seg[0].y) * 0.55f
@@ -7643,21 +7781,23 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             sh_tail.color.a *= 0.38f;
             sm_tail.color.a *= 0.44f;
 
-            r = vg_draw_polyline(ctx, seg_tail, 2, &sh_tail, 0);
-            if (r != VG_OK) {
-                return r;
-            }
-            r = vg_draw_polyline(ctx, seg_tail, 2, &sm_tail, 0);
-            if (r != VG_OK) {
-                return r;
-            }
-            r = vg_draw_polyline(ctx, seg_head, 2, &sh, 0);
-            if (r != VG_OK) {
-                return r;
-            }
-            r = vg_draw_polyline(ctx, seg_head, 2, &sm, 0);
-            if (r != VG_OK) {
-                return r;
+            if (draw_streak) {
+                r = vg_draw_polyline(ctx, seg_tail, 2, &sh_tail, 0);
+                if (r != VG_OK) {
+                    return r;
+                }
+                r = vg_draw_polyline(ctx, seg_tail, 2, &sm_tail, 0);
+                if (r != VG_OK) {
+                    return r;
+                }
+                r = vg_draw_polyline(ctx, seg_head, 2, &sh, 0);
+                if (r != VG_OK) {
+                    return r;
+                }
+                r = vg_draw_polyline(ctx, seg_head, 2, &sm, 0);
+                if (r != VG_OK) {
+                    return r;
+                }
             }
 
             r = vg_fill_circle(ctx, (vg_vec2){sx, g->stars[i].y}, g->stars[i].size + 0.4f * u, &star_fill, 10);
@@ -7666,14 +7806,20 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             }
             /* Draw seam-duplicate heads near edges for continuous wrap. */
             if (sx < 8.0f) {
-                r = vg_fill_circle(ctx, (vg_vec2){sx + g->world_w, g->stars[i].y}, g->stars[i].size + 0.4f * u, &star_fill, 10);
-                if (r != VG_OK) {
-                    return r;
+                const float sx2 = sx + g->world_w;
+                if (star_visible_with_mask(g, sx2, g->stars[i].y)) {
+                    r = vg_fill_circle(ctx, (vg_vec2){sx2, g->stars[i].y}, g->stars[i].size + 0.4f * u, &star_fill, 10);
+                    if (r != VG_OK) {
+                        return r;
+                    }
                 }
             } else if (sx > g->world_w - 8.0f) {
-                r = vg_fill_circle(ctx, (vg_vec2){sx - g->world_w, g->stars[i].y}, g->stars[i].size + 0.4f * u, &star_fill, 10);
-                if (r != VG_OK) {
-                    return r;
+                const float sx2 = sx - g->world_w;
+                if (star_visible_with_mask(g, sx2, g->stars[i].y)) {
+                    r = vg_fill_circle(ctx, (vg_vec2){sx2, g->stars[i].y}, g->stars[i].size + 0.4f * u, &star_fill, 10);
+                    if (r != VG_OK) {
+                        return r;
+                    }
                 }
             }
         }
@@ -7682,6 +7828,12 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             if (r != VG_OK) {
                 return r;
             }
+        }
+    }
+    if (!foreground_only) {
+        r = draw_background_window_mask_overlays(ctx, g, &land_halo, &land_main);
+        if (r != VG_OK) {
+            return r;
         }
     }
 

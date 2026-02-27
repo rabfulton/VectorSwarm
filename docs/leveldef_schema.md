@@ -98,6 +98,8 @@
 - `drifter_shaded`
 - `fog`
 - `wave_mode` enum: `normal` or `boid_only`
+- `background` enum: `stars`, `none`, `nebula`, `grid`, `solid`
+- `background_mask` enum: `none`, `terrain`, `windows`
 - `spawn_mode` enum:
 - `sequenced_clear` (spawn next wave only when clear + cooldown elapsed)
 - `timed` (spawn on interval regardless of clear state)
