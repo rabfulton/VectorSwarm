@@ -2132,8 +2132,8 @@ static vg_result draw_teletype_overlay(
     char line[256];
     size_t li = 0;
     int row = 0;
-    const float x0 = safe.x + safe.w * 0.025f;
-    const float y0 = safe.y + safe.h - 34.0f * ui;
+    const float x0 = safe.x + safe.w * 0.015f;
+    const float y0 = safe.y + safe.h - 20.0f * ui;
     const float lh = 20.0f * ui;
 
     for (size_t i = 0;; ++i) {
@@ -2248,21 +2248,21 @@ static vg_result draw_top_meters(
     d.show_value = 1;
     d.show_ticks = 1;
     d.ui_scale = ui;
-    d.text_scale = ui;
+    d.text_scale = ui * 0.82f;
 
     const float w = safe.w;
     const float h = safe.h;
-    const float margin_x = w * 0.04f;
+    const float margin_x = w * 0.022f;
     const float top_margin = 46.0f * ui;
-    const float total_w = w * 0.40f;
-    const float meter_gap = w * 0.02f;
-    const float meter_w = (total_w - meter_gap) * 0.5f;
+    const float meter_w = w * 0.20f;
     const float meter_h = 16.0f * ui;
-    const float y_top = safe.y + h - top_margin - meter_h;
-    const float x_block = safe.x + w - margin_x - total_w;
+    const float meter_gap = 26.0f * ui;
+    const float y_quota = safe.y + h - top_margin - meter_h;
+    const float y_vitality = y_quota + meter_h + meter_gap;
+    const float x_block = safe.x + w - margin_x - meter_w;
 
     vg_result r;
-    d.rect = (vg_rect){x_block, y_top, meter_w, meter_h};
+    d.rect = (vg_rect){x_block, y_vitality, meter_w, meter_h};
     d.label = "VITALITY";
     d.value = ((float)g->lives / 3.0f) * 100.0f;
     r = vg_ui_meter_linear(ctx, &d, &ms);
@@ -2270,7 +2270,7 @@ static vg_result draw_top_meters(
         return r;
     }
 
-    d.rect = (vg_rect){x_block + meter_w + meter_gap, y_top, meter_w, meter_h};
+    d.rect = (vg_rect){x_block, y_quota, meter_w, meter_h};
     d.label = "QUOTA";
     d.min_value = 0.0f;
     d.max_value = 40.0f;
@@ -2279,7 +2279,34 @@ static vg_result draw_top_meters(
     d.segment_gap_px = 2.0f * ui;
     d.value_fmt = "%4.0f";
     d.value = (float)g->kills;
-    return vg_ui_meter_linear(ctx, &d, &ms);
+    r = vg_ui_meter_linear(ctx, &d, &ms);
+    if (r != VG_OK) {
+        return r;
+    }
+
+    if (level_uses_cylinder_render(g) && g->level_time_remaining_s > 0.0f) {
+        char timer_txt[32];
+        const int secs = (int)ceilf(fmaxf(g->level_time_remaining_s, 0.0f));
+        snprintf(timer_txt, sizeof(timer_txt), "TIME %03d", secs);
+        const float timer_size = 22.0f * ui;
+        const float timer_track = 1.6f * ui;
+        const float timer_w = vg_measure_text(timer_txt, timer_size, timer_track);
+        const vg_vec2 timer_pos = {
+            safe.x + (safe.w - timer_w) * 0.5f,
+            safe.y + safe.h - 38.0f * ui
+        };
+        vg_stroke_style timer_halo = *halo_s;
+        vg_stroke_style timer_main = *main_s;
+        timer_halo.width_px = fmaxf(1.8f * ui, halo_s->width_px * 1.45f);
+        timer_main.width_px = fmaxf(1.2f * ui, main_s->width_px * 1.2f);
+        timer_halo.intensity = halo_s->intensity * 0.95f;
+        timer_main.intensity = main_s->intensity * 1.12f;
+        r = draw_text_vector_glow(ctx, timer_txt, timer_pos, timer_size, timer_track, &timer_halo, &timer_main);
+        if (r != VG_OK) {
+            return r;
+        }
+    }
+    return VG_OK;
 }
 
 static float norm_range(float v, float lo, float hi) {
@@ -7902,10 +7929,11 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             const float ui = ui_reference_scale(g->world_w, g->world_h);
             const float go_size = 36.0f * ui;
             const float go_spacing = 2.2f * ui;
-            const float go_w = vg_measure_text("GAME OVER", go_size, go_spacing);
+            const char* go_title = g->orbit_decay_timeout ? "ORBIT DECAYED" : "GAME OVER";
+            const float go_w = vg_measure_text(go_title, go_size, go_spacing);
             r = draw_text_vector_glow(
                 ctx,
-                "GAME OVER",
+                go_title,
                 (vg_vec2){(g->world_w - go_w) * 0.5f, g->world_h * 0.45f},
                 go_size,
                 go_spacing,
@@ -8424,10 +8452,11 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         const float ui = ui_reference_scale(g->world_w, g->world_h);
         const float go_size = 36.0f * ui;
         const float go_spacing = 2.2f * ui;
-        const float go_w = vg_measure_text("GAME OVER", go_size, go_spacing);
+        const char* go_title = g->orbit_decay_timeout ? "ORBIT DECAYED" : "GAME OVER";
+        const float go_w = vg_measure_text(go_title, go_size, go_spacing);
         r = draw_text_vector_glow(
             ctx,
-            "GAME OVER",
+            go_title,
             (vg_vec2){(g->world_w - go_w) * 0.5f, g->world_h * 0.45f},
             go_size,
             go_spacing,

@@ -607,6 +607,7 @@ typedef struct app {
     float opening_ship_scale;
     float opening_ship_spin_rate;
     int opening_ship_spin_axis; /* 0=yaw, 1=pitch, 2=roll */
+    char last_level_name_for_tty[64];
     level_editor_state level_editor;
     unsigned level_editor_applied_revision;
 } app;
@@ -658,6 +659,7 @@ static float repeatf(float v, float period) {
 }
 
 static void set_tty_message(app* a, const char* msg);
+static void set_tty_level_intro_message(app* a);
 
 static int env_flag_enabled(const char* name) {
     const char* v = getenv(name);
@@ -1539,6 +1541,71 @@ static void set_tty_message(app* a, const char* msg) {
     vg_text_fx_typewriter_set_text(&a->wave_tty, a->wave_tty_text);
     vg_text_fx_typewriter_reset(&a->wave_tty);
     a->wave_tty.timer_s = 0.02f;
+}
+
+static void format_level_name_for_tty(const char* raw, char* out, size_t out_cap) {
+    if (!out || out_cap == 0u) {
+        return;
+    }
+    out[0] = '\0';
+    if (!raw || !raw[0]) {
+        snprintf(out, out_cap, "LEVEL");
+        return;
+    }
+    size_t w = 0u;
+    const char* p = raw;
+    if (strncasecmp(p, "level_", 6) == 0) {
+        p += 6;
+    }
+    int last_space = 1;
+    for (; *p != '\0' && w + 1u < out_cap; ++p) {
+        unsigned char ch = (unsigned char)*p;
+        if (ch == '_' || ch == '-' || ch == ' ') {
+            if (!last_space) {
+                out[w++] = ' ';
+                last_space = 1;
+            }
+            continue;
+        }
+        if (ch >= 'a' && ch <= 'z') {
+            ch = (unsigned char)(ch - 'a' + 'A');
+        }
+        out[w++] = (char)ch;
+        last_space = 0;
+    }
+    while (w > 0u && out[w - 1u] == ' ') {
+        --w;
+    }
+    out[w] = '\0';
+    if (w == 0u) {
+        snprintf(out, out_cap, "LEVEL");
+    }
+}
+
+static void set_tty_level_intro_message(app* a) {
+    if (!a) {
+        return;
+    }
+    const char* raw = game_current_level_name(&a->game);
+    char lvl[96];
+    char msg[160];
+    format_level_name_for_tty(raw, lvl, sizeof(lvl));
+    snprintf(msg, sizeof(msg), "TACTICAL UPLINK READY\nENTERING %s", lvl);
+    set_tty_message(a, msg);
+}
+
+static void update_level_start_teletype(app* a) {
+    if (!a) {
+        return;
+    }
+    const char* cur = game_current_level_name(&a->game);
+    if (!cur) {
+        cur = "";
+    }
+    if (strcmp(a->last_level_name_for_tty, cur) != 0) {
+        set_tty_level_intro_message(a);
+        snprintf(a->last_level_name_for_tty, sizeof(a->last_level_name_for_tty), "%s", cur);
+    }
 }
 
 static void sync_planetarium_marquee(app* a) {
@@ -9039,7 +9106,8 @@ int main(void) {
     vg_text_fx_typewriter_set_beep(&a.wave_tty, teletype_beep_cb, &a);
     vg_text_fx_typewriter_set_beep_profile(&a.wave_tty, 900.0f, 55.0f, 0.028f, 0.14f);
     vg_text_fx_typewriter_enable_beep(&a.wave_tty, 1);
-    set_tty_message(&a, "TACTICAL UPLINK READY");
+    set_tty_level_intro_message(&a);
+    snprintf(a.last_level_name_for_tty, sizeof(a.last_level_name_for_tty), "%s", game_current_level_name(&a.game));
     sync_planetarium_marquee(&a);
     vg_text_fx_marquee_set_speed(&a.planetarium_marquee, 70.0f);
     vg_text_fx_marquee_set_gap(&a.planetarium_marquee, 48.0f);
@@ -9089,21 +9157,6 @@ int main(void) {
                 } else if (ev.key.keysym.sym == SDLK_n) {
                     game_cycle_level(&a.game);
                     a.force_clear_frames = 2;
-                    if (a.game.level_style == LEVEL_STYLE_ENEMY_RADAR) {
-                        set_tty_message(&a, "level mode: cylinder run");
-                    } else if (a.game.level_style == LEVEL_STYLE_EVENT_HORIZON) {
-                        set_tty_message(&a, "level mode: event horizon");
-                    } else if (a.game.level_style == LEVEL_STYLE_EVENT_HORIZON_LEGACY) {
-                        set_tty_message(&a, "level mode: event horizon legacy");
-                    } else if (a.game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER) {
-                        set_tty_message(&a, "level mode: high plains drifter");
-                    } else if (a.game.level_style == LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2) {
-                        set_tty_message(&a, "level mode: high plains drifter 2");
-                    } else if (a.game.level_style == LEVEL_STYLE_FOG_OF_WAR) {
-                        set_tty_message(&a, "level mode: fog of war");
-                    } else {
-                        set_tty_message(&a, "level mode: defender");
-                    }
                 } else if (ev.key.keysym.sym == SDLK_2) {
                     if (a.menu.current == APP_SCREEN_VIDEO) {
                         menu_back_screen(&a);
@@ -9685,6 +9738,7 @@ int main(void) {
             mod_sync_gameplay_playlist(&a);
             sync_shipyard_weapon_to_game(&a);
             game_update(&a.game, dt_sim, &in);
+            update_level_start_teletype(&a);
         }
         if (a.audio_ready) {
             const int thrust_on = (!controls_ui_active(&a)) &&

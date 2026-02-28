@@ -1877,11 +1877,17 @@ static void apply_level_runtime_config(game_state* g) {
     g->render_style = lvl->render_style;
     g->level_theme_palette = lvl->theme_palette;
     g->wave_cooldown_s = lvl->wave_cooldown_initial_s;
+    if (lvl->wave_mode != LEVELDEF_WAVES_CURATED) {
+        g->wave_cooldown_s = fmaxf(g->wave_cooldown_s, 2.5f);
+    }
     g->auto_event_mode = (lvl->event_count > 0) ? 1 : 0;
     g->auto_event_index = 0;
     g->auto_event_running = 0;
     g->auto_event_running_kind = -1;
     g->auto_event_delay_s = (lvl->event_count > 0) ? fmaxf(lvl->events[0].delay_s, 0.0f) : 0.0f;
+    if (lvl->wave_mode != LEVELDEF_WAVES_CURATED && lvl->event_count > 0) {
+        g->auto_event_delay_s = fmaxf(g->auto_event_delay_s, 2.5f);
+    }
     g->curated_spawned_count = 0;
     memset(g->curated_spawned, 0, sizeof(g->curated_spawned));
     configure_searchlights_for_level(g);
@@ -1943,7 +1949,9 @@ static int set_level_index(game_state* g, int index) {
     g->asteroid_storm_active = 0;
     g->asteroid_storm_completed = 0;
     g->asteroid_storm_announced = 0;
+    g->orbit_decay_timeout = 0;
     apply_level_runtime_config(g);
+    g->level_time_remaining_s = level_uses_cylinder(g) ? 120.0f : 0.0f;
     return 1;
 }
 
@@ -2376,6 +2384,7 @@ void game_init(game_state* g, float world_w, float world_h) {
     g->level_style = LEVEL_STYLE_DEFENDER;
     g->level_index = 0;
     g->current_level_name[0] = '\0';
+    g->orbit_decay_timeout = 0;
     g->wave_index = 0;
     g->wave_id_alloc = 0;
     ensure_leveldef_loaded();
@@ -2390,6 +2399,7 @@ void game_init(game_state* g, float world_w, float world_h) {
         snprintf(g->current_level_name, sizeof(g->current_level_name), "%s", g_levels[g->level_index].name);
     }
     apply_level_runtime_config(g);
+    g->level_time_remaining_s = level_uses_cylinder(g) ? 120.0f : 0.0f;
 
     for (size_t i = 0; i < MAX_STARS; ++i) {
         g->stars[i].x = frand01() * world_w;
@@ -2433,6 +2443,10 @@ void game_cycle_level(game_state* g) {
 }
 
 static void game_handle_restart(game_state* g, const game_input* in) {
+    if (g->orbit_decay_timeout && in->fire) {
+        game_cycle_level(g);
+        return;
+    }
     if (in->restart && g->lives <= 0) {
         const int restart_level_index = g->level_index;
         game_init(g, g->world_w, g->world_h);
@@ -2811,6 +2825,15 @@ void game_update(game_state* g, float dt, const game_input* in) {
 
     game_handle_restart(g, in);
     game_update_stars(g, dt);
+    if (!g->orbit_decay_timeout && g->lives > 0 && level_uses_cylinder(g) && g->level_time_remaining_s > 0.0f) {
+        g->level_time_remaining_s -= dt;
+        if (g->level_time_remaining_s <= 0.0f) {
+            g->level_time_remaining_s = 0.0f;
+            g->orbit_decay_timeout = 1;
+            g->lives = 0;
+            return;
+        }
+    }
     if (game_update_player(g, dt, in, su)) {
         return;
     }
