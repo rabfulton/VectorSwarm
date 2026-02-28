@@ -6216,6 +6216,225 @@ static vg_result draw_parallax_landscape(
     return vg_draw_polyline(ctx, line, N, main, 0);
 }
 
+static vg_result draw_defender_industrial_parallax(
+    vg_context* ctx,
+    float w,
+    float h,
+    float cam_x,
+    const palette_theme* pal,
+    const vg_stroke_style* halo,
+    const vg_stroke_style* main
+) {
+    if (!ctx || !pal || !halo || !main) {
+        return VG_OK;
+    }
+
+    enum { LAYERS = 6 };
+    const float skyline_top_cap = h * 0.62f;
+
+    for (int li = 0; li < LAYERS; ++li) {
+        const float lf = (float)li / (float)(LAYERS - 1); /* far->near */
+        const float depth = lf;
+        const float parallax = 0.14f + depth * 1.52f;
+        const float module_w = 72.0f + depth * 86.0f;
+        /* In this Y-up scene, far layers should sit much higher than near layers. */
+        const float depth_inv = (1.0f - depth);
+        const float ground_y = h * (0.22f * depth_inv * depth_inv);
+        const float h_min = h * (0.10f + depth * 0.05f);
+        const float h_max = h * (0.23f + depth * 0.11f);
+
+        vg_color layer_base = pal->primary_dim;
+        layer_base.r = clampf(layer_base.r * (0.62f + depth * 0.50f), 0.0f, 1.0f);
+        layer_base.g = clampf(layer_base.g * (0.62f + depth * 0.50f), 0.0f, 1.0f);
+        layer_base.b = clampf(layer_base.b * (0.62f + depth * 0.50f), 0.0f, 1.0f);
+        layer_base.a = clampf(0.06f + depth * 0.12f, 0.0f, 1.0f);
+        vg_fill_style fill = make_fill(0.56f + depth * 0.16f, layer_base, VG_BLEND_ALPHA);
+
+        vg_stroke_style sh = *halo;
+        vg_stroke_style sm = *main;
+        sh.width_px *= 0.78f + depth * 0.72f;
+        sm.width_px *= 0.72f + depth * 0.66f;
+        sh.intensity *= 0.30f + depth * 0.42f;
+        sm.intensity *= 0.34f + depth * 0.46f;
+        sh.color.a *= 0.22f + depth * 0.42f;
+        sm.color.a *= 0.24f + depth * 0.46f;
+
+        const float world_l = cam_x * parallax - w * 0.60f;
+        const float world_r = cam_x * parallax + w * 0.60f;
+        const int ix0 = (int)floorf(world_l / module_w) - 2;
+        const int ix1 = (int)floorf(world_r / module_w) + 2;
+
+        for (int ix = ix0; ix <= ix1; ++ix) {
+            const float rn0 = hash01_2i(ix, li * 17 + 5);
+            const float rn1 = hash01_2i(ix, li * 17 + 9);
+            const float rn2 = hash01_2i(ix, li * 17 + 13);
+            const float wx = ((float)ix + 0.5f) * module_w;
+            const float cx = wx - cam_x * parallax + w * 0.5f;
+            const float bw = module_w * (0.52f + rn0 * 0.44f);
+            const float bh = h_min + (h_max - h_min) * rn1;
+            if (cx + bw * 0.6f < -32.0f || cx - bw * 0.6f > w + 32.0f) {
+                continue;
+            }
+
+            const float top_y = fminf(ground_y + bh, skyline_top_cap);
+            const float x0 = cx - bw * 0.5f;
+            const float x1 = cx + bw * 0.5f;
+            const vg_vec2 body[4] = {
+                {x0, ground_y}, {x1, ground_y}, {x1, top_y}, {x0, top_y}
+            };
+            vg_result r = vg_fill_convex(ctx, body, 4, &fill);
+            if (r != VG_OK) {
+                return r;
+            }
+            const int is_front_layer = (li == LAYERS - 1) ? 1 : 0;
+            if (is_front_layer) {
+                const vg_vec2 no_base[4] = {
+                    {x0, ground_y}, {x0, top_y}, {x1, top_y}, {x1, ground_y}
+                };
+                r = vg_draw_polyline(ctx, no_base, 4, &sh, 0);
+            } else {
+                r = vg_draw_polyline(ctx, body, 4, &sh, 1);
+            }
+            if (r != VG_OK) {
+                return r;
+            }
+            if (is_front_layer) {
+                const vg_vec2 no_base[4] = {
+                    {x0, ground_y}, {x0, top_y}, {x1, top_y}, {x1, ground_y}
+                };
+                r = vg_draw_polyline(ctx, no_base, 4, &sm, 0);
+            } else {
+                r = vg_draw_polyline(ctx, body, 4, &sm, 1);
+            }
+            if (r != VG_OK) {
+                return r;
+            }
+
+            if (rn2 > 0.45f) {
+                const float stack_w = bw * (0.14f + 0.10f * rn0);
+                const float stack_h = bh * (0.22f + 0.32f * rn2);
+                const float sx = cx + bw * (rn1 < 0.5f ? -0.22f : 0.22f);
+                const vg_vec2 stack[4] = {
+                    {sx - stack_w * 0.5f, top_y},
+                    {sx + stack_w * 0.5f, top_y},
+                    {sx + stack_w * 0.5f, fminf(top_y + stack_h, skyline_top_cap)},
+                    {sx - stack_w * 0.5f, fminf(top_y + stack_h, skyline_top_cap)}
+                };
+                r = vg_fill_convex(ctx, stack, 4, &fill);
+                if (r != VG_OK) {
+                    return r;
+                }
+                r = vg_draw_polyline(ctx, stack, 4, &sh, 1);
+                if (r != VG_OK) {
+                    return r;
+                }
+                r = vg_draw_polyline(ctx, stack, 4, &sm, 1);
+                if (r != VG_OK) {
+                    return r;
+                }
+            }
+
+            if (rn1 > 0.44f) {
+                const float tank_w = bw * (0.20f + 0.10f * rn2);
+                const float tank_h = bh * (0.20f + 0.24f * rn0);
+                const float sep = tank_w * 0.18f;
+                const float tx0 = cx - tank_w - sep * 0.5f;
+                const float tx1 = cx + sep * 0.5f;
+                const float ty0 = ground_y;
+                const float ty1 = fminf(ground_y + tank_h, skyline_top_cap);
+                const vg_vec2 tank_a[4] = {
+                    {tx0, ty0}, {tx0 + tank_w, ty0}, {tx0 + tank_w, ty1}, {tx0, ty1}
+                };
+                const vg_vec2 tank_b[4] = {
+                    {tx1, ty0}, {tx1 + tank_w, ty0}, {tx1 + tank_w, ty1}, {tx1, ty1}
+                };
+                r = vg_fill_convex(ctx, tank_a, 4, &fill);
+                if (r != VG_OK) return r;
+                r = vg_fill_convex(ctx, tank_b, 4, &fill);
+                if (r != VG_OK) return r;
+                r = vg_draw_polyline(ctx, tank_a, 4, &sh, 1);
+                if (r != VG_OK) return r;
+                r = vg_draw_polyline(ctx, tank_a, 4, &sm, 1);
+                if (r != VG_OK) return r;
+                r = vg_draw_polyline(ctx, tank_b, 4, &sh, 1);
+                if (r != VG_OK) return r;
+                r = vg_draw_polyline(ctx, tank_b, 4, &sm, 1);
+                if (r != VG_OK) return r;
+            }
+
+            if (((ix + li) & 1) == 0 && rn2 > 0.30f) {
+                const float p_h = bh * (0.45f + 0.28f * rn1);
+                const float p_y0 = ground_y;
+                const float p_y1 = fminf(ground_y + p_h, skyline_top_cap);
+                const float p_w = bw * (0.10f + 0.06f * rn0);
+                const float px = cx + bw * (rn0 < 0.5f ? -0.34f : 0.34f);
+                const vg_vec2 frame[5] = {
+                    {px - p_w * 0.5f, p_y0},
+                    {px + p_w * 0.5f, p_y0},
+                    {px + p_w * 0.5f, p_y1},
+                    {px - p_w * 0.5f, p_y1},
+                    {px - p_w * 0.5f, p_y0}
+                };
+                const vg_vec2 x0seg[2] = {{px - p_w * 0.5f, p_y0}, {px + p_w * 0.5f, p_y1}};
+                const vg_vec2 x1seg[2] = {{px + p_w * 0.5f, p_y0}, {px - p_w * 0.5f, p_y1}};
+                r = vg_draw_polyline(ctx, frame, 5, &sh, 0);
+                if (r != VG_OK) return r;
+                r = vg_draw_polyline(ctx, frame, 5, &sm, 0);
+                if (r != VG_OK) return r;
+                r = vg_draw_polyline(ctx, x0seg, 2, &sh, 0);
+                if (r != VG_OK) return r;
+                r = vg_draw_polyline(ctx, x0seg, 2, &sm, 0);
+                if (r != VG_OK) return r;
+                r = vg_draw_polyline(ctx, x1seg, 2, &sh, 0);
+                if (r != VG_OK) return r;
+                r = vg_draw_polyline(ctx, x1seg, 2, &sm, 0);
+                if (r != VG_OK) return r;
+            }
+
+            if (((ix + li) & 2) == 0) {
+                const float nx = ((float)(ix + 1) + 0.5f) * module_w - cam_x * parallax + w * 0.5f;
+                const float py = ground_y + bh * (0.44f + 0.34f * rn0);
+                const float arc = module_w * (0.18f + rn2 * 0.10f);
+                const vg_vec2 pipe[4] = {
+                    {cx + bw * 0.5f, py},
+                    {cx + bw * 0.5f + arc, py},
+                    {nx - arc, py},
+                    {nx, py}
+                };
+                const vg_vec2 pipe_u[4] = {
+                    {cx + bw * 0.28f, py + bh * 0.10f},
+                    {cx + bw * 0.28f, py + bh * 0.26f},
+                    {nx - bw * 0.22f, py + bh * 0.26f},
+                    {nx - bw * 0.22f, py + bh * 0.08f}
+                };
+                vg_stroke_style p_h = sh;
+                vg_stroke_style p_m = sm;
+                p_h.width_px *= 1.20f;
+                p_m.width_px *= 1.12f;
+                p_h.intensity *= 0.92f;
+                p_m.intensity *= 1.00f;
+                r = vg_draw_polyline(ctx, pipe, 4, &p_h, 0);
+                if (r != VG_OK) {
+                    return r;
+                }
+                r = vg_draw_polyline(ctx, pipe, 4, &p_m, 0);
+                if (r != VG_OK) {
+                    return r;
+                }
+                r = vg_draw_polyline(ctx, pipe_u, 4, &p_h, 0);
+                if (r != VG_OK) {
+                    return r;
+                }
+                r = vg_draw_polyline(ctx, pipe_u, 4, &p_m, 0);
+                if (r != VG_OK) {
+                    return r;
+                }
+            }
+        }
+    }
+    return VG_OK;
+}
+
 static vg_result draw_fog_of_war_nebula(
     vg_context* ctx,
     const game_state* g,
@@ -8092,13 +8311,24 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         } else if (g->render_style != LEVEL_RENDER_DRIFTER_SHADED &&
                    g->render_style != LEVEL_RENDER_FOG &&
                    g->render_style != LEVEL_RENDER_BLANK) {
+            if (g->render_style == LEVEL_RENDER_DEFENDER) {
+                r = draw_defender_industrial_parallax(
+                    ctx,
+                    g->world_w,
+                    g->world_h,
+                    g->camera_x,
+                    &pal,
+                    &land_halo,
+                    &land_main
+                );
+                if (r != VG_OK) {
+                    return r;
+                }
+                goto skip_legacy_landscape;
+            }
             /* Foreground vector landscape layers for depth/parallax. */
             vg_stroke_style land1_halo = land_halo;
             vg_stroke_style land1_main = land_main;
-            if (g->render_style == LEVEL_RENDER_DEFENDER) {
-                land1_halo.width_px *= 1.16f;
-                land1_main.width_px *= 1.14f;
-            }
             r = draw_parallax_landscape(ctx, g->world_w, g->world_h, g->camera_x, 1.20f, g->world_h * 0.18f, 22.0f, &land1_halo, &land1_main);
             if (r != VG_OK) {
                 return r;
@@ -8107,10 +8337,6 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             vg_stroke_style land2_main = land_main;
             land2_halo.width_px *= 1.15f;
             land2_main.width_px *= 1.10f;
-            if (g->render_style == LEVEL_RENDER_DEFENDER) {
-                land2_halo.width_px *= 1.12f;
-                land2_main.width_px *= 1.10f;
-            }
             land2_halo.intensity *= 1.05f;
             land2_main.intensity *= 1.08f;
             land2_main.color = (vg_color){pal.secondary.r, pal.secondary.g, pal.secondary.b, 0.9f};
@@ -8120,6 +8346,7 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             }
         }
     }
+skip_legacy_landscape:
 
     if (background_only) {
         return VG_OK;
