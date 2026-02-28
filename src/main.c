@@ -76,6 +76,7 @@
 #include "grid_sim_frag_spv.h"
 #include "arc_beam_vert_spv.h"
 #include "arc_beam_frag_spv.h"
+#include "industry_frag_spv.h"
 #endif
 
 #define APP_WIDTH 1280
@@ -213,6 +214,12 @@ typedef struct grid_sim_pc {
     float src[8][4];  /* x=px, y=py, z=amp_px, w=radius_px */
 } grid_sim_pc;
 
+typedef struct industry_pc {
+    float p0[4]; /* x=viewport_w, y=viewport_h, z=time_s, w=alpha_scale */
+    float p1[4]; /* rgb=base_color, w=camera_x */
+    float p2[4]; /* x=world_w, y=world_h, z=tile_aspect, w=reserved */
+} industry_pc;
+
 typedef struct arc_beam_pc {
     float p0[4];        /* x=viewport_w, y=viewport_h, z=time_s, w=intensity */
     float color_dim[4]; /* rgb */
@@ -345,6 +352,15 @@ typedef struct app {
     float grid_line_boost;
     VkPipelineLayout arc_beam_layout;
     VkPipeline arc_beam_pipeline;
+    VkPipelineLayout industry_layout;
+    VkPipeline industry_pipeline;
+    VkDescriptorSetLayout industry_desc_layout;
+    VkDescriptorPool industry_desc_pool;
+    VkDescriptorSet industry_desc_set;
+    VkImage industry_image;
+    VkDeviceMemory industry_memory;
+    VkImageView industry_view;
+    VkSampler industry_sampler;
     VkBuffer wormhole_tri_vertex_buffer;
     VkDeviceMemory wormhole_tri_vertex_memory;
     void* wormhole_tri_vertex_map;
@@ -364,6 +380,7 @@ typedef struct app {
     int use_gpu_wormhole;
     int use_gpu_radar;
     int use_gpu_arc;
+    int use_gpu_industry;
     int use_gpu_particles;
     int disable_scene_split;
     VkBuffer particle_instance_buffer;
@@ -585,6 +602,10 @@ typedef struct app {
     uint32_t nick_w;
     uint32_t nick_h;
     uint32_t nick_stride;
+    uint8_t* industry_rgba8;
+    uint32_t industry_w;
+    uint32_t industry_h;
+    uint32_t industry_stride;
     float nick_threshold;
     float nick_contrast;
     float nick_scanline_pitch_px;
@@ -2233,6 +2254,7 @@ static int create_fog_resources(app* a);
 static int create_underwater_resources(app* a);
 static int create_grid_resources(app* a);
 static int create_arc_beam_resources(app* a);
+static int create_industry_resources(app* a);
 static void reset_grid_sim_state(app* a);
 static int create_vg_context(app* a);
 static void set_tty_message(app* a, const char* msg);
@@ -2249,6 +2271,7 @@ static void record_gpu_underwater(app* a, VkCommandBuffer cmd, float t);
 static void record_gpu_grid_sim(app* a, VkCommandBuffer cmd, float dt);
 static void record_gpu_grid(app* a, VkCommandBuffer cmd);
 static void record_gpu_arc_beam(app* a, VkCommandBuffer cmd, float t);
+static void record_gpu_industry(app* a, VkCommandBuffer cmd, float t);
 static void reset_terrain_tuning(app* a);
 static void sync_terrain_tuning_text(app* a);
 static int handle_terrain_tuning_key(app* a, SDL_Keycode key);
@@ -4157,8 +4180,8 @@ static void init_planetarium_assets(app* a) {
     }
 
 #if V_TYPE_HAS_SDL_IMAGE
-    const int img_ok = IMG_Init(IMG_INIT_JPG);
-    if (img_ok & IMG_INIT_JPG) {
+    const int img_ok = IMG_Init(IMG_INIT_JPG | IMG_INIT_PNG);
+    if (img_ok != 0) {
         const char* img_candidates[] = {
             "assets/images/nick.jpg",
             "../assets/images/nick.jpg",
@@ -4183,6 +4206,35 @@ static void init_planetarium_assets(app* a) {
                     a->nick_w = (uint32_t)rgba->w;
                     a->nick_h = (uint32_t)rgba->h;
                     a->nick_stride = (uint32_t)rgba->pitch;
+                }
+                SDL_FreeSurface(rgba);
+            }
+        }
+
+        const char* industry_candidates[] = {
+            "assets/images/industry.png",
+            "../assets/images/industry.png",
+            "../../assets/images/industry.png"
+        };
+        src = NULL;
+        for (size_t i = 0; i < sizeof(industry_candidates) / sizeof(industry_candidates[0]); ++i) {
+            src = IMG_Load(industry_candidates[i]);
+            if (src) {
+                break;
+            }
+        }
+        if (src) {
+            SDL_Surface* rgba = SDL_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_RGBA32, 0);
+            SDL_FreeSurface(src);
+            src = NULL;
+            if (rgba) {
+                const size_t bytes = (size_t)rgba->pitch * (size_t)rgba->h;
+                a->industry_rgba8 = (uint8_t*)malloc(bytes);
+                if (a->industry_rgba8) {
+                    memcpy(a->industry_rgba8, rgba->pixels, bytes);
+                    a->industry_w = (uint32_t)rgba->w;
+                    a->industry_h = (uint32_t)rgba->h;
+                    a->industry_stride = (uint32_t)rgba->pitch;
                 }
                 SDL_FreeSurface(rgba);
             }
@@ -4358,6 +4410,60 @@ static int create_buffer(
     return 1;
 }
 
+static int begin_one_shot_commands(app* a, VkCommandBuffer* out_cmd) {
+    if (!a || !out_cmd || a->command_pool == VK_NULL_HANDLE) {
+        return 0;
+    }
+    VkCommandBufferAllocateInfo alloc = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = a->command_pool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1
+    };
+    if (!check_vk(vkAllocateCommandBuffers(a->device, &alloc, out_cmd), "vkAllocateCommandBuffers(one-shot)")) {
+        return 0;
+    }
+    VkCommandBufferBeginInfo begin = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
+    };
+    if (!check_vk(vkBeginCommandBuffer(*out_cmd, &begin), "vkBeginCommandBuffer(one-shot)")) {
+        vkFreeCommandBuffers(a->device, a->command_pool, 1, out_cmd);
+        *out_cmd = VK_NULL_HANDLE;
+        return 0;
+    }
+    return 1;
+}
+
+static int end_one_shot_commands(app* a, VkCommandBuffer* cmd) {
+    if (!a || !cmd || *cmd == VK_NULL_HANDLE) {
+        return 0;
+    }
+    if (!check_vk(vkEndCommandBuffer(*cmd), "vkEndCommandBuffer(one-shot)")) {
+        vkFreeCommandBuffers(a->device, a->command_pool, 1, cmd);
+        *cmd = VK_NULL_HANDLE;
+        return 0;
+    }
+    VkSubmitInfo submit = {
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .commandBufferCount = 1,
+        .pCommandBuffers = cmd
+    };
+    if (!check_vk(vkQueueSubmit(a->graphics_queue, 1, &submit, VK_NULL_HANDLE), "vkQueueSubmit(one-shot)")) {
+        vkFreeCommandBuffers(a->device, a->command_pool, 1, cmd);
+        *cmd = VK_NULL_HANDLE;
+        return 0;
+    }
+    if (!check_vk(vkQueueWaitIdle(a->graphics_queue), "vkQueueWaitIdle(one-shot)")) {
+        vkFreeCommandBuffers(a->device, a->command_pool, 1, cmd);
+        *cmd = VK_NULL_HANDLE;
+        return 0;
+    }
+    vkFreeCommandBuffers(a->device, a->command_pool, 1, cmd);
+    *cmd = VK_NULL_HANDLE;
+    return 1;
+}
+
 static float fractf_local(float v) {
     return v - floorf(v);
 }
@@ -4518,6 +4624,7 @@ static void cleanup(app* a) {
     if (a->grid_pipeline) vkDestroyPipeline(a->device, a->grid_pipeline, NULL);
     if (a->grid_sim_pipeline) vkDestroyPipeline(a->device, a->grid_sim_pipeline, NULL);
     if (a->arc_beam_pipeline) vkDestroyPipeline(a->device, a->arc_beam_pipeline, NULL);
+    if (a->industry_pipeline) vkDestroyPipeline(a->device, a->industry_pipeline, NULL);
     if (a->post_layout) vkDestroyPipelineLayout(a->device, a->post_layout, NULL);
     if (a->terrain_layout) vkDestroyPipelineLayout(a->device, a->terrain_layout, NULL);
     if (a->particle_layout) vkDestroyPipelineLayout(a->device, a->particle_layout, NULL);
@@ -4528,14 +4635,18 @@ static void cleanup(app* a) {
     if (a->grid_layout) vkDestroyPipelineLayout(a->device, a->grid_layout, NULL);
     if (a->grid_sim_layout) vkDestroyPipelineLayout(a->device, a->grid_sim_layout, NULL);
     if (a->arc_beam_layout) vkDestroyPipelineLayout(a->device, a->arc_beam_layout, NULL);
+    if (a->industry_layout) vkDestroyPipelineLayout(a->device, a->industry_layout, NULL);
     if (a->underwater_desc_pool) vkDestroyDescriptorPool(a->device, a->underwater_desc_pool, NULL);
     if (a->underwater_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->underwater_desc_layout, NULL);
     if (a->grid_state_desc_pool) vkDestroyDescriptorPool(a->device, a->grid_state_desc_pool, NULL);
     if (a->grid_state_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->grid_state_desc_layout, NULL);
+    if (a->industry_desc_pool) vkDestroyDescriptorPool(a->device, a->industry_desc_pool, NULL);
+    if (a->industry_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->industry_desc_layout, NULL);
     if (a->grid_state_sampler) vkDestroySampler(a->device, a->grid_state_sampler, NULL);
     if (a->post_desc_pool) vkDestroyDescriptorPool(a->device, a->post_desc_pool, NULL);
     if (a->post_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->post_desc_layout, NULL);
     if (a->post_sampler) vkDestroySampler(a->device, a->post_sampler, NULL);
+    if (a->industry_sampler) vkDestroySampler(a->device, a->industry_sampler, NULL);
 
     if (a->scene_fb) vkDestroyFramebuffer(a->device, a->scene_fb, NULL);
     if (a->bloom_fb) vkDestroyFramebuffer(a->device, a->bloom_fb, NULL);
@@ -4549,6 +4660,7 @@ static void cleanup(app* a) {
     if (a->underwater_kelp_view) vkDestroyImageView(a->device, a->underwater_kelp_view, NULL);
     if (a->grid_state_view[0]) vkDestroyImageView(a->device, a->grid_state_view[0], NULL);
     if (a->grid_state_view[1]) vkDestroyImageView(a->device, a->grid_state_view[1], NULL);
+    if (a->industry_view) vkDestroyImageView(a->device, a->industry_view, NULL);
     if (a->scene_image) vkDestroyImage(a->device, a->scene_image, NULL);
     if (a->scene_depth_image) vkDestroyImage(a->device, a->scene_depth_image, NULL);
     if (a->scene_msaa_image) vkDestroyImage(a->device, a->scene_msaa_image, NULL);
@@ -4556,6 +4668,7 @@ static void cleanup(app* a) {
     if (a->underwater_kelp_image) vkDestroyImage(a->device, a->underwater_kelp_image, NULL);
     if (a->grid_state_image[0]) vkDestroyImage(a->device, a->grid_state_image[0], NULL);
     if (a->grid_state_image[1]) vkDestroyImage(a->device, a->grid_state_image[1], NULL);
+    if (a->industry_image) vkDestroyImage(a->device, a->industry_image, NULL);
     if (a->scene_memory) vkFreeMemory(a->device, a->scene_memory, NULL);
     if (a->scene_depth_memory) vkFreeMemory(a->device, a->scene_depth_memory, NULL);
     if (a->scene_msaa_memory) vkFreeMemory(a->device, a->scene_msaa_memory, NULL);
@@ -4563,6 +4676,7 @@ static void cleanup(app* a) {
     if (a->underwater_kelp_memory) vkFreeMemory(a->device, a->underwater_kelp_memory, NULL);
     if (a->grid_state_memory[0]) vkFreeMemory(a->device, a->grid_state_memory[0], NULL);
     if (a->grid_state_memory[1]) vkFreeMemory(a->device, a->grid_state_memory[1], NULL);
+    if (a->industry_memory) vkFreeMemory(a->device, a->industry_memory, NULL);
     if (a->underwater_lut_memory) vkFreeMemory(a->device, a->underwater_lut_memory, NULL);
     if (a->terrain_vertex_map && a->terrain_vertex_memory) {
         vkUnmapMemory(a->device, a->terrain_vertex_memory);
@@ -4633,6 +4747,10 @@ static void cleanup(app* a) {
     if (a->nick_rgba8) {
         free(a->nick_rgba8);
         a->nick_rgba8 = NULL;
+    }
+    if (a->industry_rgba8) {
+        free(a->industry_rgba8);
+        a->industry_rgba8 = NULL;
     }
     IMG_Quit();
 #endif
@@ -4732,6 +4850,10 @@ static void destroy_render_runtime(app* a) {
         vkDestroyPipeline(a->device, a->arc_beam_pipeline, NULL);
         a->arc_beam_pipeline = VK_NULL_HANDLE;
     }
+    if (a->industry_pipeline) {
+        vkDestroyPipeline(a->device, a->industry_pipeline, NULL);
+        a->industry_pipeline = VK_NULL_HANDLE;
+    }
     if (a->post_layout) {
         vkDestroyPipelineLayout(a->device, a->post_layout, NULL);
         a->post_layout = VK_NULL_HANDLE;
@@ -4772,6 +4894,10 @@ static void destroy_render_runtime(app* a) {
         vkDestroyPipelineLayout(a->device, a->arc_beam_layout, NULL);
         a->arc_beam_layout = VK_NULL_HANDLE;
     }
+    if (a->industry_layout) {
+        vkDestroyPipelineLayout(a->device, a->industry_layout, NULL);
+        a->industry_layout = VK_NULL_HANDLE;
+    }
     if (a->underwater_desc_pool) {
         vkDestroyDescriptorPool(a->device, a->underwater_desc_pool, NULL);
         a->underwater_desc_pool = VK_NULL_HANDLE;
@@ -4788,6 +4914,10 @@ static void destroy_render_runtime(app* a) {
         vkDestroyDescriptorPool(a->device, a->grid_state_desc_pool, NULL);
         a->grid_state_desc_pool = VK_NULL_HANDLE;
     }
+    if (a->industry_desc_pool) {
+        vkDestroyDescriptorPool(a->device, a->industry_desc_pool, NULL);
+        a->industry_desc_pool = VK_NULL_HANDLE;
+    }
     if (a->post_desc_layout) {
         vkDestroyDescriptorSetLayout(a->device, a->post_desc_layout, NULL);
         a->post_desc_layout = VK_NULL_HANDLE;
@@ -4796,6 +4926,10 @@ static void destroy_render_runtime(app* a) {
         vkDestroyDescriptorSetLayout(a->device, a->grid_state_desc_layout, NULL);
         a->grid_state_desc_layout = VK_NULL_HANDLE;
     }
+    if (a->industry_desc_layout) {
+        vkDestroyDescriptorSetLayout(a->device, a->industry_desc_layout, NULL);
+        a->industry_desc_layout = VK_NULL_HANDLE;
+    }
     if (a->post_sampler) {
         vkDestroySampler(a->device, a->post_sampler, NULL);
         a->post_sampler = VK_NULL_HANDLE;
@@ -4803,6 +4937,10 @@ static void destroy_render_runtime(app* a) {
     if (a->grid_state_sampler) {
         vkDestroySampler(a->device, a->grid_state_sampler, NULL);
         a->grid_state_sampler = VK_NULL_HANDLE;
+    }
+    if (a->industry_sampler) {
+        vkDestroySampler(a->device, a->industry_sampler, NULL);
+        a->industry_sampler = VK_NULL_HANDLE;
     }
     if (a->scene_fb) {
         vkDestroyFramebuffer(a->device, a->scene_fb, NULL);
@@ -4852,6 +4990,10 @@ static void destroy_render_runtime(app* a) {
         vkDestroyImageView(a->device, a->grid_state_view[1], NULL);
         a->grid_state_view[1] = VK_NULL_HANDLE;
     }
+    if (a->industry_view) {
+        vkDestroyImageView(a->device, a->industry_view, NULL);
+        a->industry_view = VK_NULL_HANDLE;
+    }
     if (a->scene_image) {
         vkDestroyImage(a->device, a->scene_image, NULL);
         a->scene_image = VK_NULL_HANDLE;
@@ -4880,6 +5022,10 @@ static void destroy_render_runtime(app* a) {
         vkDestroyImage(a->device, a->grid_state_image[1], NULL);
         a->grid_state_image[1] = VK_NULL_HANDLE;
     }
+    if (a->industry_image) {
+        vkDestroyImage(a->device, a->industry_image, NULL);
+        a->industry_image = VK_NULL_HANDLE;
+    }
     if (a->scene_memory) {
         vkFreeMemory(a->device, a->scene_memory, NULL);
         a->scene_memory = VK_NULL_HANDLE;
@@ -4907,6 +5053,10 @@ static void destroy_render_runtime(app* a) {
     if (a->grid_state_memory[1]) {
         vkFreeMemory(a->device, a->grid_state_memory[1], NULL);
         a->grid_state_memory[1] = VK_NULL_HANDLE;
+    }
+    if (a->industry_memory) {
+        vkFreeMemory(a->device, a->industry_memory, NULL);
+        a->industry_memory = VK_NULL_HANDLE;
     }
     if (a->underwater_lut_memory) {
         vkFreeMemory(a->device, a->underwater_lut_memory, NULL);
@@ -5085,6 +5235,7 @@ static int recreate_render_runtime(app* a) {
         !create_underwater_resources(a) ||
         !create_grid_resources(a) ||
         !create_arc_beam_resources(a) ||
+        !create_industry_resources(a) ||
         !create_vg_context(a)) {
         return 0;
     }
@@ -7163,6 +7314,297 @@ static int create_arc_beam_resources(app* a) {
 #endif
 }
 
+static int create_industry_resources(app* a) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    return 1;
+#else
+    if (!a) {
+        return 0;
+    }
+    a->use_gpu_industry = 0;
+    if (!a->industry_rgba8 || a->industry_w == 0u || a->industry_h == 0u || a->industry_stride < a->industry_w * 4u) {
+        return 1;
+    }
+
+    VkDeviceSize image_bytes = (VkDeviceSize)a->industry_h * (VkDeviceSize)a->industry_stride;
+    VkBuffer staging = VK_NULL_HANDLE;
+    VkDeviceMemory staging_mem = VK_NULL_HANDLE;
+    if (!create_buffer(
+            a, image_bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &staging, &staging_mem)) {
+        return 0;
+    }
+    void* mapped = NULL;
+    if (!check_vk(vkMapMemory(a->device, staging_mem, 0, image_bytes, 0, &mapped), "vkMapMemory(industry staging)")) {
+        vkDestroyBuffer(a->device, staging, NULL);
+        vkFreeMemory(a->device, staging_mem, NULL);
+        return 0;
+    }
+    memcpy(mapped, a->industry_rgba8, (size_t)image_bytes);
+    vkUnmapMemory(a->device, staging_mem);
+
+    if (!create_image_2d(
+            a,
+            a->industry_w,
+            a->industry_h,
+            VK_FORMAT_R8G8B8A8_UNORM,
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            VK_SAMPLE_COUNT_1_BIT,
+            &a->industry_image,
+            &a->industry_memory,
+            &a->industry_view)) {
+        vkDestroyBuffer(a->device, staging, NULL);
+        vkFreeMemory(a->device, staging_mem, NULL);
+        return 0;
+    }
+
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    if (!begin_one_shot_commands(a, &cmd)) {
+        vkDestroyBuffer(a->device, staging, NULL);
+        vkFreeMemory(a->device, staging_mem, NULL);
+        return 0;
+    }
+    VkImageMemoryBarrier to_dst = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = 0,
+        .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = a->industry_image,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        }
+    };
+    vkCmdPipelineBarrier(
+        cmd,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0,
+        0, NULL,
+        0, NULL,
+        1, &to_dst
+    );
+    VkBufferImageCopy copy = {
+        .bufferOffset = 0,
+        .bufferRowLength = a->industry_stride / 4u,
+        .bufferImageHeight = a->industry_h,
+        .imageSubresource = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .mipLevel = 0,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        },
+        .imageOffset = {0, 0, 0},
+        .imageExtent = {a->industry_w, a->industry_h, 1}
+    };
+    vkCmdCopyBufferToImage(cmd, staging, a->industry_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+    VkImageMemoryBarrier to_sampled = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = a->industry_image,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        }
+    };
+    vkCmdPipelineBarrier(
+        cmd,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0,
+        0, NULL,
+        0, NULL,
+        1, &to_sampled
+    );
+    if (!end_one_shot_commands(a, &cmd)) {
+        vkDestroyBuffer(a->device, staging, NULL);
+        vkFreeMemory(a->device, staging_mem, NULL);
+        return 0;
+    }
+    vkDestroyBuffer(a->device, staging, NULL);
+    vkFreeMemory(a->device, staging_mem, NULL);
+
+    VkSamplerCreateInfo sampler = {
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .magFilter = VK_FILTER_LINEAR,
+        .minFilter = VK_FILTER_LINEAR,
+        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+        .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .minLod = 0.0f,
+        .maxLod = 1.0f,
+        .maxAnisotropy = 1.0f
+    };
+    if (!check_vk(vkCreateSampler(a->device, &sampler, NULL, &a->industry_sampler), "vkCreateSampler(industry)")) {
+        return 0;
+    }
+
+    VkDescriptorSetLayoutBinding bind = {
+        .binding = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT
+    };
+    VkDescriptorSetLayoutCreateInfo dsl = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 1,
+        .pBindings = &bind
+    };
+    if (!check_vk(vkCreateDescriptorSetLayout(a->device, &dsl, NULL, &a->industry_desc_layout), "vkCreateDescriptorSetLayout(industry)")) {
+        return 0;
+    }
+    VkDescriptorPoolSize ps = {
+        .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1
+    };
+    VkDescriptorPoolCreateInfo dp = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .maxSets = 1,
+        .poolSizeCount = 1,
+        .pPoolSizes = &ps
+    };
+    if (!check_vk(vkCreateDescriptorPool(a->device, &dp, NULL, &a->industry_desc_pool), "vkCreateDescriptorPool(industry)")) {
+        return 0;
+    }
+    VkDescriptorSetAllocateInfo dsa = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .descriptorPool = a->industry_desc_pool,
+        .descriptorSetCount = 1,
+        .pSetLayouts = &a->industry_desc_layout
+    };
+    if (!check_vk(vkAllocateDescriptorSets(a->device, &dsa, &a->industry_desc_set), "vkAllocateDescriptorSets(industry)")) {
+        return 0;
+    }
+    VkDescriptorImageInfo di = {
+        .sampler = a->industry_sampler,
+        .imageView = a->industry_view,
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    };
+    VkWriteDescriptorSet wr = {
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = a->industry_desc_set,
+        .dstBinding = 0,
+        .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .pImageInfo = &di
+    };
+    vkUpdateDescriptorSets(a->device, 1, &wr, 0, NULL);
+
+    VkPushConstantRange pc = {
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .offset = 0,
+        .size = sizeof(industry_pc)
+    };
+    VkPipelineLayoutCreateInfo pli = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = &a->industry_desc_layout,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &pc
+    };
+    if (!check_vk(vkCreatePipelineLayout(a->device, &pli, NULL, &a->industry_layout), "vkCreatePipelineLayout(industry)")) {
+        return 0;
+    }
+
+    VkShaderModuleCreateInfo vs_ci = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = v_type_grid_vert_spv_len,
+        .pCode = (const uint32_t*)v_type_grid_vert_spv
+    };
+    VkShaderModuleCreateInfo fs_ci = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = v_type_industry_frag_spv_len,
+        .pCode = (const uint32_t*)v_type_industry_frag_spv
+    };
+    VkShaderModule vs = VK_NULL_HANDLE;
+    VkShaderModule fs = VK_NULL_HANDLE;
+    if (!check_vk(vkCreateShaderModule(a->device, &vs_ci, NULL, &vs), "vkCreateShaderModule(industry vs)")) {
+        return 0;
+    }
+    if (!check_vk(vkCreateShaderModule(a->device, &fs_ci, NULL, &fs), "vkCreateShaderModule(industry fs)")) {
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+
+    VkPipelineShaderStageCreateInfo stages[2] = {
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vs, .pName = "main"},
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = fs, .pName = "main"}
+    };
+    VkPipelineVertexInputStateCreateInfo vi = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    VkPipelineInputAssemblyStateCreateInfo ia = {.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO, .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST};
+    VkPipelineViewportStateCreateInfo vp = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .scissorCount = 1};
+    VkPipelineRasterizationStateCreateInfo rs = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .lineWidth = 1.0f,
+        .cullMode = VK_CULL_MODE_NONE,
+        .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE
+    };
+    VkPipelineMultisampleStateCreateInfo ms = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .rasterizationSamples = scene_samples(a)};
+    VkPipelineColorBlendAttachmentState cb_att = {
+        .blendEnable = VK_TRUE,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .colorBlendOp = VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .alphaBlendOp = VK_BLEND_OP_ADD,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
+    };
+    VkPipelineColorBlendStateCreateInfo cb = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1, .pAttachments = &cb_att};
+    VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo ds = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .dynamicStateCount = 2, .pDynamicStates = dyn};
+    VkPipelineDepthStencilStateCreateInfo depth = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .depthTestEnable = VK_FALSE,
+        .depthWriteEnable = VK_FALSE,
+        .depthCompareOp = VK_COMPARE_OP_ALWAYS
+    };
+    VkGraphicsPipelineCreateInfo gp = {
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .stageCount = 2,
+        .pStages = stages,
+        .pVertexInputState = &vi,
+        .pInputAssemblyState = &ia,
+        .pViewportState = &vp,
+        .pRasterizationState = &rs,
+        .pMultisampleState = &ms,
+        .pDepthStencilState = &depth,
+        .pColorBlendState = &cb,
+        .pDynamicState = &ds,
+        .layout = a->industry_layout,
+        .renderPass = a->scene_render_pass,
+        .subpass = 0
+    };
+    if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->industry_pipeline), "vkCreateGraphicsPipelines(industry)")) {
+        vkDestroyShaderModule(a->device, fs, NULL);
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+    vkDestroyShaderModule(a->device, fs, NULL);
+    vkDestroyShaderModule(a->device, vs, NULL);
+    a->use_gpu_industry = 1;
+    return 1;
+#endif
+}
+
 static int create_vg_context(app* a) {
     vg_context_desc desc;
     memset(&desc, 0, sizeof(desc));
@@ -8318,6 +8760,44 @@ static void record_gpu_arc_beam(app* a, VkCommandBuffer cmd, float t) {
 #endif
 }
 
+static void record_gpu_industry(app* a, VkCommandBuffer cmd, float t) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    (void)cmd;
+    (void)t;
+#else
+    if (!a || !cmd || !a->use_gpu_industry || !a->industry_pipeline || !a->industry_layout || !a->industry_desc_set) {
+        return;
+    }
+    if (a->game.render_style != LEVEL_RENDER_DEFENDER) {
+        return;
+    }
+    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    industry_pc pc;
+    memset(&pc, 0, sizeof(pc));
+    pc.p0[0] = (float)a->swapchain_extent.width;
+    pc.p0[1] = (float)a->swapchain_extent.height;
+    pc.p0[2] = t;
+    pc.p0[3] = 1.0f;
+    const int palette_mode = gameplay_palette_mode(a);
+    if (palette_mode == 1) {
+        pc.p1[0] = 0.66f; pc.p1[1] = 0.42f; pc.p1[2] = 0.16f;
+    } else if (palette_mode == 2) {
+        pc.p1[0] = 0.22f; pc.p1[1] = 0.56f; pc.p1[2] = 0.74f;
+    } else {
+        pc.p1[0] = 0.07f; pc.p1[1] = 0.40f; pc.p1[2] = 0.14f;
+    }
+    pc.p1[3] = a->game.camera_x;
+    pc.p2[0] = a->game.world_w;
+    pc.p2[1] = a->game.world_h;
+    pc.p2[2] = (float)a->industry_w / fmaxf((float)a->industry_h, 1.0f);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->industry_pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->industry_layout, 0, 1, &a->industry_desc_set, 0, NULL);
+    vkCmdPushConstants(cmd, a->industry_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+#endif
+}
+
 static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd) {
     const int enable_gpu_terrain = 1;
     if (!enable_gpu_terrain) {
@@ -8542,6 +9022,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .use_gpu_wormhole = 0,
         .use_gpu_radar = 0,
         .use_gpu_arc = 0,
+        .use_gpu_industry = 0,
         .scene_phase = 0,
         .level_editor_level_name = a->level_editor.level_name,
         .level_editor_status_text = a->level_editor.status_text,
@@ -8705,6 +9186,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         const int use_gpu_fog = (a->game.render_style == LEVEL_RENDER_FOG) ? 1 : 0;
         const int use_gpu_underwater = (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_UNDERWATER) ? 1 : 0;
         const int use_gpu_grid = (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_GRID) ? 1 : 0;
+        const int use_gpu_industry = a->use_gpu_industry && (a->game.render_style == LEVEL_RENDER_DEFENDER);
         const int need_mid_scene_gpu = (use_gpu_terrain || use_gpu_wormhole || use_gpu_radar || use_gpu_arc || use_gpu_grid);
         const int split_scene =
             in_gameplay_scene &&
@@ -8720,8 +9202,31 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             metrics.use_gpu_wormhole = 0;
             metrics.use_gpu_radar = 0;
             metrics.use_gpu_arc = use_gpu_arc ? 1 : 0;
+            metrics.use_gpu_industry = 0;
             clear_scene_color_depth(cmd, a->swapchain_extent);
             record_gpu_high_plains_terrain(a, cmd);
+            clear_scene_depth(cmd, a->swapchain_extent);
+            if (use_gpu_arc) {
+                record_gpu_arc_beam(a, cmd, t);
+            }
+            metrics.scene_phase = 3; /* overlay-no-clear */
+            vr = render_frame(a->vg, &a->game, &metrics);
+            if (vr != VG_OK) {
+                fprintf(stderr, "VG failure: render_frame(overlay) -> %s (%d)\n", vg_result_string(vr), (int)vr);
+                return 0;
+            }
+            if (use_gpu_particles) {
+                record_gpu_particles(a, cmd);
+            }
+        } else if (in_gameplay_scene && use_gpu_industry) {
+            metrics.use_gpu_particles = use_gpu_particles ? 1 : 0;
+            metrics.use_gpu_terrain = 0;
+            metrics.use_gpu_wormhole = 0;
+            metrics.use_gpu_radar = 0;
+            metrics.use_gpu_arc = use_gpu_arc ? 1 : 0;
+            metrics.use_gpu_industry = 1;
+            clear_scene_color_depth(cmd, a->swapchain_extent);
+            record_gpu_industry(a, cmd, t);
             clear_scene_depth(cmd, a->swapchain_extent);
             if (use_gpu_arc) {
                 record_gpu_arc_beam(a, cmd, t);
@@ -8741,6 +9246,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             metrics.use_gpu_wormhole = use_gpu_wormhole ? 1 : 0;
             metrics.use_gpu_radar = use_gpu_radar ? 1 : 0;
             metrics.use_gpu_arc = use_gpu_arc ? 1 : 0;
+            metrics.use_gpu_industry = use_gpu_industry ? 1 : 0;
 
             metrics.scene_phase = 1; /* background-only */
             vr = render_frame(a->vg, &a->game, &metrics);
@@ -8786,6 +9292,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             metrics.use_gpu_wormhole = 0;
             metrics.use_gpu_radar = 0;
             metrics.use_gpu_arc = 0;
+            metrics.use_gpu_industry = 0;
             metrics.scene_phase = 0;
             vr = render_frame(a->vg, &a->game, &metrics);
             if (vr != VG_OK) {
@@ -8916,6 +9423,7 @@ int main(void) {
     a.use_gpu_wormhole = 1;
     a.use_gpu_radar = 1;
     a.use_gpu_arc = 1;
+    a.use_gpu_industry = 1;
     a.use_gpu_particles = !env_flag_enabled("VTYPE_DISABLE_GPU_PARTICLES");
     a.disable_scene_split = env_flag_enabled("VTYPE_DISABLE_SCENE_SPLIT");
     reset_grid_tuning(&a);
@@ -9097,6 +9605,10 @@ int main(void) {
     init_planetarium_assets(&a);
     if (!planetarium_validate_registry(stderr)) {
         fprintf(stderr, "planetarium validation failed; continuing with best-effort defaults\n");
+    }
+    if (!create_industry_resources(&a)) {
+        cleanup(&a);
+        return 1;
     }
 
     game_init(&a.game, (float)a.swapchain_extent.width, (float)a.swapchain_extent.height);

@@ -8312,6 +8312,9 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
                    g->render_style != LEVEL_RENDER_FOG &&
                    g->render_style != LEVEL_RENDER_BLANK) {
             if (g->render_style == LEVEL_RENDER_DEFENDER) {
+                if (metrics->use_gpu_industry) {
+                    goto skip_legacy_landscape;
+                }
                 r = draw_defender_industrial_parallax(
                     ctx,
                     g->world_w,

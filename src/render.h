@@ -145,6 +145,7 @@ typedef struct render_metrics {
     int use_gpu_wormhole;
     int use_gpu_radar;
     int use_gpu_arc;
+    int use_gpu_industry;
     int scene_phase; /* 0=full, 1=background-only, 2=foreground-only, 3=overlay-no-clear */
     const char* level_editor_level_name;
     const char* level_editor_status_text;
