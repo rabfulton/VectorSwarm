@@ -7559,12 +7559,12 @@ static int create_industry_resources(app* a) {
     };
     VkPipelineMultisampleStateCreateInfo ms = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .rasterizationSamples = scene_samples(a)};
     VkPipelineColorBlendAttachmentState cb_att = {
-        .blendEnable = VK_TRUE,
-        .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
-        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .blendEnable = VK_FALSE,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ZERO,
         .colorBlendOp = VK_BLEND_OP_ADD,
         .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
-        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
         .alphaBlendOp = VK_BLEND_OP_ADD,
         .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
     };
@@ -8781,11 +8781,11 @@ static void record_gpu_industry(app* a, VkCommandBuffer cmd, float t) {
     pc.p0[3] = 1.0f;
     const int palette_mode = gameplay_palette_mode(a);
     if (palette_mode == 1) {
-        pc.p1[0] = 0.66f; pc.p1[1] = 0.42f; pc.p1[2] = 0.16f;
+        pc.p1[0] = 0.72f; pc.p1[1] = 0.48f; pc.p1[2] = 0.20f;
     } else if (palette_mode == 2) {
-        pc.p1[0] = 0.22f; pc.p1[1] = 0.56f; pc.p1[2] = 0.74f;
+        pc.p1[0] = 0.18f; pc.p1[1] = 0.50f; pc.p1[2] = 0.70f;
     } else {
-        pc.p1[0] = 0.07f; pc.p1[1] = 0.40f; pc.p1[2] = 0.14f;
+        pc.p1[0] = 0.08f; pc.p1[1] = 0.46f; pc.p1[2] = 0.16f;
     }
     pc.p1[3] = a->game.camera_x;
     pc.p2[0] = a->game.world_w;

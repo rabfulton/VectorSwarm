@@ -1042,7 +1042,9 @@ static int star_visible_with_mask(const game_state* g, float sx, float sy) {
         return 1;
     }
     if (mask == LEVELDEF_BG_MASK_TERRAIN) {
-        if (g->render_style == LEVEL_RENDER_DRIFTER || g->render_style == LEVEL_RENDER_DRIFTER_SHADED) {
+        if (g->render_style == LEVEL_RENDER_DRIFTER ||
+            g->render_style == LEVEL_RENDER_DRIFTER_SHADED ||
+            g->render_style == LEVEL_RENDER_DEFENDER) {
             return (sy >= g->world_h * 0.40f) ? 1 : 0;
         }
         return 1;
