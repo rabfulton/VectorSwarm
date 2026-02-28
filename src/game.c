@@ -1412,30 +1412,13 @@ static void update_arc_nodes(game_state* g, float dt) {
         }
         }
         a->energized_prev = 1;
-        a->damage_timer_s -= dt;
         if (d2 > a->radius * a->radius) {
             continue;
         }
-        if (a->damage_timer_s > 0.0f) {
-            continue;
-        }
-        a->damage_timer_s = a->damage_interval_s;
-        {
-            float nx = g->player.b.x - cx;
-            float ny = g->player.b.y - cy;
-            normalize2(&nx, &ny);
-            g->player.b.vx += nx * (a->push_accel * dt);
-            g->player.b.vy += ny * (a->push_accel * dt);
-        }
-        if (!g->shield_active) {
-            g->lives -= 1;
-            if (g->lives < 0) {
-                g->lives = 0;
-            }
-            if (g->lives == 0) {
-                game_queue_death_message(g);
-            }
-        }
+        emit_player_asteroid_explosion(g);
+        g->lives = 0;
+        game_queue_death_message(g);
+        return;
     }
 }
 
