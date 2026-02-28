@@ -70,6 +70,7 @@
 #include "fog_vert_spv.h"
 #include "fog_frag_spv.h"
 #include "underwater_frag_spv.h"
+#include "underwater_kelp_frag_spv.h"
 #include "grid_vert_spv.h"
 #include "grid_frag_spv.h"
 #include "grid_sim_frag_spv.h"
@@ -88,6 +89,8 @@
 #define GRID_STATE_W 160
 #define GRID_STATE_H 90
 #define MAX_MOD_TRACKS 128
+#define UNDERWATER_KELP_RT_DIVISOR 2u
+#define UNDERWATER_KELP_RT_Y_START_NORM 0.38f
 
 enum control_action_id {
     CONTROL_ACTION_UP = 0,
@@ -185,7 +188,7 @@ typedef struct underwater_pc {
     float p3[4];      /* x=world_origin_x, y=world_origin_y, z=caustic_scale, w=current_speed */
     float p4[4];      /* x=bubble_rate, y=palette_shift, z=world_w, w=world_h */
     float p5[4];      /* x=kelp_density, y=kelp_sway_amp, z=kelp_sway_speed, w=kelp_height */
-    float p6[4];      /* x=kelp_parallax_strength */
+    float p6[4];      /* x=kelp_parallax_strength, y=kelp_rt_w, z=kelp_rt_h, w=high_quality */
 } underwater_pc;
 
 typedef struct underwater_lut_ubo {
@@ -273,6 +276,12 @@ typedef struct app {
     VkDeviceMemory bloom_memory;
     VkImageView bloom_view;
     VkFramebuffer bloom_fb;
+    VkImage underwater_kelp_image;
+    VkDeviceMemory underwater_kelp_memory;
+    VkImageView underwater_kelp_view;
+    VkFramebuffer underwater_kelp_fb;
+    uint32_t underwater_kelp_w;
+    uint32_t underwater_kelp_h;
     VkRenderPass bloom_render_pass;
 
     VkSampler post_sampler;
@@ -298,6 +307,7 @@ typedef struct app {
     VkPipeline fog_pipeline;
     VkPipelineLayout underwater_layout;
     VkPipeline underwater_pipeline;
+    VkPipeline underwater_kelp_pipeline;
     VkDescriptorSetLayout underwater_desc_layout;
     VkDescriptorPool underwater_desc_pool;
     VkDescriptorSet underwater_desc_set;
@@ -502,6 +512,7 @@ typedef struct app {
     int crt_ui_mouse_drag;
     int video_menu_selected;
     int video_menu_fullscreen;
+    int video_menu_high_quality;
     int palette_mode;
     int msaa_enabled;
     VkSampleCountFlagBits msaa_samples;
@@ -1395,6 +1406,7 @@ static void app_to_settings(const app* a, app_settings* out) {
     out->fullscreen = a->video_menu_fullscreen ? 1 : 0;
     out->selected = a->video_menu_selected;
     out->palette = a->palette_mode;
+    out->high_quality = a->video_menu_high_quality ? 1 : 0;
     out->width = APP_WIDTH;
     out->height = APP_HEIGHT;
     if (out->selected > 0 && out->selected <= VIDEO_MENU_RES_COUNT) {
@@ -1418,6 +1430,7 @@ static void settings_to_app(app* a, const app_settings* in) {
     a->video_menu_fullscreen = in->fullscreen ? 1 : 0;
     a->video_menu_selected = in->selected;
     a->palette_mode = in->palette;
+    a->video_menu_high_quality = in->high_quality ? 1 : 0;
     for (int i = 0; i < VIDEO_MENU_DIAL_COUNT; ++i) {
         a->video_dial_01[i] = clampf(in->video_dial_01[i], 0.0f, 1.0f);
     }
@@ -2142,6 +2155,7 @@ static void record_gpu_particles_bloom(app* a, VkCommandBuffer cmd);
 static void record_gpu_wormhole(app* a, VkCommandBuffer cmd);
 static void record_gpu_radar(app* a, VkCommandBuffer cmd);
 static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t);
+static void record_gpu_underwater_kelp(app* a, VkCommandBuffer cmd, float t);
 static void record_gpu_underwater(app* a, VkCommandBuffer cmd, float t);
 static void record_gpu_grid_sim(app* a, VkCommandBuffer cmd, float dt);
 static void record_gpu_grid(app* a, VkCommandBuffer cmd);
@@ -3394,6 +3408,23 @@ static int handle_video_menu_mouse(app* a, int mouse_x, int mouse_y, int set_val
     }
 
     {
+        const vg_rect b = {
+            panel.x + panel.w * 0.05f,
+            panel.y + panel.h * 0.08f,
+            panel.w * 0.29f,
+            panel.h * 0.065f
+        };
+        if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
+            if (set_value) {
+                a->video_menu_high_quality = a->video_menu_high_quality ? 0 : 1;
+                set_tty_message(a, a->video_menu_high_quality ? "high quality on" : "high quality off");
+                (void)save_settings(a);
+            }
+            return 1;
+        }
+    }
+
+    {
         vg_vec2 centers[VIDEO_MENU_DIAL_COUNT];
         float r = 0.0f;
         video_menu_dial_geometry(a, centers, &r);
@@ -4394,6 +4425,7 @@ static void cleanup(app* a) {
     if (a->radar_pipeline) vkDestroyPipeline(a->device, a->radar_pipeline, NULL);
     if (a->fog_pipeline) vkDestroyPipeline(a->device, a->fog_pipeline, NULL);
     if (a->underwater_pipeline) vkDestroyPipeline(a->device, a->underwater_pipeline, NULL);
+    if (a->underwater_kelp_pipeline) vkDestroyPipeline(a->device, a->underwater_kelp_pipeline, NULL);
     if (a->grid_pipeline) vkDestroyPipeline(a->device, a->grid_pipeline, NULL);
     if (a->grid_sim_pipeline) vkDestroyPipeline(a->device, a->grid_sim_pipeline, NULL);
     if (a->arc_beam_pipeline) vkDestroyPipeline(a->device, a->arc_beam_pipeline, NULL);
@@ -4418,24 +4450,28 @@ static void cleanup(app* a) {
 
     if (a->scene_fb) vkDestroyFramebuffer(a->device, a->scene_fb, NULL);
     if (a->bloom_fb) vkDestroyFramebuffer(a->device, a->bloom_fb, NULL);
+    if (a->underwater_kelp_fb) vkDestroyFramebuffer(a->device, a->underwater_kelp_fb, NULL);
     if (a->grid_state_fb[0]) vkDestroyFramebuffer(a->device, a->grid_state_fb[0], NULL);
     if (a->grid_state_fb[1]) vkDestroyFramebuffer(a->device, a->grid_state_fb[1], NULL);
     if (a->scene_view) vkDestroyImageView(a->device, a->scene_view, NULL);
     if (a->scene_depth_view) vkDestroyImageView(a->device, a->scene_depth_view, NULL);
     if (a->scene_msaa_view) vkDestroyImageView(a->device, a->scene_msaa_view, NULL);
     if (a->bloom_view) vkDestroyImageView(a->device, a->bloom_view, NULL);
+    if (a->underwater_kelp_view) vkDestroyImageView(a->device, a->underwater_kelp_view, NULL);
     if (a->grid_state_view[0]) vkDestroyImageView(a->device, a->grid_state_view[0], NULL);
     if (a->grid_state_view[1]) vkDestroyImageView(a->device, a->grid_state_view[1], NULL);
     if (a->scene_image) vkDestroyImage(a->device, a->scene_image, NULL);
     if (a->scene_depth_image) vkDestroyImage(a->device, a->scene_depth_image, NULL);
     if (a->scene_msaa_image) vkDestroyImage(a->device, a->scene_msaa_image, NULL);
     if (a->bloom_image) vkDestroyImage(a->device, a->bloom_image, NULL);
+    if (a->underwater_kelp_image) vkDestroyImage(a->device, a->underwater_kelp_image, NULL);
     if (a->grid_state_image[0]) vkDestroyImage(a->device, a->grid_state_image[0], NULL);
     if (a->grid_state_image[1]) vkDestroyImage(a->device, a->grid_state_image[1], NULL);
     if (a->scene_memory) vkFreeMemory(a->device, a->scene_memory, NULL);
     if (a->scene_depth_memory) vkFreeMemory(a->device, a->scene_depth_memory, NULL);
     if (a->scene_msaa_memory) vkFreeMemory(a->device, a->scene_msaa_memory, NULL);
     if (a->bloom_memory) vkFreeMemory(a->device, a->bloom_memory, NULL);
+    if (a->underwater_kelp_memory) vkFreeMemory(a->device, a->underwater_kelp_memory, NULL);
     if (a->grid_state_memory[0]) vkFreeMemory(a->device, a->grid_state_memory[0], NULL);
     if (a->grid_state_memory[1]) vkFreeMemory(a->device, a->grid_state_memory[1], NULL);
     if (a->underwater_lut_memory) vkFreeMemory(a->device, a->underwater_lut_memory, NULL);
@@ -4591,6 +4627,10 @@ static void destroy_render_runtime(app* a) {
         vkDestroyPipeline(a->device, a->underwater_pipeline, NULL);
         a->underwater_pipeline = VK_NULL_HANDLE;
     }
+    if (a->underwater_kelp_pipeline) {
+        vkDestroyPipeline(a->device, a->underwater_kelp_pipeline, NULL);
+        a->underwater_kelp_pipeline = VK_NULL_HANDLE;
+    }
     if (a->grid_pipeline) {
         vkDestroyPipeline(a->device, a->grid_pipeline, NULL);
         a->grid_pipeline = VK_NULL_HANDLE;
@@ -4683,6 +4723,10 @@ static void destroy_render_runtime(app* a) {
         vkDestroyFramebuffer(a->device, a->bloom_fb, NULL);
         a->bloom_fb = VK_NULL_HANDLE;
     }
+    if (a->underwater_kelp_fb) {
+        vkDestroyFramebuffer(a->device, a->underwater_kelp_fb, NULL);
+        a->underwater_kelp_fb = VK_NULL_HANDLE;
+    }
     if (a->grid_state_fb[0]) {
         vkDestroyFramebuffer(a->device, a->grid_state_fb[0], NULL);
         a->grid_state_fb[0] = VK_NULL_HANDLE;
@@ -4706,6 +4750,10 @@ static void destroy_render_runtime(app* a) {
     if (a->bloom_view) {
         vkDestroyImageView(a->device, a->bloom_view, NULL);
         a->bloom_view = VK_NULL_HANDLE;
+    }
+    if (a->underwater_kelp_view) {
+        vkDestroyImageView(a->device, a->underwater_kelp_view, NULL);
+        a->underwater_kelp_view = VK_NULL_HANDLE;
     }
     if (a->grid_state_view[0]) {
         vkDestroyImageView(a->device, a->grid_state_view[0], NULL);
@@ -4731,6 +4779,10 @@ static void destroy_render_runtime(app* a) {
         vkDestroyImage(a->device, a->bloom_image, NULL);
         a->bloom_image = VK_NULL_HANDLE;
     }
+    if (a->underwater_kelp_image) {
+        vkDestroyImage(a->device, a->underwater_kelp_image, NULL);
+        a->underwater_kelp_image = VK_NULL_HANDLE;
+    }
     if (a->grid_state_image[0]) {
         vkDestroyImage(a->device, a->grid_state_image[0], NULL);
         a->grid_state_image[0] = VK_NULL_HANDLE;
@@ -4754,6 +4806,10 @@ static void destroy_render_runtime(app* a) {
     if (a->bloom_memory) {
         vkFreeMemory(a->device, a->bloom_memory, NULL);
         a->bloom_memory = VK_NULL_HANDLE;
+    }
+    if (a->underwater_kelp_memory) {
+        vkFreeMemory(a->device, a->underwater_kelp_memory, NULL);
+        a->underwater_kelp_memory = VK_NULL_HANDLE;
     }
     if (a->grid_state_memory[0]) {
         vkFreeMemory(a->device, a->grid_state_memory[0], NULL);
@@ -5380,6 +5436,11 @@ static int create_offscreen_targets(app* a) {
 
     if (!create_image_2d(a, w, h, a->swapchain_format, usage, VK_SAMPLE_COUNT_1_BIT, &a->scene_image, &a->scene_memory, &a->scene_view)) return 0;
     if (!create_image_2d(a, w, h, a->swapchain_format, usage, VK_SAMPLE_COUNT_1_BIT, &a->bloom_image, &a->bloom_memory, &a->bloom_view)) return 0;
+    a->underwater_kelp_w = (w > UNDERWATER_KELP_RT_DIVISOR) ? (w / UNDERWATER_KELP_RT_DIVISOR) : 1u;
+    a->underwater_kelp_h = (h > UNDERWATER_KELP_RT_DIVISOR) ? (h / UNDERWATER_KELP_RT_DIVISOR) : 1u;
+    if (!create_image_2d(
+            a, a->underwater_kelp_w, a->underwater_kelp_h, a->swapchain_format, usage, VK_SAMPLE_COUNT_1_BIT,
+            &a->underwater_kelp_image, &a->underwater_kelp_memory, &a->underwater_kelp_view)) return 0;
     if (!create_image_2d(
             a, GRID_STATE_W, GRID_STATE_H, VK_FORMAT_R16G16B16A16_SFLOAT,
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -5412,6 +5473,17 @@ static int create_offscreen_targets(app* a) {
     VkImageView bloom_att[] = {a->bloom_view};
     VkFramebufferCreateInfo bloom_fb = {.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO, .renderPass = a->bloom_render_pass, .attachmentCount = 1, .pAttachments = bloom_att, .width = w, .height = h, .layers = 1};
     if (!check_vk(vkCreateFramebuffer(a->device, &bloom_fb, NULL, &a->bloom_fb), "vkCreateFramebuffer(bloom)")) return 0;
+    VkImageView underwater_kelp_att[] = {a->underwater_kelp_view};
+    VkFramebufferCreateInfo underwater_kelp_fb = {
+        .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+        .renderPass = a->bloom_render_pass,
+        .attachmentCount = 1,
+        .pAttachments = underwater_kelp_att,
+        .width = a->underwater_kelp_w,
+        .height = a->underwater_kelp_h,
+        .layers = 1
+    };
+    if (!check_vk(vkCreateFramebuffer(a->device, &underwater_kelp_fb, NULL, &a->underwater_kelp_fb), "vkCreateFramebuffer(underwater kelp)")) return 0;
 
     VkImageView grid_att0[] = {a->grid_state_view[0]};
     VkImageView grid_att1[] = {a->grid_state_view[1]};
@@ -6480,28 +6552,36 @@ static int create_underwater_resources(app* a) {
         return 0;
     }
 
-    VkDescriptorSetLayoutBinding ub_binding = {
-        .binding = 0,
-        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-        .descriptorCount = 1,
-        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT
+    VkDescriptorSetLayoutBinding bindings[2] = {
+        {
+            .binding = 0,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT
+        },
+        {
+            .binding = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT
+        }
     };
     VkDescriptorSetLayoutCreateInfo dsl = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .bindingCount = 1,
-        .pBindings = &ub_binding
+        .bindingCount = 2,
+        .pBindings = bindings
     };
     if (!check_vk(vkCreateDescriptorSetLayout(a->device, &dsl, NULL, &a->underwater_desc_layout), "vkCreateDescriptorSetLayout(underwater)")) {
         return 0;
     }
-    VkDescriptorPoolSize dps = {
-        .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-        .descriptorCount = 1
+    VkDescriptorPoolSize dps[2] = {
+        {.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 1},
+        {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1}
     };
     VkDescriptorPoolCreateInfo dp = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-        .poolSizeCount = 1,
-        .pPoolSizes = &dps,
+        .poolSizeCount = 2,
+        .pPoolSizes = dps,
         .maxSets = 1
     };
     if (!check_vk(vkCreateDescriptorPool(a->device, &dp, NULL, &a->underwater_desc_pool), "vkCreateDescriptorPool(underwater)")) {
@@ -6535,15 +6615,30 @@ static int create_underwater_resources(app* a) {
         .offset = 0,
         .range = sizeof(underwater_lut_ubo)
     };
-    VkWriteDescriptorSet dw = {
-        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-        .dstSet = a->underwater_desc_set,
-        .dstBinding = 0,
-        .descriptorCount = 1,
-        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-        .pBufferInfo = &dbi
+    VkDescriptorImageInfo dii = {
+        .sampler = a->post_sampler,
+        .imageView = a->underwater_kelp_view,
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
     };
-    vkUpdateDescriptorSets(a->device, 1, &dw, 0, NULL);
+    VkWriteDescriptorSet dw[2] = {
+        {
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = a->underwater_desc_set,
+            .dstBinding = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .pBufferInfo = &dbi
+        },
+        {
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = a->underwater_desc_set,
+            .dstBinding = 1,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .pImageInfo = &dii
+        }
+    };
+    vkUpdateDescriptorSets(a->device, 2, dw, 0, NULL);
 
     VkPushConstantRange pc = {
         .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -6572,12 +6667,23 @@ static int create_underwater_resources(app* a) {
         .codeSize = v_type_underwater_frag_spv_len,
         .pCode = (const uint32_t*)v_type_underwater_frag_spv
     };
+    VkShaderModuleCreateInfo fs_kelp_ci = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = v_type_underwater_kelp_frag_spv_len,
+        .pCode = (const uint32_t*)v_type_underwater_kelp_frag_spv
+    };
     VkShaderModule vs = VK_NULL_HANDLE;
     VkShaderModule fs = VK_NULL_HANDLE;
+    VkShaderModule fs_kelp = VK_NULL_HANDLE;
     if (!check_vk(vkCreateShaderModule(a->device, &vs_ci, NULL, &vs), "vkCreateShaderModule(underwater vs)")) {
         return 0;
     }
     if (!check_vk(vkCreateShaderModule(a->device, &fs_ci, NULL, &fs), "vkCreateShaderModule(underwater fs)")) {
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+    if (!check_vk(vkCreateShaderModule(a->device, &fs_kelp_ci, NULL, &fs_kelp), "vkCreateShaderModule(underwater kelp fs)")) {
+        vkDestroyShaderModule(a->device, fs, NULL);
         vkDestroyShaderModule(a->device, vs, NULL);
         return 0;
     }
@@ -6600,6 +6706,7 @@ static int create_underwater_resources(app* a) {
         .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE
     };
     VkPipelineMultisampleStateCreateInfo ms = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .rasterizationSamples = scene_samples(a)};
+    VkPipelineMultisampleStateCreateInfo ms_single = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT};
     VkPipelineColorBlendAttachmentState cb_att = {
         .blendEnable = VK_TRUE,
         .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
@@ -6637,11 +6744,22 @@ static int create_underwater_resources(app* a) {
         .subpass = 0
     };
     if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->underwater_pipeline), "vkCreateGraphicsPipelines(underwater)")) {
+        vkDestroyShaderModule(a->device, fs_kelp, NULL);
+        vkDestroyShaderModule(a->device, fs, NULL);
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+    stages[1].module = fs_kelp;
+    gp.renderPass = a->bloom_render_pass;
+    gp.pMultisampleState = &ms_single;
+    if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->underwater_kelp_pipeline), "vkCreateGraphicsPipelines(underwater kelp)")) {
+        vkDestroyShaderModule(a->device, fs_kelp, NULL);
         vkDestroyShaderModule(a->device, fs, NULL);
         vkDestroyShaderModule(a->device, vs, NULL);
         return 0;
     }
 
+    vkDestroyShaderModule(a->device, fs_kelp, NULL);
     vkDestroyShaderModule(a->device, fs, NULL);
     vkDestroyShaderModule(a->device, vs, NULL);
     return 1;
@@ -7656,9 +7774,88 @@ static void record_gpu_underwater(app* a, VkCommandBuffer cmd, float t) {
     pc.p5[2] = fmaxf(lvl->underwater_kelp_sway_speed, 0.0f);
     pc.p5[3] = fmaxf(lvl->underwater_kelp_height, 0.1f);
     pc.p6[0] = fmaxf(lvl->underwater_kelp_parallax_strength, 0.0f);
+    pc.p6[1] = (float)a->swapchain_extent.width;
+    pc.p6[2] = (float)a->swapchain_extent.height;
+    pc.p6[3] = a->video_menu_high_quality ? 1.0f : 0.0f;
 
     set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_layout, 0, 1, &a->underwater_desc_set, 0, NULL);
+    vkCmdPushConstants(cmd, a->underwater_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+#endif
+}
+
+static void record_gpu_underwater_kelp(app* a, VkCommandBuffer cmd, float t) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    (void)cmd;
+    (void)t;
+#else
+    if (!a || !cmd || !a->underwater_kelp_pipeline || !a->underwater_layout || !a->underwater_desc_set) {
+        return;
+    }
+    const leveldef_level* lvl = game_current_leveldef(&a->game);
+    if (!lvl || lvl->background_style != LEVELDEF_BACKGROUND_UNDERWATER) {
+        return;
+    }
+
+    underwater_pc pc;
+    memset(&pc, 0, sizeof(pc));
+    const float world_w = a->game.world_w;
+    const float world_h = a->game.world_h;
+    const float cx = a->game.camera_x;
+    const float cy = a->game.camera_y;
+    pc.p0[0] = (float)a->swapchain_extent.width;
+    pc.p0[1] = (float)a->swapchain_extent.height;
+    pc.p0[2] = t;
+    pc.p0[3] = fmaxf(lvl->underwater_density, 0.0f);
+    const int palette_mode = gameplay_palette_mode(a);
+    if (palette_mode == 1) {
+        pc.p1[0] = 0.28f; pc.p1[1] = 0.42f; pc.p1[2] = 0.30f;
+        pc.p2[0] = 0.72f; pc.p2[1] = 0.86f; pc.p2[2] = 0.78f;
+    } else if (palette_mode == 2) {
+        pc.p1[0] = 0.08f; pc.p1[1] = 0.28f; pc.p1[2] = 0.34f;
+        pc.p2[0] = 0.66f; pc.p2[1] = 0.90f; pc.p2[2] = 0.96f;
+    } else {
+        pc.p1[0] = 0.06f; pc.p1[1] = 0.22f; pc.p1[2] = 0.16f;
+        pc.p2[0] = 0.36f; pc.p2[1] = 0.70f; pc.p2[2] = 0.56f;
+    }
+    pc.p1[3] = fmaxf(lvl->underwater_caustic_strength, 0.0f);
+    pc.p2[3] = fmaxf(lvl->underwater_haze_alpha, 0.0f);
+    pc.p3[0] = cx - world_w * 0.5f;
+    pc.p3[1] = cy - world_h * 0.5f;
+    pc.p3[2] = fmaxf(lvl->underwater_caustic_scale, 0.05f);
+    pc.p3[3] = fmaxf(lvl->underwater_current_speed, 0.0f);
+    pc.p4[0] = fmaxf(lvl->underwater_bubble_rate, 0.0f);
+    pc.p4[1] = lvl->underwater_palette_shift;
+    pc.p4[2] = world_w;
+    pc.p4[3] = world_h;
+    pc.p5[0] = fmaxf(lvl->underwater_kelp_density, 0.0f);
+    pc.p5[1] = fmaxf(lvl->underwater_kelp_sway_amp, 0.0f);
+    pc.p5[2] = fmaxf(lvl->underwater_kelp_sway_speed, 0.0f);
+    pc.p5[3] = fmaxf(lvl->underwater_kelp_height, 0.1f);
+    pc.p6[0] = fmaxf(lvl->underwater_kelp_parallax_strength, 0.0f);
+    pc.p6[1] = (float)a->underwater_kelp_w;
+    pc.p6[2] = (float)a->underwater_kelp_h;
+    pc.p6[3] = a->video_menu_high_quality ? 1.0f : 0.0f;
+
+    const uint32_t kelp_y0_px = (uint32_t)((float)a->underwater_kelp_h * UNDERWATER_KELP_RT_Y_START_NORM);
+    VkViewport vp = {
+        .x = 0.0f,
+        .y = (float)kelp_y0_px,
+        .width = (float)a->underwater_kelp_w,
+        .height = (float)(a->underwater_kelp_h - kelp_y0_px),
+        .minDepth = 0.0f,
+        .maxDepth = 1.0f
+    };
+    VkRect2D sc = {
+        .offset = {(int32_t)0, (int32_t)kelp_y0_px},
+        .extent = {a->underwater_kelp_w, a->underwater_kelp_h - kelp_y0_px}
+    };
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &sc);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_kelp_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_layout, 0, 1, &a->underwater_desc_set, 0, NULL);
     vkCmdPushConstants(cmd, a->underwater_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -8085,6 +8282,25 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             reset_grid_sim_state(a);
         }
     }
+    {
+        const int in_gameplay_scene = menu_is_gameplay(&a->menu);
+        const leveldef_level* lvl_bg = game_current_leveldef(&a->game);
+        const int use_gpu_underwater = (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_UNDERWATER) ? 1 : 0;
+        if (in_gameplay_scene && use_gpu_underwater && !a->video_menu_high_quality && a->underwater_kelp_fb) {
+            VkClearValue kelp_clear = {.color = {{0.0f, 0.0f, 0.0f, 0.0f}}};
+            VkRenderPassBeginInfo kelp_rp = {
+                .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+                .renderPass = a->bloom_render_pass,
+                .framebuffer = a->underwater_kelp_fb,
+                .renderArea = {.offset = {0, 0}, .extent = {a->underwater_kelp_w, a->underwater_kelp_h}},
+                .clearValueCount = 1,
+                .pClearValues = &kelp_clear
+            };
+            vkCmdBeginRenderPass(cmd, &kelp_rp, VK_SUBPASS_CONTENTS_INLINE);
+            record_gpu_underwater_kelp(a, cmd, t);
+            vkCmdEndRenderPass(cmd);
+        }
+    }
 
     VkClearValue scene_clear[3];
     memset(scene_clear, 0, sizeof(scene_clear));
@@ -8137,6 +8353,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .menu_screen = a->menu.current,
         .video_menu_selected = a->video_menu_selected,
         .video_menu_fullscreen = a->video_menu_fullscreen,
+        .video_menu_high_quality = a->video_menu_high_quality,
         .palette_mode = menu_is_gameplay(&a->menu) ? gameplay_palette_mode(a) : a->palette_mode,
         .acoustics_selected = a->acoustics_selected,
         .acoustics_page = a->acoustics_page,
@@ -8597,6 +8814,7 @@ int main(void) {
     sync_particle_tuning_text(&a);
     a.video_menu_selected = 1;
     a.video_menu_fullscreen = 0;
+    a.video_menu_high_quality = 0;
     a.palette_mode = 0;
     a.msaa_enabled = 1;
     a.video_dial_01[0] = 0.472223f; /* bloom strength */

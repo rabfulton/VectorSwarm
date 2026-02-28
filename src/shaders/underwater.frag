@@ -6,6 +6,7 @@ layout(set = 0, binding = 0) uniform UnderwaterLUT {
     vec4 kelp_seed_xjit[3 * 26];
     vec4 bubble_lut[8];
 } lut;
+layout(set = 0, binding = 1) uniform sampler2D u_kelp;
 
 layout(push_constant) uniform UnderwaterPC {
     vec4 p0; /* x=viewport_w, y=viewport_h, z=time_s, w=density */
@@ -14,7 +15,7 @@ layout(push_constant) uniform UnderwaterPC {
     vec4 p3; /* x=world_origin_x, y=world_origin_y, z=caustic_scale, w=current_speed */
     vec4 p4; /* x=bubble_rate, y=palette_shift, z=world_w, w=world_h */
     vec4 p5; /* x=kelp_density, y=kelp_sway_amp, z=kelp_sway_speed, w=kelp_height */
-    vec4 p6; /* x=kelp_parallax_strength */
+    vec4 p6; /* x=kelp_parallax_strength, y=kelp_rt_w, z=kelp_rt_h, w=high_quality */
 } pc;
 
 float hash12(vec2 p) {
@@ -105,7 +106,7 @@ vec4 kelp_field(vec2 world_px, float t) {
 
         for (int i = 0; i < stems_per_layer; ++i) {
             float fi = float(i);
-            vec4 kl = lut.kelp_seed_xjit[layer * stems_per_layer + i];
+            vec4 kl = lut.kelp_seed_xjit[i];
             float seed = kl.x;
             if (seed > layer_density) {
                 continue;
@@ -151,6 +152,17 @@ vec4 kelp_field(vec2 world_px, float t) {
     return vec4(accum_col, clamp(accum_a, 0.0, 0.65));
 }
 
+vec4 sample_kelp_tent(vec2 uv) {
+    ivec2 ts = textureSize(u_kelp, 0);
+    vec2 texel = 1.0 / vec2(max(ts.x, 1), max(ts.y, 1));
+    vec4 c = texture(u_kelp, uv) * 0.40;
+    c += texture(u_kelp, uv + vec2(texel.x, 0.0)) * 0.15;
+    c += texture(u_kelp, uv - vec2(texel.x, 0.0)) * 0.15;
+    c += texture(u_kelp, uv + vec2(0.0, texel.y)) * 0.15;
+    c += texture(u_kelp, uv - vec2(0.0, texel.y)) * 0.15;
+    return c;
+}
+
 void main() {
     vec2 frag_px = vec2(gl_FragCoord.xy);
     float w = max(pc.p0.x, 1.0);
@@ -176,7 +188,9 @@ void main() {
     ca *= max(pc.p1.w, 0.0) * density;
 
     float bubbles = bubble_field(world_px, t, pc.p4.x) * density;
-    vec4 kelp = kelp_field(world_px, t) * density;
+    vec4 kelp = (pc.p6.w > 0.5)
+        ? (kelp_field(world_px, t) * density)
+        : sample_kelp_tent(frag_px / vec2(w, h));
     float shade = clamp(0.18 + haze * 0.75 + ca * 0.60, 0.0, 1.0);
 
     vec3 col_a = pc.p1.rgb;

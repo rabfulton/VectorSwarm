@@ -3816,13 +3816,24 @@ static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render
     }
 
     {
-        const char* mode = metrics->video_menu_fullscreen ? "ACTIVE MODE: FULLSCREEN" : "ACTIVE MODE: WINDOWED";
-        r = draw_text_vector_glow(
+        const vg_rect b = {
+            panel.x + panel.w * 0.05f,
+            panel.y + panel.h * 0.08f,
+            panel.w * 0.29f,
+            panel.h * 0.065f
+        };
+        const int hover =
+            metrics->mouse_in_window &&
+            metrics->mouse_x >= b.x && metrics->mouse_x <= (b.x + b.w) &&
+            metrics->mouse_y >= b.y && metrics->mouse_y <= (b.y + b.h);
+        r = draw_lcars_text_button(
             ctx,
-            mode,
-            (vg_vec2){panel.x + panel.w * 0.05f, panel.y + panel.h * 0.10f},
-            11.0f * ui,
-            0.8f * ui,
+            b,
+            metrics->video_menu_high_quality ? "HIGH QUALITY ON" : "HIGH QUALITY OFF",
+            hover,
+            metrics->video_menu_high_quality ? 1 : 0,
+            ui,
+            &pal,
             &frame,
             &txt
         );

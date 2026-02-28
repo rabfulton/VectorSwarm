@@ -87,6 +87,7 @@ static int save_settings_to_path(const app_settings* s, const char* path) {
     fprintf(f, "width=%d\n", s->width);
     fprintf(f, "height=%d\n", s->height);
     fprintf(f, "palette=%d\n", s->palette);
+    fprintf(f, "high_quality=%d\n", s->high_quality ? 1 : 0);
     for (int i = 0; i < VIDEO_MENU_DIAL_COUNT; ++i) {
         fprintf(f, "dial%d=%.6f\n", i, clampf(s->video_dial_01[i], 0.0f, 1.0f));
     }
@@ -136,6 +137,7 @@ int settings_load(app_settings* io, const settings_resolution* resolutions, int 
     int width = -1;
     int height = -1;
     int palette = io->palette;
+    int high_quality = io->high_quality ? 1 : 0;
     int controls_use_gamepad = io->controls_use_gamepad;
     int controls_key_scancode[SETTINGS_CONTROL_ACTION_COUNT];
     int controls_pad_button[SETTINGS_CONTROL_ACTION_COUNT];
@@ -161,6 +163,8 @@ int settings_load(app_settings* io, const settings_resolution* resolutions, int 
             height = atoi(value);
         } else if (strcmp(key, "palette") == 0) {
             palette = atoi(value);
+        } else if (strcmp(key, "high_quality") == 0) {
+            high_quality = (atoi(value) != 0) ? 1 : 0;
         } else {
             int dial = -1;
             if (sscanf(key, "dial%d", &dial) == 1 && dial >= 0 && dial < VIDEO_MENU_DIAL_COUNT) {
@@ -200,6 +204,7 @@ int settings_load(app_settings* io, const settings_resolution* resolutions, int 
     io->fullscreen = fullscreen ? 1 : 0;
     io->selected = io->fullscreen ? 0 : selected;
     io->palette = palette;
+    io->high_quality = high_quality ? 1 : 0;
     io->controls_use_gamepad = controls_use_gamepad ? 1 : 0;
     memcpy(io->controls_key_scancode, controls_key_scancode, sizeof(controls_key_scancode));
     memcpy(io->controls_pad_button, controls_pad_button, sizeof(controls_pad_button));
