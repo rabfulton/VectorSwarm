@@ -1724,6 +1724,30 @@ static uint32_t mixtape_rand_u32(uint32_t* state) {
     return x;
 }
 
+static uint32_t mixtape_make_shuffle_seed(const app* a) {
+    uint64_t x = 0x9e3779b97f4a7c15ull;
+    const uint64_t perf = (uint64_t)SDL_GetPerformanceCounter();
+    const uint64_t freq = (uint64_t)SDL_GetPerformanceFrequency();
+    const uint64_t ticks = (uint64_t)SDL_GetTicks64();
+    const uint64_t addr = (uint64_t)(uintptr_t)a;
+    const uint64_t rng = a ? (uint64_t)a->audio_rng : 0ull;
+    x ^= perf + 0xbf58476d1ce4e5b9ull + (x << 6) + (x >> 2);
+    x ^= freq + 0x94d049bb133111ebull + (x << 6) + (x >> 2);
+    x ^= ticks + 0x632be59bd9b4e019ull + (x << 6) + (x >> 2);
+    x ^= addr + 0x9e3779b97f4a7c15ull + (x << 6) + (x >> 2);
+    x ^= rng + 0xd1b54a32d192ed03ull + (x << 6) + (x >> 2);
+    x ^= x >> 30;
+    x *= 0xbf58476d1ce4e5b9ull;
+    x ^= x >> 27;
+    x *= 0x94d049bb133111ebull;
+    x ^= x >> 31;
+    uint32_t seed = (uint32_t)(x ^ (x >> 32));
+    if (seed == 0u) {
+        seed = 0x6d2b79f5u;
+    }
+    return seed;
+}
+
 static void mixtape_shuffle_ints(int* v, int n, uint32_t* state) {
     if (!v || n <= 1 || !state) {
         return;
@@ -1755,10 +1779,7 @@ static void mixtape_rebuild_play_order(app* a) {
         return;
     }
     if (a->mod_playlist_randomize) {
-        uint32_t seed = a->audio_rng ^ (uint32_t)SDL_GetTicks() ^ 0x9e3779b9u;
-        if (seed == 0u) {
-            seed = 1u;
-        }
+        uint32_t seed = mixtape_make_shuffle_seed(a);
         mixtape_shuffle_ints(a->mod_playlist_order, a->mod_playlist_order_count, &seed);
         a->audio_rng ^= seed;
     }
