@@ -340,6 +340,10 @@ void leveldef_init_defaults(leveldef_db* db) {
         db->levels[i].underwater_kelp_sway_speed = 1.0f;
         db->levels[i].underwater_kelp_height = 1.0f;
         db->levels[i].underwater_kelp_parallax_strength = 1.0f;
+        db->levels[i].underwater_kelp_tint_r = 1.0f;
+        db->levels[i].underwater_kelp_tint_g = 1.0f;
+        db->levels[i].underwater_kelp_tint_b = 1.0f;
+        db->levels[i].underwater_kelp_tint_strength = 0.0f;
         db->levels[i].wave_mode = -1;
         db->levels[i].render_style = -1;
         db->levels[i].spawn_mode = -1;
@@ -907,6 +911,14 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_level->underwater_kelp_height = strtof(v, NULL);
                     } else if (strcmp(k, "underwater.kelp_parallax_strength") == 0) {
                         cur_level->underwater_kelp_parallax_strength = strtof(v, NULL);
+                    } else if (strcmp(k, "underwater.kelp_tint_r") == 0) {
+                        cur_level->underwater_kelp_tint_r = strtof(v, NULL);
+                    } else if (strcmp(k, "underwater.kelp_tint_g") == 0) {
+                        cur_level->underwater_kelp_tint_g = strtof(v, NULL);
+                    } else if (strcmp(k, "underwater.kelp_tint_b") == 0) {
+                        cur_level->underwater_kelp_tint_b = strtof(v, NULL);
+                    } else if (strcmp(k, "underwater.kelp_tint_strength") == 0) {
+                        cur_level->underwater_kelp_tint_strength = strtof(v, NULL);
                     } else if (strcmp(k, "render_style") == 0) {
                         cur_level->render_style = render_style_from_name(v);
                     } else if (strcmp(k, "wave_mode") == 0) {
@@ -1311,7 +1323,11 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
             l->underwater_kelp_sway_amp < 0.0f || !isfinite(l->underwater_kelp_sway_amp) ||
             l->underwater_kelp_sway_speed < 0.0f || !isfinite(l->underwater_kelp_sway_speed) ||
             l->underwater_kelp_height <= 0.0f || !isfinite(l->underwater_kelp_height) ||
-            l->underwater_kelp_parallax_strength < 0.0f || !isfinite(l->underwater_kelp_parallax_strength)) {
+            l->underwater_kelp_parallax_strength < 0.0f || !isfinite(l->underwater_kelp_parallax_strength) ||
+            l->underwater_kelp_tint_r < 0.0f || l->underwater_kelp_tint_r > 2.0f || !isfinite(l->underwater_kelp_tint_r) ||
+            l->underwater_kelp_tint_g < 0.0f || l->underwater_kelp_tint_g > 2.0f || !isfinite(l->underwater_kelp_tint_g) ||
+            l->underwater_kelp_tint_b < 0.0f || l->underwater_kelp_tint_b > 2.0f || !isfinite(l->underwater_kelp_tint_b) ||
+            l->underwater_kelp_tint_strength < 0.0f || l->underwater_kelp_tint_strength > 1.0f || !isfinite(l->underwater_kelp_tint_strength)) {
             if (log_out) {
                 fprintf(log_out, "leveldef: level %d invalid underwater tuning values\n", i);
             }

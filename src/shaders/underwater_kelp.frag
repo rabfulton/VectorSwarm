@@ -15,6 +15,7 @@ layout(push_constant) uniform UnderwaterPC {
     vec4 p4; /* x=bubble_rate, y=palette_shift, z=world_w, w=world_h */
     vec4 p5; /* x=kelp_density, y=kelp_sway_amp, z=kelp_sway_speed, w=kelp_height */
     vec4 p6; /* x=kelp_parallax_strength, y=kelp_rt_w, z=kelp_rt_h */
+    vec4 p7; /* x=kelp_tint_r, y=kelp_tint_g, z=kelp_tint_b, w=kelp_tint_strength */
 } pc;
 
 vec4 kelp_field(vec2 world_px, float t) {
@@ -53,7 +54,8 @@ vec4 kelp_field(vec2 world_px, float t) {
 
         for (int i = 0; i < stems_per_layer; ++i) {
             float fi = float(i);
-            vec4 kl = lut.kelp_seed_xjit[i];
+            int lut_idx = layer * stems_per_layer + i;
+            vec4 kl = lut.kelp_seed_xjit[lut_idx];
             float seed = kl.x;
             if (seed > layer_density) {
                 continue;
@@ -89,7 +91,8 @@ vec4 kelp_field(vec2 world_px, float t) {
 
             float rib = 1.0 - smoothstep(max(0.0, -aa * 0.5), width * 0.28 + aa * 0.5, d);
             vec3 stem_col = mix(pc.p1.rgb * 0.70, pc.p2.rgb * 1.05, 0.25 + 0.55 * lf);
-            stem_col *= (0.58 + 0.78 * lf) * (0.68 + 0.52 * rib);
+            float stem_shade = (0.58 + 0.78 * lf) * (0.68 + 0.52 * rib);
+            stem_col *= stem_shade;
 
             float alpha = body * (0.10 + 0.26 * lf);
             accum_col += stem_col * alpha * (1.0 - accum_a);

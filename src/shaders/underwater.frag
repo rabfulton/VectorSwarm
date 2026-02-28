@@ -16,6 +16,7 @@ layout(push_constant) uniform UnderwaterPC {
     vec4 p4; /* x=bubble_rate, y=palette_shift, z=world_w, w=world_h */
     vec4 p5; /* x=kelp_density, y=kelp_sway_amp, z=kelp_sway_speed, w=kelp_height */
     vec4 p6; /* x=kelp_parallax_strength, y=kelp_rt_w, z=kelp_rt_h, w=high_quality */
+    vec4 p7; /* x=kelp_tint_r, y=kelp_tint_g, z=kelp_tint_b, w=kelp_tint_strength */
 } pc;
 
 float hash12(vec2 p) {
@@ -106,7 +107,8 @@ vec4 kelp_field(vec2 world_px, float t) {
 
         for (int i = 0; i < stems_per_layer; ++i) {
             float fi = float(i);
-            vec4 kl = lut.kelp_seed_xjit[i];
+            int lut_idx = layer * stems_per_layer + i;
+            vec4 kl = lut.kelp_seed_xjit[lut_idx];
             float seed = kl.x;
             if (seed > layer_density) {
                 continue;
@@ -138,7 +140,8 @@ vec4 kelp_field(vec2 world_px, float t) {
 
             float rib = 1.0 - smoothstep(0.0, width * 0.28, d);
             vec3 stem_col = mix(pc.p1.rgb * 0.70, pc.p2.rgb * 1.05, 0.25 + 0.55 * lf);
-            stem_col *= (0.58 + 0.78 * lf) * (0.68 + 0.52 * rib);
+            float stem_shade = (0.58 + 0.78 * lf) * (0.68 + 0.52 * rib);
+            stem_col *= stem_shade;
 
             float alpha = body * (0.10 + 0.26 * lf);
             accum_col += stem_col * alpha * (1.0 - accum_a);
@@ -191,6 +194,11 @@ void main() {
     vec4 kelp = (pc.p6.w > 0.5)
         ? (kelp_field(world_px, t) * density)
         : sample_kelp_tent(frag_px / vec2(w, h));
+    float kelp_override = clamp(pc.p7.w, 0.0, 1.0);
+    if (kelp_override > 0.0) {
+        vec3 tint_rgb = max(pc.p7.rgb, vec3(0.0));
+        kelp.rgb = mix(kelp.rgb, tint_rgb, kelp_override);
+    }
     float shade = clamp(0.18 + haze * 0.75 + ca * 0.60, 0.0, 1.0);
 
     vec3 col_a = pc.p1.rgb;
@@ -198,9 +206,13 @@ void main() {
     float shift = pc.p4.y;
     vec3 col = mix(col_a, col_b, clamp(shade + shift * 0.20, 0.0, 1.0));
     col += vec3(0.55, 0.72, 0.88) * (0.42 * bubbles + 0.18 * ca);
-    col = mix(col, kelp.rgb + col * 0.15, kelp.a);
+    float kelp_mix_a = clamp(kelp.a * mix(1.05, 2.60, kelp_override), 0.0, 1.0);
+    float kelp_bg_dim = kelp_mix_a * mix(0.08, 0.42, kelp_override);
+    col *= (1.0 - kelp_bg_dim);
+    vec3 kelp_mix_col = mix(kelp.rgb + col * 0.10, kelp.rgb, 0.70 + 0.30 * kelp_override);
+    col = mix(col, kelp_mix_col, kelp_mix_a);
 
     float alpha = clamp((0.07 + 0.20 * haze + 0.14 * ca + 0.30 * bubbles) * max(pc.p2.w, 0.0), 0.0, 0.60);
-    alpha = clamp(alpha + kelp.a * max(pc.p2.w, 0.0), 0.0, 0.65);
+    alpha = clamp(alpha + kelp_mix_a * max(pc.p2.w, 0.0), 0.0, 0.70);
     out_color = vec4(col, alpha);
 }

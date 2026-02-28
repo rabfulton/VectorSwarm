@@ -189,6 +189,7 @@ typedef struct underwater_pc {
     float p4[4];      /* x=bubble_rate, y=palette_shift, z=world_w, w=world_h */
     float p5[4];      /* x=kelp_density, y=kelp_sway_amp, z=kelp_sway_speed, w=kelp_height */
     float p6[4];      /* x=kelp_parallax_strength, y=kelp_rt_w, z=kelp_rt_h, w=high_quality */
+    float p7[4];      /* x=kelp_tint_r, y=kelp_tint_g, z=kelp_tint_b, w=kelp_tint_strength */
 } underwater_pc;
 
 typedef struct underwater_lut_ubo {
@@ -7777,6 +7778,28 @@ static void record_gpu_underwater(app* a, VkCommandBuffer cmd, float t) {
     pc.p6[1] = (float)a->swapchain_extent.width;
     pc.p6[2] = (float)a->swapchain_extent.height;
     pc.p6[3] = a->video_menu_high_quality ? 1.0f : 0.0f;
+    pc.p7[0] = lvl->underwater_kelp_tint_r;
+    pc.p7[1] = lvl->underwater_kelp_tint_g;
+    pc.p7[2] = lvl->underwater_kelp_tint_b;
+    pc.p7[3] = lvl->underwater_kelp_tint_strength;
+    {
+        static float s_last_trace_t = -1000.0f;
+        if ((t - s_last_trace_t) > 1.0f) {
+            const char* lvl_name = game_current_level_name(&a->game);
+            fprintf(
+                stderr,
+                "[underwater_trace] level='%s' bg=%d kelp_tint=(%.3f,%.3f,%.3f) strength=%.3f highq=%d\n",
+                (lvl_name && lvl_name[0] != '\0') ? lvl_name : "(none)",
+                lvl->background_style,
+                lvl->underwater_kelp_tint_r,
+                lvl->underwater_kelp_tint_g,
+                lvl->underwater_kelp_tint_b,
+                lvl->underwater_kelp_tint_strength,
+                a->video_menu_high_quality
+            );
+            s_last_trace_t = t;
+        }
+    }
 
     set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_pipeline);
@@ -7839,6 +7862,10 @@ static void record_gpu_underwater_kelp(app* a, VkCommandBuffer cmd, float t) {
     pc.p6[1] = (float)a->underwater_kelp_w;
     pc.p6[2] = (float)a->underwater_kelp_h;
     pc.p6[3] = a->video_menu_high_quality ? 1.0f : 0.0f;
+    pc.p7[0] = lvl->underwater_kelp_tint_r;
+    pc.p7[1] = lvl->underwater_kelp_tint_g;
+    pc.p7[2] = lvl->underwater_kelp_tint_b;
+    pc.p7[3] = lvl->underwater_kelp_tint_strength;
 
     const uint32_t kelp_y0_px = (uint32_t)((float)a->underwater_kelp_h * UNDERWATER_KELP_RT_Y_START_NORM);
     VkViewport vp = {

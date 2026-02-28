@@ -278,6 +278,10 @@ typedef struct leveldef_level {
     float underwater_kelp_sway_speed;
     float underwater_kelp_height;
     float underwater_kelp_parallax_strength;
+    float underwater_kelp_tint_r;
+    float underwater_kelp_tint_g;
+    float underwater_kelp_tint_b;
+    float underwater_kelp_tint_strength;
     int render_style; /* enum level_render_style_id */
     int wave_mode;
     int spawn_mode; /* enum leveldef_spawn_mode */

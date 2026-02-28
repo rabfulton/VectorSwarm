@@ -1261,6 +1261,10 @@ static int build_level_serialized_text(
         if (!appendf(out, out_cap, &used, "underwater.kelp_sway_speed=%.3f\n", lvl.underwater_kelp_sway_speed)) return 0;
         if (!appendf(out, out_cap, &used, "underwater.kelp_height=%.3f\n", lvl.underwater_kelp_height)) return 0;
         if (!appendf(out, out_cap, &used, "underwater.kelp_parallax_strength=%.3f\n", lvl.underwater_kelp_parallax_strength)) return 0;
+        if (!appendf(out, out_cap, &used, "underwater.kelp_tint_r=%.3f\n", lvl.underwater_kelp_tint_r)) return 0;
+        if (!appendf(out, out_cap, &used, "underwater.kelp_tint_g=%.3f\n", lvl.underwater_kelp_tint_g)) return 0;
+        if (!appendf(out, out_cap, &used, "underwater.kelp_tint_b=%.3f\n", lvl.underwater_kelp_tint_b)) return 0;
+        if (!appendf(out, out_cap, &used, "underwater.kelp_tint_strength=%.3f\n", lvl.underwater_kelp_tint_strength)) return 0;
     }
     if (!appendf(out, out_cap, &used, "background_mask=%s\n", background_mask_style_name(clampi(lvl.background_mask_style, LEVELDEF_BG_MASK_NONE, LEVELDEF_BG_MASK_WINDOWS)))) return 0;
     if (!appendf(out, out_cap, &used, "spawn_mode=%s\n", spawn_mode_name(lvl.spawn_mode))) return 0;
