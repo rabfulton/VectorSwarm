@@ -2,6 +2,10 @@
 
 layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 out_color;
+layout(set = 0, binding = 0) uniform UnderwaterLUT {
+    vec4 kelp_seed_xjit[3 * 26];
+    vec4 bubble_lut[8];
+} lut;
 
 layout(push_constant) uniform UnderwaterPC {
     vec4 p0; /* x=viewport_w, y=viewport_h, z=time_s, w=density */
@@ -48,12 +52,12 @@ float bubble_field(vec2 world_px, float t, float bubble_rate) {
     const int emit_n = 7;
     for (int i = 0; i < emit_n; ++i) {
         float fi = float(i);
-        float ex = (fi + 0.35) / float(emit_n);
-        ex += (hash12(vec2(fi, 7.31)) - 0.5) * 0.05;
-        float cycle = 6.0 + fi * 0.77;
-        float phase = fract((t * (0.10 + 0.03 * fi) * max(bubble_rate, 0.0)) + hash12(vec2(fi, 11.2)));
+        vec4 bl = lut.bubble_lut[i];
+        float ex = bl.x;
+        float cycle = bl.w;
+        float phase = fract((t * (0.10 + 0.03 * fi) * max(bubble_rate, 0.0)) + bl.y);
         float y01 = 1.0 - phase;
-        float x01 = ex + sin((phase * 1.8 + fi * 0.41) * 3.14159265) * (0.012 + 0.008 * fi);
+        float x01 = ex + sin((phase * 1.8 + fi * 0.41) * 3.14159265) * bl.z;
         vec2 c = vec2(x01 * pc.p4.z, y01 * pc.p4.w);
         vec2 delta = world_px - c;
         delta.x -= tile_w * round(delta.x / tile_w);
@@ -74,6 +78,13 @@ vec4 kelp_field(vec2 world_px, float t) {
     if (kelp_density <= 0.0) {
         return vec4(0.0);
     }
+    float world_h = max(pc.p4.w, 1.0);
+    float y01_global = world_px.y / world_h;
+    const float base_y01 = 1.02;
+    const float max_h_coeff = 0.48 * 1.16; /* max((0.22+0.26*seed)*(0.82+0.34*lf)) */
+    if (y01_global > base_y01 || y01_global < (base_y01 - kelp_height * max_h_coeff)) {
+        return vec4(0.0);
+    }
 
     const int layers = 3;
     const int stems_per_layer = 26;
@@ -86,18 +97,22 @@ vec4 kelp_field(vec2 world_px, float t) {
         float layer_parallax = (0.15 + 0.55 * lf) * parallax;
         vec2 wp = world_px + vec2(pc.p3.x * layer_parallax, 0.0);
         float tile_w = max(pc.p4.z, 1.0);
-        float y01 = wp.y / max(pc.p4.w, 1.0);
-        float base_y01 = 1.02;
+        float y01 = wp.y / world_h;
+        float max_h01_layer = 0.48 * kelp_height * (0.82 + 0.34 * lf);
+        if (y01 > base_y01 || y01 < (base_y01 - max_h01_layer)) {
+            continue;
+        }
 
         for (int i = 0; i < stems_per_layer; ++i) {
             float fi = float(i);
-            float seed = hash12(vec2(fi, 31.0 + 11.0 * lf));
+            vec4 kl = lut.kelp_seed_xjit[layer * stems_per_layer + i];
+            float seed = kl.x;
             if (seed > layer_density) {
                 continue;
             }
 
             float x01 = (fi + 0.5) / float(stems_per_layer);
-            x01 += (hash12(vec2(fi, 73.0 + lf * 17.0)) - 0.5) * (0.06 + 0.02 * lf);
+            x01 += kl.y;
             float x0 = x01 * pc.p4.z;
 
             float h01 = (0.22 + 0.26 * seed) * kelp_height * (0.82 + 0.34 * lf);

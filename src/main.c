@@ -188,6 +188,11 @@ typedef struct underwater_pc {
     float p6[4];      /* x=kelp_parallax_strength */
 } underwater_pc;
 
+typedef struct underwater_lut_ubo {
+    float kelp_seed_xjit[3 * 26][4];
+    float bubble_lut[8][4];
+} underwater_lut_ubo;
+
 typedef struct grid_pc {
     float p0[4];      /* x=viewport_w, y=viewport_h, z=grid_dx, w=grid_dy */
     float p1[4];      /* x=distort_gain, y=strain_gain, z=state_w, w=state_h */
@@ -293,6 +298,11 @@ typedef struct app {
     VkPipeline fog_pipeline;
     VkPipelineLayout underwater_layout;
     VkPipeline underwater_pipeline;
+    VkDescriptorSetLayout underwater_desc_layout;
+    VkDescriptorPool underwater_desc_pool;
+    VkDescriptorSet underwater_desc_set;
+    VkBuffer underwater_lut_buffer;
+    VkDeviceMemory underwater_lut_memory;
     VkPipelineLayout grid_layout;
     VkPipeline grid_pipeline;
     VkPipelineLayout grid_sim_layout;
@@ -4228,6 +4238,49 @@ static int create_buffer(
     return 1;
 }
 
+static float fractf_local(float v) {
+    return v - floorf(v);
+}
+
+static float hash12_cpu(float x, float y) {
+    float p3x = fractf_local(x * 0.1031f);
+    float p3y = fractf_local(y * 0.1031f);
+    float p3z = fractf_local(x * 0.1031f);
+    const float dotv = p3x * (p3y + 33.33f) + p3y * (p3z + 33.33f) + p3z * (p3x + 33.33f);
+    p3x += dotv;
+    p3y += dotv;
+    p3z += dotv;
+    return fractf_local((p3x + p3y) * p3z);
+}
+
+static void build_underwater_lut(underwater_lut_ubo* lut) {
+    if (!lut) {
+        return;
+    }
+    memset(lut, 0, sizeof(*lut));
+    for (int layer = 0; layer < 3; ++layer) {
+        const float lf = (float)layer / 2.0f;
+        for (int i = 0; i < 26; ++i) {
+            const float fi = (float)i;
+            const int idx = layer * 26 + i;
+            const float seed = hash12_cpu(fi, 31.0f + 11.0f * lf);
+            const float xjit = (hash12_cpu(fi, 73.0f + lf * 17.0f) - 0.5f) * (0.06f + 0.02f * lf);
+            lut->kelp_seed_xjit[idx][0] = seed;
+            lut->kelp_seed_xjit[idx][1] = xjit;
+            lut->kelp_seed_xjit[idx][2] = lf;
+            lut->kelp_seed_xjit[idx][3] = 0.0f;
+        }
+    }
+    for (int i = 0; i < 7; ++i) {
+        const float fi = (float)i;
+        const float ex = (fi + 0.35f) / 7.0f + (hash12_cpu(fi, 7.31f) - 0.5f) * 0.05f;
+        lut->bubble_lut[i][0] = ex;
+        lut->bubble_lut[i][1] = hash12_cpu(fi, 11.2f);
+        lut->bubble_lut[i][2] = 0.012f + 0.008f * fi;
+        lut->bubble_lut[i][3] = 6.0f + fi * 0.77f;
+    }
+}
+
 static VkFormat find_depth_format(app* a) {
     const VkFormat candidates[] = {
         VK_FORMAT_D32_SFLOAT_S8_UINT,
@@ -4354,6 +4407,8 @@ static void cleanup(app* a) {
     if (a->grid_layout) vkDestroyPipelineLayout(a->device, a->grid_layout, NULL);
     if (a->grid_sim_layout) vkDestroyPipelineLayout(a->device, a->grid_sim_layout, NULL);
     if (a->arc_beam_layout) vkDestroyPipelineLayout(a->device, a->arc_beam_layout, NULL);
+    if (a->underwater_desc_pool) vkDestroyDescriptorPool(a->device, a->underwater_desc_pool, NULL);
+    if (a->underwater_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->underwater_desc_layout, NULL);
     if (a->grid_state_desc_pool) vkDestroyDescriptorPool(a->device, a->grid_state_desc_pool, NULL);
     if (a->grid_state_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->grid_state_desc_layout, NULL);
     if (a->grid_state_sampler) vkDestroySampler(a->device, a->grid_state_sampler, NULL);
@@ -4383,11 +4438,13 @@ static void cleanup(app* a) {
     if (a->bloom_memory) vkFreeMemory(a->device, a->bloom_memory, NULL);
     if (a->grid_state_memory[0]) vkFreeMemory(a->device, a->grid_state_memory[0], NULL);
     if (a->grid_state_memory[1]) vkFreeMemory(a->device, a->grid_state_memory[1], NULL);
+    if (a->underwater_lut_memory) vkFreeMemory(a->device, a->underwater_lut_memory, NULL);
     if (a->terrain_vertex_map && a->terrain_vertex_memory) {
         vkUnmapMemory(a->device, a->terrain_vertex_memory);
         a->terrain_vertex_map = NULL;
     }
     if (a->terrain_vertex_buffer) vkDestroyBuffer(a->device, a->terrain_vertex_buffer, NULL);
+    if (a->underwater_lut_buffer) vkDestroyBuffer(a->device, a->underwater_lut_buffer, NULL);
     if (a->terrain_tri_index_buffer) vkDestroyBuffer(a->device, a->terrain_tri_index_buffer, NULL);
     if (a->terrain_wire_vertex_map && a->terrain_wire_vertex_memory) {
         vkUnmapMemory(a->device, a->terrain_wire_vertex_memory);
@@ -4586,6 +4643,14 @@ static void destroy_render_runtime(app* a) {
         vkDestroyPipelineLayout(a->device, a->arc_beam_layout, NULL);
         a->arc_beam_layout = VK_NULL_HANDLE;
     }
+    if (a->underwater_desc_pool) {
+        vkDestroyDescriptorPool(a->device, a->underwater_desc_pool, NULL);
+        a->underwater_desc_pool = VK_NULL_HANDLE;
+    }
+    if (a->underwater_desc_layout) {
+        vkDestroyDescriptorSetLayout(a->device, a->underwater_desc_layout, NULL);
+        a->underwater_desc_layout = VK_NULL_HANDLE;
+    }
     if (a->post_desc_pool) {
         vkDestroyDescriptorPool(a->device, a->post_desc_pool, NULL);
         a->post_desc_pool = VK_NULL_HANDLE;
@@ -4698,6 +4763,10 @@ static void destroy_render_runtime(app* a) {
         vkFreeMemory(a->device, a->grid_state_memory[1], NULL);
         a->grid_state_memory[1] = VK_NULL_HANDLE;
     }
+    if (a->underwater_lut_memory) {
+        vkFreeMemory(a->device, a->underwater_lut_memory, NULL);
+        a->underwater_lut_memory = VK_NULL_HANDLE;
+    }
     if (a->terrain_vertex_map && a->terrain_vertex_memory) {
         vkUnmapMemory(a->device, a->terrain_vertex_memory);
         a->terrain_vertex_map = NULL;
@@ -4705,6 +4774,10 @@ static void destroy_render_runtime(app* a) {
     if (a->terrain_vertex_buffer) {
         vkDestroyBuffer(a->device, a->terrain_vertex_buffer, NULL);
         a->terrain_vertex_buffer = VK_NULL_HANDLE;
+    }
+    if (a->underwater_lut_buffer) {
+        vkDestroyBuffer(a->device, a->underwater_lut_buffer, NULL);
+        a->underwater_lut_buffer = VK_NULL_HANDLE;
     }
     if (a->terrain_tri_index_buffer) {
         vkDestroyBuffer(a->device, a->terrain_tri_index_buffer, NULL);
@@ -6407,13 +6480,81 @@ static int create_underwater_resources(app* a) {
         return 0;
     }
 
+    VkDescriptorSetLayoutBinding ub_binding = {
+        .binding = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT
+    };
+    VkDescriptorSetLayoutCreateInfo dsl = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 1,
+        .pBindings = &ub_binding
+    };
+    if (!check_vk(vkCreateDescriptorSetLayout(a->device, &dsl, NULL, &a->underwater_desc_layout), "vkCreateDescriptorSetLayout(underwater)")) {
+        return 0;
+    }
+    VkDescriptorPoolSize dps = {
+        .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorCount = 1
+    };
+    VkDescriptorPoolCreateInfo dp = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .poolSizeCount = 1,
+        .pPoolSizes = &dps,
+        .maxSets = 1
+    };
+    if (!check_vk(vkCreateDescriptorPool(a->device, &dp, NULL, &a->underwater_desc_pool), "vkCreateDescriptorPool(underwater)")) {
+        return 0;
+    }
+    VkDescriptorSetAllocateInfo dsa = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .descriptorPool = a->underwater_desc_pool,
+        .descriptorSetCount = 1,
+        .pSetLayouts = &a->underwater_desc_layout
+    };
+    if (!check_vk(vkAllocateDescriptorSets(a->device, &dsa, &a->underwater_desc_set), "vkAllocateDescriptorSets(underwater)")) {
+        return 0;
+    }
+    if (!create_buffer(
+            a, sizeof(underwater_lut_ubo), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &a->underwater_lut_buffer, &a->underwater_lut_memory)) {
+        return 0;
+    }
+    underwater_lut_ubo lut;
+    build_underwater_lut(&lut);
+    void* lut_map = NULL;
+    if (!check_vk(vkMapMemory(a->device, a->underwater_lut_memory, 0, sizeof(lut), 0, &lut_map), "vkMapMemory(underwater lut)")) {
+        return 0;
+    }
+    memcpy(lut_map, &lut, sizeof(lut));
+    vkUnmapMemory(a->device, a->underwater_lut_memory);
+    VkDescriptorBufferInfo dbi = {
+        .buffer = a->underwater_lut_buffer,
+        .offset = 0,
+        .range = sizeof(underwater_lut_ubo)
+    };
+    VkWriteDescriptorSet dw = {
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = a->underwater_desc_set,
+        .dstBinding = 0,
+        .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .pBufferInfo = &dbi
+    };
+    vkUpdateDescriptorSets(a->device, 1, &dw, 0, NULL);
+
     VkPushConstantRange pc = {
         .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
         .offset = 0,
         .size = sizeof(underwater_pc)
     };
+    VkDescriptorSetLayout set_layouts[1] = {a->underwater_desc_layout};
     VkPipelineLayoutCreateInfo pli = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = set_layouts,
         .pushConstantRangeCount = 1,
         .pPushConstantRanges = &pc
     };
@@ -7470,7 +7611,7 @@ static void record_gpu_underwater(app* a, VkCommandBuffer cmd, float t) {
     (void)cmd;
     (void)t;
 #else
-    if (!a || !cmd || !a->underwater_pipeline || !a->underwater_layout) {
+    if (!a || !cmd || !a->underwater_pipeline || !a->underwater_layout || !a->underwater_desc_set) {
         return;
     }
     const leveldef_level* lvl = game_current_leveldef(&a->game);
@@ -7518,6 +7659,7 @@ static void record_gpu_underwater(app* a, VkCommandBuffer cmd, float t) {
 
     set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_layout, 0, 1, &a->underwater_desc_set, 0, NULL);
     vkCmdPushConstants(cmd, a->underwater_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
 #endif
