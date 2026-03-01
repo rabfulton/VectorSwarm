@@ -7,6 +7,7 @@ layout(set = 0, binding = 0) uniform UnderwaterLUT {
     vec4 bubble_lut[8];
 } lut;
 layout(set = 0, binding = 1) uniform sampler2D u_kelp;
+layout(set = 0, binding = 2) uniform sampler2D u_noise;
 
 layout(push_constant) uniform UnderwaterPC {
     vec4 p0; /* x=viewport_w, y=viewport_h, z=time_s, w=density */
@@ -25,27 +26,20 @@ float hash12(vec2 p) {
     return fract((p3.x + p3.y) * p3.z);
 }
 
-float noise2(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    float a = hash12(i + vec2(0.0, 0.0));
-    float b = hash12(i + vec2(1.0, 0.0));
-    float c = hash12(i + vec2(0.0, 1.0));
-    float d = hash12(i + vec2(1.0, 1.0));
-    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
-}
-
-float fbm(vec2 p) {
-    float v = 0.0;
-    float a = 0.5;
-    mat2 m = mat2(1.6, 1.2, -1.2, 1.6);
-    for (int i = 0; i < 4; ++i) {
-        v += a * noise2(p);
-        p = m * p * 1.45;
-        a *= 0.5;
-    }
-    return v;
+/* Replaces the three fbm() calls from the original shader.
+   UVs are the original FBM inputs divided by 5, so the noise texture
+   (baked with first-octave period = tex_size/5) produces the same spatial
+   frequencies as fbm(n_uv * vec2(5.0, 2.2)), fbm(n_uv * vec2(9.8, 4.0))
+   and fbm(n_uv * vec2(14.0, 8.0)) respectively. */
+vec3 sample_underwater_noise(vec2 n_uv, vec2 flow, float t, float cur) {
+    vec2 uv0 = n_uv * vec2(1.00, 0.44) + flow * 0.20;
+    vec2 uv1 = n_uv * vec2(1.96, 0.80) - flow * 0.31 + vec2(1.22, -0.74);
+    vec2 uv2 = n_uv * vec2(2.80, 1.60) + vec2(t * 0.030, -t * 0.016) * cur;
+    return vec3(
+        texture(u_noise, uv0).r,
+        texture(u_noise, uv1).g,
+        texture(u_noise, uv2).b
+    );
 }
 
 float bubble_field(vec2 world_px, float t, float bubble_rate) {
@@ -189,13 +183,11 @@ void main() {
     vec2 flow = vec2(t * 0.040, -t * 0.022) * cur;
     vec2 n_uv = world_uv * scale;
 
-    float n0 = fbm(n_uv * vec2(5.0, 2.2) + flow);
-    float n1 = fbm(n_uv * vec2(9.8, 4.0) - flow * 1.55 + vec2(6.1, -3.7));
-    float haze = smoothstep(0.28, 0.86, n0 * 0.72 + n1 * 0.28);
+    vec3 n = sample_underwater_noise(n_uv, flow, t, cur);
+    float haze = smoothstep(0.28, 0.86, n.x * 0.72 + n.y * 0.28);
     haze *= density;
 
-    float ca = fbm(n_uv * vec2(14.0, 8.0) + vec2(t * 0.15, -t * 0.08) * cur);
-    ca = pow(clamp(ca, 0.0, 1.0), 2.2);
+    float ca = pow(clamp(n.z, 0.0, 1.0), 2.2);
     ca *= max(pc.p1.w, 0.0) * density;
 
     float bubbles = bubble_field(world_px, t, pc.p4.x) * density;

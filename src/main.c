@@ -288,6 +288,10 @@ typedef struct app {
     VkDeviceMemory underwater_kelp_memory;
     VkImageView underwater_kelp_view;
     VkFramebuffer underwater_kelp_fb;
+    VkImage underwater_noise_image;
+    VkDeviceMemory underwater_noise_memory;
+    VkImageView underwater_noise_view;
+    VkSampler underwater_noise_sampler;
     uint32_t underwater_kelp_w;
     uint32_t underwater_kelp_h;
     VkRenderPass bloom_render_pass;
@@ -1248,6 +1252,57 @@ static float perlin2(float x, float y) {
     const float ix0 = lerpf(n00, n10, sx);
     const float ix1 = lerpf(n01, n11, sx);
     return lerpf(ix0, ix1, sy);
+}
+
+/* Tileable value noise helpers for the underwater noise texture. */
+#define UNDERWATER_NOISE_TEX_SIZE 256
+
+static float underwater_noise_at(int px, int py, int period, int seed) {
+    const int wx = ((px % period) + period) % period;
+    const int wy = ((py % period) + period) % period;
+    return hash01_2i(wx ^ (seed * 3571), wy ^ (seed * 7919));
+}
+
+static float underwater_vnoise(float x, float y, int period, int seed) {
+    const int x0 = (int)floorf(x), y0 = (int)floorf(y);
+    const float fx = x - (float)x0, fy = y - (float)y0;
+    const float ux = fx * fx * (3.0f - 2.0f * fx);
+    const float uy = fy * fy * (3.0f - 2.0f * fy);
+    const float a = underwater_noise_at(x0,   y0,   period, seed);
+    const float b = underwater_noise_at(x0+1, y0,   period, seed);
+    const float c = underwater_noise_at(x0,   y0+1, period, seed);
+    const float d = underwater_noise_at(x0+1, y0+1, period, seed);
+    return lerpf(lerpf(a, b, ux), lerpf(c, d, ux), uy);
+}
+
+static float underwater_fbm(float u, float v, int seed) {
+    /* u, v are UV coords in [0,1). Scaling by base_period=5 gives smooth
+       features spanning T/5 pixels, matching fbm(n_uv*5.0) in world space
+       when sampled at UV scale 1.0. Tiles at UV period 1.0 because each
+       octave's integer period divides the UV range [0,1) exactly. */
+    float x = u * 5.0f, y = v * 5.0f;
+    float val = 0.0f, amp = 0.5f;
+    int period = 5;
+    for (int oct = 0; oct < 4; ++oct) {
+        val += amp * underwater_vnoise(x, y, period, seed + oct * 37);
+        x *= 2.0f; y *= 2.0f; period *= 2; amp *= 0.5f;
+    }
+    return val;
+}
+
+static void gen_underwater_noise_tex(uint8_t* out_rgba) {
+    const int T = UNDERWATER_NOISE_TEX_SIZE;
+    for (int y = 0; y < T; ++y) {
+        for (int x = 0; x < T; ++x) {
+            const float u = (float)x / (float)T;
+            const float v = (float)y / (float)T;
+            uint8_t* p = out_rgba + (y * T + x) * 4;
+            p[0] = (uint8_t)clampf(underwater_fbm(u, v,    0) * 255.0f, 0.0f, 255.0f);
+            p[1] = (uint8_t)clampf(underwater_fbm(u, v, 1000) * 255.0f, 0.0f, 255.0f);
+            p[2] = (uint8_t)clampf(underwater_fbm(u, v, 2000) * 255.0f, 0.0f, 255.0f);
+            p[3] = 255;
+        }
+    }
 }
 
 static float high_plains_looped_noise(float world_x, float z) {
@@ -4660,6 +4715,7 @@ static void cleanup(app* a) {
     if (a->grid_state_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->grid_state_desc_layout, NULL);
     if (a->industry_desc_pool) vkDestroyDescriptorPool(a->device, a->industry_desc_pool, NULL);
     if (a->industry_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->industry_desc_layout, NULL);
+    if (a->underwater_noise_sampler) vkDestroySampler(a->device, a->underwater_noise_sampler, NULL);
     if (a->grid_state_sampler) vkDestroySampler(a->device, a->grid_state_sampler, NULL);
     if (a->post_desc_pool) vkDestroyDescriptorPool(a->device, a->post_desc_pool, NULL);
     if (a->post_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->post_desc_layout, NULL);
@@ -4676,6 +4732,7 @@ static void cleanup(app* a) {
     if (a->scene_msaa_view) vkDestroyImageView(a->device, a->scene_msaa_view, NULL);
     if (a->bloom_view) vkDestroyImageView(a->device, a->bloom_view, NULL);
     if (a->underwater_kelp_view) vkDestroyImageView(a->device, a->underwater_kelp_view, NULL);
+    if (a->underwater_noise_view) vkDestroyImageView(a->device, a->underwater_noise_view, NULL);
     if (a->grid_state_view[0]) vkDestroyImageView(a->device, a->grid_state_view[0], NULL);
     if (a->grid_state_view[1]) vkDestroyImageView(a->device, a->grid_state_view[1], NULL);
     if (a->industry_view) vkDestroyImageView(a->device, a->industry_view, NULL);
@@ -4684,6 +4741,7 @@ static void cleanup(app* a) {
     if (a->scene_msaa_image) vkDestroyImage(a->device, a->scene_msaa_image, NULL);
     if (a->bloom_image) vkDestroyImage(a->device, a->bloom_image, NULL);
     if (a->underwater_kelp_image) vkDestroyImage(a->device, a->underwater_kelp_image, NULL);
+    if (a->underwater_noise_image) vkDestroyImage(a->device, a->underwater_noise_image, NULL);
     if (a->grid_state_image[0]) vkDestroyImage(a->device, a->grid_state_image[0], NULL);
     if (a->grid_state_image[1]) vkDestroyImage(a->device, a->grid_state_image[1], NULL);
     if (a->industry_image) vkDestroyImage(a->device, a->industry_image, NULL);
@@ -4692,6 +4750,7 @@ static void cleanup(app* a) {
     if (a->scene_msaa_memory) vkFreeMemory(a->device, a->scene_msaa_memory, NULL);
     if (a->bloom_memory) vkFreeMemory(a->device, a->bloom_memory, NULL);
     if (a->underwater_kelp_memory) vkFreeMemory(a->device, a->underwater_kelp_memory, NULL);
+    if (a->underwater_noise_memory) vkFreeMemory(a->device, a->underwater_noise_memory, NULL);
     if (a->grid_state_memory[0]) vkFreeMemory(a->device, a->grid_state_memory[0], NULL);
     if (a->grid_state_memory[1]) vkFreeMemory(a->device, a->grid_state_memory[1], NULL);
     if (a->industry_memory) vkFreeMemory(a->device, a->industry_memory, NULL);
@@ -6810,7 +6869,7 @@ static int create_underwater_resources(app* a) {
         return 0;
     }
 
-    VkDescriptorSetLayoutBinding bindings[2] = {
+    VkDescriptorSetLayoutBinding bindings[3] = {
         {
             .binding = 0,
             .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
@@ -6822,11 +6881,17 @@ static int create_underwater_resources(app* a) {
             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
             .descriptorCount = 1,
             .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT
+        },
+        {
+            .binding = 2,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT
         }
     };
     VkDescriptorSetLayoutCreateInfo dsl = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .bindingCount = 2,
+        .bindingCount = 3,
         .pBindings = bindings
     };
     if (!check_vk(vkCreateDescriptorSetLayout(a->device, &dsl, NULL, &a->underwater_desc_layout), "vkCreateDescriptorSetLayout(underwater)")) {
@@ -6834,7 +6899,7 @@ static int create_underwater_resources(app* a) {
     }
     VkDescriptorPoolSize dps[2] = {
         {.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 1},
-        {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1}
+        {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 2}
     };
     VkDescriptorPoolCreateInfo dp = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -6868,17 +6933,102 @@ static int create_underwater_resources(app* a) {
     }
     memcpy(lut_map, &lut, sizeof(lut));
     vkUnmapMemory(a->device, a->underwater_lut_memory);
+    /* Build and upload the underwater noise texture (256x256 RGBA8, tileable FBM). */
+    {
+        const uint32_t ntex_sz = UNDERWATER_NOISE_TEX_SIZE;
+        const VkDeviceSize ntex_bytes = (VkDeviceSize)ntex_sz * ntex_sz * 4;
+        uint8_t* ntex_data = (uint8_t*)malloc((size_t)ntex_bytes);
+        if (!ntex_data) return 0;
+        gen_underwater_noise_tex(ntex_data);
+        VkBuffer stg = VK_NULL_HANDLE;
+        VkDeviceMemory stg_mem = VK_NULL_HANDLE;
+        if (!create_buffer(a, ntex_bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                &stg, &stg_mem)) {
+            free(ntex_data); return 0;
+        }
+        void* stg_map = NULL;
+        if (!check_vk(vkMapMemory(a->device, stg_mem, 0, ntex_bytes, 0, &stg_map), "vkMapMemory(noise staging)")) {
+            vkDestroyBuffer(a->device, stg, NULL); vkFreeMemory(a->device, stg_mem, NULL);
+            free(ntex_data); return 0;
+        }
+        memcpy(stg_map, ntex_data, (size_t)ntex_bytes);
+        vkUnmapMemory(a->device, stg_mem);
+        free(ntex_data);
+        if (!create_image_2d(a, ntex_sz, ntex_sz, VK_FORMAT_R8G8B8A8_UNORM,
+                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                VK_SAMPLE_COUNT_1_BIT,
+                &a->underwater_noise_image, &a->underwater_noise_memory, &a->underwater_noise_view)) {
+            vkDestroyBuffer(a->device, stg, NULL); vkFreeMemory(a->device, stg_mem, NULL);
+            return 0;
+        }
+        VkCommandBuffer cmd = VK_NULL_HANDLE;
+        if (!begin_one_shot_commands(a, &cmd)) {
+            vkDestroyBuffer(a->device, stg, NULL); vkFreeMemory(a->device, stg_mem, NULL);
+            return 0;
+        }
+        VkImageMemoryBarrier to_dst = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .srcAccessMask = 0, .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED, .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = a->underwater_noise_image,
+            .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}
+        };
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0, 0, NULL, 0, NULL, 1, &to_dst);
+        VkBufferImageCopy bic = {
+            .bufferOffset = 0, .bufferRowLength = ntex_sz, .bufferImageHeight = ntex_sz,
+            .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+            .imageOffset = {0, 0, 0}, .imageExtent = {ntex_sz, ntex_sz, 1}
+        };
+        vkCmdCopyBufferToImage(cmd, stg, a->underwater_noise_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bic);
+        VkImageMemoryBarrier to_sampled = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = a->underwater_noise_image,
+            .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}
+        };
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0, 0, NULL, 0, NULL, 1, &to_sampled);
+        if (!end_one_shot_commands(a, &cmd)) {
+            vkDestroyBuffer(a->device, stg, NULL); vkFreeMemory(a->device, stg_mem, NULL);
+            return 0;
+        }
+        vkDestroyBuffer(a->device, stg, NULL);
+        vkFreeMemory(a->device, stg_mem, NULL);
+    }
+    VkSamplerCreateInfo noise_sampler_ci = {
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .magFilter = VK_FILTER_LINEAR, .minFilter = VK_FILTER_LINEAR,
+        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+        .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .maxLod = 1.0f
+    };
+    if (!check_vk(vkCreateSampler(a->device, &noise_sampler_ci, NULL, &a->underwater_noise_sampler),
+            "vkCreateSampler(underwater noise)")) {
+        return 0;
+    }
     VkDescriptorBufferInfo dbi = {
         .buffer = a->underwater_lut_buffer,
         .offset = 0,
         .range = sizeof(underwater_lut_ubo)
     };
-    VkDescriptorImageInfo dii = {
+    VkDescriptorImageInfo dii_kelp = {
         .sampler = a->post_sampler,
         .imageView = a->underwater_kelp_view,
         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
     };
-    VkWriteDescriptorSet dw[2] = {
+    VkDescriptorImageInfo dii_noise = {
+        .sampler = a->underwater_noise_sampler,
+        .imageView = a->underwater_noise_view,
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    };
+    VkWriteDescriptorSet dw[3] = {
         {
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .dstSet = a->underwater_desc_set,
@@ -6893,10 +7043,18 @@ static int create_underwater_resources(app* a) {
             .dstBinding = 1,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .pImageInfo = &dii
+            .pImageInfo = &dii_kelp
+        },
+        {
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = a->underwater_desc_set,
+            .dstBinding = 2,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .pImageInfo = &dii_noise
         }
     };
-    vkUpdateDescriptorSets(a->device, 2, dw, 0, NULL);
+    vkUpdateDescriptorSets(a->device, 3, dw, 0, NULL);
 
     VkPushConstantRange pc = {
         .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
