@@ -98,6 +98,8 @@ New `.c` files are **not** auto-discovered.
 - Avoid hidden fallback paths that silently reuse prior state, template data, or alternate code paths.
 - When behavior is wrong, trace the exact active read/write/update path and fix that path directly.
 - If a fallback is truly required for safety, it must be explicit, narrow, documented here, and approved by the user.
+- Global rule: do not introduce fallback logic that masks errors. Prefer fail-fast behavior with clear, actionable diagnostics so configuration/data/code issues are visible immediately.
+- Level loading/runtime selection must be config-driven from discovered `level_*.cfg` data; do not add enum-slot/name fallback logic that masks missing or misnamed level configs. Fail fast with explicit diagnostics instead.
 
 Why this matters in `v-type`:
 - Broad fallbacks have repeatedly masked real bugs (state leaks, duplicated logic paths, invalid serialization assumptions).

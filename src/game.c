@@ -69,13 +69,14 @@ static int strieq(const char* a, const char* b) {
 
 
 static const leveldef_level* current_leveldef(const game_state* g) {
-    if (g && g_level_count > 0 && g->level_index >= 0 && g->level_index < g_level_count) {
-        return &g_levels[g->level_index].level;
-    }
-    if (!g) {
+    if (!g || g_level_count <= 0) {
         return NULL;
     }
-    return leveldef_get_level(&g_leveldef, g->level_style);
+    if (g->level_index >= 0 && g->level_index < g_level_count) {
+        return &g_levels[g->level_index].level;
+    }
+    fprintf(stderr, "game: invalid level_index=%d (count=%d); falling back to first discovered level\n", g->level_index, g_level_count);
+    return &g_levels[0].level;
 }
 
 static void ensure_leveldef_loaded(void) {
@@ -2377,10 +2378,8 @@ void game_init(game_state* g, float world_w, float world_h) {
             break;
         }
     }
-    if (g_level_count > 0) {
-        g->level_style = g_levels[g->level_index].style_hint;
-        snprintf(g->current_level_name, sizeof(g->current_level_name), "%s", g_levels[g->level_index].name);
-    }
+    g->level_style = g_levels[g->level_index].style_hint;
+    snprintf(g->current_level_name, sizeof(g->current_level_name), "%s", g_levels[g->level_index].name);
     apply_level_runtime_config(g);
     g->level_time_remaining_s = level_uses_cylinder(g) ? 120.0f : 0.0f;
 
@@ -2416,13 +2415,8 @@ void game_cycle_level(game_state* g) {
         return;
     }
     ensure_leveldef_loaded();
-    if (g_level_count > 0) {
-        const int next = (g->level_index + 1) % g_level_count;
-        (void)set_level_index(g, next);
-    } else {
-        g->level_style = (g->level_style + 1) % LEVEL_STYLE_COUNT;
-        apply_level_runtime_config(g);
-    }
+    const int next = (g->level_index + 1) % g_level_count;
+    (void)set_level_index(g, next);
 }
 
 static void game_handle_restart(game_state* g, const game_input* in) {
@@ -2914,22 +2908,13 @@ const char* game_current_level_name(const game_state* g) {
     if (g && g->current_level_name[0] != '\0') {
         return g->current_level_name;
     }
-    if (g && g_level_count > 0 && g->level_index >= 0 && g->level_index < g_level_count) {
+    if (g && g->level_index >= 0 && g->level_index < g_level_count) {
         return g_levels[g->level_index].name;
     }
-    if (!g) {
-        return "level_defender";
+    if (g_level_count > 0) {
+        return g_levels[0].name;
     }
-    switch (g->level_style) {
-        case LEVEL_STYLE_ENEMY_RADAR: return "level_enemy_radar";
-        case LEVEL_STYLE_EVENT_HORIZON: return "level_event_horizon";
-        case LEVEL_STYLE_EVENT_HORIZON_LEGACY: return "level_event_horizon_legacy";
-        case LEVEL_STYLE_HIGH_PLAINS_DRIFTER: return "level_high_plains_drifter";
-        case LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2: return "level_high_plains_drifter_2";
-        case LEVEL_STYLE_FOG_OF_WAR: return "level_fog_of_war";
-        case LEVEL_STYLE_BLANK: return "level_blank";
-        default: return "level_defender";
-    }
+    return "";
 }
 
 int game_set_level_by_name(game_state* g, const char* name) {

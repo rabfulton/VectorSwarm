@@ -329,6 +329,7 @@ typedef struct leveldef_db {
     int profile_count;
     leveldef_boid_profile profiles[LEVELDEF_MAX_BOID_PROFILES];
     leveldef_combat_tuning combat;
+    int level_present[LEVEL_STYLE_COUNT];
     leveldef_level levels[LEVEL_STYLE_COUNT];
 } leveldef_db;
 

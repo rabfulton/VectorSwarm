@@ -324,6 +324,7 @@ void leveldef_init_defaults(leveldef_db* db) {
     memset(db, 0, sizeof(*db));
     leveldef_init_builtin_boid_profiles(db);
     for (i = 0; i < LEVEL_STYLE_COUNT; ++i) {
+        db->level_present[i] = 0;
         db->levels[i].editor_length_screens = 12.0f;
         db->levels[i].theme_palette = 0;
         db->levels[i].background_style = LEVELDEF_BACKGROUND_STARS;
@@ -832,6 +833,7 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                     cur_profile = NULL;
                     cur_level = NULL;
                     if (sid >= 0 && sid < LEVEL_STYLE_COUNT) {
+                        db->level_present[sid] = 1;
                         cur_level = &db->levels[sid];
                         cur_level->searchlight_count = 0;
                         cur_level->minefield_count = 0;
@@ -1251,6 +1253,7 @@ int leveldef_load_with_defaults(leveldef_db* db, const char* path, FILE* log_out
 static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
     int ok = 1;
     int i;
+    int present_n = 0;
     if (!db) {
         return 0;
     }
@@ -1261,6 +1264,10 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
         return 0;
     }
     for (i = 0; i < LEVEL_STYLE_COUNT; ++i) {
+        if (!db->level_present[i]) {
+            continue;
+        }
+        present_n += 1;
         const leveldef_level* l = &db->levels[i];
         if (l->render_style < 0) {
             if (log_out) {
@@ -1498,6 +1505,12 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
                 break;
             }
         }
+    }
+    if (present_n <= 0) {
+        if (log_out) {
+            fprintf(log_out, "leveldef: no [level ...] sections loaded from project files\n");
+        }
+        ok = 0;
     }
     return ok;
 }
