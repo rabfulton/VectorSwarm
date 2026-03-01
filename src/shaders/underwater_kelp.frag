@@ -37,6 +37,9 @@ vec4 kelp_field(vec2 world_px, float t) {
 
     const int layers = 3;
     const int stems_per_layer = 26;
+    /* xjit <= 0.04 UV = ~1.04 slots; bend <= ~21px = ~0.27 slots.
+       Checking +-2 slots around the fragment's slot covers all contributors. */
+    const int slot_radius = 2;
     vec3 accum_col = vec3(0.0);
     float accum_a = 0.0;
 
@@ -52,9 +55,14 @@ vec4 kelp_field(vec2 world_px, float t) {
             continue;
         }
 
-        for (int i = 0; i < stems_per_layer; ++i) {
-            float fi = float(i);
-            int lut_idx = layer * stems_per_layer + i;
+        float stem_spacing = tile_w / float(stems_per_layer);
+        int slot_center = int(floor(mod(wp.x, tile_w) / stem_spacing));
+
+        for (int ds = -slot_radius; ds <= slot_radius; ++ds) {
+            int i = slot_center + ds;
+            int i_wrap = ((i % stems_per_layer) + stems_per_layer) % stems_per_layer;
+            float fi = float(i_wrap);
+            int lut_idx = layer * stems_per_layer + i_wrap;
             vec4 kl = lut.kelp_seed_xjit[lut_idx];
             float seed = kl.x;
             if (seed > layer_density) {
@@ -62,7 +70,7 @@ vec4 kelp_field(vec2 world_px, float t) {
             }
             float x01 = (fi + 0.5) / float(stems_per_layer);
             x01 += kl.y;
-            float x0 = x01 * pc.p4.z;
+            float x0 = x01 * tile_w;
 
             float h01 = (0.22 + 0.26 * seed) * kelp_height * (0.82 + 0.34 * lf);
             h01 = max(h01, 0.05);

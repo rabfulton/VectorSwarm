@@ -7,6 +7,7 @@ layout(set = 0, binding = 0) uniform UnderwaterLUT {
     vec4 bubble_lut[8];
 } lut;
 layout(set = 0, binding = 1) uniform sampler2D u_kelp;
+layout(set = 0, binding = 2) uniform sampler2D u_noise;
 
 layout(push_constant) uniform UnderwaterPC {
     vec4 p0; /* x=viewport_w, y=viewport_h, z=time_s, w=density */
@@ -23,29 +24,6 @@ float hash12(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
     p3 += dot(p3, p3.yzx + 33.33);
     return fract((p3.x + p3.y) * p3.z);
-}
-
-float noise2(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    float a = hash12(i + vec2(0.0, 0.0));
-    float b = hash12(i + vec2(1.0, 0.0));
-    float c = hash12(i + vec2(0.0, 1.0));
-    float d = hash12(i + vec2(1.0, 1.0));
-    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
-}
-
-float fbm(vec2 p) {
-    float v = 0.0;
-    float a = 0.5;
-    mat2 m = mat2(1.6, 1.2, -1.2, 1.6);
-    for (int i = 0; i < 4; ++i) {
-        v += a * noise2(p);
-        p = m * p * 1.45;
-        a *= 0.5;
-    }
-    return v;
 }
 
 float bubble_field(vec2 world_px, float t, float bubble_rate) {
@@ -90,9 +68,6 @@ vec4 kelp_field(vec2 world_px, float t) {
 
     const int layers = 3;
     const int stems_per_layer = 26;
-    /* xjit <= 0.04 UV = ~1.04 slots; bend <= ~21px = ~0.27 slots.
-       Checking +-2 slots around the fragment's slot covers all contributors. */
-    const int slot_radius = 2;
     vec3 accum_col = vec3(0.0);
     float accum_a = 0.0;
 
@@ -108,14 +83,9 @@ vec4 kelp_field(vec2 world_px, float t) {
             continue;
         }
 
-        float stem_spacing = tile_w / float(stems_per_layer);
-        int slot_center = int(floor(mod(wp.x, tile_w) / stem_spacing));
-
-        for (int ds = -slot_radius; ds <= slot_radius; ++ds) {
-            int i = slot_center + ds;
-            int i_wrap = ((i % stems_per_layer) + stems_per_layer) % stems_per_layer;
-            float fi = float(i_wrap);
-            int lut_idx = layer * stems_per_layer + i_wrap;
+        for (int i = 0; i < stems_per_layer; ++i) {
+            float fi = float(i);
+            int lut_idx = layer * stems_per_layer + i;
             vec4 kl = lut.kelp_seed_xjit[lut_idx];
             float seed = kl.x;
             if (seed > layer_density) {
@@ -124,7 +94,7 @@ vec4 kelp_field(vec2 world_px, float t) {
 
             float x01 = (fi + 0.5) / float(stems_per_layer);
             x01 += kl.y;
-            float x0 = x01 * tile_w;
+            float x0 = x01 * pc.p4.z;
 
             float h01 = (0.22 + 0.26 * seed) * kelp_height * (0.82 + 0.34 * lf);
             h01 = max(h01, 0.05);
@@ -174,6 +144,16 @@ vec4 sample_kelp_tent(vec2 uv) {
     return c;
 }
 
+vec3 sample_underwater_noise(vec2 n_uv, vec2 flow, float t, float cur) {
+    vec2 uv0 = n_uv * vec2(1.00, 0.44) + flow * 0.11;
+    vec2 uv1 = n_uv * vec2(1.96, 0.80) - flow * 0.17 + vec2(0.31, -0.18);
+    vec2 uv2 = n_uv * vec2(2.80, 1.60) + vec2(t * 0.030, -t * 0.016) * cur + vec2(-0.22, 0.47);
+    float n0 = texture(u_noise, uv0).r;
+    float n1 = texture(u_noise, uv1).g;
+    float n2 = texture(u_noise, uv2).b;
+    return vec3(n0, n1, n2);
+}
+
 void main() {
     vec2 frag_px = vec2(gl_FragCoord.xy);
     float w = max(pc.p0.x, 1.0);
@@ -189,12 +169,13 @@ void main() {
     vec2 flow = vec2(t * 0.040, -t * 0.022) * cur;
     vec2 n_uv = world_uv * scale;
 
-    float n0 = fbm(n_uv * vec2(5.0, 2.2) + flow);
-    float n1 = fbm(n_uv * vec2(9.8, 4.0) - flow * 1.55 + vec2(6.1, -3.7));
+    vec3 n = sample_underwater_noise(n_uv, flow, t, cur);
+    float n0 = n.x;
+    float n1 = n.y;
     float haze = smoothstep(0.28, 0.86, n0 * 0.72 + n1 * 0.28);
     haze *= density;
 
-    float ca = fbm(n_uv * vec2(14.0, 8.0) + vec2(t * 0.15, -t * 0.08) * cur);
+    float ca = n.z;
     ca = pow(clamp(ca, 0.0, 1.0), 2.2);
     ca *= max(pc.p1.w, 0.0) * density;
 
