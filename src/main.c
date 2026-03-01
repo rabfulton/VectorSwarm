@@ -85,7 +85,7 @@
 #define ACOUSTICS_SCOPE_HISTORY_SAMPLES 8192
 #define GPU_PARTICLE_MAX_INSTANCES (MAX_PARTICLES + 2048u)
 #define TERRAIN_ROWS 24
-#define TERRAIN_COLS 70
+#define TERRAIN_COLS 98
 #define RADAR_GPU_MAX_VERTS 4096
 #define GRID_STATE_W 160
 #define GRID_STATE_H 90
@@ -7652,7 +7652,7 @@ static void update_gpu_high_plains_vertices(app* a) {
     const float h = (float)a->swapchain_extent.height;
     const float y_near = h * 0.04f;
     const float y_far = h * 0.34f;
-    const float cam = a->game.camera_x * 1.10f;
+    const float cam = a->game.camera_x * 1.75f;
     const float center_x = w * 0.50f;
     const float col_spacing = w * 0.050f;
     const float col_span = col_spacing * (float)(TERRAIN_COLS - 1);
