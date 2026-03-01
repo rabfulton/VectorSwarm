@@ -1661,6 +1661,24 @@ static void trigger_fire_test(app* a) {
     atomic_fetch_add_explicit(&a->pending_fire_events, 1u, memory_order_acq_rel);
 }
 
+static void audio_spatial_params_from_world(const app* a, float event_x, float event_y, float* out_pan, float* out_gain) {
+    if (!a || !out_pan || !out_gain) {
+        return;
+    }
+
+    const float dx = event_x - a->game.player.b.x;
+    const float dy = event_y - a->game.player.b.y;
+    const float pan_ref = fmaxf(a->game.world_w * 0.45f, 1.0f);
+    const float near_r = fmaxf(fminf(a->game.world_w, a->game.world_h) * 0.10f, 1.0f);
+    const float far_r = fmaxf(fmaxf(a->game.world_w, a->game.world_h) * 1.20f, near_r + 1.0f);
+    const float dist = sqrtf(dx * dx + dy * dy);
+    const float t = clampf((dist - near_r) / (far_r - near_r), 0.0f, 1.0f);
+    const float fade = 1.0f - t;
+
+    *out_pan = clampf(dx / pan_ref, -1.0f, 1.0f);
+    *out_gain = fade * fade;
+}
+
 static int audio_spatial_enqueue(app* a, uint8_t type, float pan, float gain) {
     if (!a || !a->audio_ready) {
         return 0;
@@ -10279,9 +10297,10 @@ int main(void) {
             game_audio_event game_events[MAX_AUDIO_EVENTS];
             const int game_event_count = game_pop_audio_events(&a.game, game_events, MAX_AUDIO_EVENTS);
             for (int i = 0; i < game_event_count; ++i) {
-                const float dx = game_events[i].x - a.game.camera_x;
-                const float pan = clampf(dx / (a.game.world_w * 0.5f), -1.0f, 1.0f);
-                (void)audio_spatial_enqueue(&a, (uint8_t)game_events[i].type, pan, 1.0f);
+                float pan = 0.0f;
+                float gain = 1.0f;
+                audio_spatial_params_from_world(&a, game_events[i].x, game_events[i].y, &pan, &gain);
+                (void)audio_spatial_enqueue(&a, (uint8_t)game_events[i].type, pan, gain);
             }
             atomic_store_explicit(&a.audio_weapon_level, a.game.weapon_level, memory_order_release);
         } else {
