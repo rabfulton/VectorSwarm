@@ -20,16 +20,20 @@ const float CENTRAL_S = 0.22;
 bool ring_sample(float sin_t, bool front,
                  float sy_game, float cy,
                  float ring_y_base, float H,
-                 vec3 base_col, float tiles, float scroll, float dim_extra,
+                 vec3 base_col, float tiles, float scroll, float dim_extra, float base_up_fade,
                  out vec4 col_out)
 {
     float cos_t   = sqrt(max(1.0 - sin_t * sin_t, 0.0));
     float depth   = front ? (cos_t * 0.5 + 0.5) : (0.5 - cos_t * 0.5);
-    float y_scale = 0.44 + depth * 0.62;
+    float z       = front ? cos_t : -cos_t; /* camera-space ring depth: back=-1, front=+1 */
+    float persp   = 2.4 / (2.4 - z * 1.0);  /* reciprocal perspective, softened below */
+    float y_scale = mix(1.0, persp, 0.55);
+    y_scale       = clamp(y_scale, 0.52, 1.08);
     float base_y  = cy + (ring_y_base - cy) * y_scale;
     float top_y   = base_y + H * y_scale;
     if (sy_game < base_y || sy_game > top_y) return false;
     float v = 1.0 - (sy_game - base_y) / (top_y - base_y);
+    float up01 = clamp((sy_game - base_y) / max(top_y - base_y, 1.0e-5), 0.0, 1.0);
 
     float theta_u;
     if (front) {
@@ -40,7 +44,8 @@ bool ring_sample(float sin_t, bool front,
     float u = fract(fract(theta_u / TWO_PI + 0.5 + scroll) * tiles);
     if (texture(u_industry, vec2(u, v)).a < 0.5) return false;
     float dim = (0.50 + 0.50 * depth) * dim_extra;
-    col_out = vec4(base_col * (0.25 + 0.75 * v) * dim, 1.0);
+    float fade = mix(1.0, up01, clamp(base_up_fade, 0.0, 1.0));
+    col_out = vec4(base_col * (0.25 + 0.75 * v) * dim * fade, 1.0);
     return true;
 }
 
@@ -87,27 +92,27 @@ void main() {
     vec4 hit;
 
     if (out_ok && ring_sample(sin_outer, false, sy_game, cy,
-            ring_y_base, H, base_col, tiles_outer, scroll_outer, 1.00, hit))
+            ring_y_base, H, base_col, tiles_outer, scroll_outer, 1.00, 1.0, hit))
         result = hit;
 
     if (in_ok && ring_sample(sin_inner, false, sy_game, cy,
-            ring_y_base, H, base_col, tiles_inner, scroll_inner, 0.70, hit))
+            ring_y_base, H, base_col, tiles_inner, scroll_inner, 0.70, 0.0, hit))
         result = hit;
 
     if (cen_ok && ring_sample(sin_cen, false, sy_game, cy,
-            ring_y_cen, H_cen, base_col, tiles_cen, scroll_cen, 0.55, hit))
+            ring_y_cen, H_cen, base_col, tiles_cen, scroll_cen, 0.55, 0.0, hit))
         result = hit;
 
     if (cen_ok && ring_sample(sin_cen, true, sy_game, cy,
-            ring_y_cen, H_cen, base_col, tiles_cen, scroll_cen, 0.55, hit))
+            ring_y_cen, H_cen, base_col, tiles_cen, scroll_cen, 0.55, 0.0, hit))
         result = hit;
 
     if (in_ok && ring_sample(sin_inner, true, sy_game, cy,
-            ring_y_base, H, base_col, tiles_inner, scroll_inner, 0.70, hit))
+            ring_y_base, H, base_col, tiles_inner, scroll_inner, 0.70, 0.0, hit))
         result = hit;
 
     if (out_ok && ring_sample(sin_outer, true, sy_game, cy,
-            ring_y_base, H, base_col, tiles_outer, scroll_outer, 1.00, hit))
+            ring_y_base, H, base_col, tiles_outer, scroll_outer, 1.00, 1.0, hit))
         result = hit;
 
     if (result.a < 0.5) discard;
