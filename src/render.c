@@ -4995,7 +4995,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 const float sweep_angle_deg = fmaxf(metrics->level_editor_marker_d[i], 0.0f);
                 const float sweep_amp = sweep_angle_deg * 0.5f;
                 const int sweep_type = clampi((int)lroundf(metrics->level_editor_marker_g[i]), 0, 2);
-                const float base = 1.5707963f;
+                const float base = metrics->level_editor_marker_delay_s[i] * (3.14159265f / 180.0f);
                 const float phase = t_s * sweep_speed;
                 float q = 0.0f;
                 if (sweep_type == 2) {

@@ -90,6 +90,7 @@
 #define RADAR_GPU_MAX_VERTS 4096
 #define GRID_STATE_W 160
 #define GRID_STATE_H 90
+#define GRID_SIM_MAX_SOURCES 32
 #define MAX_MOD_TRACKS 128
 #define UNDERWATER_KELP_RT_DIVISOR 2u
 #define UNDERWATER_KELP_RT_Y_START_NORM 0.38f
@@ -212,8 +213,11 @@ typedef struct grid_sim_pc {
     float p1[4];      /* x=spring_k, y=neighbor_coupling, z=damping, w=impulse_gain */
     float p2[4];      /* x=max_disp, y=max_vel, z=epsilon_zero, w=source_count */
     float p3[4];      /* x=cam_dx_px, y=cam_dy_px */
-    float src[8][4];  /* x=px, y=py, z=amp_px, w=radius_px */
 } grid_sim_pc;
+
+typedef struct grid_sim_sources_ubo {
+    float src[GRID_SIM_MAX_SOURCES][4];  /* x=px, y=py, z=amp_px, w=radius_px */
+} grid_sim_sources_ubo;
 
 typedef struct industry_pc {
     float p0[4]; /* x=viewport_w, y=viewport_h, z=time_s, w=alpha_scale */
@@ -344,6 +348,9 @@ typedef struct app {
     VkDescriptorSetLayout grid_state_desc_layout;
     VkDescriptorPool grid_state_desc_pool;
     VkDescriptorSet grid_state_desc_set[2];
+    VkBuffer grid_sim_sources_buffer;
+    VkDeviceMemory grid_sim_sources_memory;
+    void* grid_sim_sources_map;
     uint32_t grid_state_curr;
     int grid_state_initialized;
     float grid_prev_camera_x;
@@ -4691,6 +4698,10 @@ static void cleanup(app* a) {
         vg_context_destroy(a->vg);
         a->vg = NULL;
     }
+    if (a->grid_sim_sources_map) {
+        vkUnmapMemory(a->device, a->grid_sim_sources_memory);
+        a->grid_sim_sources_map = NULL;
+    }
 
     if (a->bloom_pipeline) vkDestroyPipeline(a->device, a->bloom_pipeline, NULL);
     if (a->composite_pipeline) vkDestroyPipeline(a->device, a->composite_pipeline, NULL);
@@ -4775,6 +4786,11 @@ static void cleanup(app* a) {
     }
     if (a->terrain_vertex_buffer) vkDestroyBuffer(a->device, a->terrain_vertex_buffer, NULL);
     if (a->underwater_lut_buffer) vkDestroyBuffer(a->device, a->underwater_lut_buffer, NULL);
+    if (a->grid_sim_sources_map && a->grid_sim_sources_memory) {
+        vkUnmapMemory(a->device, a->grid_sim_sources_memory);
+        a->grid_sim_sources_map = NULL;
+    }
+    if (a->grid_sim_sources_buffer) vkDestroyBuffer(a->device, a->grid_sim_sources_buffer, NULL);
     if (a->terrain_tri_index_buffer) vkDestroyBuffer(a->device, a->terrain_tri_index_buffer, NULL);
     if (a->terrain_wire_vertex_map && a->terrain_wire_vertex_memory) {
         vkUnmapMemory(a->device, a->terrain_wire_vertex_memory);
@@ -4814,6 +4830,7 @@ static void cleanup(app* a) {
     if (a->wormhole_line_vertex_memory) vkFreeMemory(a->device, a->wormhole_line_vertex_memory, NULL);
     if (a->radar_line_vertex_memory) vkFreeMemory(a->device, a->radar_line_vertex_memory, NULL);
     if (a->radar_tri_vertex_memory) vkFreeMemory(a->device, a->radar_tri_vertex_memory, NULL);
+    if (a->grid_sim_sources_memory) vkFreeMemory(a->device, a->grid_sim_sources_memory, NULL);
 
     for (uint32_t i = 0; i < a->swapchain_image_count; ++i) {
         if (a->present_framebuffers[i]) vkDestroyFramebuffer(a->device, a->present_framebuffers[i], NULL);
@@ -5129,6 +5146,10 @@ static void destroy_render_runtime(app* a) {
         vkDestroyImage(a->device, a->industry_image, NULL);
         a->industry_image = VK_NULL_HANDLE;
     }
+    if (a->grid_sim_sources_map && a->grid_sim_sources_memory) {
+        vkUnmapMemory(a->device, a->grid_sim_sources_memory);
+        a->grid_sim_sources_map = NULL;
+    }
     if (a->scene_memory) {
         vkFreeMemory(a->device, a->scene_memory, NULL);
         a->scene_memory = VK_NULL_HANDLE;
@@ -5165,6 +5186,10 @@ static void destroy_render_runtime(app* a) {
         vkFreeMemory(a->device, a->underwater_lut_memory, NULL);
         a->underwater_lut_memory = VK_NULL_HANDLE;
     }
+    if (a->grid_sim_sources_memory) {
+        vkFreeMemory(a->device, a->grid_sim_sources_memory, NULL);
+        a->grid_sim_sources_memory = VK_NULL_HANDLE;
+    }
     if (a->terrain_vertex_map && a->terrain_vertex_memory) {
         vkUnmapMemory(a->device, a->terrain_vertex_memory);
         a->terrain_vertex_map = NULL;
@@ -5176,6 +5201,10 @@ static void destroy_render_runtime(app* a) {
     if (a->underwater_lut_buffer) {
         vkDestroyBuffer(a->device, a->underwater_lut_buffer, NULL);
         a->underwater_lut_buffer = VK_NULL_HANDLE;
+    }
+    if (a->grid_sim_sources_buffer) {
+        vkDestroyBuffer(a->device, a->grid_sim_sources_buffer, NULL);
+        a->grid_sim_sources_buffer = VK_NULL_HANDLE;
     }
     if (a->terrain_tri_index_buffer) {
         vkDestroyBuffer(a->device, a->terrain_tri_index_buffer, NULL);
@@ -7303,22 +7332,51 @@ static int create_grid_resources(app* a) {
         return 0;
     }
 
-    VkDescriptorSetLayoutBinding binding = {
+    if (!create_buffer(
+            a,
+            sizeof(grid_sim_sources_ubo),
+            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &a->grid_sim_sources_buffer,
+            &a->grid_sim_sources_memory)) {
+        return 0;
+    }
+    if (!check_vk(vkMapMemory(a->device, a->grid_sim_sources_memory, 0, sizeof(grid_sim_sources_ubo), 0, &a->grid_sim_sources_map),
+                  "vkMapMemory(grid sim sources)")) {
+        return 0;
+    }
+    memset(a->grid_sim_sources_map, 0, sizeof(grid_sim_sources_ubo));
+
+    VkDescriptorSetLayoutBinding bindings[2];
+    bindings[0] = (VkDescriptorSetLayoutBinding){
         .binding = 0,
         .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
         .descriptorCount = 1,
         .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT
     };
+    bindings[1] = (VkDescriptorSetLayoutBinding){
+        .binding = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT
+    };
     VkDescriptorSetLayoutCreateInfo dsl = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .bindingCount = 1,
-        .pBindings = &binding
+        .bindingCount = 2,
+        .pBindings = bindings
     };
     if (!check_vk(vkCreateDescriptorSetLayout(a->device, &dsl, NULL, &a->grid_state_desc_layout), "vkCreateDescriptorSetLayout(grid state)")) {
         return 0;
     }
-    VkDescriptorPoolSize pool_size = {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 2};
-    VkDescriptorPoolCreateInfo pool = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, .poolSizeCount = 1, .pPoolSizes = &pool_size, .maxSets = 2};
+    VkDescriptorPoolSize pool_sizes[2];
+    pool_sizes[0] = (VkDescriptorPoolSize){.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 2};
+    pool_sizes[1] = (VkDescriptorPoolSize){.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 2};
+    VkDescriptorPoolCreateInfo pool = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .poolSizeCount = 2,
+        .pPoolSizes = pool_sizes,
+        .maxSets = 2
+    };
     if (!check_vk(vkCreateDescriptorPool(a->device, &pool, NULL, &a->grid_state_desc_pool), "vkCreateDescriptorPool(grid state)")) {
         return 0;
     }
@@ -7338,7 +7396,13 @@ static int create_grid_resources(app* a) {
             .imageView = a->grid_state_view[i],
             .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
         };
-        VkWriteDescriptorSet write = {
+        VkDescriptorBufferInfo src_info = {
+            .buffer = a->grid_sim_sources_buffer,
+            .offset = 0,
+            .range = sizeof(grid_sim_sources_ubo)
+        };
+        VkWriteDescriptorSet writes[2];
+        writes[0] = (VkWriteDescriptorSet){
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .dstSet = a->grid_state_desc_set[i],
             .dstBinding = 0,
@@ -7346,7 +7410,15 @@ static int create_grid_resources(app* a) {
             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
             .pImageInfo = &info
         };
-        vkUpdateDescriptorSets(a->device, 1, &write, 0, NULL);
+        writes[1] = (VkWriteDescriptorSet){
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = a->grid_state_desc_set[i],
+            .dstBinding = 1,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .pBufferInfo = &src_info
+        };
+        vkUpdateDescriptorSets(a->device, 2, writes, 0, NULL);
     }
 
     VkPushConstantRange render_pc = {.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 0, .size = sizeof(grid_pc)};
@@ -8858,7 +8930,7 @@ static void record_gpu_underwater_kelp(app* a, VkCommandBuffer cmd, float t) {
 #endif
 }
 
-static int gather_grid_sim_sources(const app* a, float out_src[8][4]) {
+static int gather_grid_sim_sources(const app* a, float out_src[GRID_SIM_MAX_SOURCES][4]) {
     int n = 0;
     if (!a || !out_src) {
         return 0;
@@ -8880,7 +8952,7 @@ static int gather_grid_sim_sources(const app* a, float out_src[8][4]) {
     out_src[n][3] = fmaxf(world_h * 0.18f, 90.0f);
     n++;
 
-    if (a->game.emp_effect_active && n < 8) {
+    if (a->game.emp_effect_active && n < GRID_SIM_MAX_SOURCES) {
         const float u = clampf(
             a->game.emp_effect_t / fmaxf(a->game.emp_effect_duration_s, 1.0e-3f),
             0.0f,
@@ -8894,7 +8966,7 @@ static int gather_grid_sim_sources(const app* a, float out_src[8][4]) {
         n++;
     }
 
-    for (int i = 0; i < MAX_MINES && n < 8; ++i) {
+    for (int i = 0; i < MAX_MINES && n < GRID_SIM_MAX_SOURCES; ++i) {
         const mine* m = &a->game.mines[i];
         if (!m->active) {
             continue;
@@ -8910,7 +8982,7 @@ static int gather_grid_sim_sources(const app* a, float out_src[8][4]) {
         n++;
     }
 
-    for (int i = 0; i < MAX_MISSILES && n < 8; ++i) {
+    for (int i = 0; i < MAX_MISSILES && n < GRID_SIM_MAX_SOURCES; ++i) {
         const homing_missile* m = &a->game.missiles[i];
         if (!m->active) {
             continue;
@@ -8931,7 +9003,7 @@ static int gather_grid_sim_sources(const app* a, float out_src[8][4]) {
         n++;
     }
 
-    for (int i = 0; i < MAX_ENEMIES && n < 8; ++i) {
+    for (int i = 0; i < MAX_ENEMIES && n < GRID_SIM_MAX_SOURCES; ++i) {
         if (!a->game.enemies[i].active) {
             continue;
         }
@@ -8945,7 +9017,7 @@ static int gather_grid_sim_sources(const app* a, float out_src[8][4]) {
         out_src[n][3] = fmaxf(a->game.enemies[i].radius * 5.2f, 70.0f);
         n++;
     }
-    for (int i = 0; i < MAX_PARTICLES && n < 8; ++i) {
+    for (int i = 0; i < MAX_PARTICLES && n < GRID_SIM_MAX_SOURCES; ++i) {
         const particle* p = &a->game.particles[i];
         if (!p->active || p->type != PARTICLE_FLASH || p->life_s <= 1.0e-4f) {
             continue;
@@ -9001,8 +9073,18 @@ static void record_gpu_grid_sim(app* a, VkCommandBuffer cmd, float dt) {
     a->grid_prev_camera_x = a->game.camera_x;
     a->grid_prev_camera_y = a->game.camera_y;
 
-    float src[8][4] = {{0}};
+    float src[GRID_SIM_MAX_SOURCES][4] = {{0}};
     const int src_n = gather_grid_sim_sources(a, src);
+    if (a->grid_sim_sources_map) {
+        grid_sim_sources_ubo* ubo = (grid_sim_sources_ubo*)a->grid_sim_sources_map;
+        memset(ubo, 0, sizeof(*ubo));
+        for (int i = 0; i < src_n && i < GRID_SIM_MAX_SOURCES; ++i) {
+            ubo->src[i][0] = src[i][0];
+            ubo->src[i][1] = src[i][1];
+            ubo->src[i][2] = src[i][2];
+            ubo->src[i][3] = src[i][3];
+        }
+    }
     for (int step = 0; step < steps; ++step) {
         const uint32_t prev = a->grid_state_curr;
         const uint32_t next = 1u - prev;
@@ -9040,12 +9122,6 @@ static void record_gpu_grid_sim(app* a, VkCommandBuffer cmd, float dt) {
         pc.p3[1] = (step == 0) ? ((-cam_dy) * ((float)GRID_STATE_H / fmaxf((float)a->swapchain_extent.height, 1.0f))) : 0.0f;
         pc.p3[2] = (float)a->swapchain_extent.width;
         pc.p3[3] = (float)a->swapchain_extent.height;
-        for (int i = 0; i < src_n && i < 8; ++i) {
-            pc.src[i][0] = src[i][0];
-            pc.src[i][1] = src[i][1];
-            pc.src[i][2] = src[i][2];
-            pc.src[i][3] = src[i][3];
-        }
         vkCmdPushConstants(cmd, a->grid_sim_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
         vkCmdDraw(cmd, 3, 1, 0, 0);
         vkCmdEndRenderPass(cmd);

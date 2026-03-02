@@ -669,13 +669,20 @@ static void configure_searchlights_for_level(game_state* g) {
     for (int i = 0; i < lvl->searchlight_count && g->searchlight_count < MAX_SEARCHLIGHTS; ++i) {
         const leveldef_searchlight* d = &lvl->searchlights[i];
         searchlight* sl = &g->searchlights[g->searchlight_count++];
+        float sweep_center_deg;
         memset(sl, 0, sizeof(*sl));
         sl->active = 1;
         sl->origin_x = g->world_w * d->anchor_x01;
         sl->origin_y = g->world_h * d->anchor_y01;
         sl->length = g->world_h * d->length_h01;
         sl->half_angle_rad = deg_to_rad(d->half_angle_deg);
-        sl->sweep_center_rad = deg_to_rad(d->sweep_center_deg);
+        sweep_center_deg = d->sweep_center_deg;
+        if (fabsf(sweep_center_deg) < 1.0e-3f) {
+            /* Legacy/editor-authored searchlights defaulted center to 0deg,
+               which produced vertical sweeps for 180deg span. */
+            sweep_center_deg = 90.0f;
+        }
+        sl->sweep_center_rad = deg_to_rad(sweep_center_deg);
         sl->sweep_amplitude_rad = deg_to_rad(d->sweep_amplitude_deg);
         sl->sweep_speed = d->sweep_speed;
         sl->sweep_phase = deg_to_rad(d->sweep_phase_deg);

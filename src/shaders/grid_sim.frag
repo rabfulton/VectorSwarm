@@ -10,8 +10,11 @@ layout(push_constant) uniform GridSimPC {
     vec4 p1;      /* x=spring_k, y=neighbor_coupling, z=damping, w=impulse_gain */
     vec4 p2;      /* x=max_disp, y=max_vel, z=epsilon_zero, w=source_count */
     vec4 p3;      /* x=cam_dx_state, y=cam_dy_state, z=viewport_w, w=viewport_h */
-    vec4 src[8];  /* x=px, y=py, z=amp_px, w=radius_px */
 } pc;
+
+layout(set = 0, binding = 1) uniform GridSimSources {
+    vec4 src[32]; /* x=px, y=py, z=amp_px, w=radius_px */
+} grid_src;
 
 ivec2 clamp_coord(ivec2 c, ivec2 mn, ivec2 mx) {
     return ivec2(clamp(c.x, mn.x, mx.x), clamp(c.y, mn.y, mx.y));
@@ -43,11 +46,11 @@ void main() {
 
     vec2 node_px = vec2(v_uv.x * max(pc.p3.z, 1.0), v_uv.y * max(pc.p3.w, 1.0));
     vec2 impulse = vec2(0.0);
-    int src_n = clamp(int(pc.p2.w + 0.5), 0, 8);
+    int src_n = clamp(int(pc.p2.w + 0.5), 0, 32);
     for (int i = 0; i < src_n; ++i) {
-        vec2 d = node_px - pc.src[i].xy;
-        float amp = pc.src[i].z;
-        float r = max(pc.src[i].w, 1.0);
+        vec2 d = node_px - grid_src.src[i].xy;
+        float amp = grid_src.src[i].z;
+        float r = max(grid_src.src[i].w, 1.0);
         float dist2 = dot(d, d);
         float dist = sqrt(max(dist2, 1.0));
         float fall = 0.0;

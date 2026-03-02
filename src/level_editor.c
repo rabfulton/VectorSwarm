@@ -998,6 +998,7 @@ static int build_level_serialized_text(
         sl.anchor_y01 = m->y01;
         sl.length_h01 = m->a;
         sl.half_angle_deg = m->b;
+        sl.sweep_center_deg = m->delay_s;
         sl.sweep_speed = m->c;
         sl.sweep_amplitude_deg = m->d * 0.5f;
         lvl.searchlights[searchlight_n++] = sl;
@@ -1938,6 +1939,7 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
         );
         if (s->marker_count > before) {
             level_editor_marker* m = &s->markers[s->marker_count - 1];
+            m->delay_s = (fabsf(sl->sweep_center_deg) < 1.0e-3f) ? 90.0f : sl->sweep_center_deg;
             m->e = (float)sl->source_type;
             m->f = sl->source_radius;
             m->g = (float)sl->sweep_motion;
@@ -2353,7 +2355,7 @@ static void add_marker_at_view(
     const float y01 = clampf(view_y01, 0.0f, 1.0f);
     if (kind == LEVEL_EDITOR_MARKER_SEARCHLIGHT) {
         const int before = s->marker_count;
-        push_marker(s, LEVEL_EDITOR_MARKER_SEARCHLIGHT, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, x01, y01, 0.36f, 12.0f, 1.2f, 45.0f);
+        push_marker(s, LEVEL_EDITOR_MARKER_SEARCHLIGHT, LEVEL_EDITOR_TRACK_SPATIAL, 1, 90.0f, x01, y01, 0.36f, 12.0f, 1.2f, 45.0f);
         if (s->marker_count > before) {
             level_editor_marker* m = &s->markers[s->marker_count - 1];
             m->e = (float)SEARCHLIGHT_SOURCE_DOME;
@@ -2428,7 +2430,7 @@ static void add_spatial_marker_at_x01(level_editor_state* s, int kind, float x01
     const float yy = clampf(y01, 0.0f, 1.0f);
     if (kind == LEVEL_EDITOR_MARKER_SEARCHLIGHT) {
         const int before = s->marker_count;
-        push_marker(s, LEVEL_EDITOR_MARKER_SEARCHLIGHT, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, xx, yy, 0.36f, 12.0f, 1.2f, 45.0f);
+        push_marker(s, LEVEL_EDITOR_MARKER_SEARCHLIGHT, LEVEL_EDITOR_TRACK_SPATIAL, 1, 90.0f, xx, yy, 0.36f, 12.0f, 1.2f, 45.0f);
         if (s->marker_count > before) {
             level_editor_marker* m = &s->markers[s->marker_count - 1];
             m->e = (float)SEARCHLIGHT_SOURCE_DOME;
