@@ -700,6 +700,7 @@ static const char* style_header_name(int style) {
         case LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2: return "HIGH_PLAINS_DRIFTER_2";
         case LEVEL_STYLE_FOG_OF_WAR: return "FOG_OF_WAR";
         case LEVEL_STYLE_BLANK: return "BLANK";
+        case LEVEL_STYLE_REVOLVER: return "REVOLVER";
         default: return "UNKNOWN";
     }
 }
@@ -1612,6 +1613,9 @@ static int level_style_from_name_loose(const char* name) {
     if (strieq(name, "blank") || strieq(name, "level_blank")) {
         return LEVEL_STYLE_BLANK;
     }
+    if (strieq(name, "revolver") || strieq(name, "level_revolver")) {
+        return LEVEL_STYLE_REVOLVER;
+    }
     if (stristarts(name, "level_defender")) {
         return LEVEL_STYLE_DEFENDER;
     }
@@ -1636,6 +1640,9 @@ static int level_style_from_name_loose(const char* name) {
     if (stristarts(name, "level_blank")) {
         return LEVEL_STYLE_BLANK;
     }
+    if (stristarts(name, "level_revolver")) {
+        return LEVEL_STYLE_REVOLVER;
+    }
     return -1;
 }
 
@@ -1649,6 +1656,7 @@ static const char* level_style_name(int style) {
         case LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2: return "level_high_plains_drifter_2";
         case LEVEL_STYLE_FOG_OF_WAR: return "level_fog_of_war";
         case LEVEL_STYLE_BLANK: return "level_blank";
+        case LEVEL_STYLE_REVOLVER: return "level_revolver";
         default: return "level_unknown";
     }
 }
@@ -3025,9 +3033,11 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
     }
 
     if (m->kind == LEVEL_EDITOR_MARKER_SEARCHLIGHT) {
+        const float pos_step = (fabsf(delta) >= 9.0f) ? 0.1f : 0.01f;
+        const float pos_delta = (delta >= 0.0f) ? pos_step : -pos_step;
         switch (s->selected_property) {
-            case 0: move_marker_x(s, s->selected_marker, delta); break;
-            case 1: m->y01 = clampf(m->y01 + delta, 0.0f, 1.0f); break;
+            case 0: move_marker_x(s, s->selected_marker, pos_delta); break;
+            case 1: m->y01 = clampf(m->y01 + pos_delta, 0.0f, 1.0f); break;
             case 2: m->a = clampf(m->a + delta * 0.01f, 0.05f, 2.5f); break;
             case 3: m->b = clampf(m->b + delta * 1.0f, 1.0f, 179.0f); break;
             case 4: m->c = clampf(m->c + delta * 0.1f, 0.01f, 50.0f); break;

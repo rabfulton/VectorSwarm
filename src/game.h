@@ -33,7 +33,8 @@ enum level_style_id {
     LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2 = 5,
     LEVEL_STYLE_FOG_OF_WAR = 6,
     LEVEL_STYLE_BLANK = 7,
-    LEVEL_STYLE_COUNT = 8
+    LEVEL_STYLE_REVOLVER = 8,
+    LEVEL_STYLE_COUNT = 9
 };
 
 enum level_render_style_id {

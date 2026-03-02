@@ -18,6 +18,7 @@ static int level_style_from_name(const char* name) {
     if (strcmp(name, "HIGH_PLAINS_DRIFTER_2") == 0) return LEVEL_STYLE_HIGH_PLAINS_DRIFTER_2;
     if (strcmp(name, "FOG_OF_WAR") == 0) return LEVEL_STYLE_FOG_OF_WAR;
     if (strcmp(name, "BLANK") == 0) return LEVEL_STYLE_BLANK;
+    if (strcmp(name, "REVOLVER") == 0) return LEVEL_STYLE_REVOLVER;
     return -1;
 }
 

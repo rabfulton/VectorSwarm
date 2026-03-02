@@ -77,6 +77,7 @@
 #include "arc_beam_vert_spv.h"
 #include "arc_beam_frag_spv.h"
 #include "industry_frag_spv.h"
+#include "revolver_frag_spv.h"
 #endif
 
 #define APP_WIDTH 1280
@@ -358,6 +359,7 @@ typedef struct app {
     VkPipeline arc_beam_pipeline;
     VkPipelineLayout industry_layout;
     VkPipeline industry_pipeline;
+    VkPipeline revolver_pipeline;
     VkDescriptorSetLayout industry_desc_layout;
     VkDescriptorPool industry_desc_pool;
     VkDescriptorSet industry_desc_set;
@@ -385,6 +387,7 @@ typedef struct app {
     int use_gpu_radar;
     int use_gpu_arc;
     int use_gpu_industry;
+    int use_gpu_revolver;
     int use_gpu_particles;
     int disable_scene_split;
     VkBuffer particle_instance_buffer;
@@ -2328,6 +2331,7 @@ static int create_underwater_resources(app* a);
 static int create_grid_resources(app* a);
 static int create_arc_beam_resources(app* a);
 static int create_industry_resources(app* a);
+static int create_revolver_pipeline(app* a);
 static void reset_grid_sim_state(app* a);
 static int create_vg_context(app* a);
 static void set_tty_message(app* a, const char* msg);
@@ -4698,6 +4702,7 @@ static void cleanup(app* a) {
     if (a->grid_sim_pipeline) vkDestroyPipeline(a->device, a->grid_sim_pipeline, NULL);
     if (a->arc_beam_pipeline) vkDestroyPipeline(a->device, a->arc_beam_pipeline, NULL);
     if (a->industry_pipeline) vkDestroyPipeline(a->device, a->industry_pipeline, NULL);
+    if (a->revolver_pipeline) vkDestroyPipeline(a->device, a->revolver_pipeline, NULL);
     if (a->post_layout) vkDestroyPipelineLayout(a->device, a->post_layout, NULL);
     if (a->terrain_layout) vkDestroyPipelineLayout(a->device, a->terrain_layout, NULL);
     if (a->particle_layout) vkDestroyPipelineLayout(a->device, a->particle_layout, NULL);
@@ -4930,6 +4935,10 @@ static void destroy_render_runtime(app* a) {
     if (a->industry_pipeline) {
         vkDestroyPipeline(a->device, a->industry_pipeline, NULL);
         a->industry_pipeline = VK_NULL_HANDLE;
+    }
+    if (a->revolver_pipeline) {
+        vkDestroyPipeline(a->device, a->revolver_pipeline, NULL);
+        a->revolver_pipeline = VK_NULL_HANDLE;
     }
     if (a->post_layout) {
         vkDestroyPipelineLayout(a->device, a->post_layout, NULL);
@@ -5313,6 +5322,7 @@ static int recreate_render_runtime(app* a) {
         !create_grid_resources(a) ||
         !create_arc_beam_resources(a) ||
         !create_industry_resources(a) ||
+        !create_revolver_pipeline(a) ||
         !create_vg_context(a)) {
         return 0;
     }
@@ -7781,6 +7791,104 @@ static int create_industry_resources(app* a) {
 #endif
 }
 
+/* Creates a second pipeline that uses the same layout/descriptor as the
+   industry pipeline but with the revolver fragment shader.  Must be called
+   after create_industry_resources() so industry_layout exists. */
+static int create_revolver_pipeline(app* a) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    return 1;
+#else
+    if (!a) {
+        return 0;
+    }
+    a->use_gpu_revolver = 0;
+    if (!a->industry_layout || !a->industry_desc_set) {
+        return 1; /* industry not ready; skip gracefully */
+    }
+
+    VkShaderModuleCreateInfo vs_ci = {
+        .sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = v_type_grid_vert_spv_len,
+        .pCode    = (const uint32_t*)v_type_grid_vert_spv
+    };
+    VkShaderModuleCreateInfo fs_ci = {
+        .sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = v_type_revolver_frag_spv_len,
+        .pCode    = (const uint32_t*)v_type_revolver_frag_spv
+    };
+    VkShaderModule vs = VK_NULL_HANDLE;
+    VkShaderModule fs = VK_NULL_HANDLE;
+    if (!check_vk(vkCreateShaderModule(a->device, &vs_ci, NULL, &vs), "vkCreateShaderModule(revolver vs)")) {
+        return 0;
+    }
+    if (!check_vk(vkCreateShaderModule(a->device, &fs_ci, NULL, &fs), "vkCreateShaderModule(revolver fs)")) {
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+
+    VkPipelineShaderStageCreateInfo stages[2] = {
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT,   .module = vs, .pName = "main"},
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = fs, .pName = "main"}
+    };
+    VkPipelineVertexInputStateCreateInfo   vi  = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    VkPipelineInputAssemblyStateCreateInfo ia  = {.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO, .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST};
+    VkPipelineViewportStateCreateInfo      vp  = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .scissorCount = 1};
+    VkPipelineRasterizationStateCreateInfo rs  = {
+        .sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .lineWidth   = 1.0f,
+        .cullMode    = VK_CULL_MODE_NONE,
+        .frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE
+    };
+    VkPipelineMultisampleStateCreateInfo ms = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .rasterizationSamples = scene_samples(a)};
+    VkPipelineColorBlendAttachmentState cb_att = {
+        .blendEnable         = VK_FALSE,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ZERO,
+        .colorBlendOp        = VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+        .alphaBlendOp        = VK_BLEND_OP_ADD,
+        .colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
+    };
+    VkPipelineColorBlendStateCreateInfo cb = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1, .pAttachments = &cb_att};
+    VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo ds = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .dynamicStateCount = 2, .pDynamicStates = dyn};
+    VkPipelineDepthStencilStateCreateInfo depth = {
+        .sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .depthTestEnable  = VK_FALSE,
+        .depthWriteEnable = VK_FALSE,
+        .depthCompareOp   = VK_COMPARE_OP_ALWAYS
+    };
+    VkGraphicsPipelineCreateInfo gp = {
+        .sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .stageCount          = 2,
+        .pStages             = stages,
+        .pVertexInputState   = &vi,
+        .pInputAssemblyState = &ia,
+        .pViewportState      = &vp,
+        .pRasterizationState = &rs,
+        .pMultisampleState   = &ms,
+        .pDepthStencilState  = &depth,
+        .pColorBlendState    = &cb,
+        .pDynamicState       = &ds,
+        .layout              = a->industry_layout,
+        .renderPass          = a->scene_render_pass,
+        .subpass             = 0
+    };
+    if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->revolver_pipeline), "vkCreateGraphicsPipelines(revolver)")) {
+        vkDestroyShaderModule(a->device, fs, NULL);
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+    vkDestroyShaderModule(a->device, fs, NULL);
+    vkDestroyShaderModule(a->device, vs, NULL);
+    a->use_gpu_revolver = 1;
+    return 1;
+#endif
+}
+
 static int create_vg_context(app* a) {
     vg_context_desc desc;
     memset(&desc, 0, sizeof(desc));
@@ -8974,6 +9082,44 @@ static void record_gpu_industry(app* a, VkCommandBuffer cmd, float t) {
 #endif
 }
 
+static void record_gpu_revolver(app* a, VkCommandBuffer cmd, float t) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    (void)cmd;
+    (void)t;
+#else
+    if (!a || !cmd || !a->use_gpu_revolver || !a->revolver_pipeline || !a->industry_layout || !a->industry_desc_set) {
+        return;
+    }
+    if (a->game.level_style != LEVEL_STYLE_REVOLVER) {
+        return;
+    }
+    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    industry_pc pc;
+    memset(&pc, 0, sizeof(pc));
+    pc.p0[0] = (float)a->swapchain_extent.width;
+    pc.p0[1] = (float)a->swapchain_extent.height;
+    pc.p0[2] = t;
+    pc.p0[3] = 1.0f;
+    const int palette_mode = gameplay_palette_mode(a);
+    if (palette_mode == 1) {
+        pc.p1[0] = 0.72f; pc.p1[1] = 0.48f; pc.p1[2] = 0.20f;
+    } else if (palette_mode == 2) {
+        pc.p1[0] = 0.18f; pc.p1[1] = 0.50f; pc.p1[2] = 0.70f;
+    } else {
+        pc.p1[0] = 0.08f; pc.p1[1] = 0.46f; pc.p1[2] = 0.16f;
+    }
+    pc.p1[3] = a->game.camera_x;
+    pc.p2[0] = a->game.world_w;
+    pc.p2[1] = a->game.world_h;
+    pc.p2[2] = (float)a->industry_w / fmaxf((float)a->industry_h, 1.0f);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->revolver_pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->industry_layout, 0, 1, &a->industry_desc_set, 0, NULL);
+    vkCmdPushConstants(cmd, a->industry_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+#endif
+}
+
 static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd) {
     const int enable_gpu_terrain = 1;
     if (!enable_gpu_terrain) {
@@ -9363,7 +9509,8 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         const int use_gpu_underwater = (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_UNDERWATER) ? 1 : 0;
         const int use_gpu_grid = (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_GRID) ? 1 : 0;
         const int use_gpu_industry = a->use_gpu_industry && (a->game.render_style == LEVEL_RENDER_DEFENDER);
-        const int need_mid_scene_gpu = (use_gpu_terrain || use_gpu_wormhole || use_gpu_radar || use_gpu_arc || use_gpu_grid);
+        const int use_gpu_revolver = a->use_gpu_revolver && (a->game.level_style == LEVEL_STYLE_REVOLVER);
+        const int need_mid_scene_gpu = (use_gpu_terrain || use_gpu_wormhole || use_gpu_radar || use_gpu_revolver || use_gpu_arc || use_gpu_grid);
         const int split_scene =
             in_gameplay_scene &&
             (need_mid_scene_gpu || use_gpu_fog || use_gpu_underwater || (use_gpu_particles && !a->disable_scene_split));
@@ -9439,6 +9586,9 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             }
             if (use_gpu_radar) {
                 record_gpu_radar(a, cmd);
+            }
+            if (use_gpu_revolver) {
+                record_gpu_revolver(a, cmd, t);
             }
             if (use_gpu_arc) {
                 record_gpu_arc_beam(a, cmd, t);
@@ -9783,6 +9933,10 @@ int main(void) {
         fprintf(stderr, "planetarium validation failed; continuing with best-effort defaults\n");
     }
     if (!create_industry_resources(&a)) {
+        cleanup(&a);
+        return 1;
+    }
+    if (!create_revolver_pipeline(&a)) {
         cleanup(&a);
         return 1;
     }

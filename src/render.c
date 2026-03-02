@@ -6893,7 +6893,7 @@ static vg_result draw_cylinder_wire(
     cyl_h.intensity *= 0.62f;
     cyl_m.intensity *= 0.58f;
     if (level_style != LEVEL_STYLE_EVENT_HORIZON && level_style != LEVEL_STYLE_EVENT_HORIZON_LEGACY) {
-        const int ring_start = (level_style == LEVEL_STYLE_ENEMY_RADAR) ? 2 : 1;
+        const int ring_start = (level_style == LEVEL_STYLE_ENEMY_RADAR || level_style == LEVEL_STYLE_REVOLVER) ? 2 : 1;
         for (int r = ring_start; r < 3; ++r) {
             vg_vec2 line[N];
             float z01[N];
