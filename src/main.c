@@ -2337,9 +2337,9 @@ static int create_vg_context(app* a);
 static void set_tty_message(app* a, const char* msg);
 static void update_gpu_high_plains_vertices(app* a);
 static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd);
-static void update_gpu_particle_instances(app* a);
-static void record_gpu_particles(app* a, VkCommandBuffer cmd);
-static void record_gpu_particles_bloom(app* a, VkCommandBuffer cmd);
+static void update_gpu_particle_instances(app* a, int emit_runtime_particles, int emit_level_smoke);
+static void record_gpu_particles(app* a, VkCommandBuffer cmd, int emit_runtime_particles, int emit_level_smoke);
+static void record_gpu_particles_bloom(app* a, VkCommandBuffer cmd, int emit_runtime_particles, int emit_level_smoke);
 static void record_gpu_wormhole(app* a, VkCommandBuffer cmd);
 static void record_gpu_radar(app* a, VkCommandBuffer cmd);
 static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t);
@@ -8014,7 +8014,113 @@ static void project_cylinder_point_gpu(const game_state* g, float x, float y, fl
     }
 }
 
-static void update_gpu_particle_instances(app* a) {
+static void append_gpu_vent_smoke_plume(
+    const game_state* g,
+    particle_instance* out,
+    uint32_t* inout_n,
+    int palette_mode,
+    int use_cyl_projection,
+    float source_x,
+    float source_y,
+    float source_w,
+    float source_h,
+    float vent_density,
+    float vent_opacity,
+    float vent_height,
+    int seed_base,
+    float* io_r_sum,
+    float* io_r_min,
+    float* io_r_max
+) {
+    if (!g || !out || !inout_n) {
+        return;
+    }
+    uint32_t n = *inout_n;
+    const float density = (vent_density > 0.0f) ? vent_density : 1.0f;
+    const float opacity = (vent_opacity > 0.0f) ? vent_opacity : 1.0f;
+    const float plume_h = (vent_height > 0.0f) ? vent_height : 1.0f;
+    int streams = (int)lroundf(6.0f * density);
+    int puffs_per_stream = (int)lroundf(14.0f * density);
+    if (streams < 2) streams = 2;
+    if (streams > 16) streams = 16;
+    if (puffs_per_stream < 4) puffs_per_stream = 4;
+    if (puffs_per_stream > 28) puffs_per_stream = 28;
+
+    for (int stream = 0; stream < streams && n < GPU_PARTICLE_MAX_INSTANCES; ++stream) {
+        const float stream_t = (streams > 1) ? ((float)stream / (float)(streams - 1)) : 0.5f;
+        const float vent_x = source_x + source_w * (0.18f + 0.64f * stream_t);
+        const float vent_y = source_y + source_h;
+        for (int puff = 0; puff < puffs_per_stream && n < GPU_PARTICLE_MAX_INSTANCES; ++puff) {
+            const int seed = seed_base + stream * 131 + puff * 37;
+            const float h = (float)(seed & 255) / 255.0f;
+            const float h2 = (float)((seed * 137) & 255) / 255.0f;
+            const float ph = repeatf(
+                g->t * (0.095f + 0.075f * h) + (float)puff * 0.143f + h * 0.91f + stream_t * 0.37f,
+                1.0f
+            );
+            const float rise = ph * (source_h * 5.8f * plume_h);
+            const float swirl = sinf((ph + h) * (8.0f + 1.9f * stream_t) + (float)puff * 1.07f) *
+                                source_w * (0.10f + 0.22f * ph);
+            const float spread = ((float)puff / (float)puffs_per_stream) * source_w * 0.24f;
+            const float life_in = clampf(ph / 0.18f, 0.0f, 1.0f);
+            const float life_out = clampf((1.0f - ph) / 0.62f, 0.0f, 1.0f);
+            const float life = life_in * life_out;
+            const float life_s = life * life * (3.0f - 2.0f * life);
+            const float size_u = ph * ph * (3.0f - 2.0f * ph);
+            const float wx = vent_x + swirl + spread;
+            const float wy = vent_y + rise;
+            float sx = 0.0f;
+            float sy = 0.0f;
+            float depth = 1.0f;
+            if (use_cyl_projection) {
+                project_cylinder_point_gpu(g, wx, wy, &sx, &sy, &depth);
+            } else {
+                sx = wx + g->world_w * 0.5f - g->camera_x;
+                sy = wy + g->world_h * 0.5f - g->camera_y;
+            }
+            if (sx < -44.0f || sx > g->world_w + 44.0f || sy < -44.0f || sy > g->world_h + 44.0f) {
+                continue;
+            }
+            out[n].x = sx;
+            out[n].y = sy;
+            out[n].radius_px = fmaxf(source_h * (0.12f + 0.20f * size_u + 0.08f * h) * sqrtf(plume_h), 1.2f);
+            if (use_cyl_projection) {
+                out[n].radius_px *= (0.35f + 0.9f * depth);
+            }
+            out[n].kind = 3.0f; /* Vent smoke textured splat */
+            if (palette_mode == 1) {
+                out[n].r = clampf(0.82f + (h2 - 0.5f) * 0.10f, 0.0f, 1.0f);
+                out[n].g = clampf(0.58f + (h - 0.5f) * 0.10f, 0.0f, 1.0f);
+                out[n].b = clampf(0.30f + (h2 - 0.5f) * 0.08f, 0.0f, 1.0f);
+            } else if (palette_mode == 2) {
+                out[n].r = clampf(0.54f + (h2 - 0.5f) * 0.10f, 0.0f, 1.0f);
+                out[n].g = clampf(0.70f + (h - 0.5f) * 0.10f, 0.0f, 1.0f);
+                out[n].b = clampf(0.82f + (h2 - 0.5f) * 0.10f, 0.0f, 1.0f);
+            } else {
+                out[n].r = clampf(0.36f + (h2 - 0.5f) * 0.08f, 0.0f, 1.0f);
+                out[n].g = clampf(0.62f + (h - 0.5f) * 0.10f, 0.0f, 1.0f);
+                out[n].b = clampf(0.42f + (h2 - 0.5f) * 0.08f, 0.0f, 1.0f);
+            }
+            const float smoke_gain = (g->level_style == LEVEL_STYLE_REVOLVER) ? 0.58f : 1.0f;
+            out[n].r *= smoke_gain;
+            out[n].g *= smoke_gain;
+            out[n].b *= smoke_gain;
+            out[n].a = clampf(0.18f * smoke_gain * opacity * life_s * (0.76f + 0.24f * (1.0f - stream_t)), 0.0f, 0.60f);
+            out[n].dir_x = 0.04f * sinf(g->t * 0.77f + h * 4.0f);
+            out[n].dir_y = -1.0f;
+            out[n].trail = 0.06f;
+            out[n].heat = ph + h2 * 0.5f;
+            if (io_r_min && out[n].radius_px < *io_r_min) *io_r_min = out[n].radius_px;
+            if (io_r_max && out[n].radius_px > *io_r_max) *io_r_max = out[n].radius_px;
+            if (io_r_sum) *io_r_sum += out[n].radius_px;
+            ++n;
+        }
+    }
+
+    *inout_n = n;
+}
+
+static void update_gpu_particle_instances(app* a, int emit_runtime_particles, int emit_level_smoke) {
     if (!a || !a->particle_instance_map) {
         return;
     }
@@ -8028,87 +8134,89 @@ static void update_gpu_particle_instances(app* a) {
     float r_sum = 0.0f;
     float r_min = 1e9f;
     float r_max = 0.0f;
-    for (size_t i = 0; i < MAX_PARTICLES; ++i) {
-        const particle* p = &g->particles[i];
-        if (!p->active || p->a <= 0.01f || p->size <= 0.10f) {
-            continue;
-        }
-        if (n >= GPU_PARTICLE_MAX_INSTANCES) {
-            break;
-        }
-        float sx = p->b.x;
-        float sy = p->b.y;
-        float depth = 1.0f;
-        float radius = p->size;
-        if (use_cyl) {
-            project_cylinder_point_gpu(g, p->b.x, p->b.y, &sx, &sy, &depth);
-            radius *= (0.35f + 0.9f * depth);
-        } else {
-            /* Match vg foreground world->screen transform:
-               translate(world by -camera, then center in viewport). */
-            sx = p->b.x + g->world_w * 0.5f - g->camera_x;
-            sy = p->b.y + g->world_h * 0.5f - g->camera_y;
-        }
-        if (sx < -24.0f || sx > g->world_w + 24.0f || sy < -24.0f || sy > g->world_h + 24.0f) {
-            continue;
-        }
-        if (radius <= 0.10f) {
-            continue;
-        }
-        if (radius < r_min) r_min = radius;
-        if (radius > r_max) r_max = radius;
-        r_sum += radius;
-        out[n].x = sx;
-        out[n].y = sy;
-        out[n].radius_px = radius;
-        if (p->type == PARTICLE_POINT) {
-            out[n].kind = 0.0f;
-        } else if (p->type == PARTICLE_FLASH) {
-            out[n].kind = 2.0f;
-        } else {
-            out[n].kind = 1.0f;
-        }
-        {
-            float emission_boost = 1.0f;
-            /* Explosion particles live longer than thruster particles;
-               give them a short spawn-time brightness kick. */
-            if (p->life_s > 0.30f) {
-                const float life_t = clampf(p->age_s / fmaxf(p->life_s, 1e-5f), 0.0f, 1.0f);
-                const float spawn_t = 1.0f - life_t;
-                emission_boost += 0.55f * spawn_t * spawn_t;
+    if (emit_runtime_particles) {
+        for (size_t i = 0; i < MAX_PARTICLES; ++i) {
+            const particle* p = &g->particles[i];
+            if (!p->active || p->a <= 0.01f || p->size <= 0.10f) {
+                continue;
             }
-            out[n].r = clampf(p->r * emission_boost, 0.0f, 1.0f);
-            out[n].g = clampf(p->g * emission_boost, 0.0f, 1.0f);
-            out[n].b = clampf(p->bcol * emission_boost, 0.0f, 1.0f);
-            out[n].a = p->a;
-        }
-        {
-            const float spd = sqrtf(p->b.vx * p->b.vx + p->b.vy * p->b.vy);
-            float dx = 1.0f;
-            float dy = 0.0f;
-            if (spd > 1e-3f) {
-                dx = p->b.vx / spd;
-                dy = p->b.vy / spd;
+            if (n >= GPU_PARTICLE_MAX_INSTANCES) {
+                break;
             }
-            float life_t = clampf(p->age_s / fmaxf(p->life_s, 1e-5f), 0.0f, 1.0f);
-            float trail = 0.0f;
-            float heat = 0.0f;
-            if (p->type == PARTICLE_FLASH) {
-                heat = 2.0f;
-            } else if (p->life_s > 0.30f) {
-                /* Explosion sparks: hot at spawn, with short phosphor streak. */
-                const float speed01 = clampf(spd / 520.0f, 0.0f, 1.0f);
-                trail = speed01 * (1.0f - life_t) * 0.95f * a->particle_trail_gain;
-                heat = powf(1.0f - life_t, a->particle_heat_cooling);
+            float sx = p->b.x;
+            float sy = p->b.y;
+            float depth = 1.0f;
+            float radius = p->size;
+            if (use_cyl) {
+                project_cylinder_point_gpu(g, p->b.x, p->b.y, &sx, &sy, &depth);
+                radius *= (0.35f + 0.9f * depth);
+            } else {
+                /* Match vg foreground world->screen transform:
+                   translate(world by -camera, then center in viewport). */
+                sx = p->b.x + g->world_w * 0.5f - g->camera_x;
+                sy = p->b.y + g->world_h * 0.5f - g->camera_y;
             }
-            out[n].dir_x = dx;
-            out[n].dir_y = dy;
-            out[n].trail = trail;
-            out[n].heat = heat;
+            if (sx < -24.0f || sx > g->world_w + 24.0f || sy < -24.0f || sy > g->world_h + 24.0f) {
+                continue;
+            }
+            if (radius <= 0.10f) {
+                continue;
+            }
+            if (radius < r_min) r_min = radius;
+            if (radius > r_max) r_max = radius;
+            r_sum += radius;
+            out[n].x = sx;
+            out[n].y = sy;
+            out[n].radius_px = radius;
+            if (p->type == PARTICLE_POINT) {
+                out[n].kind = 0.0f;
+            } else if (p->type == PARTICLE_FLASH) {
+                out[n].kind = 2.0f;
+            } else {
+                out[n].kind = 1.0f;
+            }
+            {
+                float emission_boost = 1.0f;
+                /* Explosion particles live longer than thruster particles;
+                   give them a short spawn-time brightness kick. */
+                if (p->life_s > 0.30f) {
+                    const float life_t = clampf(p->age_s / fmaxf(p->life_s, 1e-5f), 0.0f, 1.0f);
+                    const float spawn_t = 1.0f - life_t;
+                    emission_boost += 0.55f * spawn_t * spawn_t;
+                }
+                out[n].r = clampf(p->r * emission_boost, 0.0f, 1.0f);
+                out[n].g = clampf(p->g * emission_boost, 0.0f, 1.0f);
+                out[n].b = clampf(p->bcol * emission_boost, 0.0f, 1.0f);
+                out[n].a = p->a;
+            }
+            {
+                const float spd = sqrtf(p->b.vx * p->b.vx + p->b.vy * p->b.vy);
+                float dx = 1.0f;
+                float dy = 0.0f;
+                if (spd > 1e-3f) {
+                    dx = p->b.vx / spd;
+                    dy = p->b.vy / spd;
+                }
+                float life_t = clampf(p->age_s / fmaxf(p->life_s, 1e-5f), 0.0f, 1.0f);
+                float trail = 0.0f;
+                float heat = 0.0f;
+                if (p->type == PARTICLE_FLASH) {
+                    heat = 2.0f;
+                } else if (p->life_s > 0.30f) {
+                    /* Explosion sparks: hot at spawn, with short phosphor streak. */
+                    const float speed01 = clampf(spd / 520.0f, 0.0f, 1.0f);
+                    trail = speed01 * (1.0f - life_t) * 0.95f * a->particle_trail_gain;
+                    heat = powf(1.0f - life_t, a->particle_heat_cooling);
+                }
+                out[n].dir_x = dx;
+                out[n].dir_y = dy;
+                out[n].trail = trail;
+                out[n].heat = heat;
+            }
+            ++n;
         }
-        ++n;
     }
-    {
+    if (emit_level_smoke) {
         const leveldef_level* lvl = game_current_leveldef(g);
         if (lvl && lvl->structure_count > 0 && g->render_style != LEVEL_RENDER_CYLINDER) {
             const float unit_w = g->world_w * (float)LEVELDEF_STRUCTURE_GRID_SCALE / (float)(LEVELDEF_STRUCTURE_GRID_W - 1);
@@ -8123,75 +8231,27 @@ static void update_gpu_particle_instances(app* a) {
                 }
                 const float bx = (float)st->grid_x * unit_w;
                 const float by = (float)st->grid_y * unit_h;
-                const float bw = unit_w;
-                const float bh = unit_h;
-                const float vent_density = (st->vent_density > 0.0f) ? st->vent_density : 1.0f;
-                const float vent_opacity = (st->vent_opacity > 0.0f) ? st->vent_opacity : 1.0f;
-                const float vent_height = (st->vent_plume_height > 0.0f) ? st->vent_plume_height : 1.0f;
-                int streams = (int)lroundf(6.0f * vent_density);
-                int puffs_per_stream = (int)lroundf(14.0f * vent_density);
-                if (streams < 2) streams = 2;
-                if (streams > 16) streams = 16;
-                if (puffs_per_stream < 4) puffs_per_stream = 4;
-                if (puffs_per_stream > 28) puffs_per_stream = 28;
-                for (int stream = 0; stream < streams; ++stream) {
-                    const float stream_t = (streams > 1) ? ((float)stream / (float)(streams - 1)) : 0.5f;
-                    const float vent_x = bx + bw * (0.18f + 0.64f * stream_t);
-                    const float vent_y = by + bh;
-                    for (int puff = 0; puff < puffs_per_stream; ++puff) {
-                        if (n >= GPU_PARTICLE_MAX_INSTANCES) {
-                            break;
-                        }
-                        const int seed = st->grid_x * 97 + st->grid_y * 53 + stream * 131 + puff * 37;
-                        const float h = (float)(seed & 255) / 255.0f;
-                        const float h2 = (float)((seed * 137) & 255) / 255.0f;
-                        const float ph = repeatf(
-                            g->t * (0.095f + 0.075f * h) + (float)puff * 0.143f + h * 0.91f + stream_t * 0.37f,
-                            1.0f
-                        );
-                        const float rise = ph * (bh * 5.8f * vent_height);
-                        const float swirl = sinf((ph + h) * (8.0f + 1.9f * stream_t) + (float)puff * 1.07f) *
-                                            bw * (0.10f + 0.22f * ph);
-                        const float spread = ((float)puff / (float)puffs_per_stream) * bw * 0.24f;
-                        const float life_in = clampf(ph / 0.18f, 0.0f, 1.0f);
-                        const float life_out = clampf((1.0f - ph) / 0.62f, 0.0f, 1.0f);
-                        const float life = life_in * life_out;
-                        const float life_s = life * life * (3.0f - 2.0f * life);
-                        const float size_u = ph * ph * (3.0f - 2.0f * ph);
-                        const float wx = vent_x + swirl + spread;
-                        const float wy = vent_y + rise;
-                        const float sx = wx + g->world_w * 0.5f - g->camera_x;
-                        const float sy = wy + g->world_h * 0.5f - g->camera_y;
-                        if (sx < -44.0f || sx > g->world_w + 44.0f || sy < -44.0f || sy > g->world_h + 44.0f) {
-                            continue;
-                        }
-                        out[n].x = sx;
-                        out[n].y = sy;
-                        out[n].radius_px = fmaxf(unit_h * (0.12f + 0.20f * size_u + 0.08f * h) * sqrtf(vent_height), 1.2f);
-                        out[n].kind = 3.0f; /* Vent smoke textured splat */
-                        if (palette_mode == 1) {
-                            out[n].r = clampf(0.82f + (h2 - 0.5f) * 0.10f, 0.0f, 1.0f);
-                            out[n].g = clampf(0.58f + (h - 0.5f) * 0.10f, 0.0f, 1.0f);
-                            out[n].b = clampf(0.30f + (h2 - 0.5f) * 0.08f, 0.0f, 1.0f);
-                        } else if (palette_mode == 2) {
-                            out[n].r = clampf(0.54f + (h2 - 0.5f) * 0.10f, 0.0f, 1.0f);
-                            out[n].g = clampf(0.70f + (h - 0.5f) * 0.10f, 0.0f, 1.0f);
-                            out[n].b = clampf(0.82f + (h2 - 0.5f) * 0.10f, 0.0f, 1.0f);
-                        } else {
-                            out[n].r = clampf(0.36f + (h2 - 0.5f) * 0.08f, 0.0f, 1.0f);
-                            out[n].g = clampf(0.62f + (h - 0.5f) * 0.10f, 0.0f, 1.0f);
-                            out[n].b = clampf(0.42f + (h2 - 0.5f) * 0.08f, 0.0f, 1.0f);
-                        }
-                        out[n].a = clampf(0.18f * vent_opacity * life_s * (0.76f + 0.24f * (1.0f - stream_t)), 0.0f, 0.60f);
-                        out[n].dir_x = 0.04f * sinf(g->t * 0.77f + h * 4.0f);
-                        out[n].dir_y = -1.0f;
-                        out[n].trail = 0.06f;
-                        out[n].heat = ph + h2 * 0.5f;
-                        ++n;
-                    }
-                }
+                const int seed_base = st->grid_x * 97 + st->grid_y * 53;
+                append_gpu_vent_smoke_plume(
+                    g, out, &n, palette_mode, 0,
+                    bx, by, unit_w, unit_h,
+                    st->vent_density, st->vent_opacity, st->vent_plume_height,
+                    seed_base, &r_sum, &r_min, &r_max
+                );
             }
         }
+    }
+    if (emit_level_smoke && g->level_style == LEVEL_STYLE_REVOLVER && n < GPU_PARTICLE_MAX_INSTANCES) {
+        const float source_w = g->world_w * 0.09f;
+        const float source_h = g->world_h * 0.11f;
+        const float source_x = g->camera_x - source_w * 0.5f;
+        const float source_y = g->camera_y - g->world_h * 0.50f + g->world_h * 0.05f;
+        append_gpu_vent_smoke_plume(
+            g, out, &n, palette_mode, use_cyl,
+            source_x, source_y, source_w, source_h,
+            1.65f, 1.20f, 1.55f,
+            9117, &r_sum, &r_min, &r_max
+        );
     }
     a->particle_instance_count = n;
     if (trace_enabled && n > 0 && (g->t - trace_last_t) >= 0.5f) {
@@ -8205,7 +8265,7 @@ static void update_gpu_particle_instances(app* a) {
     }
 }
 
-static void record_gpu_particles(app* a, VkCommandBuffer cmd) {
+static void record_gpu_particles(app* a, VkCommandBuffer cmd, int emit_runtime_particles, int emit_level_smoke) {
 #if !V_TYPE_HAS_TERRAIN_SHADERS
     (void)a;
     (void)cmd;
@@ -8213,7 +8273,7 @@ static void record_gpu_particles(app* a, VkCommandBuffer cmd) {
     if (!a || !cmd || !a->particle_pipeline || !a->particle_instance_buffer) {
         return;
     }
-    update_gpu_particle_instances(a);
+    update_gpu_particle_instances(a, emit_runtime_particles, emit_level_smoke);
     if (a->particle_instance_count == 0) {
         return;
     }
@@ -8232,7 +8292,7 @@ static void record_gpu_particles(app* a, VkCommandBuffer cmd) {
 #endif
 }
 
-static void record_gpu_particles_bloom(app* a, VkCommandBuffer cmd) {
+static void record_gpu_particles_bloom(app* a, VkCommandBuffer cmd, int emit_runtime_particles, int emit_level_smoke) {
 #if !V_TYPE_HAS_TERRAIN_SHADERS
     (void)a;
     (void)cmd;
@@ -8240,7 +8300,7 @@ static void record_gpu_particles_bloom(app* a, VkCommandBuffer cmd) {
     if (!a || !cmd || !a->particle_bloom_pipeline || !a->particle_instance_buffer) {
         return;
     }
-    update_gpu_particle_instances(a);
+    update_gpu_particle_instances(a, emit_runtime_particles, emit_level_smoke);
     if (a->particle_instance_count == 0) {
         return;
     }
@@ -9082,7 +9142,7 @@ static void record_gpu_industry(app* a, VkCommandBuffer cmd, float t) {
 #endif
 }
 
-static void record_gpu_revolver(app* a, VkCommandBuffer cmd, float t) {
+static void record_gpu_revolver(app* a, VkCommandBuffer cmd, float t, int front_only) {
 #if !V_TYPE_HAS_TERRAIN_SHADERS
     (void)a;
     (void)cmd;
@@ -9113,6 +9173,7 @@ static void record_gpu_revolver(app* a, VkCommandBuffer cmd, float t) {
     pc.p2[0] = a->game.world_w;
     pc.p2[1] = a->game.world_h;
     pc.p2[2] = (float)a->industry_w / fmaxf((float)a->industry_h, 1.0f);
+    pc.p2[3] = front_only ? 1.0f : 0.0f;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->revolver_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->industry_layout, 0, 1, &a->industry_desc_set, 0, NULL);
     vkCmdPushConstants(cmd, a->industry_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
@@ -9539,7 +9600,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
                 return 0;
             }
             if (use_gpu_particles) {
-                record_gpu_particles(a, cmd);
+                record_gpu_particles(a, cmd, 1, 1);
             }
         } else if (in_gameplay_scene && use_gpu_industry) {
             metrics.use_gpu_particles = use_gpu_particles ? 1 : 0;
@@ -9561,7 +9622,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
                 return 0;
             }
             if (use_gpu_particles) {
-                record_gpu_particles(a, cmd);
+                record_gpu_particles(a, cmd, 1, 1);
             }
         } else if (split_scene) {
             metrics.use_gpu_particles = use_gpu_particles ? 1 : 0;
@@ -9588,7 +9649,11 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
                 record_gpu_radar(a, cmd);
             }
             if (use_gpu_revolver) {
-                record_gpu_revolver(a, cmd, t);
+                if (use_gpu_particles) {
+                    /* Draw revolver smoke behind cylinder surfaces. */
+                    record_gpu_particles(a, cmd, 0, 1);
+                }
+                record_gpu_revolver(a, cmd, t, 1);
             }
             if (use_gpu_arc) {
                 record_gpu_arc_beam(a, cmd, t);
@@ -9610,7 +9675,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
                 return 0;
             }
             if (use_gpu_particles) {
-                record_gpu_particles(a, cmd);
+                record_gpu_particles(a, cmd, 1, use_gpu_revolver ? 0 : 1);
             }
         } else {
             metrics.use_gpu_particles = use_gpu_particles ? 1 : 0;
@@ -9626,7 +9691,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
                 return 0;
             }
             if (use_gpu_particles) {
-                record_gpu_particles(a, cmd);
+                record_gpu_particles(a, cmd, 1, 1);
             }
         }
     }
@@ -9674,7 +9739,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
     vkCmdPushConstants(cmd, a->post_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     if (a->particle_bloom_enabled && menu_is_gameplay(&a->menu)) {
-        record_gpu_particles_bloom(a, cmd);
+        record_gpu_particles_bloom(a, cmd, 1, (a->game.level_style == LEVEL_STYLE_REVOLVER) ? 0 : 1);
     }
     vkCmdEndRenderPass(cmd);
 

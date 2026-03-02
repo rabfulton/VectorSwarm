@@ -12,6 +12,7 @@ const float PI        = 3.14159265359;
 const float TWO_PI    = 6.28318530718;
 const float INNER_S   = 0.60;
 const float CENTRAL_S = 0.22;
+const float CYL_BRIGHTNESS = 1.24;
 
 /* Sample a cylindrical ring wall at this pixel.
    sin_t  : sin(theta) for this ring — used for both depth/y-scale and U coord.
@@ -45,7 +46,8 @@ bool ring_sample(float sin_t, bool front,
     if (texture(u_industry, vec2(u, v)).a < 0.5) return false;
     float dim = (0.50 + 0.50 * depth) * dim_extra;
     float fade = mix(1.0, up01, clamp(base_up_fade, 0.0, 1.0));
-    col_out = vec4(base_col * (0.25 + 0.75 * v) * dim * fade, 1.0);
+    float top_boost = 1.0 + 0.40 * up01;
+    col_out = vec4(base_col * (0.25 + 0.75 * v) * dim * fade * top_boost * CYL_BRIGHTNESS, 1.0);
     return true;
 }
 
@@ -54,6 +56,7 @@ void main() {
     float vh          = max(pc.p0.y, 1.0);
     float camera_x    = pc.p1.w;
     float tile_aspect = max(pc.p2.z, 0.1);
+    bool front_only   = (pc.p2.w >= 0.5);
     vec3  base_col    = pc.p1.rgb;
     float alpha_scale = clamp(pc.p0.w, 0.0, 1.0);
 
@@ -91,24 +94,26 @@ void main() {
     vec4 result = vec4(0.0);
     vec4 hit;
 
-    if (out_ok && ring_sample(sin_outer, false, sy_game, cy,
-            ring_y_base, H, base_col, tiles_outer, scroll_outer, 1.00, 1.0, hit))
-        result = hit;
+    if (false) {
+        if (out_ok && ring_sample(sin_outer, false, sy_game, cy,
+                ring_y_base, H, base_col, tiles_outer, scroll_outer, 1.00, 1.0, hit))
+            result = hit;
 
-    if (in_ok && ring_sample(sin_inner, false, sy_game, cy,
-            ring_y_base, H, base_col, tiles_inner, scroll_inner, 0.70, 0.0, hit))
-        result = hit;
+        if (in_ok && ring_sample(sin_inner, false, sy_game, cy,
+                ring_y_base, H, base_col, tiles_inner, scroll_inner, 0.70, 1.0, hit))
+            result = hit;
 
-    if (cen_ok && ring_sample(sin_cen, false, sy_game, cy,
-            ring_y_cen, H_cen, base_col, tiles_cen, scroll_cen, 0.55, 0.0, hit))
-        result = hit;
+        if (cen_ok && ring_sample(sin_cen, false, sy_game, cy,
+                ring_y_cen, H_cen, base_col, tiles_cen, scroll_cen, 0.55, 1.0, hit))
+            result = hit;
+    }
 
     if (cen_ok && ring_sample(sin_cen, true, sy_game, cy,
-            ring_y_cen, H_cen, base_col, tiles_cen, scroll_cen, 0.55, 0.0, hit))
+            ring_y_cen, H_cen, base_col, tiles_cen, scroll_cen, 0.55, 1.0, hit))
         result = hit;
 
     if (in_ok && ring_sample(sin_inner, true, sy_game, cy,
-            ring_y_base, H, base_col, tiles_inner, scroll_inner, 0.70, 0.0, hit))
+            ring_y_base, H, base_col, tiles_inner, scroll_inner, 0.70, 1.0, hit))
         result = hit;
 
     if (out_ok && ring_sample(sin_outer, true, sy_game, cy,
