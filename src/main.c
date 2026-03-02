@@ -285,6 +285,8 @@ typedef struct app {
     VkDeviceMemory bloom_memory;
     VkImageView bloom_view;
     VkFramebuffer bloom_fb;
+    uint32_t bloom_w;
+    uint32_t bloom_h;
     VkImage underwater_kelp_image;
     VkDeviceMemory underwater_kelp_memory;
     VkImageView underwater_kelp_view;
@@ -308,6 +310,9 @@ typedef struct app {
     VkPipeline terrain_fill_pipeline;
     VkPipeline terrain_line_pipeline;
     VkPipelineLayout particle_layout;
+    VkDescriptorSetLayout particle_desc_layout;
+    VkDescriptorPool particle_desc_pool;
+    VkDescriptorSet particle_desc_set;
     VkPipeline particle_pipeline;
     VkPipeline particle_bloom_pipeline;
     VkPipelineLayout wormhole_line_layout;
@@ -4718,6 +4723,8 @@ static void cleanup(app* a) {
     if (a->industry_layout) vkDestroyPipelineLayout(a->device, a->industry_layout, NULL);
     if (a->underwater_desc_pool) vkDestroyDescriptorPool(a->device, a->underwater_desc_pool, NULL);
     if (a->underwater_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->underwater_desc_layout, NULL);
+    if (a->particle_desc_pool) vkDestroyDescriptorPool(a->device, a->particle_desc_pool, NULL);
+    if (a->particle_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->particle_desc_layout, NULL);
     if (a->grid_state_desc_pool) vkDestroyDescriptorPool(a->device, a->grid_state_desc_pool, NULL);
     if (a->grid_state_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->grid_state_desc_layout, NULL);
     if (a->industry_desc_pool) vkDestroyDescriptorPool(a->device, a->industry_desc_pool, NULL);
@@ -4953,6 +4960,14 @@ static void destroy_render_runtime(app* a) {
     if (a->particle_layout) {
         vkDestroyPipelineLayout(a->device, a->particle_layout, NULL);
         a->particle_layout = VK_NULL_HANDLE;
+    }
+    if (a->particle_desc_pool) {
+        vkDestroyDescriptorPool(a->device, a->particle_desc_pool, NULL);
+        a->particle_desc_pool = VK_NULL_HANDLE;
+    }
+    if (a->particle_desc_layout) {
+        vkDestroyDescriptorSetLayout(a->device, a->particle_desc_layout, NULL);
+        a->particle_desc_layout = VK_NULL_HANDLE;
     }
     if (a->wormhole_line_layout) {
         vkDestroyPipelineLayout(a->device, a->wormhole_line_layout, NULL);
@@ -5316,11 +5331,11 @@ static int recreate_render_runtime(app* a) {
         !create_sync(a) ||
         !create_post_resources(a) ||
         !create_terrain_resources(a) ||
+        !create_underwater_resources(a) ||
         !create_particle_resources(a) ||
         !create_wormhole_resources(a) ||
         !create_radar_resources(a) ||
         !create_fog_resources(a) ||
-        !create_underwater_resources(a) ||
         !create_grid_resources(a) ||
         !create_arc_beam_resources(a) ||
         !create_industry_resources(a) ||
@@ -5760,11 +5775,15 @@ static int create_render_passes(app* a) {
 static int create_offscreen_targets(app* a) {
     uint32_t w = a->swapchain_extent.width;
     uint32_t h = a->swapchain_extent.height;
+    a->bloom_w = (w > 1u) ? (w / 2u) : 1u;
+    a->bloom_h = (h > 1u) ? (h / 2u) : 1u;
     VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     VkSampleCountFlagBits samples = scene_samples(a);
 
     if (!create_image_2d(a, w, h, a->swapchain_format, usage, VK_SAMPLE_COUNT_1_BIT, &a->scene_image, &a->scene_memory, &a->scene_view)) return 0;
-    if (!create_image_2d(a, w, h, a->swapchain_format, usage, VK_SAMPLE_COUNT_1_BIT, &a->bloom_image, &a->bloom_memory, &a->bloom_view)) return 0;
+    if (!create_image_2d(
+            a, a->bloom_w, a->bloom_h, a->swapchain_format, usage, VK_SAMPLE_COUNT_1_BIT,
+            &a->bloom_image, &a->bloom_memory, &a->bloom_view)) return 0;
     a->underwater_kelp_w = (w > UNDERWATER_KELP_RT_DIVISOR) ? (w / UNDERWATER_KELP_RT_DIVISOR) : 1u;
     a->underwater_kelp_h = (h > UNDERWATER_KELP_RT_DIVISOR) ? (h / UNDERWATER_KELP_RT_DIVISOR) : 1u;
     if (!create_image_2d(
@@ -5800,7 +5819,15 @@ static int create_offscreen_targets(app* a) {
     if (!check_vk(vkCreateFramebuffer(a->device, &scene_fb, NULL, &a->scene_fb), "vkCreateFramebuffer(scene)")) return 0;
 
     VkImageView bloom_att[] = {a->bloom_view};
-    VkFramebufferCreateInfo bloom_fb = {.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO, .renderPass = a->bloom_render_pass, .attachmentCount = 1, .pAttachments = bloom_att, .width = w, .height = h, .layers = 1};
+    VkFramebufferCreateInfo bloom_fb = {
+        .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+        .renderPass = a->bloom_render_pass,
+        .attachmentCount = 1,
+        .pAttachments = bloom_att,
+        .width = a->bloom_w,
+        .height = a->bloom_h,
+        .layers = 1
+    };
     if (!check_vk(vkCreateFramebuffer(a->device, &bloom_fb, NULL, &a->bloom_fb), "vkCreateFramebuffer(bloom)")) return 0;
     VkImageView underwater_kelp_att[] = {a->underwater_kelp_view};
     VkFramebufferCreateInfo underwater_kelp_fb = {
@@ -6207,6 +6234,9 @@ static int create_particle_resources(app* a) {
     (void)a;
     return 1;
 #else
+    if (!a || !a->underwater_noise_view || !a->underwater_noise_sampler) {
+        return 0;
+    }
     const VkDeviceSize ibuf_size = (VkDeviceSize)GPU_PARTICLE_MAX_INSTANCES * sizeof(particle_instance);
     if (!create_buffer(
             a, ibuf_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
@@ -6219,6 +6249,60 @@ static int create_particle_resources(app* a) {
     }
     a->particle_instance_count = 0;
 
+    VkDescriptorSetLayoutBinding noise_binding = {
+        .binding = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT
+    };
+    VkDescriptorSetLayoutCreateInfo noise_dsl = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 1,
+        .pBindings = &noise_binding
+    };
+    if (!check_vk(vkCreateDescriptorSetLayout(a->device, &noise_dsl, NULL, &a->particle_desc_layout),
+                  "vkCreateDescriptorSetLayout(particles)")) {
+        return 0;
+    }
+    VkDescriptorPoolSize noise_pool_size = {
+        .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1
+    };
+    VkDescriptorPoolCreateInfo noise_pool = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .poolSizeCount = 1,
+        .pPoolSizes = &noise_pool_size,
+        .maxSets = 1
+    };
+    if (!check_vk(vkCreateDescriptorPool(a->device, &noise_pool, NULL, &a->particle_desc_pool),
+                  "vkCreateDescriptorPool(particles)")) {
+        return 0;
+    }
+    VkDescriptorSetAllocateInfo noise_alloc = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .descriptorPool = a->particle_desc_pool,
+        .descriptorSetCount = 1,
+        .pSetLayouts = &a->particle_desc_layout
+    };
+    if (!check_vk(vkAllocateDescriptorSets(a->device, &noise_alloc, &a->particle_desc_set),
+                  "vkAllocateDescriptorSets(particles)")) {
+        return 0;
+    }
+    VkDescriptorImageInfo noise_info = {
+        .sampler = a->underwater_noise_sampler,
+        .imageView = a->underwater_noise_view,
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    };
+    VkWriteDescriptorSet noise_write = {
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = a->particle_desc_set,
+        .dstBinding = 0,
+        .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .pImageInfo = &noise_info
+    };
+    vkUpdateDescriptorSets(a->device, 1, &noise_write, 0, NULL);
+
     VkPushConstantRange pc = {
         .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         .offset = 0,
@@ -6226,6 +6310,8 @@ static int create_particle_resources(app* a) {
     };
     VkPipelineLayoutCreateInfo pli = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = &a->particle_desc_layout,
         .pushConstantRangeCount = 1,
         .pPushConstantRanges = &pc
     };
@@ -8274,7 +8360,7 @@ static void record_gpu_particles(
     (void)a;
     (void)cmd;
 #else
-    if (!a || !cmd || !a->particle_pipeline || !a->particle_instance_buffer) {
+    if (!a || !cmd || !a->particle_pipeline || !a->particle_instance_buffer || !a->particle_desc_set) {
         return;
     }
     update_gpu_particle_instances(a, emit_runtime_particles, emit_level_smoke);
@@ -8292,6 +8378,7 @@ static void record_gpu_particles(
     pc.params[2] = a->particle_core_gain;
     pc.params[3] = a->particle_trail_gain;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->particle_pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->particle_layout, 0, 1, &a->particle_desc_set, 0, NULL);
     vkCmdPushConstants(cmd, a->particle_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
     VkDeviceSize off = 0;
     vkCmdBindVertexBuffers(cmd, 0, 1, &a->particle_instance_buffer, &off);
@@ -8304,14 +8391,14 @@ static void record_gpu_particles_bloom(app* a, VkCommandBuffer cmd, int emit_run
     (void)a;
     (void)cmd;
 #else
-    if (!a || !cmd || !a->particle_bloom_pipeline || !a->particle_instance_buffer) {
+    if (!a || !cmd || !a->particle_bloom_pipeline || !a->particle_instance_buffer || !a->particle_desc_set) {
         return;
     }
     update_gpu_particle_instances(a, emit_runtime_particles, emit_level_smoke);
     if (a->particle_instance_count == 0) {
         return;
     }
-    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    set_viewport_scissor(cmd, a->bloom_w, a->bloom_h);
     particle_pc pc;
     memset(&pc, 0, sizeof(pc));
     pc.params[0] = (float)a->swapchain_extent.width;
@@ -8319,6 +8406,7 @@ static void record_gpu_particles_bloom(app* a, VkCommandBuffer cmd, int emit_run
     pc.params[2] = a->particle_core_gain;
     pc.params[3] = a->particle_trail_gain;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->particle_bloom_pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->particle_layout, 0, 1, &a->particle_desc_set, 0, NULL);
     vkCmdPushConstants(cmd, a->particle_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
     VkDeviceSize off = 0;
     vkCmdBindVertexBuffers(cmd, 0, 1, &a->particle_instance_buffer, &off);
@@ -9149,7 +9237,7 @@ static void record_gpu_industry(app* a, VkCommandBuffer cmd, float t) {
 #endif
 }
 
-static void record_gpu_revolver(app* a, VkCommandBuffer cmd, float t, int front_only) {
+static void record_gpu_revolver(app* a, VkCommandBuffer cmd, float t, int front_only, const VkRect2D* opt_scissor) {
 #if !V_TYPE_HAS_TERRAIN_SHADERS
     (void)a;
     (void)cmd;
@@ -9162,6 +9250,9 @@ static void record_gpu_revolver(app* a, VkCommandBuffer cmd, float t, int front_
         return;
     }
     set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    if (opt_scissor) {
+        vkCmdSetScissor(cmd, 0, 1, opt_scissor);
+    }
     industry_pc pc;
     memset(&pc, 0, sizeof(pc));
     pc.p0[0] = (float)a->swapchain_extent.width;
@@ -9660,8 +9751,8 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
                     /* Draw revolver smoke behind cylinder surfaces. */
                     const uint32_t sw = a->swapchain_extent.width;
                     const uint32_t sh = a->swapchain_extent.height;
-                    const int32_t sc_x = (int32_t)(sw * 0.30f);
-                    const uint32_t sc_w = (uint32_t)fmaxf(1.0f, floorf((float)sw * 0.40f));
+                    const int32_t sc_x = (int32_t)(sw * 0.375f);
+                    const uint32_t sc_w = (uint32_t)fmaxf(1.0f, floorf((float)sw * 0.25f));
                     VkRect2D smoke_scissor = {
                         .offset = {sc_x, 0},
                         .extent = {sc_w, sh}
@@ -9671,7 +9762,16 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
                     }
                     record_gpu_particles(a, cmd, 0, 1, &smoke_scissor);
                 }
-                record_gpu_revolver(a, cmd, t, 1);
+                {
+                    const uint32_t sw = a->swapchain_extent.width;
+                    const uint32_t sh = a->swapchain_extent.height;
+                    const int32_t y0 = (int32_t)(sh * 0.25f);
+                    VkRect2D rev_scissor = {
+                        .offset = {0, y0},
+                        .extent = {sw, sh - (uint32_t)y0}
+                    };
+                    record_gpu_revolver(a, cmd, t, 1, &rev_scissor);
+                }
             }
             if (use_gpu_arc) {
                 record_gpu_arc_beam(a, cmd, t);
@@ -9728,33 +9828,33 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
         .renderPass = a->bloom_render_pass,
         .framebuffer = a->bloom_fb,
-        .renderArea = {.offset = {0, 0}, .extent = a->swapchain_extent},
+        .renderArea = {.offset = {0, 0}, .extent = {.width = a->bloom_w, .height = a->bloom_h}},
         .clearValueCount = 1,
         .pClearValues = &bloom_clear
     };
     vkCmdBeginRenderPass(cmd, &bloom_rp, VK_SUBPASS_CONTENTS_INLINE);
-    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    set_viewport_scissor(cmd, a->bloom_w, a->bloom_h);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->bloom_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->post_layout, 0, 1, &a->post_desc_set, 0, NULL);
 
     vg_crt_profile crt;
     vg_get_crt_profile(a->vg, &crt);
-    post_pc pc = {0};
-    pc.p0[0] = 1.0f / (float)a->swapchain_extent.width;
-    pc.p0[1] = 1.0f / (float)a->swapchain_extent.height;
-    pc.p0[2] = crt.bloom_strength;
-    pc.p0[3] = crt.bloom_radius_px;
-    pc.p1[0] = crt.vignette_strength;
-    pc.p1[1] = crt.barrel_distortion;
-    pc.p1[2] = crt.scanline_strength;
-    pc.p1[3] = crt.noise_strength;
-    pc.p2[0] = t;
-    pc.p2[1] = a->show_crt_ui ? 1.0f : 0.0f;
-    pc.p2[2] = 24.0f / (float)a->swapchain_extent.width;
-    pc.p2[3] = 0.12f;
-    pc.p3[0] = 0.44f;
-    pc.p3[1] = 0.76f;
-    vkCmdPushConstants(cmd, a->post_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    post_pc bloom_pc = {0};
+    bloom_pc.p0[0] = 1.0f / (float)a->bloom_w;
+    bloom_pc.p0[1] = 1.0f / (float)a->bloom_h;
+    bloom_pc.p0[2] = crt.bloom_strength;
+    bloom_pc.p0[3] = crt.bloom_radius_px * 0.5f;
+    bloom_pc.p1[0] = crt.vignette_strength;
+    bloom_pc.p1[1] = crt.barrel_distortion;
+    bloom_pc.p1[2] = crt.scanline_strength;
+    bloom_pc.p1[3] = crt.noise_strength;
+    bloom_pc.p2[0] = t;
+    bloom_pc.p2[1] = a->show_crt_ui ? 1.0f : 0.0f;
+    bloom_pc.p2[2] = 24.0f / (float)a->swapchain_extent.width;
+    bloom_pc.p2[3] = 0.12f;
+    bloom_pc.p3[0] = 0.44f;
+    bloom_pc.p3[1] = 0.76f;
+    vkCmdPushConstants(cmd, a->post_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(bloom_pc), &bloom_pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     if (a->particle_bloom_enabled && menu_is_gameplay(&a->menu)) {
         record_gpu_particles_bloom(a, cmd, 1, (a->game.level_style == LEVEL_STYLE_REVOLVER) ? 0 : 1);
@@ -9774,7 +9874,22 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
     set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->composite_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->post_layout, 0, 1, &a->post_desc_set, 0, NULL);
-    vkCmdPushConstants(cmd, a->post_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    post_pc comp_pc = {0};
+    comp_pc.p0[0] = 1.0f / (float)a->swapchain_extent.width;
+    comp_pc.p0[1] = 1.0f / (float)a->swapchain_extent.height;
+    comp_pc.p0[2] = crt.bloom_strength;
+    comp_pc.p0[3] = crt.bloom_radius_px;
+    comp_pc.p1[0] = crt.vignette_strength;
+    comp_pc.p1[1] = crt.barrel_distortion;
+    comp_pc.p1[2] = crt.scanline_strength;
+    comp_pc.p1[3] = crt.noise_strength;
+    comp_pc.p2[0] = t;
+    comp_pc.p2[1] = a->show_crt_ui ? 1.0f : 0.0f;
+    comp_pc.p2[2] = 24.0f / (float)a->swapchain_extent.width;
+    comp_pc.p2[3] = 0.12f;
+    comp_pc.p3[0] = 0.44f;
+    comp_pc.p3[1] = 0.76f;
+    vkCmdPushConstants(cmd, a->post_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(comp_pc), &comp_pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRenderPass(cmd);
 
@@ -9999,11 +10114,11 @@ int main(void) {
         !create_sync(&a) ||
         !create_post_resources(&a) ||
         !create_terrain_resources(&a) ||
+        !create_underwater_resources(&a) ||
         !create_particle_resources(&a) ||
         !create_wormhole_resources(&a) ||
         !create_radar_resources(&a) ||
         !create_fog_resources(&a) ||
-        !create_underwater_resources(&a) ||
         !create_grid_resources(&a) ||
         !create_arc_beam_resources(&a) ||
         !create_vg_context(&a)) {
