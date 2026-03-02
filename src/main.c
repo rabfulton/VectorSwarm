@@ -2338,7 +2338,9 @@ static void set_tty_message(app* a, const char* msg);
 static void update_gpu_high_plains_vertices(app* a);
 static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd);
 static void update_gpu_particle_instances(app* a, int emit_runtime_particles, int emit_level_smoke);
-static void record_gpu_particles(app* a, VkCommandBuffer cmd, int emit_runtime_particles, int emit_level_smoke);
+static void record_gpu_particles(
+    app* a, VkCommandBuffer cmd, int emit_runtime_particles, int emit_level_smoke, const VkRect2D* opt_scissor
+);
 static void record_gpu_particles_bloom(app* a, VkCommandBuffer cmd, int emit_runtime_particles, int emit_level_smoke);
 static void record_gpu_wormhole(app* a, VkCommandBuffer cmd);
 static void record_gpu_radar(app* a, VkCommandBuffer cmd);
@@ -8265,7 +8267,9 @@ static void update_gpu_particle_instances(app* a, int emit_runtime_particles, in
     }
 }
 
-static void record_gpu_particles(app* a, VkCommandBuffer cmd, int emit_runtime_particles, int emit_level_smoke) {
+static void record_gpu_particles(
+    app* a, VkCommandBuffer cmd, int emit_runtime_particles, int emit_level_smoke, const VkRect2D* opt_scissor
+) {
 #if !V_TYPE_HAS_TERRAIN_SHADERS
     (void)a;
     (void)cmd;
@@ -8278,6 +8282,9 @@ static void record_gpu_particles(app* a, VkCommandBuffer cmd, int emit_runtime_p
         return;
     }
     set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    if (opt_scissor) {
+        vkCmdSetScissor(cmd, 0, 1, opt_scissor);
+    }
     particle_pc pc;
     memset(&pc, 0, sizeof(pc));
     pc.params[0] = (float)a->swapchain_extent.width;
@@ -9600,7 +9607,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
                 return 0;
             }
             if (use_gpu_particles) {
-                record_gpu_particles(a, cmd, 1, 1);
+                record_gpu_particles(a, cmd, 1, 1, NULL);
             }
         } else if (in_gameplay_scene && use_gpu_industry) {
             metrics.use_gpu_particles = use_gpu_particles ? 1 : 0;
@@ -9622,7 +9629,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
                 return 0;
             }
             if (use_gpu_particles) {
-                record_gpu_particles(a, cmd, 1, 1);
+                record_gpu_particles(a, cmd, 1, 1, NULL);
             }
         } else if (split_scene) {
             metrics.use_gpu_particles = use_gpu_particles ? 1 : 0;
@@ -9651,7 +9658,18 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             if (use_gpu_revolver) {
                 if (use_gpu_particles) {
                     /* Draw revolver smoke behind cylinder surfaces. */
-                    record_gpu_particles(a, cmd, 0, 1);
+                    const uint32_t sw = a->swapchain_extent.width;
+                    const uint32_t sh = a->swapchain_extent.height;
+                    const int32_t sc_x = (int32_t)(sw * 0.30f);
+                    const uint32_t sc_w = (uint32_t)fmaxf(1.0f, floorf((float)sw * 0.40f));
+                    VkRect2D smoke_scissor = {
+                        .offset = {sc_x, 0},
+                        .extent = {sc_w, sh}
+                    };
+                    if ((uint32_t)smoke_scissor.offset.x + smoke_scissor.extent.width > sw) {
+                        smoke_scissor.extent.width = sw - (uint32_t)smoke_scissor.offset.x;
+                    }
+                    record_gpu_particles(a, cmd, 0, 1, &smoke_scissor);
                 }
                 record_gpu_revolver(a, cmd, t, 1);
             }
@@ -9675,7 +9693,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
                 return 0;
             }
             if (use_gpu_particles) {
-                record_gpu_particles(a, cmd, 1, use_gpu_revolver ? 0 : 1);
+                record_gpu_particles(a, cmd, 1, use_gpu_revolver ? 0 : 1, NULL);
             }
         } else {
             metrics.use_gpu_particles = use_gpu_particles ? 1 : 0;
@@ -9691,7 +9709,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
                 return 0;
             }
             if (use_gpu_particles) {
-                record_gpu_particles(a, cmd, 1, 1);
+                record_gpu_particles(a, cmd, 1, 1, NULL);
             }
         }
     }

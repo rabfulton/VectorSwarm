@@ -10,7 +10,7 @@ layout(push_constant) uniform RevolverPC {
 
 const float PI        = 3.14159265359;
 const float TWO_PI    = 6.28318530718;
-const float INNER_S   = 0.60;
+const float INNER_S   = 0.80;
 const float CENTRAL_S = 0.22;
 const float CYL_BRIGHTNESS = 1.24;
 
@@ -69,7 +69,7 @@ void main() {
 
     float ring_y_base = vh * 0.06;   /* world-y baseline of outer/inner rings */
     float H           = vh * 0.25;   /* wall height for outer/inner rings */
-    float ring_y_cen  = vh * 0.06; /* baseline of central ring (can go off-screen) */
+    float ring_y_cen  = vh * 0.06;   /* baseline of central ring (can go off-screen) */
     float H_cen       = vh * 0.55;   /* central ring is taller */
 
     float tiles_outer = period / (H * tile_aspect);
@@ -94,30 +94,17 @@ void main() {
     vec4 result = vec4(0.0);
     vec4 hit;
 
-    if (false) {
-        if (out_ok && ring_sample(sin_outer, false, sy_game, cy,
-                ring_y_base, H, base_col, tiles_outer, scroll_outer, 1.00, 1.0, hit))
-            result = hit;
-
-        if (in_ok && ring_sample(sin_inner, false, sy_game, cy,
-                ring_y_base, H, base_col, tiles_inner, scroll_inner, 0.70, 1.0, hit))
-            result = hit;
-
-        if (cen_ok && ring_sample(sin_cen, false, sy_game, cy,
-                ring_y_cen, H_cen, base_col, tiles_cen, scroll_cen, 0.55, 1.0, hit))
-            result = hit;
-    }
 
     if (cen_ok && ring_sample(sin_cen, true, sy_game, cy,
-            ring_y_cen, H_cen, base_col, tiles_cen, scroll_cen, 0.55, 1.0, hit))
+            ring_y_cen, H_cen, base_col, tiles_cen, scroll_cen, 1.05, 1.0, hit))
         result = hit;
 
     if (in_ok && ring_sample(sin_inner, true, sy_game, cy,
-            ring_y_base, H, base_col, tiles_inner, scroll_inner, 0.70, 1.0, hit))
+            ring_y_base, H, base_col, tiles_inner, scroll_inner, 0.85, 1.0, hit))
         result = hit;
 
     if (out_ok && ring_sample(sin_outer, true, sy_game, cy,
-            ring_y_base, H, base_col, tiles_outer, scroll_outer, 1.00, 1.0, hit))
+            ring_y_base, H, base_col, tiles_outer, scroll_outer, 1.40, 1.0, hit))
         result = hit;
 
     if (result.a < 0.5) discard;
