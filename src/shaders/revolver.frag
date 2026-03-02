@@ -10,8 +10,8 @@ layout(push_constant) uniform RevolverPC {
 
 const float PI        = 3.14159265359;
 const float TWO_PI    = 6.28318530718;
-const float INNER_S   = 0.80;
-const float CENTRAL_S = 0.22;
+const float INNER_S   = 0.90;
+const float CENTRAL_S = 0.25;
 const float CYL_BRIGHTNESS = 1.24;
 
 /* Sample a cylindrical ring wall at this pixel.
@@ -74,11 +74,11 @@ void main() {
 
     float tiles_outer = period / (H * tile_aspect);
     float tiles_inner = tiles_outer * INNER_S;
-    float tiles_cen   = 1.0;  /* single texture wrap around central ring */
+    float tiles_cen   = 2.0;  /* double texture wrap around central ring */
 
     float scroll_outer = camera_x / period;
     float scroll_inner = camera_x * INNER_S / period;
-    float scroll_cen   = camera_x * CENTRAL_S / period;
+    float scroll_cen   = camera_x * CENTRAL_S * 2 / period;
 
     float sin_outer = (sx - cx) / radius;
     float sin_inner = (sx - cx) / (radius * INNER_S);
@@ -94,15 +94,15 @@ void main() {
     vec4 result = vec4(0.0);
     vec4 hit;
 
-
+    /* central ring */
     if (cen_ok && ring_sample(sin_cen, true, sy_game, cy,
-            ring_y_cen, H_cen, base_col, tiles_cen, scroll_cen, 1.05, 1.0, hit))
+            ring_y_cen, H_cen, base_col, tiles_cen, scroll_cen, 1.45, 1.0, hit))
         result = hit;
-
+    /* inner ring */
     if (in_ok && ring_sample(sin_inner, true, sy_game, cy,
-            ring_y_base, H, base_col, tiles_inner, scroll_inner, 0.85, 1.0, hit))
+            ring_y_base, H * 1.5, base_col, tiles_inner, scroll_inner, 0.85, 1.0, hit))
         result = hit;
-
+    /* outer ring */
     if (out_ok && ring_sample(sin_outer, true, sy_game, cy,
             ring_y_base, H, base_col, tiles_outer, scroll_outer, 1.40, 1.0, hit))
         result = hit;
