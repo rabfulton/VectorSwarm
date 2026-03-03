@@ -92,6 +92,7 @@ static int curated_kind_from_name(const char* name) {
     if (strcmp(name, "boid_fish") == 0 || strcmp(name, "swarm_fish") == 0) return 10;
     if (strcmp(name, "boid_firefly") == 0 || strcmp(name, "swarm_firefly") == 0) return 11;
     if (strcmp(name, "boid_bird") == 0 || strcmp(name, "swarm_bird") == 0) return 12;
+    if (strcmp(name, "jelly_swarm") == 0 || strcmp(name, "jelly") == 0) return 15;
     return -1;
 }
 

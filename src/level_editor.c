@@ -279,14 +279,16 @@ static int is_wave_kind(int kind) {
             kind == LEVEL_EDITOR_MARKER_BOID ||
             kind == LEVEL_EDITOR_MARKER_BOID_FISH ||
             kind == LEVEL_EDITOR_MARKER_BOID_FIREFLY ||
-            kind == LEVEL_EDITOR_MARKER_BOID_BIRD);
+            kind == LEVEL_EDITOR_MARKER_BOID_BIRD ||
+            kind == LEVEL_EDITOR_MARKER_JELLY_SWARM);
 }
 
 static int is_boid_wave_kind(int kind) {
     return (kind == LEVEL_EDITOR_MARKER_BOID ||
             kind == LEVEL_EDITOR_MARKER_BOID_FISH ||
             kind == LEVEL_EDITOR_MARKER_BOID_FIREFLY ||
-            kind == LEVEL_EDITOR_MARKER_BOID_BIRD);
+            kind == LEVEL_EDITOR_MARKER_BOID_BIRD ||
+            kind == LEVEL_EDITOR_MARKER_JELLY_SWARM);
 }
 
 static float boid_turn_rate_default_deg_for_kind(int kind) {
@@ -796,6 +798,7 @@ static const char* curated_kind_name(int kind) {
     if (kind == LEVEL_EDITOR_MARKER_BOID_FISH) return "boid_fish";
     if (kind == LEVEL_EDITOR_MARKER_BOID_FIREFLY) return "boid_firefly";
     if (kind == LEVEL_EDITOR_MARKER_BOID_BIRD) return "boid_bird";
+    if (kind == LEVEL_EDITOR_MARKER_JELLY_SWARM) return "jelly_swarm";
     return "sine";
 }
 
@@ -811,6 +814,7 @@ static const char* marker_kind_name(int kind) {
     if (kind == LEVEL_EDITOR_MARKER_BOID_FISH) return "swarm_fish";
     if (kind == LEVEL_EDITOR_MARKER_BOID_FIREFLY) return "swarm_firefly";
     if (kind == LEVEL_EDITOR_MARKER_BOID_BIRD) return "swarm_bird";
+    if (kind == LEVEL_EDITOR_MARKER_JELLY_SWARM) return "jelly_swarm";
     return "marker";
 }
 
@@ -833,6 +837,7 @@ static int event_kind_from_marker_kind(int marker_kind) {
     if (marker_kind == LEVEL_EDITOR_MARKER_BOID_FISH) return LEVELDEF_EVENT_WAVE_SWARM_FISH;
     if (marker_kind == LEVEL_EDITOR_MARKER_BOID_FIREFLY) return LEVELDEF_EVENT_WAVE_SWARM_FIREFLY;
     if (marker_kind == LEVEL_EDITOR_MARKER_BOID_BIRD) return LEVELDEF_EVENT_WAVE_SWARM_BIRD;
+    if (marker_kind == LEVEL_EDITOR_MARKER_JELLY_SWARM) return LEVELDEF_EVENT_WAVE_SWARM;
     if (marker_kind == LEVEL_EDITOR_MARKER_BOID) return LEVELDEF_EVENT_WAVE_SWARM;
     return LEVELDEF_EVENT_WAVE_SINE;
 }
@@ -844,6 +849,7 @@ static int wave_pattern_from_marker_kind(int marker_kind) {
     if (marker_kind == LEVEL_EDITOR_MARKER_BOID_FISH) return LEVELDEF_WAVE_SWARM_FISH;
     if (marker_kind == LEVEL_EDITOR_MARKER_BOID_FIREFLY) return LEVELDEF_WAVE_SWARM_FIREFLY;
     if (marker_kind == LEVEL_EDITOR_MARKER_BOID_BIRD) return LEVELDEF_WAVE_SWARM_BIRD;
+    if (marker_kind == LEVEL_EDITOR_MARKER_JELLY_SWARM) return LEVELDEF_WAVE_SWARM;
     if (marker_kind == LEVEL_EDITOR_MARKER_BOID) return LEVELDEF_WAVE_SWARM;
     return LEVELDEF_WAVE_SINE_SNAKE;
 }
@@ -1508,7 +1514,8 @@ static int cycle_wave_kind(int kind, int step) {
         LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE,
         LEVEL_EDITOR_MARKER_BOID_FISH,
         LEVEL_EDITOR_MARKER_BOID_FIREFLY,
-        LEVEL_EDITOR_MARKER_BOID_BIRD
+        LEVEL_EDITOR_MARKER_BOID_BIRD,
+        LEVEL_EDITOR_MARKER_JELLY_SWARM
     };
     const int nk = (int)(sizeof(kinds) / sizeof(kinds[0]));
     int idx = 0;

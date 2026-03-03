@@ -103,6 +103,15 @@ static float clampf(float v, float lo, float hi) {
     return v;
 }
 
+static float hash01_u32(uint32_t x) {
+    x ^= x >> 16;
+    x *= 0x7feb352dU;
+    x ^= x >> 15;
+    x *= 0x846ca68bU;
+    x ^= x >> 16;
+    return (float)(x & 0x00ffffffU) / 16777215.0f;
+}
+
 static int clampi(int v, int lo, int hi) {
     if (v < lo) return lo;
     if (v > hi) return hi;
@@ -4045,6 +4054,7 @@ static const char* level_editor_marker_name(int kind) {
         case 10: return "SWARM FISH";
         case 11: return "SWARM FIREFLY";
         case 12: return "SWARM BIRD";
+        case 15: return "JELLY SWARM";
         case 6: return "ASTEROID STORM";
         case 7: return "MINEFIELD";
         case 8: return "MISSILE LAUNCHER";
@@ -4080,7 +4090,7 @@ static vg_color level_editor_marker_color(const palette_theme* pal, int kind) {
     if (kind == 9) {
         return (vg_color){0.48f, 0.90f, 1.0f, 1.0f};
     }
-    if (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 10 || kind == 11 || kind == 12) {
+    if (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 15) {
         return (vg_color){1.0f, 0.26f, 0.26f, 1.0f};
     }
     return pal->secondary;
@@ -4400,6 +4410,7 @@ static const char* editor_wave_type_name(int kind) {
         case 10: return "SWARM FISH";
         case 11: return "SWARM FIREFLY";
         case 12: return "SWARM BIRD";
+        case 15: return "JELLY SWARM";
         default: return "UNKNOWN";
     }
 }
@@ -4542,9 +4553,9 @@ static int editor_marker_properties_text(
         if (n < cap) { out_labels[n] = "VENT HEIGHT"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_g[sel]); n++; }
         return n;
     }
-    if (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 10 || kind == 11 || kind == 12) {
+    if (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 15) {
         const int event_item = (metrics->level_editor_marker_track[sel] == 1);
-        const int boid_item = (kind == 5 || kind == 10 || kind == 11 || kind == 12);
+        const int boid_item = (kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 15);
         const int kamikaze_item = (kind == 4);
         if (n < cap) { out_labels[n] = "TYPE"; snprintf(out_values[n], 32, "%s", editor_wave_type_name(kind)); n++; }
         if (event_item) {
@@ -4912,7 +4923,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 const int track_i = metrics->level_editor_marker_track[i];
                 const int is_enemy_i =
                     (kind_i == 2 || kind_i == 3 || kind_i == 4 || kind_i == 5 || kind_i == 6 ||
-                     kind_i == 10 || kind_i == 11 || kind_i == 12);
+                     kind_i == 10 || kind_i == 11 || kind_i == 12 || kind_i == 15);
                 const int event_item_i = is_enemy_i && (track_i == 1);
                 if (event_item_i) {
                     event_n += 1;
@@ -4924,7 +4935,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             const float my01 = clampf(metrics->level_editor_marker_y01[i], 0.0f, 1.0f);
             const int kind = metrics->level_editor_marker_kind[i];
             const int track = metrics->level_editor_marker_track[i];
-            const int is_enemy = (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 6 || kind == 10 || kind == 11 || kind == 12);
+            const int is_enemy = (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 6 || kind == 10 || kind == 11 || kind == 12 || kind == 15);
             const int event_item = is_enemy && (track == 1);
             const vg_color c = level_editor_marker_color(&pal, kind);
 
@@ -4948,7 +4959,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                     const int track_j = metrics->level_editor_marker_track[j];
                     const int is_enemy_j =
                         (kind_j == 2 || kind_j == 3 || kind_j == 4 || kind_j == 5 || kind_j == 6 ||
-                         kind_j == 10 || kind_j == 11 || kind_j == 12);
+                         kind_j == 10 || kind_j == 11 || kind_j == 12 || kind_j == 15);
                     const int event_item_j = is_enemy_j && (track_j == 1);
                     if (!event_item_j) {
                         continue;
@@ -5048,7 +5059,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                     mk2.intensity *= 0.74f;
                     r = draw_editor_diamond(ctx, (vg_vec2){vx, vy}, 6.0f * ui * glyph_scale, &mk2);
                 }
-            } else if (kind == 5 || kind == 10 || kind == 11 || kind == 12) {
+            } else if (kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 15) {
                 vg_stroke_style mk2 = mk;
                 mk2.intensity *= 0.78f;
                 r = draw_editor_diamond(ctx, (vg_vec2){vx, vy}, 21.0f * ui * glyph_scale, &mk);
@@ -5308,7 +5319,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     );
     if (r != VG_OK) return r;
     if (metrics->level_editor_drag_active &&
-        (metrics->level_editor_drag_kind == 5 || metrics->level_editor_drag_kind == 10 || metrics->level_editor_drag_kind == 11 || metrics->level_editor_drag_kind == 12 || metrics->level_editor_drag_kind == 1 || metrics->level_editor_drag_kind == 6 || metrics->level_editor_drag_kind == 7 || metrics->level_editor_drag_kind == 8 || metrics->level_editor_drag_kind == 9 || metrics->level_editor_drag_kind == 13 || metrics->level_editor_drag_kind == 14)) {
+        (metrics->level_editor_drag_kind == 5 || metrics->level_editor_drag_kind == 10 || metrics->level_editor_drag_kind == 11 || metrics->level_editor_drag_kind == 12 || metrics->level_editor_drag_kind == 15 || metrics->level_editor_drag_kind == 1 || metrics->level_editor_drag_kind == 6 || metrics->level_editor_drag_kind == 7 || metrics->level_editor_drag_kind == 8 || metrics->level_editor_drag_kind == 9 || metrics->level_editor_drag_kind == 13 || metrics->level_editor_drag_kind == 14)) {
         vg_stroke_style gs = frame;
         gs.intensity = 1.2f;
         gs.color = level_editor_marker_color(&pal, metrics->level_editor_drag_kind);
@@ -7520,9 +7531,9 @@ static vg_result draw_emp_blast(
     return vg_draw_polyline(ctx, pts2, segs, &ring1, 1);
 }
 
-static vg_result draw_enemy_glyph(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
-    float fx = e->facing_x;
-    float fy = e->facing_y;
+static void enemy_glyph_basis(const enemy* e, float* out_fx, float* out_fy, float* out_nx, float* out_ny) {
+    float fx = e ? e->facing_x : -1.0f;
+    float fy = e ? e->facing_y : 0.0f;
     float f_len = sqrtf(fx * fx + fy * fy);
     if (f_len < 1e-5f) {
         fx = -1.0f;
@@ -7531,9 +7542,73 @@ static vg_result draw_enemy_glyph(vg_context* ctx, const enemy* e, float x, floa
     }
     fx /= f_len;
     fy /= f_len;
+    if (out_fx) {
+        *out_fx = fx;
+    }
+    if (out_fy) {
+        *out_fy = fy;
+    }
+    if (out_nx) {
+        *out_nx = -fy;
+    }
+    if (out_ny) {
+        *out_ny = fx;
+    }
+}
+
+static vg_result draw_enemy_tail(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
+    float fx = 0.0f;
+    float fy = 0.0f;
+    enemy_glyph_basis(e, &fx, &fy, NULL, NULL);
     {
-        const float nx = -fy;
-        const float ny = fx;
+        const float tx = -fx;
+        const float ty = -fy;
+        const float nx = -ty;
+        const float ny = tx;
+        const float tail01 = clampf(e->kamikaze_tail, 0.0f, 1.0f);
+        const float pulse01 = clampf(e->kamikaze_thrust, 0.0f, 1.0f);
+        const float base_back = rr * (0.72f + 0.18f * pulse01);
+        const float tail_len = rr * (0.55f + 2.05f * tail01);
+        const float spread = rr * (0.10f + 0.42f * tail01);
+        const vg_vec2 tail_center = {
+            x + tx * (base_back + rr * 0.22f),
+            y + ty * (base_back + rr * 0.22f)
+        };
+        const vg_vec2 tail_tip = {
+            tail_center.x + tx * tail_len,
+            tail_center.y + ty * tail_len
+        };
+        const vg_vec2 tail_l[] = {
+            {tail_center.x + nx * spread, tail_center.y + ny * spread},
+            {tail_tip.x, tail_tip.y}
+        };
+        const vg_vec2 tail_r[] = {
+            {tail_center.x - nx * spread, tail_center.y - ny * spread},
+            {tail_tip.x, tail_tip.y}
+        };
+        const vg_vec2 tail_mid[] = {
+            {tail_center.x, tail_center.y},
+            {tail_tip.x, tail_tip.y}
+        };
+        vg_result r = vg_draw_polyline(ctx, tail_l, 2, enemy_style, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_draw_polyline(ctx, tail_r, 2, enemy_style, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        return vg_draw_polyline(ctx, tail_mid, 2, enemy_style, 0);
+    }
+}
+
+static vg_result draw_enemy_glyph_default(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
+    float fx = 0.0f;
+    float fy = 0.0f;
+    float nx = 0.0f;
+    float ny = 0.0f;
+    enemy_glyph_basis(e, &fx, &fy, &nx, &ny);
+    {
         const vg_vec2 body[] = {
             {x + fx * (-1.0f * rr) + nx * (0.0f * rr), y + fy * (-1.0f * rr) + ny * (0.0f * rr)},
             {x + fx * (-0.2f * rr) + nx * (-0.8f * rr), y + fy * (-0.2f * rr) + ny * (-0.8f * rr)},
@@ -7549,58 +7624,122 @@ static vg_result draw_enemy_glyph(vg_context* ctx, const enemy* e, float x, floa
     if (e->kamikaze_tail <= 0.02f) {
         return VG_OK;
     }
+    return draw_enemy_tail(ctx, e, x, y, rr, enemy_style);
+}
+
+static vg_result draw_enemy_glyph_jelly(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
+    float fx = 0.0f;
+    float fy = 0.0f;
+    float nx = 0.0f;
+    float ny = 0.0f;
+    enemy_glyph_basis(e, &fx, &fy, &nx, &ny);
+    const float pulse_freq = (e->visual_param_a > 0.01f) ? e->visual_param_a : 2.0f;
+    const float tentacle_amp = clampf((e->visual_param_b > 0.01f) ? e->visual_param_b : 0.12f, 0.03f, 0.28f);
+    const float phase = e->ai_timer_s * pulse_freq + e->visual_phase;
+    const float p = sinf(phase);
+    const float pulse01 = 0.5f + 0.5f * p;
+    const float scale_y = 1.0f + 0.18f * p;
+    const float scale_x = 1.0f - 0.10f * p;
+    const float skirt_drop = rr * (0.20f + 0.10f * pulse01);
+    const float seed_phase = (float)(e->visual_seed & 1023u) * 0.013f;
+    const float draw_y = y + rr * 0.20f * sinf(phase * 0.5f + seed_phase);
+    vg_stroke_style inner = *enemy_style;
+    vg_stroke_style rim = *enemy_style;
+    inner.width_px *= 0.78f;
+    inner.intensity *= 0.70f;
+    inner.color.a *= 0.72f;
+    rim.width_px *= 1.30f;
+    rim.intensity *= 0.34f;
+    rim.color.a *= 0.58f;
+    rim.blend = VG_BLEND_ADDITIVE;
 
     {
-        fx = e->facing_x;
-        fy = e->facing_y;
-        f_len = sqrtf(fx * fx + fy * fy);
-        if (f_len < 1e-5f) {
-            fx = -1.0f;
-            fy = 0.0f;
-            f_len = 1.0f;
+        const float k_bell[][2] = {
+            {-1.00f, -0.10f}, {-0.74f, 0.40f}, {-0.38f, 0.78f}, {0.00f, 0.98f},
+            {0.38f, 0.78f}, {0.74f, 0.40f}, {1.00f, -0.10f}, {0.48f, -0.34f},
+            {0.00f, -0.48f}, {-0.48f, -0.34f}, {-1.00f, -0.10f}
+        };
+        vg_vec2 bell[11];
+        for (int i = 0; i < 11; ++i) {
+            const float local_n = k_bell[i][0] * rr * scale_x;
+            float local_f = k_bell[i][1] * rr * scale_y;
+            if (i >= 7 && i <= 9) {
+                local_f -= skirt_drop * (0.85f - 0.25f * fabsf(k_bell[i][0]));
+            }
+            bell[i].x = x + fx * local_f + nx * local_n;
+            bell[i].y = draw_y + fy * local_f + ny * local_n;
         }
-        fx /= f_len;
-        fy /= f_len;
-        {
-            const float tx = -fx;
-            const float ty = -fy;
-            const float nx = -ty;
-            const float ny = tx;
-            const float tail01 = clampf(e->kamikaze_tail, 0.0f, 1.0f);
-            const float pulse01 = clampf(e->kamikaze_thrust, 0.0f, 1.0f);
-            const float base_back = rr * (0.72f + 0.18f * pulse01);
-            const float tail_len = rr * (0.55f + 2.05f * tail01);
-            const float spread = rr * (0.10f + 0.42f * tail01);
-            const vg_vec2 tail_center = {
-                x + tx * (base_back + rr * 0.22f),
-                y + ty * (base_back + rr * 0.22f)
-            };
-            const vg_vec2 tail_tip = {
-                tail_center.x + tx * tail_len,
-                tail_center.y + ty * tail_len
-            };
-            const vg_vec2 tail_l[] = {
-                {tail_center.x + nx * spread, tail_center.y + ny * spread},
-                {tail_tip.x, tail_tip.y}
-            };
-            const vg_vec2 tail_r[] = {
-                {tail_center.x - nx * spread, tail_center.y - ny * spread},
-                {tail_tip.x, tail_tip.y}
-            };
-            const vg_vec2 tail_mid[] = {
-                {tail_center.x, tail_center.y},
-                {tail_tip.x, tail_tip.y}
-            };
-            vg_result r = vg_draw_polyline(ctx, tail_l, 2, enemy_style, 0);
+        vg_result r = vg_draw_polyline(ctx, bell, 11, enemy_style, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_draw_polyline(ctx, bell, 11, &rim, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+    }
+
+    for (int arc_i = 0; arc_i < 2; ++arc_i) {
+        const float af = (arc_i == 0) ? 0.40f : 0.18f;
+        const float aw = (arc_i == 0) ? 0.36f : 0.25f;
+        const vg_vec2 arc[5] = {
+            {x + fx * (rr * af) + nx * (-rr * aw), draw_y + fy * (rr * af) + ny * (-rr * aw)},
+            {x + fx * (rr * (af + 0.05f)) + nx * (-rr * aw * 0.35f), draw_y + fy * (rr * (af + 0.05f)) + ny * (-rr * aw * 0.35f)},
+            {x + fx * (rr * (af + 0.06f)), draw_y + fy * (rr * (af + 0.06f))},
+            {x + fx * (rr * (af + 0.05f)) + nx * (rr * aw * 0.35f), draw_y + fy * (rr * (af + 0.05f)) + ny * (rr * aw * 0.35f)},
+            {x + fx * (rr * af) + nx * (rr * aw), draw_y + fy * (rr * af) + ny * (rr * aw)}
+        };
+        vg_result r = vg_draw_polyline(ctx, arc, 5, &inner, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+    }
+
+    {
+        const int seg_n = (rr < 10.0f) ? 4 : 5;
+        int tentacle_n = 8 + (int)(e->visual_seed % 5u);
+        if (rr < 9.0f) {
+            tentacle_n = 5;
+        } else if (rr < 14.0f) {
+            tentacle_n = 7;
+        }
+        tentacle_n = clampi(tentacle_n, 4, 12);
+        const float wave_freq = 2.2f + 1.2f * hash01_u32(e->visual_seed ^ 0x517u);
+        const float wave_phase = 5.0f + 3.0f * hash01_u32(e->visual_seed ^ 0x19fu);
+        for (int ti = 0; ti < tentacle_n; ++ti) {
+            vg_vec2 line[6];
+            const float v = ((float)ti + 0.5f) / (float)tentacle_n;
+            const float side = (v * 2.0f - 1.0f) * 0.84f;
+            const float tent_phase = 6.2831853f * hash01_u32(e->visual_seed ^ (uint32_t)(ti * 0x9e37u));
+            for (int si = 0; si <= seg_n; ++si) {
+                const float u = (float)si / (float)seg_n;
+                const float amp_u = rr * tentacle_amp * powf(u, 1.25f);
+                const float offset = amp_u * sinf(e->ai_timer_s * wave_freq - u * wave_phase + tent_phase);
+                const float local_f = rr * (-0.20f - u * (1.22f + 0.12f * pulse01));
+                const float local_n = rr * side + offset;
+                line[si].x = x + fx * local_f + nx * local_n;
+                line[si].y = draw_y + fy * local_f + ny * local_n;
+            }
+            vg_result r = vg_draw_polyline(ctx, line, seg_n + 1, &inner, 0);
             if (r != VG_OK) {
                 return r;
             }
-            r = vg_draw_polyline(ctx, tail_r, 2, enemy_style, 0);
-            if (r != VG_OK) {
-                return r;
-            }
-            return vg_draw_polyline(ctx, tail_mid, 2, enemy_style, 0);
         }
+    }
+
+    if (e->kamikaze_tail > 0.02f) {
+        return draw_enemy_tail(ctx, e, x, draw_y, rr, &inner);
+    }
+    return VG_OK;
+}
+
+static vg_result draw_enemy_glyph(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
+    switch (e->visual_kind) {
+        case ENEMY_VISUAL_JELLY:
+            return draw_enemy_glyph_jelly(ctx, e, x, y, rr, enemy_style);
+        case ENEMY_VISUAL_DEFAULT:
+        default:
+            return draw_enemy_glyph_default(ctx, e, x, y, rr, enemy_style);
     }
 }
 

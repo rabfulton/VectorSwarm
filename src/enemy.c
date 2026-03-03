@@ -92,6 +92,10 @@ static float lerpf(float a, float b, float t) {
     return a + (b - a) * t;
 }
 
+static uint32_t enemy_visual_seed_from_ids(int wave_id, int slot_index) {
+    return (uint32_t)((uint32_t)wave_id * 73856093u) ^ (uint32_t)((uint32_t)slot_index * 19349663u);
+}
+
 static float length2(float x, float y) {
     return sqrtf(x * x + y * y);
 }
@@ -641,6 +645,11 @@ static enemy* spawn_enemy_common(game_state* g, float su) {
         e->kamikaze_strike_x = 0.0f;
         e->kamikaze_strike_y = 0.0f;
         e->kamikaze_is_turning = 0;
+        e->visual_kind = ENEMY_VISUAL_DEFAULT;
+        e->visual_seed = 0u;
+        e->visual_phase = 0.0f;
+        e->visual_param_a = 0.0f;
+        e->visual_param_b = 0.0f;
         return e;
     }
     return NULL;
@@ -887,7 +896,7 @@ void enemy_spawn_curated_enemy(
     if (count > 24) {
         count = 24;
     }
-    if (ce->kind == 5 || ce->kind == 10 || ce->kind == 11 || ce->kind == 12) {
+    if (ce->kind == 5 || ce->kind == 10 || ce->kind == 11 || ce->kind == 12 || ce->kind == 15) {
         const int profile_id = resolve_boid_profile_by_variant(db, lvl, ce->kind);
         const leveldef_boid_profile* p = leveldef_get_boid_profile(db, profile_id);
         if (!p) {
@@ -929,6 +938,14 @@ void enemy_spawn_curated_enemy(
             e->swarm_drag = p->steer_drag;
             e->swarm_min_speed = p->min_speed * su;
             e->swarm_turn_rate_rad = p->max_turn_rate_deg * (3.14159265359f / 180.0f);
+            if (ce->kind == 15) {
+                const uint32_t seed = enemy_visual_seed_from_ids(wave_id, i);
+                e->visual_kind = ENEMY_VISUAL_JELLY;
+                e->visual_seed = seed;
+                e->visual_phase = hash01_u32(seed) * 6.2831853f;
+                e->visual_param_a = lerpf(1.6f, 2.4f, hash01_u32(seed ^ 0xA53u));
+                e->visual_param_b = lerpf(0.08f, 0.18f, hash01_u32(seed ^ 0xB71u));
+            }
             enemy_adjust_spawn_clear(g, e, su);
         }
         return;
@@ -1049,6 +1066,8 @@ void enemy_spawn_next_wave(
                 announce_wave(g, "curated bird swarm");
             } else if (ce->kind == 5) {
                 announce_wave(g, "curated boid contact");
+            } else if (ce->kind == 15) {
+                announce_wave(g, "curated jelly swarm");
             } else if (ce->kind == 4) {
                 announce_wave(g, "curated kamikaze contact");
             } else if (ce->kind == 3) {

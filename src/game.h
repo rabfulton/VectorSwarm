@@ -46,6 +46,11 @@ enum level_render_style_id {
     LEVEL_RENDER_BLANK = 5
 };
 
+enum enemy_visual_kind {
+    ENEMY_VISUAL_DEFAULT = 0,
+    ENEMY_VISUAL_JELLY = 1
+};
+
 typedef struct star {
     float x;
     float y;
@@ -127,6 +132,11 @@ typedef struct enemy {
     float kamikaze_strike_x;
     float kamikaze_strike_y;
     int kamikaze_is_turning;
+    int visual_kind;
+    uint32_t visual_seed;
+    float visual_phase;
+    float visual_param_a;
+    float visual_param_b;
     float emp_push_ax;
     float emp_push_ay;
     float emp_push_time_s;
