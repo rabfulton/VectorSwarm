@@ -416,6 +416,141 @@ static void emit_explosion(game_state* g, float x, float y, float bias_vx, float
     }
 }
 
+static void emit_manta_turbulence(game_state* g, const enemy* e, float dt, float su, int uses_cylinder, float period) {
+    if (!g || !e || !e->active) {
+        return;
+    }
+    const leveldef_level* lvl = game_current_leveldef(g);
+    if (!lvl || lvl->background_style != LEVELDEF_BACKGROUND_UNDERWATER) {
+        return;
+    }
+    /* Underwater is currently a flat background; avoid wasting particles if we're far offscreen. */
+    if (!uses_cylinder) {
+        if (fabsf(e->b.x - g->camera_x) > g->world_w * 0.80f) {
+            return;
+        }
+    } else {
+        /* On cylinder there is no true offscreen; keep it very quiet. */
+        if (fabsf(wrap_delta(e->b.x, g->camera_x, period)) > period * 0.45f) {
+            return;
+        }
+    }
+
+    float lane = (e->lane_dir != 0.0f) ? e->lane_dir : 0.0f;
+    if (lane > -0.01f && lane < 0.01f) {
+        lane = (e->b.vx != 0.0f) ? e->b.vx : e->facing_x;
+    }
+    const float fx = (lane < 0.0f) ? -1.0f : 1.0f;
+
+    const float rr = fmaxf(e->radius, 6.0f * su);
+    const float flap_speed = (e->visual_param_a > 0.01f) ? e->visual_param_a : 1.5f;
+    const float flap_amp = clampf((e->visual_param_b > 0.01f) ? e->visual_param_b : 0.16f, 0.06f, 0.32f);
+    const float flap_t = e->ai_timer_s * (2.2f + flap_speed) + e->visual_phase;
+    const float flap_s1 = sinf(flap_t);
+    const float flap_s2 = sinf(flap_t * 2.0f + 0.65f);
+    float flap_pos = flap_s1 + 0.22f * flap_s2;
+    flap_pos = clampf(flap_pos, -1.0f, 1.0f);
+    float flap_vel = cosf(flap_t) + 0.44f * cosf(flap_t * 2.0f + 0.65f);
+    flap_vel = clampf(flap_vel, -1.0f, 1.0f);
+
+    const float spd = fabsf(e->b.vx);
+    const float spd01 = clampf(spd / fmaxf(e->max_speed, 1.0f), 0.0f, 1.0f);
+    const float beat01 = clampf(fabsf(flap_vel), 0.0f, 1.0f);
+    const float strength = (0.35f + 0.65f * beat01) * (0.35f + 0.65f * spd01);
+
+    /* Small bursty rate that follows the wingbeat, without needing per-enemy accumulators. */
+    float emit_rate = (10.0f + 48.0f * strength) * (rr / fmaxf(18.0f * su, 1.0f));
+    if (uses_cylinder) {
+        emit_rate *= 0.35f;
+    }
+    float want = emit_rate * fmaxf(dt, 0.0f);
+    int emit_count = (int)want;
+    want -= (float)emit_count;
+    if (frand01() < want) {
+        emit_count += 1;
+    }
+    if (emit_count > 3) {
+        emit_count = 3;
+    }
+    if (emit_count <= 0) {
+        return;
+    }
+
+    const float wing_base_front_f = 1.06f * rr;
+    const float wing_base_back_f = -1.76f * rr;
+    const float wing_beat_amp = rr * (0.54f + 2.05f * flap_amp);
+    const float wing_twist_amp = rr * (0.10f + 0.24f * flap_amp);
+    const float wing_rest_amp = rr * (0.18f + 0.12f * flap_amp);
+    const float wing_ripple_amp = rr * (0.06f + 0.20f * flap_amp);
+
+    for (int pi = 0; pi < emit_count; ++pi) {
+        /* Bias toward the trailing half, where the traveling wave reads strongest. */
+        const float r = frand01();
+        float u = 0.12f + 0.84f * (1.0f - powf(r, 1.7f));
+        u = clampf(u, 0.06f, 0.94f);
+
+        const float prof0 = sinf(u * 3.14159265f); /* 0..1..0 */
+        float prof = prof0 * (1.10f - 0.55f * u);
+        if (prof < 0.0f) {
+            prof = 0.0f;
+        }
+        const float sweep_u = clampf(u + 0.10f * sinf(u * 3.14159265f), 0.0f, 1.0f);
+        const float f = lerpf(wing_base_front_f, wing_base_back_f, sweep_u);
+
+        const float rest_n = wing_rest_amp * (0.35f + 0.65f * (1.0f - u)) * prof;
+        const float beat_n = wing_beat_amp * flap_pos * prof;
+        const float twist_n = wing_twist_amp * flap_vel * prof * (0.85f - 0.65f * u);
+
+        const float trailing_w = u * (0.35f + 0.65f * u);
+        const float ripple_phase = flap_t * 2.25f - u * 14.5f + e->visual_phase * 0.7f;
+        const float wave = sinf(ripple_phase);
+        const float wave_env = (0.10f + 0.90f * prof0) * trailing_w;
+        const float wave_n = wave * wave_env;
+        const float ripple = wing_ripple_amp * wave_n;
+
+        float outer_n = rest_n + beat_n + twist_n + ripple;
+        if (fabsf(outer_n) < rr * 0.02f) {
+            outer_n = (outer_n < 0.0f) ? (-rr * 0.02f) : (rr * 0.02f);
+        }
+
+        /* Skip weak wave regions so the turbulence clusters into a readable ripple. */
+        const float wave_abs = fabsf(wave_n);
+        if (frand01() > clampf(wave_abs * 1.35f, 0.15f, 1.0f)) {
+            continue;
+        }
+
+        const float edge_x = e->b.x + fx * f;
+        const float edge_y = e->b.y + outer_n;
+
+        particle* p = alloc_particle(g);
+        if (!p) {
+            return;
+        }
+
+        /* Turbulence: short-lived, quickly damped, drifting behind the wing edge. */
+        const float back_spd = (38.0f + 160.0f * strength) * su;
+        const float up_spd = (20.0f + 90.0f * strength) * su * ((flap_vel >= 0.0f) ? 1.0f : -1.0f);
+        /* Use FLASH so GPU heat stays "hot" (avoids the global orange heat-tint that point/geom get at heat=0). */
+        p->type = PARTICLE_FLASH;
+        p->b.x = edge_x - fx * (3.0f + frand01() * 3.5f) * su + frands1() * 2.0f * su;
+        p->b.y = edge_y + frands1() * 2.5f * su;
+        p->b.vx = -fx * back_spd + frands1() * 40.0f * su + e->b.vx * 0.30f;
+        p->b.vy = up_spd + frands1() * 40.0f * su;
+        p->b.ax = -p->b.vx * 4.2f;
+        p->b.ay = -p->b.vy * 4.2f;
+        p->age_s = 0.0f;
+        p->life_s = 0.11f + frand01() * 0.12f;
+        p->size = (1.2f + frand01() * 1.9f) * su;
+        p->spin = frand01() * 6.2831853f;
+        p->spin_rate = frands1() * 10.0f;
+        /* Blue-green water shimmer; shader heat tint warms slightly. */
+        p->r = 0.30f;
+        p->g = 0.92f;
+        p->bcol = 1.00f;
+        p->a = 0.08f + 0.12f * strength;
+    }
+}
+
 static void apply_player_hit(game_state* g, float impact_x, float impact_y, float impact_vx, float impact_vy, float su) {
     if (!g || g->lives <= 0 || g->shield_active) {
         return;
@@ -2430,6 +2565,11 @@ void enemy_update_system(
                 e->facing_y = e->b.vy / v;
             }
         }
+
+        if (e->visual_kind == ENEMY_VISUAL_MANTA) {
+            emit_manta_turbulence(g, e, dt, su, uses_cylinder, period);
+        }
+
         if (!uses_cylinder && e->b.x < g->camera_x - g->world_w * 0.72f) {
             if (e->archetype == ENEMY_ARCH_FORMATION && e->visual_kind != ENEMY_VISUAL_MANTA) {
                 e->state = ENEMY_STATE_BREAK_ATTACK;
