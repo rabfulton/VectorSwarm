@@ -4457,6 +4457,7 @@ static const char* editor_background_style_name(int style) {
     if (style == LEVELDEF_BACKGROUND_GRID) return "GRID";
     if (style == LEVELDEF_BACKGROUND_SOLID) return "SOLID";
     if (style == LEVELDEF_BACKGROUND_UNDERWATER) return "UNDERWATER";
+    if (style == LEVELDEF_BACKGROUND_FIRE) return "FIRE";
     return "STARS";
 }
 

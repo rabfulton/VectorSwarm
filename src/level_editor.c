@@ -746,6 +746,7 @@ static const char* background_style_name(int style) {
         case LEVELDEF_BACKGROUND_GRID: return "grid";
         case LEVELDEF_BACKGROUND_SOLID: return "solid";
         case LEVELDEF_BACKGROUND_UNDERWATER: return "underwater";
+        case LEVELDEF_BACKGROUND_FIRE: return "fire";
         case LEVELDEF_BACKGROUND_STARS:
         default: return "stars";
     }
@@ -1271,7 +1272,7 @@ static int build_level_serialized_text(
     if (!appendf(out, out_cap, &used, "render_style=%s\n", render_style_name(lvl.render_style))) return 0;
     if (!appendf(out, out_cap, &used, "wave_mode=%s\n", wave_mode_name(lvl.wave_mode))) return 0;
     if (!appendf(out, out_cap, &used, "theme_palette=%d\n", clampi(lvl.theme_palette, 0, 2))) return 0;
-    if (!appendf(out, out_cap, &used, "background=%s\n", background_style_name(clampi(lvl.background_style, LEVELDEF_BACKGROUND_STARS, LEVELDEF_BACKGROUND_UNDERWATER)))) return 0;
+    if (!appendf(out, out_cap, &used, "background=%s\n", background_style_name(clampi(lvl.background_style, LEVELDEF_BACKGROUND_STARS, LEVELDEF_BACKGROUND_FIRE)))) return 0;
     if (lvl.background_style == LEVELDEF_BACKGROUND_UNDERWATER) {
         if (!appendf(out, out_cap, &used, "underwater.density=%.3f\n", lvl.underwater_density)) return 0;
         if (!appendf(out, out_cap, &used, "underwater.caustic_strength=%.3f\n", lvl.underwater_caustic_strength)) return 0;
@@ -1289,6 +1290,15 @@ static int build_level_serialized_text(
         if (!appendf(out, out_cap, &used, "underwater.kelp_tint_g=%.3f\n", lvl.underwater_kelp_tint_g)) return 0;
         if (!appendf(out, out_cap, &used, "underwater.kelp_tint_b=%.3f\n", lvl.underwater_kelp_tint_b)) return 0;
         if (!appendf(out, out_cap, &used, "underwater.kelp_tint_strength=%.3f\n", lvl.underwater_kelp_tint_strength)) return 0;
+    } else if (lvl.background_style == LEVELDEF_BACKGROUND_FIRE) {
+        if (!appendf(out, out_cap, &used, "fire.magma_scale=%.3f\n", lvl.fire_magma_scale)) return 0;
+        if (!appendf(out, out_cap, &used, "fire.warp_amp=%.3f\n", lvl.fire_warp_amp)) return 0;
+        if (!appendf(out, out_cap, &used, "fire.pulse_freq=%.3f\n", lvl.fire_pulse_freq)) return 0;
+        if (!appendf(out, out_cap, &used, "fire.plume_height=%.3f\n", lvl.fire_plume_height)) return 0;
+        if (!appendf(out, out_cap, &used, "fire.rise_speed=%.3f\n", lvl.fire_rise_speed)) return 0;
+        if (!appendf(out, out_cap, &used, "fire.distortion_amp=%.3f\n", lvl.fire_distortion_amp)) return 0;
+        if (!appendf(out, out_cap, &used, "fire.smoke_alpha_cap=%.3f\n", lvl.fire_smoke_alpha_cap)) return 0;
+        if (!appendf(out, out_cap, &used, "fire.ember_spawn_rate=%.3f\n", lvl.fire_ember_spawn_rate)) return 0;
     }
     if (!appendf(out, out_cap, &used, "background_mask=%s\n", background_mask_style_name(clampi(lvl.background_mask_style, LEVELDEF_BG_MASK_NONE, LEVELDEF_BG_MASK_WINDOWS)))) return 0;
     if (!appendf(out, out_cap, &used, "spawn_mode=%s\n", spawn_mode_name(lvl.spawn_mode))) return 0;
@@ -2305,7 +2315,7 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
             s->level_render_style = lvl->render_style;
             s->level_wave_mode = lvl->wave_mode;
             s->level_theme_palette = clampi(lvl->theme_palette, 0, 2);
-            s->level_background_style = clampi(lvl->background_style, LEVELDEF_BACKGROUND_STARS, LEVELDEF_BACKGROUND_UNDERWATER);
+            s->level_background_style = clampi(lvl->background_style, LEVELDEF_BACKGROUND_STARS, LEVELDEF_BACKGROUND_FIRE);
             s->level_background_mask_style = clampi(lvl->background_mask_style, LEVELDEF_BG_MASK_NONE, LEVELDEF_BG_MASK_WINDOWS);
             s->level_asteroid_storm_enabled = lvl->asteroid_storm_enabled ? 1 : 0;
             s->level_asteroid_storm_angle_deg = lvl->asteroid_storm_angle_deg;
@@ -3015,8 +3025,8 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             case 3:
             {
                 const int dir = (delta >= 0.0f) ? 1 : -1;
-                const int n = LEVELDEF_BACKGROUND_UNDERWATER - LEVELDEF_BACKGROUND_STARS + 1;
-                int bg = clampi(s->level_background_style, LEVELDEF_BACKGROUND_STARS, LEVELDEF_BACKGROUND_UNDERWATER);
+                const int n = LEVELDEF_BACKGROUND_FIRE - LEVELDEF_BACKGROUND_STARS + 1;
+                int bg = clampi(s->level_background_style, LEVELDEF_BACKGROUND_STARS, LEVELDEF_BACKGROUND_FIRE);
                 bg = LEVELDEF_BACKGROUND_STARS + ((bg - LEVELDEF_BACKGROUND_STARS + dir + n) % n);
                 s->level_background_style = bg;
             } break;

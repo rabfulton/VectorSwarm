@@ -98,7 +98,16 @@
 - `drifter_shaded`
 - `fog`
 - `wave_mode` enum: `normal` or `boid_only`
-- `background` enum: `stars`, `none`, `nebula`, `grid`, `solid`
+- `background` enum: `stars`, `none`, `nebula`, `grid`, `solid`, `underwater`, `fire`
+- `underwater.*` tuning keys (density/caustics/kelp variants) when `background=underwater`
+- `fire.magma_scale` float
+- `fire.warp_amp` float
+- `fire.pulse_freq` float
+- `fire.plume_height` float
+- `fire.rise_speed` float
+- `fire.distortion_amp` float
+- `fire.smoke_alpha_cap` float
+- `fire.ember_spawn_rate` float
 - `background_mask` enum: `none`, `terrain`, `windows`
 - `spawn_mode` enum:
 - `sequenced_clear` (spawn next wave only when clear + cooldown elapsed)

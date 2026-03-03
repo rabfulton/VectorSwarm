@@ -130,6 +130,7 @@ static int background_style_from_name(const char* name) {
     if (strcmp(name, "grid") == 0) return LEVELDEF_BACKGROUND_GRID;
     if (strcmp(name, "solid") == 0) return LEVELDEF_BACKGROUND_SOLID;
     if (strcmp(name, "underwater") == 0) return LEVELDEF_BACKGROUND_UNDERWATER;
+    if (strcmp(name, "fire") == 0) return LEVELDEF_BACKGROUND_FIRE;
     return -1;
 }
 
@@ -348,6 +349,14 @@ void leveldef_init_defaults(leveldef_db* db) {
         db->levels[i].underwater_kelp_tint_g = 1.0f;
         db->levels[i].underwater_kelp_tint_b = 1.0f;
         db->levels[i].underwater_kelp_tint_strength = 0.0f;
+        db->levels[i].fire_magma_scale = 1.10f;
+        db->levels[i].fire_warp_amp = 0.14f;
+        db->levels[i].fire_pulse_freq = 1.20f;
+        db->levels[i].fire_plume_height = 1.00f;
+        db->levels[i].fire_rise_speed = 1.35f;
+        db->levels[i].fire_distortion_amp = 0.003f;
+        db->levels[i].fire_smoke_alpha_cap = 0.34f;
+        db->levels[i].fire_ember_spawn_rate = 90.0f;
         db->levels[i].wave_mode = -1;
         db->levels[i].render_style = -1;
         db->levels[i].spawn_mode = -1;
@@ -926,6 +935,22 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_level->underwater_kelp_tint_b = strtof(v, NULL);
                     } else if (strcmp(k, "underwater.kelp_tint_strength") == 0) {
                         cur_level->underwater_kelp_tint_strength = strtof(v, NULL);
+                    } else if (strcmp(k, "fire.magma_scale") == 0) {
+                        cur_level->fire_magma_scale = strtof(v, NULL);
+                    } else if (strcmp(k, "fire.warp_amp") == 0) {
+                        cur_level->fire_warp_amp = strtof(v, NULL);
+                    } else if (strcmp(k, "fire.pulse_freq") == 0) {
+                        cur_level->fire_pulse_freq = strtof(v, NULL);
+                    } else if (strcmp(k, "fire.plume_height") == 0) {
+                        cur_level->fire_plume_height = strtof(v, NULL);
+                    } else if (strcmp(k, "fire.rise_speed") == 0) {
+                        cur_level->fire_rise_speed = strtof(v, NULL);
+                    } else if (strcmp(k, "fire.distortion_amp") == 0) {
+                        cur_level->fire_distortion_amp = strtof(v, NULL);
+                    } else if (strcmp(k, "fire.smoke_alpha_cap") == 0) {
+                        cur_level->fire_smoke_alpha_cap = strtof(v, NULL);
+                    } else if (strcmp(k, "fire.ember_spawn_rate") == 0) {
+                        cur_level->fire_ember_spawn_rate = strtof(v, NULL);
                     } else if (strcmp(k, "render_style") == 0) {
                         cur_level->render_style = render_style_from_name(v);
                     } else if (strcmp(k, "wave_mode") == 0) {
@@ -1318,9 +1343,9 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
             }
             ok = 0;
         }
-        if (l->background_style < LEVELDEF_BACKGROUND_STARS || l->background_style > LEVELDEF_BACKGROUND_UNDERWATER) {
+        if (l->background_style < LEVELDEF_BACKGROUND_STARS || l->background_style > LEVELDEF_BACKGROUND_FIRE) {
             if (log_out) {
-                fprintf(log_out, "leveldef: level %d invalid background (expected stars|none|nebula|grid|solid|underwater)\n", i);
+                fprintf(log_out, "leveldef: level %d invalid background (expected stars|none|nebula|grid|solid|underwater|fire)\n", i);
             }
             ok = 0;
         }
@@ -1342,6 +1367,19 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
             l->underwater_kelp_tint_strength < 0.0f || l->underwater_kelp_tint_strength > 1.0f || !isfinite(l->underwater_kelp_tint_strength)) {
             if (log_out) {
                 fprintf(log_out, "leveldef: level %d invalid underwater tuning values\n", i);
+            }
+            ok = 0;
+        }
+        if (l->fire_magma_scale <= 0.0f || !isfinite(l->fire_magma_scale) ||
+            l->fire_warp_amp < 0.0f || l->fire_warp_amp > 1.0f || !isfinite(l->fire_warp_amp) ||
+            l->fire_pulse_freq <= 0.0f || l->fire_pulse_freq > 10.0f || !isfinite(l->fire_pulse_freq) ||
+            l->fire_plume_height <= 0.0f || l->fire_plume_height > 8.0f || !isfinite(l->fire_plume_height) ||
+            l->fire_rise_speed < 0.0f || l->fire_rise_speed > 10.0f || !isfinite(l->fire_rise_speed) ||
+            l->fire_distortion_amp < 0.0f || l->fire_distortion_amp > 0.05f || !isfinite(l->fire_distortion_amp) ||
+            l->fire_smoke_alpha_cap < 0.0f || l->fire_smoke_alpha_cap > 1.0f || !isfinite(l->fire_smoke_alpha_cap) ||
+            l->fire_ember_spawn_rate < 0.0f || l->fire_ember_spawn_rate > 2000.0f || !isfinite(l->fire_ember_spawn_rate)) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid fire tuning values\n", i);
             }
             ok = 0;
         }

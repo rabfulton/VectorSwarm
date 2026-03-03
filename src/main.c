@@ -71,6 +71,7 @@
 #include "fog_frag_spv.h"
 #include "underwater_frag_spv.h"
 #include "underwater_kelp_frag_spv.h"
+#include "fire_frag_spv.h"
 #include "grid_vert_spv.h"
 #include "grid_frag_spv.h"
 #include "grid_sim_frag_spv.h"
@@ -85,6 +86,8 @@
 #define APP_MAX_SWAPCHAIN_IMAGES 8
 #define ACOUSTICS_SCOPE_HISTORY_SAMPLES 8192
 #define GPU_PARTICLE_MAX_INSTANCES (MAX_PARTICLES + 2048u)
+#define FIRE_BG_PARTICLE_CAP 224
+#define UNDERWATER_NOISE_TEX_SIZE 256
 #define TERRAIN_ROWS 24
 #define TERRAIN_COLS 98
 #define RADAR_GPU_MAX_VERTS 4096
@@ -165,6 +168,21 @@ typedef struct particle_instance {
     float trail;
     float heat;
 } particle_instance;
+
+typedef struct fire_bg_particle {
+    int active;
+    int kind; /* 0=ember, 1=ash */
+    float x;
+    float y;
+    float vx;
+    float vy;
+    float age_s;
+    float life_s;
+    float size_px;
+    float alpha;
+    float heat;
+    float seed;
+} fire_bg_particle;
 
 typedef struct particle_pc {
     float params[4]; /* x=viewport_width, y=viewport_height, z=core_gain, w=trail_gain */
@@ -330,6 +348,7 @@ typedef struct app {
     VkPipelineLayout underwater_layout;
     VkPipeline underwater_pipeline;
     VkPipeline underwater_kelp_pipeline;
+    VkPipeline fire_pipeline;
     VkDescriptorSetLayout underwater_desc_layout;
     VkDescriptorPool underwater_desc_pool;
     VkDescriptorSet underwater_desc_set;
@@ -406,6 +425,10 @@ typedef struct app {
     VkDeviceMemory particle_instance_memory;
     void* particle_instance_map;
     uint32_t particle_instance_count;
+    fire_bg_particle fire_bg_particles[FIRE_BG_PARTICLE_CAP];
+    int fire_bg_initialized;
+    float fire_bg_last_t;
+    uint32_t fire_bg_rng;
     VkBuffer terrain_vertex_buffer;
     VkDeviceMemory terrain_vertex_memory;
     void* terrain_vertex_map;
@@ -1269,8 +1292,9 @@ static float perlin2(float x, float y) {
     return lerpf(ix0, ix1, sy);
 }
 
-/* Tileable value noise helpers for the underwater noise texture. */
-#define UNDERWATER_NOISE_TEX_SIZE 256
+/* Tileable value noise helpers for the shared underwater/fire noise texture. */
+static uint8_t g_shared_noise_tex[UNDERWATER_NOISE_TEX_SIZE * UNDERWATER_NOISE_TEX_SIZE * 4];
+static int g_shared_noise_tex_ready = 0;
 
 static float underwater_noise_at(int px, int py, int period, int seed) {
     const int wx = ((px % period) + period) % period;
@@ -1305,17 +1329,73 @@ static float underwater_fbm(float u, float v, int seed) {
     return val;
 }
 
+static int shared_noise_wrap_index(int i) {
+    const int t = UNDERWATER_NOISE_TEX_SIZE;
+    i %= t;
+    if (i < 0) {
+        i += t;
+    }
+    return i;
+}
+
+static float sample_shared_noise_channel(float u, float v, int channel) {
+    if (!g_shared_noise_tex_ready) {
+        return 0.5f;
+    }
+    int ch = channel;
+    if (ch < 0) ch = 0;
+    if (ch > 3) ch = 3;
+    const float sx = repeatf(u, 1.0f) * (float)UNDERWATER_NOISE_TEX_SIZE;
+    const float sy = repeatf(v, 1.0f) * (float)UNDERWATER_NOISE_TEX_SIZE;
+    const int x0 = (int)floorf(sx);
+    const int y0 = (int)floorf(sy);
+    const int x1 = x0 + 1;
+    const int y1 = y0 + 1;
+    const float tx = sx - (float)x0;
+    const float ty = sy - (float)y0;
+    const int ix0 = shared_noise_wrap_index(x0);
+    const int iy0 = shared_noise_wrap_index(y0);
+    const int ix1 = shared_noise_wrap_index(x1);
+    const int iy1 = shared_noise_wrap_index(y1);
+    const float c00 = (float)g_shared_noise_tex[((iy0 * UNDERWATER_NOISE_TEX_SIZE + ix0) * 4) + ch] / 255.0f;
+    const float c10 = (float)g_shared_noise_tex[((iy0 * UNDERWATER_NOISE_TEX_SIZE + ix1) * 4) + ch] / 255.0f;
+    const float c01 = (float)g_shared_noise_tex[((iy1 * UNDERWATER_NOISE_TEX_SIZE + ix0) * 4) + ch] / 255.0f;
+    const float c11 = (float)g_shared_noise_tex[((iy1 * UNDERWATER_NOISE_TEX_SIZE + ix1) * 4) + ch] / 255.0f;
+    return lerpf(lerpf(c00, c10, tx), lerpf(c01, c11, tx), ty);
+}
+
+static void sample_shared_noise_flow(float u, float v, float* out_x, float* out_y) {
+    float fx = sample_shared_noise_channel(u, v, 3) - sample_shared_noise_channel(u, v, 0);
+    float fy = sample_shared_noise_channel(u, v, 2) - sample_shared_noise_channel(u, v, 1);
+    fx += (sample_shared_noise_channel(u * 1.91f + 0.37f, v * 1.77f - 0.11f, 1) - 0.5f) * 0.58f;
+    fy += (sample_shared_noise_channel(u * 1.83f - 0.23f, v * 2.07f + 0.41f, 2) - 0.5f) * 0.58f;
+    if (out_x) {
+        *out_x = fx;
+    }
+    if (out_y) {
+        *out_y = fy;
+    }
+}
+
 static void gen_underwater_noise_tex(uint8_t* out_rgba) {
     const int T = UNDERWATER_NOISE_TEX_SIZE;
     for (int y = 0; y < T; ++y) {
         for (int x = 0; x < T; ++x) {
             const float u = (float)x / (float)T;
             const float v = (float)y / (float)T;
+            const float dither = (underwater_noise_at(x, y, T, 9001) - 0.5f) * (1.0f / 255.0f);
+            const float w0 = underwater_fbm(u, v, 0);
+            const float w1 = underwater_fbm(u, v, 1000);
+            const float w2 = underwater_fbm(u, v, 2000);
+            const float f0 = underwater_fbm(u + 0.13f, v - 0.07f, 3100);
+            const float f1 = underwater_fbm(u * 2.0f - 0.17f, v * 2.0f + 0.29f, 4700);
+            const float f2 = underwater_fbm(u * 4.0f + 0.31f, v * 3.0f - 0.23f, 6200);
+            const float flow = clampf(0.5f + (f1 - f0) * 1.05f + (f2 - 0.5f) * 0.32f, 0.0f, 1.0f);
             uint8_t* p = out_rgba + (y * T + x) * 4;
-            p[0] = (uint8_t)clampf(underwater_fbm(u, v,    0) * 255.0f, 0.0f, 255.0f);
-            p[1] = (uint8_t)clampf(underwater_fbm(u, v, 1000) * 255.0f, 0.0f, 255.0f);
-            p[2] = (uint8_t)clampf(underwater_fbm(u, v, 2000) * 255.0f, 0.0f, 255.0f);
-            p[3] = 255;
+            p[0] = (uint8_t)clampf((w0 + dither) * 255.0f, 0.0f, 255.0f);
+            p[1] = (uint8_t)clampf((w1 + dither) * 255.0f, 0.0f, 255.0f);
+            p[2] = (uint8_t)clampf((w2 + dither) * 255.0f, 0.0f, 255.0f);
+            p[3] = (uint8_t)clampf(flow * 255.0f, 0.0f, 255.0f);
         }
     }
 }
@@ -4660,6 +4740,7 @@ static void clear_scene_color_depth(VkCommandBuffer cmd, VkExtent2D extent) {
 }
 
 static void cleanup(app* a) {
+    g_shared_noise_tex_ready = 0;
     if (a->device != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(a->device);
     }
@@ -4716,6 +4797,7 @@ static void cleanup(app* a) {
     if (a->fog_pipeline) vkDestroyPipeline(a->device, a->fog_pipeline, NULL);
     if (a->underwater_pipeline) vkDestroyPipeline(a->device, a->underwater_pipeline, NULL);
     if (a->underwater_kelp_pipeline) vkDestroyPipeline(a->device, a->underwater_kelp_pipeline, NULL);
+    if (a->fire_pipeline) vkDestroyPipeline(a->device, a->fire_pipeline, NULL);
     if (a->grid_pipeline) vkDestroyPipeline(a->device, a->grid_pipeline, NULL);
     if (a->grid_sim_pipeline) vkDestroyPipeline(a->device, a->grid_sim_pipeline, NULL);
     if (a->arc_beam_pipeline) vkDestroyPipeline(a->device, a->arc_beam_pipeline, NULL);
@@ -4945,6 +5027,10 @@ static void destroy_render_runtime(app* a) {
     if (a->underwater_kelp_pipeline) {
         vkDestroyPipeline(a->device, a->underwater_kelp_pipeline, NULL);
         a->underwater_kelp_pipeline = VK_NULL_HANDLE;
+    }
+    if (a->fire_pipeline) {
+        vkDestroyPipeline(a->device, a->fire_pipeline, NULL);
+        a->fire_pipeline = VK_NULL_HANDLE;
     }
     if (a->grid_pipeline) {
         vkDestroyPipeline(a->device, a->grid_pipeline, NULL);
@@ -6995,6 +7081,7 @@ static int create_underwater_resources(app* a) {
     if (!a) {
         return 0;
     }
+    g_shared_noise_tex_ready = 0;
 
     VkDescriptorSetLayoutBinding bindings[3] = {
         {
@@ -7067,6 +7154,8 @@ static int create_underwater_resources(app* a) {
         uint8_t* ntex_data = (uint8_t*)malloc((size_t)ntex_bytes);
         if (!ntex_data) return 0;
         gen_underwater_noise_tex(ntex_data);
+        memcpy(g_shared_noise_tex, ntex_data, (size_t)ntex_bytes);
+        g_shared_noise_tex_ready = 1;
         VkBuffer stg = VK_NULL_HANDLE;
         VkDeviceMemory stg_mem = VK_NULL_HANDLE;
         if (!create_buffer(a, ntex_bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -7215,9 +7304,15 @@ static int create_underwater_resources(app* a) {
         .codeSize = v_type_underwater_kelp_frag_spv_len,
         .pCode = (const uint32_t*)v_type_underwater_kelp_frag_spv
     };
+    VkShaderModuleCreateInfo fs_fire_ci = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = v_type_fire_frag_spv_len,
+        .pCode = (const uint32_t*)v_type_fire_frag_spv
+    };
     VkShaderModule vs = VK_NULL_HANDLE;
     VkShaderModule fs = VK_NULL_HANDLE;
     VkShaderModule fs_kelp = VK_NULL_HANDLE;
+    VkShaderModule fs_fire = VK_NULL_HANDLE;
     if (!check_vk(vkCreateShaderModule(a->device, &vs_ci, NULL, &vs), "vkCreateShaderModule(underwater vs)")) {
         return 0;
     }
@@ -7226,6 +7321,12 @@ static int create_underwater_resources(app* a) {
         return 0;
     }
     if (!check_vk(vkCreateShaderModule(a->device, &fs_kelp_ci, NULL, &fs_kelp), "vkCreateShaderModule(underwater kelp fs)")) {
+        vkDestroyShaderModule(a->device, fs, NULL);
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+    if (!check_vk(vkCreateShaderModule(a->device, &fs_fire_ci, NULL, &fs_fire), "vkCreateShaderModule(fire fs)")) {
+        vkDestroyShaderModule(a->device, fs_kelp, NULL);
         vkDestroyShaderModule(a->device, fs, NULL);
         vkDestroyShaderModule(a->device, vs, NULL);
         return 0;
@@ -7287,6 +7388,17 @@ static int create_underwater_resources(app* a) {
         .subpass = 0
     };
     if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->underwater_pipeline), "vkCreateGraphicsPipelines(underwater)")) {
+        vkDestroyShaderModule(a->device, fs_fire, NULL);
+        vkDestroyShaderModule(a->device, fs_kelp, NULL);
+        vkDestroyShaderModule(a->device, fs, NULL);
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+    stages[1].module = fs_fire;
+    gp.renderPass = a->scene_render_pass;
+    gp.pMultisampleState = &ms;
+    if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->fire_pipeline), "vkCreateGraphicsPipelines(fire)")) {
+        vkDestroyShaderModule(a->device, fs_fire, NULL);
         vkDestroyShaderModule(a->device, fs_kelp, NULL);
         vkDestroyShaderModule(a->device, fs, NULL);
         vkDestroyShaderModule(a->device, vs, NULL);
@@ -7296,12 +7408,18 @@ static int create_underwater_resources(app* a) {
     gp.renderPass = a->bloom_render_pass;
     gp.pMultisampleState = &ms_single;
     if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->underwater_kelp_pipeline), "vkCreateGraphicsPipelines(underwater kelp)")) {
+        if (a->fire_pipeline) {
+            vkDestroyPipeline(a->device, a->fire_pipeline, NULL);
+            a->fire_pipeline = VK_NULL_HANDLE;
+        }
+        vkDestroyShaderModule(a->device, fs_fire, NULL);
         vkDestroyShaderModule(a->device, fs_kelp, NULL);
         vkDestroyShaderModule(a->device, fs, NULL);
         vkDestroyShaderModule(a->device, vs, NULL);
         return 0;
     }
 
+    vkDestroyShaderModule(a->device, fs_fire, NULL);
     vkDestroyShaderModule(a->device, fs_kelp, NULL);
     vkDestroyShaderModule(a->device, fs, NULL);
     vkDestroyShaderModule(a->device, vs, NULL);
@@ -8280,6 +8398,273 @@ static void append_gpu_vent_smoke_plume(
     *inout_n = n;
 }
 
+static uint32_t fire_bg_rand_u32(app* a) {
+    if (!a) {
+        return 0u;
+    }
+    a->fire_bg_rng = hash_u32(a->fire_bg_rng + 0x9e3779b9u + 0xa341316cu);
+    return a->fire_bg_rng;
+}
+
+static float fire_bg_rand01(app* a) {
+    const uint32_t r = fire_bg_rand_u32(a);
+    return (float)(r & 0x00ffffffu) / 16777215.0f;
+}
+
+static void fire_bg_sample_flow(const fire_bg_particle* p, const game_state* g, float* out_x, float* out_y) {
+    if (!p || !g) {
+        if (out_x) *out_x = 0.0f;
+        if (out_y) *out_y = 0.0f;
+        return;
+    }
+    const float seed_u = p->seed * 0.00073f;
+    const float seed_v = p->seed * 0.00041f;
+    const float u = p->x * 0.00235f + seed_u + g->t * 0.028f;
+    const float v = p->y * 0.00195f + seed_v - g->t * 0.036f;
+    float f0x = 0.0f;
+    float f0y = 0.0f;
+    float f1x = 0.0f;
+    float f1y = 0.0f;
+    float f2x = 0.0f;
+    float f2y = 0.0f;
+    sample_shared_noise_flow(u, v, &f0x, &f0y);
+    sample_shared_noise_flow(u + 0.019f, v - 0.017f, &f1x, &f1y);
+    sample_shared_noise_flow(u - 0.021f, v + 0.015f, &f2x, &f2y);
+    const float curl_x = (f1y - f2y) * 2.1f;
+    const float curl_y = (f2x - f1x) * 2.1f;
+    if (out_x) {
+        *out_x = f0x * 0.75f + curl_x * 0.90f;
+    }
+    if (out_y) {
+        *out_y = f0y * 0.75f + curl_y * 0.90f;
+    }
+}
+
+static void fire_bg_respawn_particle(app* a, const game_state* g, fire_bg_particle* p, int kind) {
+    if (!a || !g || !p) {
+        return;
+    }
+    const float x_span = g->world_w * 1.44f;
+    const float x_left = g->camera_x - x_span * 0.5f;
+    const float y_base = g->camera_y - g->world_h * 0.50f;
+    float rx = 0.5f;
+    float ry = 0.5f;
+    float rz = 0.5f;
+    float plume_mask = 0.5f;
+
+    p->active = 1;
+    p->kind = kind;
+    p->seed = fire_bg_rand01(a) * 4096.0f;
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        rx = fire_bg_rand01(a);
+        ry = fire_bg_rand01(a);
+        rz = fire_bg_rand01(a);
+        const float wx = x_left + rx * x_span;
+        const float u = wx / fmaxf(g->world_w, 1.0f) * 0.41f + p->seed * 0.00037f;
+        const float v = g->t * 0.022f + ry * 0.63f + (kind == 0 ? 0.0f : 0.41f);
+        plume_mask = sample_shared_noise_channel(u, v, 3);
+        if (plume_mask > (0.38f + 0.40f * fire_bg_rand01(a))) {
+            break;
+        }
+    }
+
+    if (kind == 0) {
+        const float y01 = 0.02f + plume_mask * 0.24f + ry * 0.09f;
+        p->x = x_left + rx * x_span + (sample_shared_noise_channel(rx * 3.7f, ry * 4.1f, 2) - 0.5f) * g->world_w * 0.08f;
+        p->y = y_base + y01 * g->world_h;
+        p->vx = (rz - 0.5f) * 26.0f + (sample_shared_noise_channel(rx * 2.9f + 0.3f, ry * 2.3f - 0.2f, 1) - 0.5f) * 28.0f;
+        p->vy = 74.0f + plume_mask * 88.0f + fire_bg_rand01(a) * 96.0f;
+        p->life_s = 1.6f + fire_bg_rand01(a) * 2.4f;
+        p->size_px = 1.1f + fire_bg_rand01(a) * 3.0f;
+        p->alpha = 0.44f + fire_bg_rand01(a) * 0.54f;
+        p->heat = 0.84f + fire_bg_rand01(a) * 0.96f;
+    } else {
+        const float y01 = 0.06f + ry * 0.88f;
+        p->x = x_left + rx * x_span + (sample_shared_noise_channel(rx * 2.3f - 0.1f, ry * 2.6f + 0.4f, 0) - 0.5f) * g->world_w * 0.10f;
+        p->y = y_base + y01 * g->world_h;
+        p->vx = (rz - 0.5f) * 18.0f;
+        p->vy = 20.0f + plume_mask * 24.0f + fire_bg_rand01(a) * 34.0f;
+        p->life_s = 3.4f + fire_bg_rand01(a) * 5.2f;
+        p->size_px = 0.8f + fire_bg_rand01(a) * 1.9f;
+        p->alpha = 0.16f + fire_bg_rand01(a) * 0.26f;
+        p->heat = 0.0f;
+    }
+    p->age_s = fire_bg_rand01(a) * p->life_s * 0.72f;
+}
+
+static void append_gpu_fire_embers_and_ash(
+    app* a,
+    const game_state* g,
+    const leveldef_level* lvl,
+    particle_instance* out,
+    uint32_t* inout_n,
+    int use_cyl_projection,
+    float* io_r_sum,
+    float* io_r_min,
+    float* io_r_max
+) {
+    if (!a || !g || !lvl || !out || !inout_n) {
+        return;
+    }
+    uint32_t n = *inout_n;
+    const float quality = a->video_menu_high_quality ? 1.0f : 0.62f;
+    const float spawn_rate = fmaxf(lvl->fire_ember_spawn_rate, 0.0f);
+    int target_ember = (int)lroundf(spawn_rate * quality * 0.42f);
+    int target_ash = (int)lroundf(spawn_rate * quality * 0.28f);
+    if (target_ember < 24) target_ember = 24;
+    if (target_ember > 132) target_ember = 132;
+    if (target_ash < 18) target_ash = 18;
+    if (target_ash > 92) target_ash = 92;
+
+    if (!a->fire_bg_initialized || g->t < a->fire_bg_last_t) {
+        memset(a->fire_bg_particles, 0, sizeof(a->fire_bg_particles));
+        if (a->fire_bg_rng == 0u) {
+            a->fire_bg_rng = 0x5f3759dfu ^ ((uint32_t)fabsf(g->camera_x) * 2654435761u);
+        }
+        a->fire_bg_last_t = g->t;
+        a->fire_bg_initialized = 1;
+    }
+    float dt = g->t - a->fire_bg_last_t;
+    if (!isfinite(dt) || dt <= 0.0f) {
+        dt = 1.0f / 60.0f;
+    }
+    if (dt > 0.05f) {
+        dt = 0.05f;
+    }
+    a->fire_bg_last_t = g->t;
+
+    int active_ember = 0;
+    int active_ash = 0;
+    for (int i = 0; i < FIRE_BG_PARTICLE_CAP; ++i) {
+        fire_bg_particle* p = &a->fire_bg_particles[i];
+        if (!p->active) {
+            continue;
+        }
+        if (p->kind == 0) {
+            active_ember += 1;
+        } else {
+            active_ash += 1;
+        }
+    }
+    for (int i = 0; i < FIRE_BG_PARTICLE_CAP && active_ember < target_ember; ++i) {
+        fire_bg_particle* p = &a->fire_bg_particles[i];
+        if (p->active) {
+            continue;
+        }
+        fire_bg_respawn_particle(a, g, p, 0);
+        active_ember += 1;
+    }
+    for (int i = FIRE_BG_PARTICLE_CAP - 1; i >= 0 && active_ash < target_ash; --i) {
+        fire_bg_particle* p = &a->fire_bg_particles[i];
+        if (p->active) {
+            continue;
+        }
+        fire_bg_respawn_particle(a, g, p, 1);
+        active_ash += 1;
+    }
+
+    const float x_min = g->camera_x - g->world_w * 0.85f;
+    const float x_max = g->camera_x + g->world_w * 0.85f;
+    const float y_min = g->camera_y - g->world_h * 0.55f;
+    const float y_max = g->camera_y + g->world_h * 1.10f;
+    for (int i = 0; i < FIRE_BG_PARTICLE_CAP && n < GPU_PARTICLE_MAX_INSTANCES; ++i) {
+        fire_bg_particle* p = &a->fire_bg_particles[i];
+        if (!p->active) {
+            continue;
+        }
+
+        p->age_s += dt;
+        if (p->age_s >= p->life_s) {
+            fire_bg_respawn_particle(a, g, p, p->kind);
+        }
+        const float life01 = clampf(p->age_s / fmaxf(p->life_s, 1.0e-4f), 0.0f, 1.0f);
+        float flow_x = 0.0f;
+        float flow_y = 0.0f;
+        fire_bg_sample_flow(p, g, &flow_x, &flow_y);
+        const float jitter = sample_shared_noise_channel(
+            p->seed * 0.00053f + g->t * 0.082f + p->x * 0.0012f,
+            p->seed * 0.00019f - g->t * 0.071f + p->y * 0.0010f,
+            0
+        ) - 0.5f;
+        const float buoy = (p->kind == 0) ? 86.0f : 30.0f;
+        const float drag = (p->kind == 0) ? 0.78f : 1.22f;
+        const float swirl_gain = (p->kind == 0) ? 112.0f : 56.0f;
+        const float lateral_jitter = (p->kind == 0) ? 38.0f : 18.0f;
+        p->vx += (flow_x * swirl_gain + jitter * lateral_jitter - p->vx * drag * 0.22f) * dt;
+        p->vy += (buoy + flow_y * (p->kind == 0 ? 62.0f : 28.0f) - drag * p->vy) * dt;
+        p->x += p->vx * dt;
+        p->y += p->vy * dt;
+
+        if (!isfinite(p->x) || !isfinite(p->y) ||
+            p->x < x_min || p->x > x_max || p->y < y_min || p->y > y_max) {
+            fire_bg_respawn_particle(a, g, p, p->kind);
+        }
+
+        float sx = 0.0f;
+        float sy = 0.0f;
+        float depth = 1.0f;
+        if (use_cyl_projection) {
+            project_cylinder_point_gpu(g, p->x, p->y, &sx, &sy, &depth);
+        } else {
+            sx = p->x + g->world_w * 0.5f - g->camera_x;
+            sy = p->y + g->world_h * 0.5f - g->camera_y;
+        }
+        if (sx < -28.0f || sx > g->world_w + 28.0f || sy < -28.0f || sy > g->world_h + 28.0f) {
+            continue;
+        }
+
+        const float fade_in = clampf(life01 / 0.15f, 0.0f, 1.0f);
+        const float fade_out = clampf((1.0f - life01) / 0.34f, 0.0f, 1.0f);
+        const float fade = fade_in * fade_out;
+        float spd = sqrtf(p->vx * p->vx + p->vy * p->vy);
+        if (spd < 1.0e-4f) {
+            spd = 1.0e-4f;
+        }
+        out[n].x = sx;
+        out[n].y = sy;
+        out[n].radius_px = p->size_px * (p->kind == 0 ? (0.75f + 0.55f * (1.0f - life01)) : (0.85f + 0.35f * fade));
+        if (use_cyl_projection) {
+            out[n].radius_px *= (0.35f + 0.90f * depth);
+        }
+        if (p->kind == 0) {
+            const float c = sample_shared_noise_channel(
+                p->seed * 0.00037f + g->t * 0.094f + life01 * 0.73f,
+                p->seed * 0.00029f - g->t * 0.071f + life01 * 0.51f,
+                2
+            );
+            out[n].kind = (c > 0.55f) ? 0.0f : 1.0f;
+            out[n].r = clampf(0.92f + 0.12f * c, 0.0f, 1.0f);
+            out[n].g = clampf(0.48f + 0.42f * (1.0f - life01), 0.0f, 1.0f);
+            out[n].b = clampf(0.08f + 0.20f * c * (1.0f - life01), 0.0f, 1.0f);
+            out[n].a = clampf(p->alpha * fade, 0.0f, 1.0f);
+            out[n].trail = 0.18f + 0.34f * (1.0f - life01);
+            out[n].heat = clampf(p->heat * (1.0f - life01), 0.0f, 1.8f);
+        } else {
+            const float c = sample_shared_noise_channel(
+                p->seed * 0.00027f - g->t * 0.028f + life01 * 0.42f,
+                p->seed * 0.00061f + g->t * 0.034f + life01 * 0.35f,
+                1
+            );
+            out[n].kind = 1.0f;
+            out[n].r = 0.30f + 0.08f * c;
+            out[n].g = 0.28f + 0.08f * c;
+            out[n].b = 0.27f + 0.08f * c;
+            out[n].a = clampf(p->alpha * fade * 0.65f, 0.0f, 0.42f);
+            out[n].trail = 0.06f;
+            out[n].heat = 0.0f;
+        }
+        out[n].dir_x = p->vx / spd;
+        out[n].dir_y = p->vy / spd;
+
+        if (io_r_min && out[n].radius_px < *io_r_min) *io_r_min = out[n].radius_px;
+        if (io_r_max && out[n].radius_px > *io_r_max) *io_r_max = out[n].radius_px;
+        if (io_r_sum) *io_r_sum += out[n].radius_px;
+        ++n;
+    }
+
+    *inout_n = n;
+}
+
 static void update_gpu_particle_instances(app* a, int emit_runtime_particles, int emit_level_smoke) {
     if (!a || !a->particle_instance_map) {
         return;
@@ -8399,6 +8784,12 @@ static void update_gpu_particle_instances(app* a, int emit_runtime_particles, in
                     seed_base, &r_sum, &r_min, &r_max
                 );
             }
+        }
+        if (lvl && lvl->background_style == LEVELDEF_BACKGROUND_FIRE && n < GPU_PARTICLE_MAX_INSTANCES) {
+            append_gpu_fire_embers_and_ash(
+                a, g, lvl, out, &n, use_cyl,
+                &r_sum, &r_min, &r_max
+            );
         }
     }
     if (emit_level_smoke && g->level_style == LEVEL_STYLE_REVOLVER && n < GPU_PARTICLE_MAX_INSTANCES) {
@@ -8844,6 +9235,81 @@ static void record_gpu_underwater(app* a, VkCommandBuffer cmd, float t) {
 
     set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_layout, 0, 1, &a->underwater_desc_set, 0, NULL);
+    vkCmdPushConstants(cmd, a->underwater_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+#endif
+}
+
+static void record_gpu_fire(app* a, VkCommandBuffer cmd, float t) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    (void)cmd;
+    (void)t;
+#else
+    if (!a || !cmd || !a->fire_pipeline || !a->underwater_layout || !a->underwater_desc_set) {
+        return;
+    }
+    const leveldef_level* lvl = game_current_leveldef(&a->game);
+    if (!lvl || lvl->background_style != LEVELDEF_BACKGROUND_FIRE) {
+        return;
+    }
+
+    underwater_pc pc;
+    memset(&pc, 0, sizeof(pc));
+    const float world_w = a->game.world_w;
+    const float world_h = a->game.world_h;
+    const float cx = a->game.camera_x;
+    const float cy = a->game.camera_y;
+    const int palette_mode = gameplay_palette_mode(a);
+
+    pc.p0[0] = (float)a->swapchain_extent.width;
+    pc.p0[1] = (float)a->swapchain_extent.height;
+    pc.p0[2] = t;
+    pc.p0[3] = fmaxf(lvl->fire_magma_scale, 0.05f);
+
+    pc.p1[0] = 0.190f;
+    pc.p1[1] = 0.086f;
+    pc.p1[2] = 0.044f;
+    pc.p1[3] = clampf(lvl->fire_warp_amp, 0.0f, 1.0f);
+
+    pc.p2[0] = 0.700f;
+    pc.p2[1] = 0.220f;
+    pc.p2[2] = 0.098f;
+    pc.p2[3] = fmaxf(lvl->fire_pulse_freq, 0.01f);
+
+    pc.p3[0] = cx - world_w * 0.5f;
+    pc.p3[1] = cy - world_h * 0.5f;
+    pc.p3[2] = fmaxf(lvl->fire_plume_height, 0.1f);
+    pc.p3[3] = fmaxf(lvl->fire_rise_speed, 0.0f);
+
+    pc.p4[0] = fmaxf(lvl->fire_distortion_amp, 0.0f);
+    pc.p4[1] = clampf(lvl->fire_smoke_alpha_cap, 0.0f, 1.0f);
+    pc.p4[2] = world_w;
+    pc.p4[3] = world_h;
+
+    pc.p5[0] = 0.970f;
+    pc.p5[1] = 0.460f;
+    pc.p5[2] = 0.146f;
+    pc.p5[3] = clampf(lvl->fire_ember_spawn_rate / 100.0f, 0.0f, 3.5f);
+
+    pc.p6[0] = 1.000f;
+    pc.p6[1] = 0.900f;
+    pc.p6[2] = 0.640f;
+    pc.p6[3] = a->video_menu_high_quality ? 1.0f : 0.0f;
+
+    pc.p7[0] = repeatf(t * 0.075f, 1.0f);
+    pc.p7[1] = 0.5f + 0.5f * sinf(t * 0.31f);
+    if (palette_mode == 1) {
+        pc.p2[0] += 0.06f;
+        pc.p5[1] += 0.05f;
+    } else if (palette_mode == 2) {
+        pc.p1[2] += 0.03f;
+        pc.p6[1] += 0.04f;
+    }
+
+    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->fire_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_layout, 0, 1, &a->underwater_desc_set, 0, NULL);
     vkCmdPushConstants(cmd, a->underwater_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -9742,13 +10208,14 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         const leveldef_level* lvl_bg = game_current_leveldef(&a->game);
         const int use_gpu_fog = (a->game.render_style == LEVEL_RENDER_FOG) ? 1 : 0;
         const int use_gpu_underwater = (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_UNDERWATER) ? 1 : 0;
+        const int use_gpu_fire = (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_FIRE) ? 1 : 0;
         const int use_gpu_grid = (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_GRID) ? 1 : 0;
         const int use_gpu_industry = a->use_gpu_industry && (a->game.render_style == LEVEL_RENDER_DEFENDER);
         const int use_gpu_revolver = a->use_gpu_revolver && (a->game.level_style == LEVEL_STYLE_REVOLVER);
         const int need_mid_scene_gpu = (use_gpu_terrain || use_gpu_wormhole || use_gpu_radar || use_gpu_revolver || use_gpu_arc || use_gpu_grid);
         const int split_scene =
             in_gameplay_scene &&
-            (need_mid_scene_gpu || use_gpu_fog || use_gpu_underwater || (use_gpu_particles && !a->disable_scene_split));
+            (need_mid_scene_gpu || use_gpu_fog || use_gpu_underwater || use_gpu_fire || (use_gpu_particles && !a->disable_scene_split));
         if (in_gameplay_scene && use_gpu_terrain) {
             /* IMPORTANT: high-plains terrain flickers with split scene phases
                (background-only + foreground-only). Keep this known-stable order:
@@ -9860,6 +10327,9 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             }
             if (use_gpu_underwater) {
                 record_gpu_underwater(a, cmd, t);
+            }
+            if (use_gpu_fire) {
+                record_gpu_fire(a, cmd, t);
             }
 
             metrics.scene_phase = 2; /* foreground-only */

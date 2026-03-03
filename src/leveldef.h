@@ -37,7 +37,8 @@ enum leveldef_background_style {
     LEVELDEF_BACKGROUND_NEBULA = 2,
     LEVELDEF_BACKGROUND_GRID = 3,
     LEVELDEF_BACKGROUND_SOLID = 4,
-    LEVELDEF_BACKGROUND_UNDERWATER = 5
+    LEVELDEF_BACKGROUND_UNDERWATER = 5,
+    LEVELDEF_BACKGROUND_FIRE = 6
 };
 
 enum leveldef_background_mask_style {
@@ -283,6 +284,14 @@ typedef struct leveldef_level {
     float underwater_kelp_tint_g;
     float underwater_kelp_tint_b;
     float underwater_kelp_tint_strength;
+    float fire_magma_scale;
+    float fire_warp_amp;
+    float fire_pulse_freq;
+    float fire_plume_height;
+    float fire_rise_speed;
+    float fire_distortion_amp;
+    float fire_smoke_alpha_cap;
+    float fire_ember_spawn_rate;
     int render_style; /* enum level_render_style_id */
     int wave_mode;
     int spawn_mode; /* enum leveldef_spawn_mode */
