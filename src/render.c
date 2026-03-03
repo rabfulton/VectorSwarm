@@ -7812,12 +7812,17 @@ static vg_result draw_enemy_glyph_manta(vg_context* ctx, const enemy* e, float x
     float fy = 0.0f;
     float nx = 0.0f;
     float ny = 0.0f;
-    enemy_glyph_basis(e, &fx, &fy, &nx, &ny);
-    /* Manta is a side-view creature: keep the "normal" consistently pointing upward in world space
-     * so the wingbeat doesn't invert based on left/right travel direction. */
-    if (ny < 0.0f) {
-        nx = -nx;
-        ny = -ny;
+    /* Side-view manta: use a stable left/right basis so wing motion doesn't discontinuously flip
+     * when steering/facing changes during on-screen turns. */
+    {
+        float lane = (e && e->lane_dir != 0.0f) ? e->lane_dir : 0.0f;
+        if (lane > -0.01f && lane < 0.01f) {
+            lane = (e && e->b.vx != 0.0f) ? e->b.vx : (e ? e->facing_x : -1.0f);
+        }
+        fx = (lane < 0.0f) ? -1.0f : 1.0f;
+        fy = 0.0f;
+        nx = 0.0f;
+        ny = 1.0f;
     }
     const float flap_speed = (e->visual_param_a > 0.01f) ? e->visual_param_a : 1.5f;
     const float flap_amp = clampf((e->visual_param_b > 0.01f) ? e->visual_param_b : 0.16f, 0.06f, 0.32f);
@@ -8015,6 +8020,25 @@ static vg_result draw_enemy_glyph_manta(vg_context* ctx, const enemy* e, float x
         }
     }
     /* Draw body on top to hide the wing's attachment seam. */
+    {
+        vg_fill_style body_fill = wing_fill;
+        body_fill.blend = VG_BLEND_ALPHA;
+        body_fill.intensity *= 0.48f;
+        body_fill.color.a = 0.18f + 0.06f * charge01;
+        vg_fill_style body_glow = body_fill;
+        body_glow.blend = VG_BLEND_ADDITIVE;
+        body_glow.intensity *= 0.35f;
+        body_glow.color.a *= 0.42f;
+        const int body_fill_n = (int)(sizeof(body) / sizeof(body[0])) - 1;
+        r = vg_fill_convex(ctx, body, (size_t)body_fill_n, &body_fill);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_fill_convex(ctx, body, (size_t)body_fill_n, &body_glow);
+        if (r != VG_OK) {
+            return r;
+        }
+    }
     r = vg_draw_polyline(ctx, body, sizeof(body) / sizeof(body[0]), &main, 0);
     if (r != VG_OK) {
         return r;
@@ -8045,18 +8069,8 @@ static vg_result draw_enemy_glyph_manta(vg_context* ctx, const enemy* e, float x
         root.width_px *= 1.10f;
         root.intensity *= underside_face ? 1.25f : 0.78f;
         root.color.a *= underside_face ? 1.00f : 0.75f;
-        const vg_vec2 root_pts[] = {wing_root_front, wing_root_back};
-        r = vg_draw_polyline(ctx, root_pts, 2, &root, 0);
-        if (r != VG_OK) {
-            return r;
-        }
-        const vg_vec2 attach0[] = {wing_root_front, wing_edge[2]};
-        r = vg_draw_polyline(ctx, attach0, 2, &root, 0);
-        if (r != VG_OK) {
-            return r;
-        }
-        const vg_vec2 attach1[] = {wing_root_back, wing_edge[WING_SEG_N - 2]};
-        r = vg_draw_polyline(ctx, attach1, 2, &root, 0);
+        /* Draw the join as a curve (matching the body top edge) to avoid a straight stray chord. */
+        r = vg_draw_polyline(ctx, wing_root, WING_SEG_N + 1, &root, 0);
         if (r != VG_OK) {
             return r;
         }
@@ -8064,9 +8078,13 @@ static vg_result draw_enemy_glyph_manta(vg_context* ctx, const enemy* e, float x
         /* Interior shade and a few ribs. */
         vg_vec2 shade[WING_SEG_N + 1];
         for (int i = 0; i <= WING_SEG_N; ++i) {
-            const vg_vec2 root_at_u = wing_root[i];
-            shade[i].x = lerpf(root_at_u.x, wing_edge[i].x, 0.62f);
-            shade[i].y = lerpf(root_at_u.y, wing_edge[i].y, 0.62f);
+            /* Start slightly off the body so lines don't read inside the body fill. */
+            const vg_vec2 root_out = (vg_vec2){
+                lerpf(wing_root[i].x, wing_edge[i].x, 0.10f),
+                lerpf(wing_root[i].y, wing_edge[i].y, 0.10f)
+            };
+            shade[i].x = lerpf(root_out.x, wing_edge[i].x, 0.62f);
+            shade[i].y = lerpf(root_out.y, wing_edge[i].y, 0.62f);
         }
         r = vg_draw_polyline(ctx, shade, WING_SEG_N + 1, &wing_shade, 0);
         if (r != VG_OK) {
@@ -8075,8 +8093,11 @@ static vg_result draw_enemy_glyph_manta(vg_context* ctx, const enemy* e, float x
         const int rib_idx[] = {6, 14, 22, 30};
         for (int i = 0; i < (int)(sizeof(rib_idx) / sizeof(rib_idx[0])); ++i) {
             const int idx = clampi(rib_idx[i], 0, WING_SEG_N);
-            const vg_vec2 root_at_u = wing_root[idx];
-            const vg_vec2 rib[] = {root_at_u, wing_edge[idx]};
+            const vg_vec2 root_out = (vg_vec2){
+                lerpf(wing_root[idx].x, wing_edge[idx].x, 0.10f),
+                lerpf(wing_root[idx].y, wing_edge[idx].y, 0.10f)
+            };
+            const vg_vec2 rib[] = {root_out, wing_edge[idx]};
             r = vg_draw_polyline(ctx, rib, 2, &detail, 0);
             if (r != VG_OK) {
                 return r;

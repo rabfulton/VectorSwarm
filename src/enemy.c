@@ -1400,9 +1400,14 @@ static void update_enemy_formation(game_state* g, enemy* e, float dt, float su, 
                     const float lane_dir = (e->lane_dir < 0.0f) ? -1.0f : 1.0f;
                     const float dx_to_player = uses_cylinder ? wrap_delta(g->player.b.x, e->b.x, period) : (g->player.b.x - e->b.x);
                     const float wing_zero_gate = fabsf(sinf(e->ai_timer_s * (2.2f + flap_freq) + e->visual_phase));
-                    if (fabsf(dx_to_player) > g->world_w * 0.26f && e->ai_timer_s > 2.2f && wing_zero_gate <= 0.10f) {
-                        e->lane_dir = (dx_to_player < 0.0f) ? -1.0f : 1.0f;
-                        e->ai_timer_s = 0.0f;
+                    /* Mantas should not reverse direction while visible. */
+                    if (!uses_cylinder) {
+                        const float pad_x = fmaxf(36.0f * su, g->world_w * 0.06f);
+                        const int offscreen_x = (e->b.x < -pad_x) || (e->b.x > g->world_w + pad_x);
+                        if (!same_screen && offscreen_x && e->ai_timer_s > 0.85f && wing_zero_gate <= 0.10f) {
+                            e->lane_dir = (dx_to_player < 0.0f) ? -1.0f : 1.0f;
+                            e->ai_timer_s = 0.0f;
+                        }
                     }
                     {
                         const float target_vx = lane_dir * lerpf(0.72f, 1.05f, wing) * e->max_speed;
