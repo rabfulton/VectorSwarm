@@ -259,6 +259,7 @@ typedef struct leveldef_curated_enemy {
     float a;
     float b;
     float c;
+    float d; /* optional extra parameter (jelly_swarm uses this as size scale) */
 } leveldef_curated_enemy;
 
 typedef struct leveldef_level {

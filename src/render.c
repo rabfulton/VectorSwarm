@@ -4576,7 +4576,16 @@ static int editor_marker_properties_text(
             snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_c[sel]);
             n++;
         }
-        if (boid_item && n < cap) { out_labels[n] = "MAX TURN DEG"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_marker_d[sel]); n++; }
+        if (boid_item && n < cap) {
+            if (kind == 15) {
+                out_labels[n] = "SIZE SCALE";
+                snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_d[sel]);
+            } else {
+                out_labels[n] = "MAX TURN DEG";
+                snprintf(out_values[n], 32, "%.1f", metrics->level_editor_marker_d[sel]);
+            }
+            n++;
+        }
         if (kamikaze_item && n < cap) { out_labels[n] = "RADIUS MIN"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_kamikaze_radius_min); n++; }
         if (kamikaze_item && n < cap) { out_labels[n] = "RADIUS MAX"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_kamikaze_radius_max); n++; }
         if (!event_item && n < cap) { out_labels[n] = "DELAY S"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_delay_s[sel]); n++; }
@@ -7696,7 +7705,7 @@ static vg_result draw_enemy_glyph_jelly(vg_context* ctx, const enemy* e, float x
     }
 
     {
-        const int seg_n = (rr < 10.0f) ? 4 : 5;
+        const int seg_n = (rr < 10.0f) ? 5 : 6;
         int tentacle_n = 8 + (int)(e->visual_seed % 5u);
         if (rr < 9.0f) {
             tentacle_n = 5;
@@ -7715,7 +7724,7 @@ static vg_result draw_enemy_glyph_jelly(vg_context* ctx, const enemy* e, float x
                 const float u = (float)si / (float)seg_n;
                 const float amp_u = rr * tentacle_amp * powf(u, 1.25f);
                 const float offset = amp_u * sinf(e->ai_timer_s * wave_freq - u * wave_phase + tent_phase);
-                const float local_f = rr * (-0.20f - u * (1.22f + 0.12f * pulse01));
+                const float local_f = rr * (-0.24f - u * (1.70f + 0.20f * pulse01));
                 const float local_n = rr * side + offset;
                 line[si].x = x + fx * local_f + nx * local_n;
                 line[si].y = draw_y + fy * local_f + ny * local_n;

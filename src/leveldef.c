@@ -695,8 +695,9 @@ static int parse_curated_enemy(leveldef_level* lvl, const char* value, FILE* log
     char buf[320];
     char* tok;
     char* save = NULL;
-    const int expected = 6;
-    char* fields[6];
+    const int min_expected = 6;
+    const int max_expected = 7;
+    char* fields[7];
     int i = 0;
     leveldef_curated_enemy ce;
 
@@ -708,13 +709,13 @@ static int parse_curated_enemy(leveldef_level* lvl, const char* value, FILE* log
     buf[sizeof(buf) - 1] = '\0';
 
     tok = strtok_r(buf, ",", &save);
-    while (tok && i < expected) {
+    while (tok && i < max_expected) {
         fields[i++] = trim(tok);
         tok = strtok_r(NULL, ",", &save);
     }
-    if (i != expected) {
+    if (i != min_expected && i != max_expected) {
         if (log_out) {
-            fprintf(log_out, "leveldef: curated_enemy expects %d fields, got %d\n", expected, i);
+            fprintf(log_out, "leveldef: curated_enemy expects %d or %d fields, got %d\n", min_expected, max_expected, i);
         }
         return 0;
     }
@@ -725,6 +726,7 @@ static int parse_curated_enemy(leveldef_level* lvl, const char* value, FILE* log
     ce.a = strtof(fields[3], NULL);
     ce.b = strtof(fields[4], NULL);
     ce.c = strtof(fields[5], NULL);
+    ce.d = (i >= 7) ? strtof(fields[6], NULL) : 0.0f;
     if (ce.kind < 0) {
         if (log_out) {
             fprintf(log_out, "leveldef: invalid curated_enemy kind '%s'\n", fields[0]);

@@ -820,6 +820,8 @@ static int resolve_boid_profile_by_variant(const leveldef_db* db, const leveldef
         pid = leveldef_find_boid_profile(db, "FIREFLY");
     } else if (variant_kind_or_pattern == 12 || variant_kind_or_pattern == LEVELDEF_WAVE_SWARM_BIRD) {
         pid = leveldef_find_boid_profile(db, "BIRD");
+    } else if (variant_kind_or_pattern == 15) {
+        pid = leveldef_find_boid_profile(db, "JELLY");
     }
     if (pid < 0) {
         pid = lvl->default_boid_profile;
@@ -922,14 +924,29 @@ void enemy_spawn_curated_enemy(
             e->max_speed = ((ce->b > 0.0f && !legacy_default_override) ? ce->b : p->max_speed) * su;
             e->accel = ((ce->c > 0.0f && !legacy_default_override) ? ce->c : p->accel);
             e->radius = (p->radius_min + frand01() * fmaxf(p->radius_max - p->radius_min, 0.0f)) * su;
+            {
+                float jelly_sep_scale = 1.0f;
+                if (ce->kind == 15) {
+                    const float size_scale = (ce->d > 0.0f) ? ce->d : 1.0f;
+                    const float size_scale_clamped = clampf(size_scale, 0.20f, 4.00f);
+                    e->radius *= size_scale_clamped;
+                    jelly_sep_scale = lerpf(0.75f, 1.90f, (size_scale_clamped - 0.20f) / (4.00f - 0.20f));
+                }
+                e->swarm_sep_r = p->sep_r * su * jelly_sep_scale;
+            }
+            e->swarm_ali_r = p->ali_r * su;
+            e->swarm_coh_r = p->coh_r * su;
+            if (ce->kind == 15) {
+                const float size_scale = clampf((ce->d > 0.0f) ? ce->d : 1.0f, 0.20f, 4.00f);
+                const float neighborhood_scale = lerpf(0.95f, 1.35f, (size_scale - 0.20f) / (4.00f - 0.20f));
+                e->swarm_ali_r *= neighborhood_scale;
+                e->swarm_coh_r *= neighborhood_scale;
+            }
             e->swarm_sep_w = p->sep_w;
             e->swarm_ali_w = p->ali_w;
             e->swarm_coh_w = p->coh_w;
             e->swarm_avoid_w = p->avoid_w;
             e->swarm_goal_w = p->goal_w;
-            e->swarm_sep_r = p->sep_r * su;
-            e->swarm_ali_r = p->ali_r * su;
-            e->swarm_coh_r = p->coh_r * su;
             e->swarm_goal_amp = p->goal_amp * su;
             e->swarm_goal_freq = p->goal_freq;
             e->swarm_goal_dir = 1.0f;
@@ -1647,12 +1664,32 @@ static void update_enemy_kamikaze(game_state* g, enemy* e, float dt, int uses_cy
 }
 
 static void update_enemy_swarm(game_state* g, enemy* e, float dt, int uses_cylinder, float period, float su) {
-    (void)dt;
     float sep_x = 0.0f, sep_y = 0.0f, ali_x = 0.0f, ali_y = 0.0f, coh_x = 0.0f, coh_y = 0.0f;
     int ali_n = 0, coh_n = 0;
-    const float sep_r = (e->swarm_sep_r > 1.0f) ? e->swarm_sep_r : (70.0f * su);
-    const float ali_r = (e->swarm_ali_r > 1.0f) ? e->swarm_ali_r : (180.0f * su);
-    const float coh_r = (e->swarm_coh_r > 1.0f) ? e->swarm_coh_r : (220.0f * su);
+    float sep_r = (e->swarm_sep_r > 1.0f) ? e->swarm_sep_r : (70.0f * su);
+    float ali_r = (e->swarm_ali_r > 1.0f) ? e->swarm_ali_r : (180.0f * su);
+    float coh_r = (e->swarm_coh_r > 1.0f) ? e->swarm_coh_r : (220.0f * su);
+    float jelly_speed_scale = 1.0f;
+    float jelly_sep_w_scale = 1.0f;
+    float jelly_ali_w_scale = 1.0f;
+    float jelly_coh_w_scale = 1.0f;
+
+    if (e->visual_kind == ENEMY_VISUAL_JELLY) {
+        const float pulse_freq = (e->visual_param_a > 0.01f) ? e->visual_param_a : 2.0f;
+        const float phase = e->ai_timer_s * pulse_freq + e->visual_phase;
+        const float pulse = sinf(phase);
+        const float pulse01 = 0.5f + 0.5f * pulse;
+        /* Jelly school "breathes": wider + slower on expand, tighter + faster on contract. */
+        const float shape = 0.86f + 0.34f * pulse01;
+        sep_r *= (0.90f + 0.42f * shape);
+        ali_r *= (0.92f + 0.24f * shape);
+        coh_r *= (0.90f + 0.26f * shape);
+        jelly_speed_scale = 0.86f + 0.26f * (1.0f - pulse01);
+        jelly_sep_w_scale = 0.90f + 0.38f * shape;
+        jelly_ali_w_scale = 0.86f + 0.28f * (1.0f - shape);
+        jelly_coh_w_scale = 0.88f + 0.34f * shape;
+    }
+
     const float sep_r2 = sep_r * sep_r;
     const float ali_r2 = ali_r * ali_r;
     const float coh_r2 = coh_r * coh_r;
@@ -1897,6 +1934,12 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt, int uses_cylin
         const float wander_freq = (e->swarm_wander_freq > 0.01f) ? e->swarm_wander_freq : 0.9f;
         const float steer_drag = (e->swarm_drag > 0.01f) ? e->swarm_drag : 1.3f;
 
+        if (e->visual_kind == ENEMY_VISUAL_JELLY) {
+            sep_w *= jelly_sep_w_scale;
+            ali_w *= jelly_ali_w_scale;
+            coh_w *= jelly_coh_w_scale;
+        }
+
         if (uses_cylinder) {
             goal_x = wrap_delta(g->player.b.x + goal_dir * 280.0f * su, e->b.x, period);
         }
@@ -2009,6 +2052,10 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt, int uses_cylin
             target_speed -= avoid_boost * (0.28f * e->max_speed);
             /* Player collision urgency should trigger evasive acceleration. */
             target_speed += player_avoid_boost * (0.36f * e->max_speed);
+            if (e->visual_kind == ENEMY_VISUAL_JELLY) {
+                target_speed *= jelly_speed_scale;
+                min_speed *= lerpf(0.94f, 1.08f, jelly_speed_scale);
+            }
             target_speed = clampf(target_speed, min_speed, e->max_speed);
 
             target_vx = cosf(out_a) * target_speed;
@@ -2033,6 +2080,7 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt, int uses_cylin
             }
         }
     }
+    e->ai_timer_s += dt;
 }
 
 void enemy_update_system(
