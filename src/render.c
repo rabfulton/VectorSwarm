@@ -7576,6 +7576,9 @@ static vg_result draw_enemy_tail(vg_context* ctx, const enemy* e, float x, float
         const float ny = tx;
         const float tail01 = clampf(e->kamikaze_tail, 0.0f, 1.0f);
         const float pulse01 = clampf(e->kamikaze_thrust, 0.0f, 1.0f);
+        const float speed = sqrtf(e->b.vx * e->b.vx + e->b.vy * e->b.vy);
+        const float speed01 = clampf(speed / fmaxf(e->max_speed, 1.0f), 0.0f, 1.0f);
+        const float speed_brightness = lerpf(0.50f, 1.30f, speed01);
         const float base_back = rr * (0.72f + 0.18f * pulse01);
         const float tail_len = rr * (0.55f + 2.05f * tail01);
         const float spread = rr * (0.10f + 0.42f * tail01);
@@ -7599,15 +7602,61 @@ static vg_result draw_enemy_tail(vg_context* ctx, const enemy* e, float x, float
             {tail_center.x, tail_center.y},
             {tail_tip.x, tail_tip.y}
         };
-        vg_result r = vg_draw_polyline(ctx, tail_l, 2, enemy_style, 0);
+        const vg_vec2 left_back[] = {
+            tail_l[0],
+            {lerpf(tail_l[0].x, tail_l[1].x, 0.52f), lerpf(tail_l[0].y, tail_l[1].y, 0.52f)}
+        };
+        const vg_vec2 left_front[] = {
+            left_back[1],
+            tail_l[1]
+        };
+        const vg_vec2 right_back[] = {
+            tail_r[0],
+            {lerpf(tail_r[0].x, tail_r[1].x, 0.52f), lerpf(tail_r[0].y, tail_r[1].y, 0.52f)}
+        };
+        const vg_vec2 right_front[] = {
+            right_back[1],
+            tail_r[1]
+        };
+        const vg_vec2 mid_back[] = {
+            tail_mid[0],
+            {lerpf(tail_mid[0].x, tail_mid[1].x, 0.55f), lerpf(tail_mid[0].y, tail_mid[1].y, 0.55f)}
+        };
+        const vg_vec2 mid_front[] = {
+            mid_back[1],
+            tail_mid[1]
+        };
+        vg_stroke_style shade_back = *enemy_style;
+        vg_stroke_style shade_front = *enemy_style;
+        vg_stroke_style shade_core = *enemy_style;
+        shade_back.intensity *= (0.28f + 0.16f * tail01) * speed_brightness;
+        shade_front.intensity *= (0.54f + 0.28f * tail01) * speed_brightness;
+        shade_core.intensity *= (0.70f + 0.45f * tail01) * speed_brightness;
+        shade_back.color.a *= 0.42f + 0.12f * speed01;
+        shade_front.color.a *= 0.58f + 0.20f * speed01;
+        shade_core.color.a *= 0.72f + 0.22f * speed01;
+
+        vg_result r = vg_draw_polyline(ctx, left_back, 2, &shade_back, 0);
         if (r != VG_OK) {
             return r;
         }
-        r = vg_draw_polyline(ctx, tail_r, 2, enemy_style, 0);
+        r = vg_draw_polyline(ctx, left_front, 2, &shade_front, 0);
         if (r != VG_OK) {
             return r;
         }
-        return vg_draw_polyline(ctx, tail_mid, 2, enemy_style, 0);
+        r = vg_draw_polyline(ctx, right_back, 2, &shade_back, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_draw_polyline(ctx, right_front, 2, &shade_front, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_draw_polyline(ctx, mid_back, 2, &shade_front, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        return vg_draw_polyline(ctx, mid_front, 2, &shade_core, 0);
     }
 }
 
