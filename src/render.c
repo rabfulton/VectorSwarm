@@ -7813,10 +7813,23 @@ static vg_result draw_enemy_glyph_manta(vg_context* ctx, const enemy* e, float x
     float nx = 0.0f;
     float ny = 0.0f;
     enemy_glyph_basis(e, &fx, &fy, &nx, &ny);
+    /* Manta is a side-view creature: keep the "normal" consistently pointing upward in world space
+     * so the wingbeat doesn't invert based on left/right travel direction. */
+    if (ny < 0.0f) {
+        nx = -nx;
+        ny = -ny;
+    }
     const float flap_speed = (e->visual_param_a > 0.01f) ? e->visual_param_a : 1.5f;
     const float flap_amp = clampf((e->visual_param_b > 0.01f) ? e->visual_param_b : 0.16f, 0.06f, 0.32f);
     const float flap_t = e->ai_timer_s * (2.2f + flap_speed) + e->visual_phase;
-    const float flap = sinf(flap_t);
+    /* Organic-ish wingbeat: fundamental + harmonic, plus a velocity term for mild twist.
+     * This keeps the fin readable at mid-stroke (where pure sine would go edge-on). */
+    const float flap_s1 = sinf(flap_t);
+    const float flap_s2 = sinf(flap_t * 2.0f + 0.65f);
+    float flap_pos = flap_s1 + 0.22f * flap_s2;
+    flap_pos = clampf(flap_pos, -1.0f, 1.0f);
+    float flap_vel = cosf(flap_t) + 0.44f * cosf(flap_t * 2.0f + 0.65f);
+    flap_vel = clampf(flap_vel, -1.0f, 1.0f);
     const float charge01 = (e->missile_charge_duration_s > 0.01f)
         ? clampf(e->missile_charge_s / e->missile_charge_duration_s, 0.0f, 1.0f)
         : 0.0f;
@@ -7835,47 +7848,222 @@ static vg_result draw_enemy_glyph_manta(vg_context* ctx, const enemy* e, float x
     vg_stroke_style wing_side = main;
     wing_side.width_px *= 0.92f;
     /* Continuous wing shading by flap phase: brighter on underside (up), dimmer on topside (down). */
-    wing_side.intensity *= lerpf(0.80f, 1.20f, 0.5f + 0.5f * flap);
+    wing_side.intensity *= lerpf(0.80f, 1.20f, 0.5f + 0.5f * flap_pos);
     wing_side.color.a = 1.0f;
     vg_stroke_style wing_shade = wing_side;
     wing_shade.intensity *= 0.86f;
     wing_shade.color.a = 1.0f;
     wing_shade.blend = VG_BLEND_ALPHA;
+    const float face01 = clampf(0.5f + 0.5f * flap_pos, 0.0f, 1.0f);
+    const int underside_face = (flap_pos >= 0.0f) ? 1 : 0;
     vg_fill_style wing_fill = {
-        .intensity = wing_side.intensity * 0.95f,
-        .color = (vg_color){wing_side.color.r, wing_side.color.g, wing_side.color.b, 1.0f},
+        /* Needs to be fairly strong; otherwise it reads as "barely tinted" under CRT bloom. */
+        .intensity = wing_side.intensity * 0.92f,
+        .color = (vg_color){wing_side.color.r, wing_side.color.g, wing_side.color.b, 0.82f + 0.10f * charge01},
         .blend = VG_BLEND_ALPHA
     };
+    vg_fill_style wing_fill_glow = wing_fill;
+    wing_fill_glow.blend = VG_BLEND_ADDITIVE;
+    wing_fill_glow.intensity *= 0.28f;
+    wing_fill_glow.color.a *= 0.30f;
+    vg_fill_style wing_edge_band = wing_fill_glow;
+    wing_edge_band.intensity *= 1.10f;
+    wing_edge_band.color.a *= 1.20f;
 
+    /* Slightly manta-ish: flatter belly, arched back, pointier nose. */
     const vg_vec2 body[] = {
-        {x + fx * (1.32f * rr) + nx * (0.00f * rr), y + fy * (1.32f * rr) + ny * (0.00f * rr)},
-        {x + fx * (0.74f * rr) + nx * (0.24f * rr), y + fy * (0.74f * rr) + ny * (0.24f * rr)},
-        {x + fx * (0.02f * rr) + nx * (0.29f * rr), y + fy * (0.02f * rr) + ny * (0.29f * rr)},
-        {x + fx * (-0.82f * rr) + nx * (0.14f * rr), y + fy * (-0.82f * rr) + ny * (0.14f * rr)},
-        {x + fx * (-1.56f * rr) + nx * (0.02f * rr), y + fy * (-1.56f * rr) + ny * (0.02f * rr)},
+        {x + fx * (1.40f * rr) + nx * (0.00f * rr), y + fy * (1.40f * rr) + ny * (0.00f * rr)},
+        {x + fx * (1.08f * rr) + nx * (0.22f * rr), y + fy * (1.08f * rr) + ny * (0.22f * rr)},
+        {x + fx * (0.40f * rr) + nx * (0.33f * rr), y + fy * (0.40f * rr) + ny * (0.33f * rr)},
+        {x + fx * (-0.50f * rr) + nx * (0.22f * rr), y + fy * (-0.50f * rr) + ny * (0.22f * rr)},
+        {x + fx * (-1.30f * rr) + nx * (0.06f * rr), y + fy * (-1.30f * rr) + ny * (0.06f * rr)},
         {x + fx * (-1.84f * rr) + nx * (0.00f * rr), y + fy * (-1.84f * rr) + ny * (0.00f * rr)},
-        {x + fx * (-1.56f * rr) + nx * (-0.10f * rr), y + fy * (-1.56f * rr) + ny * (-0.10f * rr)},
-        {x + fx * (-0.82f * rr) + nx * (-0.22f * rr), y + fy * (-0.82f * rr) + ny * (-0.22f * rr)},
-        {x + fx * (0.02f * rr) + nx * (-0.27f * rr), y + fy * (0.02f * rr) + ny * (-0.27f * rr)},
-        {x + fx * (0.74f * rr) + nx * (-0.20f * rr), y + fy * (0.74f * rr) + ny * (-0.20f * rr)},
-        {x + fx * (1.32f * rr) + nx * (0.00f * rr), y + fy * (1.32f * rr) + ny * (0.00f * rr)}
+        {x + fx * (-1.30f * rr) + nx * (-0.10f * rr), y + fy * (-1.30f * rr) + ny * (-0.10f * rr)},
+        {x + fx * (-0.50f * rr) + nx * (-0.20f * rr), y + fy * (-0.50f * rr) + ny * (-0.20f * rr)},
+        {x + fx * (0.40f * rr) + nx * (-0.26f * rr), y + fy * (0.40f * rr) + ny * (-0.26f * rr)},
+        {x + fx * (1.08f * rr) + nx * (-0.16f * rr), y + fy * (1.08f * rr) + ny * (-0.16f * rr)},
+        {x + fx * (1.40f * rr) + nx * (0.00f * rr), y + fy * (1.40f * rr) + ny * (0.00f * rr)}
     };
-    const float wing_base_front_f = 1.05f * rr;
-    const float wing_base_back_f = -1.30f * rr;
-    const float wing_apex_f = -0.05f * rr + sinf(flap_t + 0.9f) * 0.20f * rr;
-    /* Tip height is pure sine: 0 = flat, +1/-1 = full up/down. */
-    const float wing_apex_n = rr * 1.18f * flap;
-    const vg_vec2 wing_tri[] = {
-        {x + fx * wing_base_front_f + nx * (0.00f * rr), y + fy * wing_base_front_f + ny * (0.00f * rr)},
-        {x + fx * wing_apex_f + nx * wing_apex_n, y + fy * wing_apex_f + ny * wing_apex_n},
-        {x + fx * wing_base_back_f + nx * (0.00f * rr), y + fy * wing_base_back_f + ny * (0.00f * rr)}
-    };
-    const vg_vec2 wing_outline[] = {
-        wing_tri[0],
-        wing_tri[1],
-        wing_tri[2],
-        wing_tri[0]
-    };
+
+    /* Wing membrane: deforming outer edge + root attachment line.
+     * Fill is a triangle mesh between root and edge (2 triangles/segment). This reads as a flat fin,
+     * and lets us modulate brightness per-segment (approx "per-vertex") without relying on a single fan center. */
+    const float wing_base_front_f = 1.06f * rr;
+    /* Match the tail attachment so the membrane reaches the body all the way to the tail join. */
+    const float wing_base_back_f = -1.76f * rr;
+    const float wing_beat_amp = rr * (0.54f + 2.05f * flap_amp);
+    const float wing_twist_amp = rr * (0.10f + 0.24f * flap_amp);
+    const float wing_rest_amp = rr * (0.18f + 0.12f * flap_amp);
+    const float wing_ripple_amp = rr * (0.06f + 0.20f * flap_amp);
+    enum { WING_SEG_N = 32 };
+    vg_vec2 wing_edge[WING_SEG_N + 1];
+    float wing_edge_wave[WING_SEG_N + 1];
+    const float root_front_f = 0.72f * rr;
+    /* Extend the root attachment line to the same tail join point as the wing edge. */
+    const float root_back_f = -1.76f * rr;
+    const vg_vec2 wing_root_front = (vg_vec2){x + fx * root_front_f, y + fy * root_front_f};
+    const vg_vec2 wing_root_back = (vg_vec2){x + fx * root_back_f, y + fy * root_back_f};
+    vg_vec2 wing_root[WING_SEG_N + 1];
+    for (int i = 0; i <= WING_SEG_N; ++i) {
+        const float u = (float)i / (float)WING_SEG_N;
+        /* Root attachment line (in body plane). */
+        wing_root[i].x = lerpf(wing_root_front.x, wing_root_back.x, u);
+        wing_root[i].y = lerpf(wing_root_front.y, wing_root_back.y, u);
+        /* Profile: manta wings are swept and forward-weighted, not semicircular. */
+        const float prof0 = sinf(u * 3.14159265f); /* 0..1..0 */
+        float prof = prof0 * (1.10f - 0.55f * u); /* bias more area toward the front */
+        if (prof < 0.0f) {
+            prof = 0.0f;
+        }
+        /* Slight sweep/curve in planform so the trailing edge isn't a perfect arc. */
+        const float sweep_u = clampf(u + 0.10f * sinf(u * 3.14159265f), 0.0f, 1.0f);
+        const float f = lerpf(wing_base_front_f, wing_base_back_f, sweep_u);
+
+        const float base_n = 0.0f;
+        const float rest_n = wing_rest_amp * (0.35f + 0.65f * (1.0f - u)) * prof;
+        const float beat_n = wing_beat_amp * flap_pos * prof;
+        const float twist_n = wing_twist_amp * flap_vel * prof * (0.85f - 0.65f * u);
+
+        /* Traveling wave that moves from front to back; emphasize on the outer edge. */
+        const float trailing_w = u * (0.35f + 0.65f * u);
+        const float ripple_phase = flap_t * 2.25f - u * 14.5f + e->visual_phase * 0.7f;
+        const float wave = sinf(ripple_phase);
+        const float wave_env = (0.10f + 0.90f * prof0) * trailing_w;
+        const float wave_n = wave * wave_env;
+        wing_edge_wave[i] = wave_n;
+        const float ripple = wing_ripple_amp * wave_n;
+
+        float outer_n = base_n + rest_n + beat_n + twist_n + ripple;
+        /* Avoid degenerate triangles at mid-stroke without destroying the sign (needed for up/down beats). */
+        if (fabsf(outer_n) < rr * 0.02f) {
+            outer_n = (outer_n < 0.0f) ? (-rr * 0.02f) : (rr * 0.02f);
+        }
+        wing_edge[i].x = x + fx * f + nx * outer_n;
+        wing_edge[i].y = y + fy * f + ny * outer_n;
+    }
+
+    vg_result r = VG_OK;
+    {
+        const float root_face_boost = underside_face ? 1.35f : 0.78f;
+        for (int i = 0; i < WING_SEG_N; ++i) {
+            /* Interior fill stays steady (no wave modulation): modulation should only read on the edge. */
+            const vg_vec2 inner0 = (vg_vec2){
+                lerpf(wing_root[i].x, wing_edge[i].x, 0.74f),
+                lerpf(wing_root[i].y, wing_edge[i].y, 0.74f)
+            };
+            const vg_vec2 inner1 = (vg_vec2){
+                lerpf(wing_root[i + 1].x, wing_edge[i + 1].x, 0.74f),
+                lerpf(wing_root[i + 1].y, wing_edge[i + 1].y, 0.74f)
+            };
+
+            vg_fill_style base_fill = wing_fill;
+            base_fill.intensity *= lerpf(0.90f, 1.15f, face01);
+            const vg_vec2 tri0[] = {wing_root[i], inner0, inner1};
+            r = vg_fill_convex(ctx, tri0, 3, &base_fill);
+            if (r != VG_OK) {
+                return r;
+            }
+            const vg_vec2 tri1[] = {wing_root[i], inner1, wing_root[i + 1]};
+            r = vg_fill_convex(ctx, tri1, 3, &base_fill);
+            if (r != VG_OK) {
+                return r;
+            }
+
+            /* Edge band: additive, modulated by the traveling wave, localized to the outer span. */
+            const float wave01 = 0.5f + 0.5f * clampf(0.5f * (wing_edge_wave[i] + wing_edge_wave[i + 1]) * 1.15f, -1.0f, 1.0f);
+            vg_fill_style band = wing_edge_band;
+            band.intensity *= (0.25f + 1.05f * wave01) * lerpf(0.88f, 1.22f, face01);
+            band.color.a *= (0.22f + 0.78f * wave01);
+            const vg_vec2 band0[] = {inner0, wing_edge[i], wing_edge[i + 1]};
+            r = vg_fill_convex(ctx, band0, 3, &band);
+            if (r != VG_OK) {
+                return r;
+            }
+            const vg_vec2 band1[] = {inner0, wing_edge[i + 1], inner1};
+            r = vg_fill_convex(ctx, band1, 3, &band);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+    }
+    /* Draw body on top to hide the wing's attachment seam. */
+    r = vg_draw_polyline(ctx, body, sizeof(body) / sizeof(body[0]), &main, 0);
+    if (r != VG_OK) {
+        return r;
+    }
+    r = vg_draw_polyline(ctx, body, sizeof(body) / sizeof(body[0]), &glow, 0);
+    if (r != VG_OK) {
+        return r;
+    }
+
+    /* Stroke passes after body so the edge highlight stays readable. */
+    {
+        /* Edge segments with per-segment brightness driven by the traveling wave. */
+        const float edge_face_boost = lerpf(0.80f, 1.22f, face01);
+        for (int i = 0; i < WING_SEG_N; ++i) {
+            const float wave01 = 0.5f + 0.5f * (0.5f * (wing_edge_wave[i] + wing_edge_wave[i + 1]));
+            vg_stroke_style seg = wing_side;
+            seg.intensity *= edge_face_boost * (0.70f + 0.60f * wave01);
+            seg.color.a *= (0.80f + 0.35f * wave01);
+            const vg_vec2 seg_pts[] = {wing_edge[i], wing_edge[i + 1]};
+            r = vg_draw_polyline(ctx, seg_pts, 2, &seg, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+
+        /* Root/attachment highlight flips with face visibility. */
+        vg_stroke_style root = detail;
+        root.width_px *= 1.10f;
+        root.intensity *= underside_face ? 1.25f : 0.78f;
+        root.color.a *= underside_face ? 1.00f : 0.75f;
+        const vg_vec2 root_pts[] = {wing_root_front, wing_root_back};
+        r = vg_draw_polyline(ctx, root_pts, 2, &root, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        const vg_vec2 attach0[] = {wing_root_front, wing_edge[2]};
+        r = vg_draw_polyline(ctx, attach0, 2, &root, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        const vg_vec2 attach1[] = {wing_root_back, wing_edge[WING_SEG_N - 2]};
+        r = vg_draw_polyline(ctx, attach1, 2, &root, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+
+        /* Interior shade and a few ribs. */
+        vg_vec2 shade[WING_SEG_N + 1];
+        for (int i = 0; i <= WING_SEG_N; ++i) {
+            const float u = (float)i / (float)WING_SEG_N;
+            const vg_vec2 root_at_u = (vg_vec2){
+                lerpf(wing_root_front.x, wing_root_back.x, u),
+                lerpf(wing_root_front.y, wing_root_back.y, u)
+            };
+            shade[i].x = lerpf(root_at_u.x, wing_edge[i].x, 0.62f);
+            shade[i].y = lerpf(root_at_u.y, wing_edge[i].y, 0.62f);
+        }
+        r = vg_draw_polyline(ctx, shade, WING_SEG_N + 1, &wing_shade, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        const int rib_idx[] = {6, 14, 22, 30};
+        for (int i = 0; i < (int)(sizeof(rib_idx) / sizeof(rib_idx[0])); ++i) {
+            const int idx = clampi(rib_idx[i], 0, WING_SEG_N);
+            const float u = (float)idx / (float)WING_SEG_N;
+            const vg_vec2 root_at_u = (vg_vec2){
+                lerpf(wing_root_front.x, wing_root_back.x, u),
+                lerpf(wing_root_front.y, wing_root_back.y, u)
+            };
+            const vg_vec2 rib[] = {root_at_u, wing_edge[idx]};
+            r = vg_draw_polyline(ctx, rib, 2, &detail, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+    }
+
     const float tail_wave = rr * 0.13f;
     const float tail_t = flap_t * 0.5f;
     const vg_vec2 tail[] = {
@@ -7884,26 +8072,7 @@ static vg_result draw_enemy_glyph_manta(vg_context* ctx, const enemy* e, float x
         {x + fx * (-2.45f * rr) + nx * (tail_wave * 1.25f * sinf(tail_t + 1.8f)), y + fy * (-2.45f * rr) + ny * (tail_wave * 1.25f * sinf(tail_t + 1.8f))},
         {x + fx * (-2.82f * rr) + nx * (tail_wave * 1.55f * sinf(tail_t + 2.6f)), y + fy * (-2.82f * rr) + ny * (tail_wave * 1.55f * sinf(tail_t + 2.6f))}
     };
-    vg_result r = vg_draw_polyline(ctx, body, sizeof(body) / sizeof(body[0]), &main, 0);
-    if (r != VG_OK) {
-        return r;
-    }
-    r = vg_draw_polyline(ctx, body, sizeof(body) / sizeof(body[0]), &glow, 0);
-    if (r != VG_OK) {
-        return r;
-    }
-    r = vg_fill_convex(ctx, wing_tri, 3, &wing_fill);
-    if (r != VG_OK) {
-        return r;
-    }
-    r = vg_draw_polyline(ctx, wing_outline, 4, &wing_side, 0);
-    if (r != VG_OK) {
-        return r;
-    }
-    r = vg_draw_polyline(ctx, wing_outline, 4, &wing_shade, 0);
-    if (r != VG_OK) {
-        return r;
-    }
+
     r = vg_draw_polyline(ctx, tail, 4, &main, 0);
     if (r != VG_OK) {
         return r;

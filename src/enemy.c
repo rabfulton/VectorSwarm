@@ -1046,8 +1046,8 @@ void enemy_spawn_curated_enemy(
                 e->visual_kind = ENEMY_VISUAL_MANTA;
                 e->visual_seed = seed;
                 e->visual_phase = hash01_u32(seed ^ 0x6d2u) * 6.2831853f;
-                e->visual_param_a = lerpf(1.2f, 1.8f, hash01_u32(seed ^ 0x39fu)); /* ripple speed */
-                e->visual_param_b = lerpf(0.12f, 0.22f, hash01_u32(seed ^ 0x8a1u)); /* ripple amp */
+                e->visual_param_a = lerpf(1.2f, 1.8f, hash01_u32(seed ^ 0x39fu)); /* flap speed */
+                e->visual_param_b = lerpf(0.12f, 0.22f, hash01_u32(seed ^ 0x8a1u)); /* flap amp */
                 e->formation_kind = ENEMY_FORMATION_V;
                 e->armed = 1;
                 e->weapon_id = ENEMY_WEAPON_PULSE;
