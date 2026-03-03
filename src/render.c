@@ -8019,26 +8019,19 @@ static vg_result draw_enemy_glyph_manta(vg_context* ctx, const enemy* e, float x
             }
         }
     }
-    /* Draw body on top to hide the wing's attachment seam. */
-    {
-        vg_fill_style body_fill = wing_fill;
-        body_fill.blend = VG_BLEND_ALPHA;
-        body_fill.intensity *= 0.48f;
-        body_fill.color.a = 0.18f + 0.06f * charge01;
-        vg_fill_style body_glow = body_fill;
-        body_glow.blend = VG_BLEND_ADDITIVE;
-        body_glow.intensity *= 0.35f;
-        body_glow.color.a *= 0.42f;
-        const int body_fill_n = (int)(sizeof(body) / sizeof(body[0])) - 1;
-        r = vg_fill_convex(ctx, body, (size_t)body_fill_n, &body_fill);
-        if (r != VG_OK) {
-            return r;
-        }
-        r = vg_fill_convex(ctx, body, (size_t)body_fill_n, &body_glow);
-        if (r != VG_OK) {
-            return r;
-        }
-    }
+	    /* Draw body on top to hide the wing's attachment seam. */
+	    {
+	        /* Keep body fill very subtle and mostly neutral so it doesn't read as a solid colored blob. */
+	        vg_fill_style body_fill = wing_fill;
+	        body_fill.blend = VG_BLEND_ALPHA;
+	        body_fill.intensity = 1.0f;
+	        body_fill.color = (vg_color){0.0f, 0.0f, 0.0f, (0.018f + 0.010f * charge01) * lerpf(0.85f, 1.10f, face01)};
+	        const int body_fill_n = (int)(sizeof(body) / sizeof(body[0])) - 1;
+	        r = vg_fill_convex(ctx, body, (size_t)body_fill_n, &body_fill);
+	        if (r != VG_OK) {
+	            return r;
+	        }
+	    }
     r = vg_draw_polyline(ctx, body, sizeof(body) / sizeof(body[0]), &main, 0);
     if (r != VG_OK) {
         return r;

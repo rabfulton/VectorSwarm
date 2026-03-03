@@ -3204,6 +3204,8 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
     if (is_wave_kind(m->kind)) {
         const int ev_item = marker_is_event_item(s, m);
         const int boid_item = is_boid_wave_kind(m->kind);
+        const float pos_step = (fabsf(delta) >= 9.0f) ? 0.10f : 0.01f;
+        const float pos_delta = (delta >= 0.0f) ? pos_step : -pos_step;
         switch (s->selected_property) {
             case 0:
                 m->kind = cycle_wave_kind(m->kind, (delta >= 0.0f) ? 1 : -1);
@@ -3219,11 +3221,11 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
                 break;
             case 1:
                 if (ev_item) m->order = (int)fmaxf(1.0f, (float)m->order + ((delta >= 0.0f) ? 1.0f : -1.0f));
-                else move_marker_x(s, s->selected_marker, delta);
+                else move_marker_x(s, s->selected_marker, pos_delta);
                 break;
             case 2:
                 if (ev_item) m->delay_s = fmaxf(0.0f, m->delay_s + delta * 0.1f);
-                else m->y01 = clampf(m->y01 + delta, 0.0f, 1.0f);
+                else m->y01 = clampf(m->y01 + pos_delta, 0.0f, 1.0f);
                 break;
             case 3: m->a += delta * 1.0f; break;
             case 4:
