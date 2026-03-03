@@ -1673,21 +1673,36 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt, int uses_cylin
     float jelly_sep_w_scale = 1.0f;
     float jelly_ali_w_scale = 1.0f;
     float jelly_coh_w_scale = 1.0f;
+    float jelly_turn_gate = 1.0f;
+    float jelly_speed_blend = 1.0f;
+    float jelly_expand_phase = 0.0f;
+    float jelly_compress_phase = 0.0f;
 
     if (e->visual_kind == ENEMY_VISUAL_JELLY) {
         const float pulse_freq = (e->visual_param_a > 0.01f) ? e->visual_param_a : 2.0f;
         const float phase = e->ai_timer_s * pulse_freq + e->visual_phase;
         const float pulse = sinf(phase);
         const float pulse01 = 0.5f + 0.5f * pulse;
-        /* Jelly school "breathes": wider + slower on expand, tighter + faster on contract. */
+        jelly_expand_phase = clampf(pulse, 0.0f, 1.0f);
+        jelly_compress_phase = clampf(-pulse, 0.0f, 1.0f);
+        /* Jelly school "breathes": wider + slower on expand, tighter on compression. */
         const float shape = 0.86f + 0.34f * pulse01;
         sep_r *= (0.90f + 0.42f * shape);
         ali_r *= (0.92f + 0.24f * shape);
         coh_r *= (0.90f + 0.26f * shape);
-        jelly_speed_scale = 0.86f + 0.26f * (1.0f - pulse01);
+        /* Acceleration bias during expansion; slowdown during compression. */
+        jelly_speed_scale = 0.60f + 0.90f * jelly_expand_phase;
         jelly_sep_w_scale = 0.90f + 0.38f * shape;
         jelly_ali_w_scale = 0.86f + 0.28f * (1.0f - shape);
         jelly_coh_w_scale = 0.88f + 0.34f * shape;
+        {
+            /* Turning occurs during compression; strongest in deep compression. */
+            float turn_window = jelly_compress_phase * jelly_compress_phase;
+            turn_window = turn_window * (3.0f - 2.0f * turn_window);
+            jelly_turn_gate = 0.05f + 0.95f * turn_window;
+        }
+        /* Glide tail and slowdown during compression. */
+        jelly_speed_blend = lerpf(0.14f, 0.56f, jelly_expand_phase);
     }
 
     const float sep_r2 = sep_r * sep_r;
@@ -2035,11 +2050,22 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt, int uses_cylin
                 normalize2(&desired_x, &desired_y);
             }
 
+            if (e->visual_kind == ENEMY_VISUAL_JELLY) {
+                const float dir_blend = 0.12f + 0.88f * jelly_turn_gate;
+                desired_x = lerpf(cur_x, desired_x, dir_blend);
+                desired_y = lerpf(cur_y, desired_y, dir_blend);
+                normalize2(&desired_x, &desired_y);
+            }
+
             cur_a = atan2f(cur_y, cur_x);
             desired_a = atan2f(desired_y, desired_x);
             out_a = cur_a;
             if (dt > 1.0e-5f && max_turn > 1.0e-4f) {
-                const float max_da = max_turn * dt;
+                float max_turn_eff = max_turn;
+                if (e->visual_kind == ENEMY_VISUAL_JELLY) {
+                    max_turn_eff *= (0.08f + 1.25f * jelly_turn_gate);
+                }
+                const float max_da = max_turn_eff * dt;
                 float da = wrap_angle_pi(desired_a - cur_a);
                 if (da > max_da) da = max_da;
                 if (da < -max_da) da = -max_da;
@@ -2052,10 +2078,11 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt, int uses_cylin
             target_speed -= avoid_boost * (0.28f * e->max_speed);
             /* Player collision urgency should trigger evasive acceleration. */
             target_speed += player_avoid_boost * (0.36f * e->max_speed);
-            if (e->visual_kind == ENEMY_VISUAL_JELLY) {
-                target_speed *= jelly_speed_scale;
-                min_speed *= lerpf(0.94f, 1.08f, jelly_speed_scale);
-            }
+                if (e->visual_kind == ENEMY_VISUAL_JELLY) {
+                    target_speed *= jelly_speed_scale;
+                    min_speed *= lerpf(0.94f, 1.08f, jelly_speed_scale);
+                    target_speed = lerpf(cur_v, target_speed, jelly_speed_blend);
+                }
             target_speed = clampf(target_speed, min_speed, e->max_speed);
 
             target_vx = cosf(out_a) * target_speed;
@@ -2063,9 +2090,18 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt, int uses_cylin
             desired_vx = target_vx;
             desired_vy = target_vy;
             if (dt > 1.0e-5f) {
+                const float prev_ax = e->b.ax;
+                const float prev_ay = e->b.ay;
                 e->b.ax = (desired_vx - e->b.vx) / dt;
                 e->b.ay = (desired_vy - e->b.vy) / dt;
                 max_accel = fmaxf(220.0f, e->accel * 280.0f);
+                if (e->visual_kind == ENEMY_VISUAL_JELLY) {
+                    const float accel_blend_base = 0.14f + 0.30f * jelly_turn_gate;
+                    const float accel_blend = accel_blend_base * (0.70f + 0.60f * jelly_expand_phase) * (1.0f - 0.45f * jelly_compress_phase);
+                    e->b.ax = lerpf(prev_ax, e->b.ax, accel_blend);
+                    e->b.ay = lerpf(prev_ay, e->b.ay, accel_blend);
+                    max_accel = fmaxf(80.0f, e->accel * lerpf(105.0f, 215.0f, jelly_expand_phase));
+                }
                 {
                     const float a_len = length2(e->b.ax, e->b.ay);
                     if (a_len > max_accel) {

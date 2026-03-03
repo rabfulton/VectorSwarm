@@ -7647,19 +7647,23 @@ static vg_result draw_enemy_glyph_jelly(vg_context* ctx, const enemy* e, float x
     const float phase = e->ai_timer_s * pulse_freq + e->visual_phase;
     const float p = sinf(phase);
     const float pulse01 = 0.5f + 0.5f * p;
+    const float accel01 = clampf(p, 0.0f, 1.0f);
     const float scale_y = 1.0f + 0.18f * p;
     const float scale_x = 1.0f - 0.10f * p;
     const float skirt_drop = rr * (0.20f + 0.10f * pulse01);
     const float seed_phase = (float)(e->visual_seed & 1023u) * 0.013f;
     const float draw_y = y + rr * 0.20f * sinf(phase * 0.5f + seed_phase);
+    vg_stroke_style main = *enemy_style;
     vg_stroke_style inner = *enemy_style;
     vg_stroke_style rim = *enemy_style;
+    main.intensity *= lerpf(0.82f, 1.36f, accel01);
+    main.color.a *= lerpf(0.80f, 1.00f, accel01);
     inner.width_px *= 0.78f;
-    inner.intensity *= 0.70f;
-    inner.color.a *= 0.72f;
+    inner.intensity *= lerpf(0.56f, 0.96f, accel01);
+    inner.color.a *= lerpf(0.62f, 0.92f, accel01);
     rim.width_px *= 1.30f;
-    rim.intensity *= 0.34f;
-    rim.color.a *= 0.58f;
+    rim.intensity *= lerpf(0.22f, 0.72f, accel01);
+    rim.color.a *= lerpf(0.36f, 0.88f, accel01);
     rim.blend = VG_BLEND_ADDITIVE;
 
     {
@@ -7678,7 +7682,7 @@ static vg_result draw_enemy_glyph_jelly(vg_context* ctx, const enemy* e, float x
             bell[i].x = x + fx * local_f + nx * local_n;
             bell[i].y = draw_y + fy * local_f + ny * local_n;
         }
-        vg_result r = vg_draw_polyline(ctx, bell, 11, enemy_style, 0);
+        vg_result r = vg_draw_polyline(ctx, bell, 11, &main, 0);
         if (r != VG_OK) {
             return r;
         }
