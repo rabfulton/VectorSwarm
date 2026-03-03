@@ -10,7 +10,7 @@ layout(push_constant) uniform RevolverPC {
 
 const float PI        = 3.14159265359;
 const float TWO_PI    = 6.28318530718;
-const float INNER_S   = 0.95;
+const float INNER_S   = 0.90;
 const float CENTRAL_S = 0.25;
 const float CYL_BRIGHTNESS = 1.24;
 
@@ -27,8 +27,8 @@ bool ring_sample(float sin_t, bool front,
     float cos_t   = sqrt(max(1.0 - sin_t * sin_t, 0.0));
     float depth   = front ? (cos_t * 0.5 + 0.5) : (0.5 - cos_t * 0.5);
     float z       = front ? cos_t : -cos_t; /* camera-space ring depth: back=-1, front=+1 */
-    float persp   = 2.4 / (2.4 - z * 1.0);  /* reciprocal perspective, softened below */
-    float y_scale = mix(1.0, persp, 0.55);
+    float persp   = 2.4 / (2.4 - z * 2.0);  /* reciprocal perspective, softened below */
+    float y_scale = mix(1.0, persp, 0.75);
     y_scale       = clamp(y_scale, 0.52, 1.08);
     float base_y  = cy + (ring_y_base - cy) * y_scale;
     float top_y   = base_y + H * y_scale;
@@ -70,7 +70,7 @@ void main() {
     float ring_y_base = vh * 0.06;   /* world-y baseline of outer/inner rings */
     float H           = vh * 0.25;   /* wall height for outer/inner rings */
     float ring_y_cen  = vh * 0.06;   /* baseline of central ring (can go off-screen) */
-    float H_cen       = vh * 0.65;   /* central ring is taller */
+    float H_cen       = vh * 0.55;   /* central ring is taller */
 
     float tiles_outer = period / (H * tile_aspect);
     float tiles_inner = tiles_outer * INNER_S;
@@ -100,7 +100,7 @@ void main() {
         result = hit;
     /* inner ring */
     if (in_ok && ring_sample(sin_inner, true, sy_game, cy,
-            ring_y_base * 1.15, H * 1.5, base_col, tiles_inner, scroll_inner, 0.85, 1.0, hit))
+            ring_y_base, H * 1.5, base_col, tiles_inner, scroll_inner, 0.85, 1.0, hit))
         result = hit;
     /* outer ring */
     if (out_ok && ring_sample(sin_outer, true, sy_game, cy,
