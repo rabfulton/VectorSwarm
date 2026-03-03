@@ -7901,14 +7901,37 @@ static vg_result draw_enemy_glyph_manta(vg_context* ctx, const enemy* e, float x
     const float root_front_f = 0.72f * rr;
     /* Extend the root attachment line to the same tail join point as the wing edge. */
     const float root_back_f = -1.76f * rr;
-    const vg_vec2 wing_root_front = (vg_vec2){x + fx * root_front_f, y + fy * root_front_f};
-    const vg_vec2 wing_root_back = (vg_vec2){x + fx * root_back_f, y + fy * root_back_f};
     vg_vec2 wing_root[WING_SEG_N + 1];
+
+    /* Sample the body top edge in local (f,n) coords so the wing attachment follows the body silhouette. */
+    const float body_top_f_unit[] = {1.40f, 1.08f, 0.40f, -0.50f, -1.30f, -1.84f};
+    const float body_top_n_unit[] = {0.00f, 0.22f, 0.33f, 0.22f, 0.06f, 0.00f};
+    const int body_top_count = (int)(sizeof(body_top_f_unit) / sizeof(body_top_f_unit[0]));
     for (int i = 0; i <= WING_SEG_N; ++i) {
         const float u = (float)i / (float)WING_SEG_N;
-        /* Root attachment line (in body plane). */
-        wing_root[i].x = lerpf(wing_root_front.x, wing_root_back.x, u);
-        wing_root[i].y = lerpf(wing_root_front.y, wing_root_back.y, u);
+        /* Root attachment curve: follow the top edge of the manta body, inset slightly. */
+        const float root_f = lerpf(root_front_f, root_back_f, u);
+        const float f_unit = root_f / fmaxf(rr, 1.0e-4f);
+        float n_unit = body_top_n_unit[body_top_count - 1];
+        if (f_unit >= body_top_f_unit[0]) {
+            n_unit = body_top_n_unit[0];
+        } else if (f_unit <= body_top_f_unit[body_top_count - 1]) {
+            n_unit = body_top_n_unit[body_top_count - 1];
+        } else {
+            for (int j = 0; j < body_top_count - 1; ++j) {
+                const float f0 = body_top_f_unit[j];
+                const float f1 = body_top_f_unit[j + 1];
+                if (f_unit <= f0 && f_unit >= f1) {
+                    const float t = (f0 - f_unit) / fmaxf(f0 - f1, 1.0e-6f);
+                    n_unit = lerpf(body_top_n_unit[j], body_top_n_unit[j + 1], clampf(t, 0.0f, 1.0f));
+                    break;
+                }
+            }
+        }
+        float root_n = (n_unit - 0.035f) * rr;
+        root_n = fmaxf(root_n, -0.02f * rr);
+        wing_root[i].x = x + fx * root_f + nx * root_n;
+        wing_root[i].y = y + fy * root_f + ny * root_n;
         /* Profile: manta wings are swept and forward-weighted, not semicircular. */
         const float prof0 = sinf(u * 3.14159265f); /* 0..1..0 */
         float prof = prof0 * (1.10f - 0.55f * u); /* bias more area toward the front */
@@ -7941,6 +7964,11 @@ static vg_result draw_enemy_glyph_manta(vg_context* ctx, const enemy* e, float x
         wing_edge[i].x = x + fx * f + nx * outer_n;
         wing_edge[i].y = y + fy * f + ny * outer_n;
     }
+    const vg_vec2 wing_root_front = wing_root[0];
+    const vg_vec2 wing_root_back = wing_root[WING_SEG_N];
+    /* Ensure the outer edge meets the attachment curve at both ends. */
+    wing_edge[0] = wing_root_front;
+    wing_edge[WING_SEG_N] = wing_root_back;
 
     vg_result r = VG_OK;
     {
@@ -8036,11 +8064,7 @@ static vg_result draw_enemy_glyph_manta(vg_context* ctx, const enemy* e, float x
         /* Interior shade and a few ribs. */
         vg_vec2 shade[WING_SEG_N + 1];
         for (int i = 0; i <= WING_SEG_N; ++i) {
-            const float u = (float)i / (float)WING_SEG_N;
-            const vg_vec2 root_at_u = (vg_vec2){
-                lerpf(wing_root_front.x, wing_root_back.x, u),
-                lerpf(wing_root_front.y, wing_root_back.y, u)
-            };
+            const vg_vec2 root_at_u = wing_root[i];
             shade[i].x = lerpf(root_at_u.x, wing_edge[i].x, 0.62f);
             shade[i].y = lerpf(root_at_u.y, wing_edge[i].y, 0.62f);
         }
@@ -8051,11 +8075,7 @@ static vg_result draw_enemy_glyph_manta(vg_context* ctx, const enemy* e, float x
         const int rib_idx[] = {6, 14, 22, 30};
         for (int i = 0; i < (int)(sizeof(rib_idx) / sizeof(rib_idx[0])); ++i) {
             const int idx = clampi(rib_idx[i], 0, WING_SEG_N);
-            const float u = (float)idx / (float)WING_SEG_N;
-            const vg_vec2 root_at_u = (vg_vec2){
-                lerpf(wing_root_front.x, wing_root_back.x, u),
-                lerpf(wing_root_front.y, wing_root_back.y, u)
-            };
+            const vg_vec2 root_at_u = wing_root[idx];
             const vg_vec2 rib[] = {root_at_u, wing_edge[idx]};
             r = vg_draw_polyline(ctx, rib, 2, &detail, 0);
             if (r != VG_OK) {
