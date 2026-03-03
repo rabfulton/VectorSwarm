@@ -48,7 +48,8 @@ enum level_render_style_id {
 
 enum enemy_visual_kind {
     ENEMY_VISUAL_DEFAULT = 0,
-    ENEMY_VISUAL_JELLY = 1
+    ENEMY_VISUAL_JELLY = 1,
+    ENEMY_VISUAL_MANTA = 2
 };
 
 typedef struct star {
@@ -143,11 +144,16 @@ typedef struct enemy {
     float lane_dir;
     float home_y;
     int formation_kind;
+    int hp;
+    int missile_ammo;
     int armed;
     int weapon_id;
     float fire_cooldown_s;
     int burst_shots_left;
     float burst_gap_timer_s;
+    float missile_cooldown_s;
+    float missile_charge_s;
+    float missile_charge_duration_s;
 } enemy;
 
 typedef struct enemy_bullet {
@@ -459,5 +465,17 @@ void game_structure_avoidance_vector(
 );
 int game_line_of_sight_clear(const game_state* g, float x0, float y0, float x1, float y1, float radius);
 int game_structure_segment_blocked(const game_state* g, float x0, float y0, float x1, float y1, float pad_radius);
+int game_spawn_enemy_missile(
+    game_state* g,
+    float x,
+    float y,
+    float dir_x,
+    float dir_y,
+    float speed,
+    float turn_rate_deg,
+    float ttl_s,
+    float hit_radius,
+    float blast_radius
+);
 
 #endif

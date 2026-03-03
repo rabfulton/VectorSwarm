@@ -88,6 +88,16 @@ static float clampf(float v, float lo, float hi) {
     return v;
 }
 
+static int clampi(int v, int lo, int hi) {
+    if (v < lo) {
+        return lo;
+    }
+    if (v > hi) {
+        return hi;
+    }
+    return v;
+}
+
 static float lerpf(float a, float b, float t) {
     return a + (b - a) * t;
 }
@@ -650,6 +660,11 @@ static enemy* spawn_enemy_common(game_state* g, float su) {
         e->visual_phase = 0.0f;
         e->visual_param_a = 0.0f;
         e->visual_param_b = 0.0f;
+        e->hp = 1;
+        e->missile_ammo = 0;
+        e->missile_cooldown_s = 0.0f;
+        e->missile_charge_s = 0.0f;
+        e->missile_charge_duration_s = 0.0f;
         return e;
     }
     return NULL;
@@ -1024,6 +1039,37 @@ void enemy_spawn_curated_enemy(
             e->max_speed = ((ce->c > 0.0f) ? ce->c : ((ce->kind == 3) ? lvl->v.max_speed : lvl->sine.max_speed)) * su;
             e->accel = (ce->kind == 3) ? lvl->v.accel : lvl->sine.accel;
             e->lane_dir = lane_dir_toward_player_x(g, e->b.x, uses_cylinder, period);
+            if (ce->kind == 16) {
+                const uint32_t seed = enemy_visual_seed_from_ids(wave_id, i);
+                const float size_scale = clampf((ce->b > 0.0f) ? ce->b : 1.90f, 1.0f, 4.0f);
+                const float slot = (float)i - 0.5f * (float)(count - 1);
+                e->visual_kind = ENEMY_VISUAL_MANTA;
+                e->visual_seed = seed;
+                e->visual_phase = hash01_u32(seed ^ 0x6d2u) * 6.2831853f;
+                e->visual_param_a = lerpf(1.2f, 1.8f, hash01_u32(seed ^ 0x39fu)); /* ripple speed */
+                e->visual_param_b = lerpf(0.12f, 0.22f, hash01_u32(seed ^ 0x8a1u)); /* ripple amp */
+                e->formation_kind = ENEMY_FORMATION_V;
+                e->armed = 1;
+                e->weapon_id = ENEMY_WEAPON_PULSE;
+                e->hp = 3;
+                e->missile_ammo = (ce->c > 0.0f) ? clampi((int)lroundf(ce->c), 0, 12) : 2;
+                e->radius *= size_scale;
+                {
+                    const float spacing = fmaxf(78.0f * su, e->radius * 2.8f);
+                    e->b.x = g->world_w * ce->x01 + slot * spacing;
+                    if (count > 1) {
+                        const float y_spacing = fmaxf(42.0f * su, e->radius * 1.55f);
+                        e->home_y = clampf(e->home_y + slot * y_spacing, 26.0f * su, g->world_h - 26.0f * su);
+                        e->b.y = e->home_y;
+                    }
+                }
+                e->form_amp = 0.0f;
+                e->form_freq = 0.0f;
+                e->max_speed = 240.0f * su;
+                e->accel = 1.9f;
+                e->fire_cooldown_s = 1.0f + frand01() * 0.8f;
+                e->missile_cooldown_s = 2.8f + frand01() * 2.0f;
+            }
             enemy_adjust_spawn_clear(g, e, su);
         }
     }
@@ -1085,6 +1131,8 @@ void enemy_spawn_next_wave(
                 announce_wave(g, "curated boid contact");
             } else if (ce->kind == 15) {
                 announce_wave(g, "curated jelly swarm");
+            } else if (ce->kind == 16) {
+                announce_wave(g, "curated manta ray");
             } else if (ce->kind == 4) {
                 announce_wave(g, "curated kamikaze contact");
             } else if (ce->kind == 3) {
@@ -1177,7 +1225,7 @@ static void enemy_fire_projectiles(game_state* g, const enemy* e, const enemy_we
     }
 }
 
-static void enemy_try_fire(game_state* g, enemy* e, float dt, const leveldef_db* db, int uses_cylinder, float period) {
+static void enemy_try_fire(game_state* g, enemy* e, float dt, float su, const leveldef_db* db, int uses_cylinder, float period) {
     const leveldef_combat_tuning* combat;
     enemy_weapon_def w_local;
     const enemy_weapon_def* w;
@@ -1211,6 +1259,37 @@ static void enemy_try_fire(game_state* g, enemy* e, float dt, const leveldef_db*
     }
     if (e->fire_cooldown_s > 0.0f) {
         e->fire_cooldown_s -= dt;
+    }
+    if (e->missile_cooldown_s > 0.0f) {
+        e->missile_cooldown_s -= dt;
+    }
+    if (e->visual_kind == ENEMY_VISUAL_MANTA && e->missile_charge_duration_s > 0.0f) {
+        e->missile_charge_s += dt;
+        if (e->missile_charge_s >= e->missile_charge_duration_s) {
+            float dir_x = uses_cylinder ? wrap_delta(g->player.b.x, e->b.x, period) : (g->player.b.x - e->b.x);
+            float dir_y = g->player.b.y - e->b.y;
+            normalize2(&dir_x, &dir_y);
+            if (game_spawn_enemy_missile(
+                    g,
+                    e->b.x + dir_x * (e->radius + 8.0f * su),
+                    e->b.y + dir_y * (e->radius + 8.0f * su),
+                    dir_x,
+                    dir_y,
+                    420.0f * su,
+                    115.0f,
+                    3.4f,
+                    22.0f * su,
+                    72.0f * su)) {
+                game_push_audio_event(g, GAME_AUDIO_EVENT_ENEMY_FIRE, e->b.x, e->b.y);
+                if (e->missile_ammo > 0) {
+                    e->missile_ammo -= 1;
+                }
+            }
+            e->missile_charge_s = 0.0f;
+            e->missile_charge_duration_s = 0.0f;
+            e->missile_cooldown_s = frand_range(4.8f, 8.2f);
+        }
+        return;
     }
 
     if (e->burst_shots_left > 0 && e->burst_gap_timer_s <= 0.0f) {
@@ -1265,6 +1344,23 @@ static void enemy_try_fire(game_state* g, enemy* e, float dt, const leveldef_db*
         }
     }
 
+    if (e->visual_kind == ENEMY_VISUAL_MANTA) {
+        if (e->missile_ammo != 0 && e->missile_cooldown_s <= 0.0f) {
+            const float mx = uses_cylinder ? wrap_delta(g->player.b.x, e->b.x, period) : (g->player.b.x - e->b.x);
+            const float my = g->player.b.y - e->b.y;
+            const float d2 = mx * mx + my * my;
+            const float start_r = g->world_w * 0.18f;
+            const float end_r = g->world_w * 0.52f;
+            if (d2 >= start_r * start_r && d2 <= end_r * end_r) {
+                e->missile_charge_duration_s = frand_range(0.55f, 0.95f);
+                e->missile_charge_s = 0.0f;
+                e->missile_cooldown_s = frand_range(4.8f, 8.2f);
+                e->fire_cooldown_s = fmaxf(e->fire_cooldown_s, 0.45f);
+                return;
+            }
+        }
+    }
+
     enemy_fire_projectiles(g, e, w, &t, uses_cylinder, period);
     e->burst_shots_left = w->burst_count - 1;
     e->burst_gap_timer_s = (e->burst_shots_left > 0) ? w->burst_gap_s : 0.0f;
@@ -1274,6 +1370,7 @@ static void enemy_try_fire(game_state* g, enemy* e, float dt, const leveldef_db*
 static void update_enemy_formation(game_state* g, enemy* e, float dt, float su, int uses_cylinder, float period) {
     const float dx_player = uses_cylinder ? wrap_delta(g->player.b.x, e->b.x, period) : (g->player.b.x - e->b.x);
     const float dy_player = g->player.b.y - e->b.y;
+    const int is_manta = (e->visual_kind == ENEMY_VISUAL_MANTA);
     const int same_screen =
         (fabsf(dx_player) <= g->world_w * 0.52f) &&
         (fabsf(dy_player) <= g->world_h * 0.52f);
@@ -1296,6 +1393,25 @@ static void update_enemy_formation(game_state* g, enemy* e, float dt, float su, 
             } break;
             case ENEMY_FORMATION_V:
             default: {
+                if (is_manta) {
+                    const float flap_freq = (e->visual_param_a > 0.01f) ? e->visual_param_a : 1.5f;
+                    const float glide_phase = g->t * flap_freq + e->visual_phase;
+                    const float wing = 0.5f + 0.5f * sinf(glide_phase);
+                    const float lane_dir = (e->lane_dir < 0.0f) ? -1.0f : 1.0f;
+                    const float dx_to_player = uses_cylinder ? wrap_delta(g->player.b.x, e->b.x, period) : (g->player.b.x - e->b.x);
+                    const float wing_zero_gate = fabsf(sinf(e->ai_timer_s * (2.2f + flap_freq) + e->visual_phase));
+                    if (fabsf(dx_to_player) > g->world_w * 0.26f && e->ai_timer_s > 2.2f && wing_zero_gate <= 0.10f) {
+                        e->lane_dir = (dx_to_player < 0.0f) ? -1.0f : 1.0f;
+                        e->ai_timer_s = 0.0f;
+                    }
+                    {
+                        const float target_vx = lane_dir * lerpf(0.72f, 1.05f, wing) * e->max_speed;
+                        steer_to_velocity(&e->b, target_vx, 0.0f, e->accel, 1.05f);
+                    }
+                    e->b.y = e->home_y;
+                    e->b.vy = 0.0f;
+                    break;
+                }
                 const float desired_y = e->home_y + sinf(g->t * e->form_freq + e->form_phase) * e->form_amp;
                 const float lane_dir = (e->lane_dir < 0.0f) ? -1.0f : 1.0f;
                 const float target_vx = lane_dir * 165.0f * su;
@@ -1316,6 +1432,39 @@ static void update_enemy_formation(game_state* g, enemy* e, float dt, float su, 
             } break;
         }
     } else {
+        if (is_manta) {
+            const float lead = 0.32f;
+            const float tx = g->player.b.x + g->player.b.vx * lead;
+            const float ty = g->player.b.y + g->player.b.vy * lead;
+            float to_x = uses_cylinder ? wrap_delta(tx, e->b.x, period) : (tx - e->b.x);
+            float to_y = ty - e->b.y;
+            float dir_x = to_x;
+            float dir_y = to_y;
+            normalize2(&dir_x, &dir_y);
+            {
+                const float glide_arc = sinf(g->t * 0.45f + e->visual_phase) * 0.40f;
+                const float px = -dir_y;
+                const float py = dir_x;
+                dir_x += px * glide_arc;
+                dir_y += py * glide_arc;
+                normalize2(&dir_x, &dir_y);
+            }
+            steer_to_velocity(
+                &e->b,
+                dir_x * (e->max_speed * 1.08f),
+                0.0f,
+                e->accel * 0.95f,
+                1.35f
+            );
+            e->b.y = e->home_y;
+            e->b.vy = 0.0f;
+            if (e->ai_timer_s > fmaxf(e->break_delay_s, 2.2f)) {
+                e->state = ENEMY_STATE_FORMATION;
+                e->ai_timer_s = 0.0f;
+                e->break_delay_s = 0.0f;
+            }
+            return;
+        }
         const float lead = 0.45f;
         const float tx = g->player.b.x + g->player.b.vx * lead;
         const float ty = g->player.b.y + g->player.b.vy * lead;
@@ -2156,6 +2305,11 @@ void enemy_update_system(
             }
         }
         integrate_body(&e->b, dt);
+        if (e->visual_kind == ENEMY_VISUAL_MANTA) {
+            e->b.y = e->home_y;
+            e->b.vy = 0.0f;
+            e->b.ay = 0.0f;
+        }
         if (!uses_cylinder) {
             if (e->archetype != ENEMY_ARCH_SWARM) {
                 float avoid_x = 0.0f;
@@ -2268,7 +2422,7 @@ void enemy_update_system(
             }
         }
         if (!uses_cylinder && e->b.x < g->camera_x - g->world_w * 0.72f) {
-            if (e->archetype == ENEMY_ARCH_FORMATION) {
+            if (e->archetype == ENEMY_ARCH_FORMATION && e->visual_kind != ENEMY_VISUAL_MANTA) {
                 e->state = ENEMY_STATE_BREAK_ATTACK;
                 e->ai_timer_s = 0.0f;
                 e->break_delay_s = 1.0f + frand01() * 1.3f;
@@ -2324,7 +2478,7 @@ void enemy_update_system(
                 player_hit_this_frame = 1;
             }
         }
-        enemy_try_fire(g, e, dt, db, uses_cylinder, period);
+        enemy_try_fire(g, e, dt, su, db, uses_cylinder, period);
     }
 
     for (size_t i = 0; i < MAX_ENEMY_BULLETS; ++i) {
@@ -2380,11 +2534,24 @@ void enemy_update_system(
             if (dist_sq_level(uses_cylinder, period, g->bullets[bi].b.x, g->bullets[bi].b.y, g->enemies[ei].b.x, g->enemies[ei].b.y) <=
                 g->enemies[ei].radius * g->enemies[ei].radius) {
                 g->bullets[bi].active = 0;
-                emit_enemy_debris(g, &g->enemies[ei], g->bullets[bi].b.vx, g->bullets[bi].b.vy);
-                g->enemies[ei].active = 0;
-                emit_explosion(g, g->enemies[ei].b.x, g->enemies[ei].b.y, g->enemies[ei].b.vx, g->enemies[ei].b.vy, 26, su);
-                g->kills += 1;
-                g->score += 100;
+                {
+                    enemy* hit = &g->enemies[ei];
+                    const int hp_max = (hit->hp > 0) ? hit->hp : 1;
+                    hit->hp = hp_max - 1;
+                    if (hit->hp <= 0) {
+                        emit_enemy_debris(g, hit, g->bullets[bi].b.vx, g->bullets[bi].b.vy);
+                        hit->active = 0;
+                        emit_explosion(g, hit->b.x, hit->b.y, hit->b.vx, hit->b.vy, 26, su);
+                        g->kills += 1;
+                        g->score += 100;
+                    } else {
+                        hit->b.vx += g->bullets[bi].b.vx * 0.05f;
+                        hit->b.vy += g->bullets[bi].b.vy * 0.05f;
+                        if (hit->visual_kind == ENEMY_VISUAL_MANTA) {
+                            hit->missile_charge_s = fmaxf(0.0f, hit->missile_charge_s - 0.18f);
+                        }
+                    }
+                }
                 break;
             }
         }

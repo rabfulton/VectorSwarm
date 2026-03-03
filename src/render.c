@@ -4055,6 +4055,7 @@ static const char* level_editor_marker_name(int kind) {
         case 11: return "SWARM FIREFLY";
         case 12: return "SWARM BIRD";
         case 15: return "JELLY SWARM";
+        case 16: return "MANTA WING";
         case 6: return "ASTEROID STORM";
         case 7: return "MINEFIELD";
         case 8: return "MISSILE LAUNCHER";
@@ -4090,7 +4091,7 @@ static vg_color level_editor_marker_color(const palette_theme* pal, int kind) {
     if (kind == 9) {
         return (vg_color){0.48f, 0.90f, 1.0f, 1.0f};
     }
-    if (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 15) {
+    if (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 15 || kind == 16) {
         return (vg_color){1.0f, 0.26f, 0.26f, 1.0f};
     }
     return pal->secondary;
@@ -4411,6 +4412,7 @@ static const char* editor_wave_type_name(int kind) {
         case 11: return "SWARM FIREFLY";
         case 12: return "SWARM BIRD";
         case 15: return "JELLY SWARM";
+        case 16: return "MANTA WING";
         default: return "UNKNOWN";
     }
 }
@@ -4553,7 +4555,7 @@ static int editor_marker_properties_text(
         if (n < cap) { out_labels[n] = "VENT HEIGHT"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_g[sel]); n++; }
         return n;
     }
-    if (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 15) {
+    if (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 15 || kind == 16) {
         const int event_item = (metrics->level_editor_marker_track[sel] == 1);
         const int boid_item = (kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 15);
         const int kamikaze_item = (kind == 4);
@@ -4567,14 +4569,24 @@ static int editor_marker_properties_text(
         }
         if (n < cap) { out_labels[n] = "COUNT"; snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_a[sel]); n++; }
         if (n < cap) {
-            out_labels[n] = (kind == 2 || kind == 3) ? "FORMATION AMP" : "MAX SPEED";
+            if (kind == 16) {
+                out_labels[n] = "SIZE";
+            } else {
+                out_labels[n] = (kind == 2 || kind == 3) ? "FORMATION AMP" : "MAX SPEED";
+            }
             snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_b[sel]);
             n++;
         }
         if (n < cap) {
-            out_labels[n] = (kind == 2 || kind == 3) ? "MAX SPEED" : "ACCEL";
-            snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_c[sel]);
-            n++;
+            if (kind == 16) {
+                out_labels[n] = "MISSILES";
+                snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_c[sel]);
+                n++;
+            } else {
+                out_labels[n] = (kind == 2 || kind == 3) ? "MAX SPEED" : "ACCEL";
+                snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_c[sel]);
+                n++;
+            }
         }
         if (boid_item && n < cap) {
             if (kind == 15) {
@@ -7795,8 +7807,118 @@ static vg_result draw_enemy_glyph_jelly(vg_context* ctx, const enemy* e, float x
     return VG_OK;
 }
 
+static vg_result draw_enemy_glyph_manta(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
+    float fx = 0.0f;
+    float fy = 0.0f;
+    float nx = 0.0f;
+    float ny = 0.0f;
+    enemy_glyph_basis(e, &fx, &fy, &nx, &ny);
+    const float flap_speed = (e->visual_param_a > 0.01f) ? e->visual_param_a : 1.5f;
+    const float flap_amp = clampf((e->visual_param_b > 0.01f) ? e->visual_param_b : 0.16f, 0.06f, 0.32f);
+    const float flap_t = e->ai_timer_s * (2.2f + flap_speed) + e->visual_phase;
+    const float flap = sinf(flap_t);
+    const float charge01 = (e->missile_charge_duration_s > 0.01f)
+        ? clampf(e->missile_charge_s / e->missile_charge_duration_s, 0.0f, 1.0f)
+        : 0.0f;
+    vg_stroke_style main = *enemy_style;
+    vg_stroke_style glow = *enemy_style;
+    vg_stroke_style detail = *enemy_style;
+    main.intensity *= lerpf(0.90f, 1.65f, charge01);
+    main.color.a *= lerpf(0.86f, 1.00f, charge01);
+    detail.width_px *= 0.78f;
+    detail.intensity *= lerpf(0.70f, 1.22f, charge01);
+    detail.color.a *= lerpf(0.66f, 0.98f, charge01);
+    glow.width_px *= 1.40f;
+    glow.blend = VG_BLEND_ADDITIVE;
+    glow.intensity *= lerpf(0.35f, 1.25f, charge01);
+    glow.color.a *= lerpf(0.45f, 0.95f, charge01);
+    vg_stroke_style wing_side = main;
+    wing_side.width_px *= 0.92f;
+    /* Continuous wing shading by flap phase: brighter on underside (up), dimmer on topside (down). */
+    wing_side.intensity *= lerpf(0.80f, 1.20f, 0.5f + 0.5f * flap);
+    wing_side.color.a = 1.0f;
+    vg_stroke_style wing_shade = wing_side;
+    wing_shade.intensity *= 0.86f;
+    wing_shade.color.a = 1.0f;
+    wing_shade.blend = VG_BLEND_ALPHA;
+    vg_fill_style wing_fill = {
+        .intensity = wing_side.intensity * 0.95f,
+        .color = (vg_color){wing_side.color.r, wing_side.color.g, wing_side.color.b, 1.0f},
+        .blend = VG_BLEND_ALPHA
+    };
+
+    const vg_vec2 body[] = {
+        {x + fx * (1.32f * rr) + nx * (0.00f * rr), y + fy * (1.32f * rr) + ny * (0.00f * rr)},
+        {x + fx * (0.74f * rr) + nx * (0.24f * rr), y + fy * (0.74f * rr) + ny * (0.24f * rr)},
+        {x + fx * (0.02f * rr) + nx * (0.29f * rr), y + fy * (0.02f * rr) + ny * (0.29f * rr)},
+        {x + fx * (-0.82f * rr) + nx * (0.14f * rr), y + fy * (-0.82f * rr) + ny * (0.14f * rr)},
+        {x + fx * (-1.56f * rr) + nx * (0.02f * rr), y + fy * (-1.56f * rr) + ny * (0.02f * rr)},
+        {x + fx * (-1.84f * rr) + nx * (0.00f * rr), y + fy * (-1.84f * rr) + ny * (0.00f * rr)},
+        {x + fx * (-1.56f * rr) + nx * (-0.10f * rr), y + fy * (-1.56f * rr) + ny * (-0.10f * rr)},
+        {x + fx * (-0.82f * rr) + nx * (-0.22f * rr), y + fy * (-0.82f * rr) + ny * (-0.22f * rr)},
+        {x + fx * (0.02f * rr) + nx * (-0.27f * rr), y + fy * (0.02f * rr) + ny * (-0.27f * rr)},
+        {x + fx * (0.74f * rr) + nx * (-0.20f * rr), y + fy * (0.74f * rr) + ny * (-0.20f * rr)},
+        {x + fx * (1.32f * rr) + nx * (0.00f * rr), y + fy * (1.32f * rr) + ny * (0.00f * rr)}
+    };
+    const float wing_base_front_f = 1.05f * rr;
+    const float wing_base_back_f = -1.30f * rr;
+    const float wing_apex_f = -0.05f * rr + sinf(flap_t + 0.9f) * 0.20f * rr;
+    /* Tip height is pure sine: 0 = flat, +1/-1 = full up/down. */
+    const float wing_apex_n = rr * 1.18f * flap;
+    const vg_vec2 wing_tri[] = {
+        {x + fx * wing_base_front_f + nx * (0.00f * rr), y + fy * wing_base_front_f + ny * (0.00f * rr)},
+        {x + fx * wing_apex_f + nx * wing_apex_n, y + fy * wing_apex_f + ny * wing_apex_n},
+        {x + fx * wing_base_back_f + nx * (0.00f * rr), y + fy * wing_base_back_f + ny * (0.00f * rr)}
+    };
+    const vg_vec2 wing_outline[] = {
+        wing_tri[0],
+        wing_tri[1],
+        wing_tri[2],
+        wing_tri[0]
+    };
+    const float tail_wave = rr * 0.13f;
+    const float tail_t = flap_t * 0.5f;
+    const vg_vec2 tail[] = {
+        {x + fx * (-1.76f * rr), y + fy * (-1.76f * rr)},
+        {x + fx * (-2.10f * rr) + nx * (tail_wave * sinf(tail_t + 0.8f)), y + fy * (-2.10f * rr) + ny * (tail_wave * sinf(tail_t + 0.8f))},
+        {x + fx * (-2.45f * rr) + nx * (tail_wave * 1.25f * sinf(tail_t + 1.8f)), y + fy * (-2.45f * rr) + ny * (tail_wave * 1.25f * sinf(tail_t + 1.8f))},
+        {x + fx * (-2.82f * rr) + nx * (tail_wave * 1.55f * sinf(tail_t + 2.6f)), y + fy * (-2.82f * rr) + ny * (tail_wave * 1.55f * sinf(tail_t + 2.6f))}
+    };
+    vg_result r = vg_draw_polyline(ctx, body, sizeof(body) / sizeof(body[0]), &main, 0);
+    if (r != VG_OK) {
+        return r;
+    }
+    r = vg_draw_polyline(ctx, body, sizeof(body) / sizeof(body[0]), &glow, 0);
+    if (r != VG_OK) {
+        return r;
+    }
+    r = vg_fill_convex(ctx, wing_tri, 3, &wing_fill);
+    if (r != VG_OK) {
+        return r;
+    }
+    r = vg_draw_polyline(ctx, wing_outline, 4, &wing_side, 0);
+    if (r != VG_OK) {
+        return r;
+    }
+    r = vg_draw_polyline(ctx, wing_outline, 4, &wing_shade, 0);
+    if (r != VG_OK) {
+        return r;
+    }
+    r = vg_draw_polyline(ctx, tail, 4, &main, 0);
+    if (r != VG_OK) {
+        return r;
+    }
+    r = vg_draw_polyline(ctx, tail, 4, &glow, 0);
+    if (r != VG_OK) {
+        return r;
+    }
+    return VG_OK;
+}
+
 static vg_result draw_enemy_glyph(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
     switch (e->visual_kind) {
+        case ENEMY_VISUAL_MANTA:
+            return draw_enemy_glyph_manta(ctx, e, x, y, rr, enemy_style);
         case ENEMY_VISUAL_JELLY:
             return draw_enemy_glyph_jelly(ctx, e, x, y, rr, enemy_style);
         case ENEMY_VISUAL_DEFAULT:

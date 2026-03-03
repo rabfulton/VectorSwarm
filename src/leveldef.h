@@ -253,7 +253,7 @@ typedef struct leveldef_wave_kamikaze_tuning {
 } leveldef_wave_kamikaze_tuning;
 
 typedef struct leveldef_curated_enemy {
-    int kind; /* level editor marker kind: 2=sine,3=v,4=kamikaze,5=boid,10/11/12=swarm variants,15=jelly_swarm */
+    int kind; /* level editor marker kind: 2=sine,3=v,4=kamikaze,5=boid,10/11/12=swarm variants,15=jelly_swarm,16=manta_wing */
     float x01; /* in screens (same unit as exit_x01) */
     float y01; /* 0..1 on screen */
     float a;

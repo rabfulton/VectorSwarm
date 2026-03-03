@@ -1242,9 +1242,13 @@ static void explode_missile(game_state* g, homing_missile* m, int direct_hit) {
             const float dy = e->b.y - y;
             const float d2 = dx * dx + dy * dy;
             if (d2 <= hit2) {
-                e->active = 0;
-                g->kills += 1;
-                g->score += 100;
+                const int hp_max = (e->hp > 0) ? e->hp : 1;
+                e->hp = hp_max - 1;
+                if (e->hp <= 0) {
+                    e->active = 0;
+                    g->kills += 1;
+                    g->score += 100;
+                }
                 continue;
             }
             if (d2 <= blast2) {
@@ -1462,6 +1466,52 @@ static void spawn_enemy_missile_one(game_state* g, missile_launcher* ml) {
     if (ml->launched_count >= ml->count) {
         ml->fired = 1;
     }
+}
+
+int game_spawn_enemy_missile(
+    game_state* g,
+    float x,
+    float y,
+    float dir_x,
+    float dir_y,
+    float speed,
+    float turn_rate_deg,
+    float ttl_s,
+    float hit_radius,
+    float blast_radius
+) {
+    if (!g || g->lives <= 0) {
+        return 0;
+    }
+    homing_missile* m = alloc_missile(g);
+    if (!m) {
+        return 0;
+    }
+    const float su = gameplay_ui_scale(g);
+    const float v = sqrtf(dir_x * dir_x + dir_y * dir_y);
+    if (v <= 1.0e-5f) {
+        dir_x = 1.0f;
+        dir_y = 0.0f;
+    } else {
+        dir_x /= v;
+        dir_y /= v;
+    }
+    m->owner = MISSILE_OWNER_ENEMY;
+    m->b.x = x;
+    m->b.y = y;
+    m->heading_rad = atan2f(dir_y, dir_x);
+    m->speed = fmaxf(speed, 10.0f);
+    m->turn_rate_rad_s = deg_to_rad(fmaxf(turn_rate_deg, 1.0f));
+    m->ttl_s = fmaxf(ttl_s, 0.1f);
+    m->hit_radius = fmaxf(hit_radius, 1.0f);
+    m->blast_radius = fmaxf(blast_radius, m->hit_radius);
+    m->radius = 10.0f * su;
+    m->trail_emit_accum = 0.0f;
+    m->b.vx = dir_x * m->speed;
+    m->b.vy = dir_y * m->speed;
+    m->b.ax = 0.0f;
+    m->b.ay = 0.0f;
+    return 1;
 }
 
 static void spawn_player_missile(game_state* g) {
