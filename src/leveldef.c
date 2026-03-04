@@ -362,6 +362,21 @@ void leveldef_init_defaults(leveldef_db* db) {
         db->levels[i].spawn_mode = -1;
         db->levels[i].default_boid_profile = -1;
         db->levels[i].powerup_drop_chance = 0.12f;
+        db->levels[i].powerup_double_shot_r = 0.90f;
+        db->levels[i].powerup_double_shot_g = 0.95f;
+        db->levels[i].powerup_double_shot_b = 1.00f;
+        db->levels[i].powerup_triple_shot_r = 1.00f;
+        db->levels[i].powerup_triple_shot_g = 0.86f;
+        db->levels[i].powerup_triple_shot_b = 0.54f;
+        db->levels[i].powerup_vitality_r = 0.64f;
+        db->levels[i].powerup_vitality_g = 1.00f;
+        db->levels[i].powerup_vitality_b = 0.72f;
+        db->levels[i].powerup_orbital_boost_r = 0.70f;
+        db->levels[i].powerup_orbital_boost_g = 0.86f;
+        db->levels[i].powerup_orbital_boost_b = 1.00f;
+        db->levels[i].powerup_magnet_r = 1.00f;
+        db->levels[i].powerup_magnet_g = 0.76f;
+        db->levels[i].powerup_magnet_b = 0.72f;
     }
     {
         leveldef_level* b = &db->levels[LEVEL_STYLE_BLANK];
@@ -973,6 +988,36 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_level->cylinder_double_swarm_chance = strtof(v, NULL);
                     } else if (strcmp(k, "powerup_drop_chance") == 0) {
                         cur_level->powerup_drop_chance = strtof(v, NULL);
+                    } else if (strcmp(k, "powerup.double_shot_r") == 0) {
+                        cur_level->powerup_double_shot_r = strtof(v, NULL);
+                    } else if (strcmp(k, "powerup.double_shot_g") == 0) {
+                        cur_level->powerup_double_shot_g = strtof(v, NULL);
+                    } else if (strcmp(k, "powerup.double_shot_b") == 0) {
+                        cur_level->powerup_double_shot_b = strtof(v, NULL);
+                    } else if (strcmp(k, "powerup.triple_shot_r") == 0) {
+                        cur_level->powerup_triple_shot_r = strtof(v, NULL);
+                    } else if (strcmp(k, "powerup.triple_shot_g") == 0) {
+                        cur_level->powerup_triple_shot_g = strtof(v, NULL);
+                    } else if (strcmp(k, "powerup.triple_shot_b") == 0) {
+                        cur_level->powerup_triple_shot_b = strtof(v, NULL);
+                    } else if (strcmp(k, "powerup.vitality_r") == 0) {
+                        cur_level->powerup_vitality_r = strtof(v, NULL);
+                    } else if (strcmp(k, "powerup.vitality_g") == 0) {
+                        cur_level->powerup_vitality_g = strtof(v, NULL);
+                    } else if (strcmp(k, "powerup.vitality_b") == 0) {
+                        cur_level->powerup_vitality_b = strtof(v, NULL);
+                    } else if (strcmp(k, "powerup.orbital_boost_r") == 0) {
+                        cur_level->powerup_orbital_boost_r = strtof(v, NULL);
+                    } else if (strcmp(k, "powerup.orbital_boost_g") == 0) {
+                        cur_level->powerup_orbital_boost_g = strtof(v, NULL);
+                    } else if (strcmp(k, "powerup.orbital_boost_b") == 0) {
+                        cur_level->powerup_orbital_boost_b = strtof(v, NULL);
+                    } else if (strcmp(k, "powerup.magnet_r") == 0) {
+                        cur_level->powerup_magnet_r = strtof(v, NULL);
+                    } else if (strcmp(k, "powerup.magnet_g") == 0) {
+                        cur_level->powerup_magnet_g = strtof(v, NULL);
+                    } else if (strcmp(k, "powerup.magnet_b") == 0) {
+                        cur_level->powerup_magnet_b = strtof(v, NULL);
                     } else if (strcmp(k, "exit_enabled") == 0) {
                         cur_level->exit_enabled = atoi(v) ? 1 : 0;
                     } else if (strcmp(k, "exit_x01") == 0) {
@@ -1408,6 +1453,26 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
         if (l->powerup_drop_chance < 0.0f || l->powerup_drop_chance > 1.0f) {
             if (log_out) {
                 fprintf(log_out, "leveldef: level %d invalid powerup_drop_chance (expected 0..1)\n", i);
+            }
+            ok = 0;
+        }
+        if (l->powerup_double_shot_r < 0.0f || l->powerup_double_shot_r > 1.0f || !isfinite(l->powerup_double_shot_r) ||
+            l->powerup_double_shot_g < 0.0f || l->powerup_double_shot_g > 1.0f || !isfinite(l->powerup_double_shot_g) ||
+            l->powerup_double_shot_b < 0.0f || l->powerup_double_shot_b > 1.0f || !isfinite(l->powerup_double_shot_b) ||
+            l->powerup_triple_shot_r < 0.0f || l->powerup_triple_shot_r > 1.0f || !isfinite(l->powerup_triple_shot_r) ||
+            l->powerup_triple_shot_g < 0.0f || l->powerup_triple_shot_g > 1.0f || !isfinite(l->powerup_triple_shot_g) ||
+            l->powerup_triple_shot_b < 0.0f || l->powerup_triple_shot_b > 1.0f || !isfinite(l->powerup_triple_shot_b) ||
+            l->powerup_vitality_r < 0.0f || l->powerup_vitality_r > 1.0f || !isfinite(l->powerup_vitality_r) ||
+            l->powerup_vitality_g < 0.0f || l->powerup_vitality_g > 1.0f || !isfinite(l->powerup_vitality_g) ||
+            l->powerup_vitality_b < 0.0f || l->powerup_vitality_b > 1.0f || !isfinite(l->powerup_vitality_b) ||
+            l->powerup_orbital_boost_r < 0.0f || l->powerup_orbital_boost_r > 1.0f || !isfinite(l->powerup_orbital_boost_r) ||
+            l->powerup_orbital_boost_g < 0.0f || l->powerup_orbital_boost_g > 1.0f || !isfinite(l->powerup_orbital_boost_g) ||
+            l->powerup_orbital_boost_b < 0.0f || l->powerup_orbital_boost_b > 1.0f || !isfinite(l->powerup_orbital_boost_b) ||
+            l->powerup_magnet_r < 0.0f || l->powerup_magnet_r > 1.0f || !isfinite(l->powerup_magnet_r) ||
+            l->powerup_magnet_g < 0.0f || l->powerup_magnet_g > 1.0f || !isfinite(l->powerup_magnet_g) ||
+            l->powerup_magnet_b < 0.0f || l->powerup_magnet_b > 1.0f || !isfinite(l->powerup_magnet_b)) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid powerup color channel (expected 0..1)\n", i);
             }
             ok = 0;
         }

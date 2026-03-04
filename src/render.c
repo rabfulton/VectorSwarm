@@ -7463,13 +7463,24 @@ static vg_result draw_player_shield(
     );
 }
 
-static vg_color powerup_symbol_color(int type) {
+static vg_color powerup_symbol_color(const leveldef_level* lvl, int type) {
+    if (!lvl) {
+        switch (clampi(type, 0, POWERUP_COUNT - 1)) {
+            case POWERUP_DOUBLE_SHOT: return (vg_color){0.90f, 0.95f, 1.00f, 1.0f};
+            case POWERUP_TRIPLE_SHOT: return (vg_color){1.00f, 0.86f, 0.54f, 1.0f};
+            case POWERUP_VITALITY: return (vg_color){0.64f, 1.00f, 0.72f, 1.0f};
+            case POWERUP_ORBITAL_BOOST: return (vg_color){0.70f, 0.86f, 1.00f, 1.0f};
+            case POWERUP_MAGNET: return (vg_color){1.00f, 0.76f, 0.72f, 1.0f};
+            default: return (vg_color){0.92f, 0.92f, 0.92f, 1.0f};
+        }
+    }
     switch (clampi(type, 0, POWERUP_COUNT - 1)) {
-        case POWERUP_DOUBLE_SHOT: return (vg_color){0.90f, 0.95f, 1.00f, 1.0f};
-        case POWERUP_TRIPLE_SHOT: return (vg_color){1.00f, 0.86f, 0.54f, 1.0f};
-        case POWERUP_VITALITY: return (vg_color){0.64f, 1.00f, 0.72f, 1.0f};
-        case POWERUP_ORBITAL_BOOST: return (vg_color){0.70f, 0.86f, 1.00f, 1.0f};
-        case POWERUP_MAGNET: return (vg_color){1.00f, 0.76f, 0.72f, 1.0f};
+        case POWERUP_DOUBLE_SHOT: return (vg_color){lvl->powerup_double_shot_r, lvl->powerup_double_shot_g, lvl->powerup_double_shot_b, 1.0f};
+        case POWERUP_TRIPLE_SHOT: return (vg_color){lvl->powerup_triple_shot_r, lvl->powerup_triple_shot_g, lvl->powerup_triple_shot_b, 1.0f};
+        case POWERUP_VITALITY: return (vg_color){lvl->powerup_vitality_r, lvl->powerup_vitality_g, lvl->powerup_vitality_b, 1.0f};
+        case POWERUP_ORBITAL_BOOST:
+            return (vg_color){lvl->powerup_orbital_boost_r, lvl->powerup_orbital_boost_g, lvl->powerup_orbital_boost_b, 1.0f};
+        case POWERUP_MAGNET: return (vg_color){lvl->powerup_magnet_r, lvl->powerup_magnet_g, lvl->powerup_magnet_b, 1.0f};
         default: return (vg_color){0.92f, 0.92f, 0.92f, 1.0f};
     }
 }
@@ -7625,11 +7636,12 @@ static vg_result draw_powerup_medallion(
     float spin,
     float bob_phase,
     int type,
+    const leveldef_level* lvl,
     float intensity_scale,
     const vg_stroke_style* txt_halo,
     const vg_stroke_style* txt_main
 ) {
-    const vg_color c = powerup_symbol_color(type);
+    const vg_color c = powerup_symbol_color(lvl, type);
     const float bob = sinf(bob_phase) * fmaxf(2.6f, radius * 0.20f);
     const float rr = fmaxf(radius * 2.03f, 10.0f);
     const float face = cosf(spin);
@@ -8704,6 +8716,7 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
                 p->spin,
                 p->bob_phase,
                 p->type,
+                game_current_leveldef(g),
                 intensity_scale * (0.45f + depth * 0.95f),
                 &txt_halo,
                 &txt_main
@@ -9297,6 +9310,7 @@ skip_legacy_landscape:
             p->spin,
             p->bob_phase,
             p->type,
+            game_current_leveldef(g),
             intensity_scale,
             &txt_halo,
             &txt_main
