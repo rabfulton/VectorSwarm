@@ -139,6 +139,13 @@ static float wrap_delta(float a, float b, float period) {
     return d;
 }
 
+static float wrap_position_near(float x, float ref, float period) {
+    if (period <= 1.0e-5f) {
+        return x;
+    }
+    return ref + wrap_delta(x, ref, period);
+}
+
 static float dist_sq(float ax, float ay, float bx, float by) {
     const float dx = ax - bx;
     const float dy = ay - by;
@@ -159,6 +166,221 @@ static float wrap_angle_pi(float a) {
     while (a > pi) a -= 2.0f * pi;
     while (a < -pi) a += 2.0f * pi;
     return a;
+}
+
+static float point_segment_dist_sq(float px, float py, float ax, float ay, float bx, float by) {
+    const float abx = bx - ax;
+    const float aby = by - ay;
+    const float apx = px - ax;
+    const float apy = py - ay;
+    const float denom = abx * abx + aby * aby;
+    float t = 0.0f;
+    float qx;
+    float qy;
+    if (denom > 1.0e-6f) {
+        t = (apx * abx + apy * aby) / denom;
+    }
+    t = clampf(t, 0.0f, 1.0f);
+    qx = ax + abx * t;
+    qy = ay + aby * t;
+    return dist_sq(px, py, qx, qy);
+}
+
+static void eel_basis(const enemy* e, float* out_fx, float* out_fy, float* out_nx, float* out_ny) {
+    float fx = 1.0f;
+    float fy = 0.0f;
+    float v;
+    if (!e) {
+        if (out_fx) *out_fx = fx;
+        if (out_fy) *out_fy = fy;
+        if (out_nx) *out_nx = -fy;
+        if (out_ny) *out_ny = fx;
+        return;
+    }
+
+    v = length2(e->facing_x, e->facing_y);
+    if (v > 1.0e-5f) {
+        fx = e->facing_x / v;
+        fy = e->facing_y / v;
+    } else {
+        const float h = e->eel_heading_rad;
+        fx = cosf(h);
+        fy = sinf(h);
+        v = length2(fx, fy);
+        if (v <= 1.0e-5f) {
+            fx = (e->b.vx < 0.0f) ? -1.0f : 1.0f;
+            fy = 0.0f;
+        }
+    }
+    if (out_fx) *out_fx = fx;
+    if (out_fy) *out_fy = fy;
+    if (out_nx) *out_nx = -fy;
+    if (out_ny) *out_ny = fx;
+}
+
+static void eel_tail_anchor(const enemy* e, float* out_x, float* out_y) {
+    float fx = 1.0f;
+    float fy = 0.0f;
+    float head_back;
+    if (!e || !out_x || !out_y) {
+        return;
+    }
+    eel_basis(e, &fx, &fy, NULL, NULL);
+    head_back = fmaxf(1.0f, e->radius * 0.58f);
+    *out_x = e->b.x - fx * head_back;
+    *out_y = e->b.y - fy * head_back;
+}
+
+static void eel_seed_spine(enemy* e, int uses_cylinder, float period) {
+    float anchor_x;
+    float anchor_y;
+    float fx = 1.0f;
+    float fy = 0.0f;
+    float body_len;
+    float seg_len;
+    int n;
+    if (!e) {
+        return;
+    }
+    n = EEL_SPINE_POINTS;
+    if (n < 2) {
+        n = 2;
+    }
+    eel_tail_anchor(e, &anchor_x, &anchor_y);
+    eel_basis(e, &fx, &fy, NULL, NULL);
+    body_len = (e->eel_body_length > 1.0f) ? e->eel_body_length : fmaxf(e->radius * 6.0f, 24.0f);
+    seg_len = body_len / (float)(n - 1);
+    e->eel_spine_count = n;
+    for (int i = 0; i < n; ++i) {
+        const float along = (float)i * seg_len;
+        e->eel_spine_x[i] = anchor_x - fx * along;
+        e->eel_spine_y[i] = anchor_y - fy * along;
+    }
+    if (uses_cylinder && period > 1.0e-5f) {
+        for (int i = 0; i < n; ++i) {
+            e->eel_spine_x[i] = wrap_position_near(e->eel_spine_x[i], anchor_x, period);
+        }
+    }
+}
+
+static void eel_update_spine(enemy* e, float dt, int uses_cylinder, float period) {
+    float anchor_x;
+    float anchor_y;
+    float body_len;
+    float seg_len;
+    int n;
+    if (!e) {
+        return;
+    }
+    n = clampi(e->eel_spine_count, 0, EEL_SPINE_POINTS);
+    if (n < 2) {
+        eel_seed_spine(e, uses_cylinder, period);
+        n = clampi(e->eel_spine_count, 0, EEL_SPINE_POINTS);
+        if (n < 2) {
+            return;
+        }
+    }
+    eel_tail_anchor(e, &anchor_x, &anchor_y);
+    if (uses_cylinder && period > 1.0e-5f) {
+        anchor_x = wrap_position_near(anchor_x, e->eel_spine_x[0], period);
+    }
+    e->eel_spine_x[0] = anchor_x;
+    e->eel_spine_y[0] = anchor_y;
+
+    body_len = (e->eel_body_length > 1.0f) ? e->eel_body_length : fmaxf(e->radius * 6.0f, 24.0f);
+    seg_len = body_len / (float)(n - 1);
+
+    for (int i = 1; i < n; ++i) {
+        float prev_x = e->eel_spine_x[i - 1];
+        float prev_y = e->eel_spine_y[i - 1];
+        float cur_x = e->eel_spine_x[i];
+        float cur_y = e->eel_spine_y[i];
+        float dx;
+        float dy;
+        float d;
+        float pull;
+        if (uses_cylinder && period > 1.0e-5f) {
+            cur_x = wrap_position_near(cur_x, prev_x, period);
+        }
+        dx = cur_x - prev_x;
+        dy = cur_y - prev_y;
+        d = length2(dx, dy);
+        if (d > 1.0e-5f) {
+            const float overshoot = d - seg_len;
+            if (overshoot > 0.0f) {
+                pull = clampf(dt * 16.0f, 0.15f, 1.0f);
+                cur_x -= (dx / d) * overshoot * pull;
+                cur_y -= (dy / d) * overshoot * pull;
+            } else {
+                const float compress = (-overshoot) / fmaxf(seg_len, 1.0f);
+                if (compress > 0.55f) {
+                    pull = clampf(dt * 8.5f, 0.0f, 1.0f) * (compress - 0.55f);
+                    cur_x += (dx / d) * seg_len * pull;
+                    cur_y += (dy / d) * seg_len * pull;
+                }
+            }
+        } else {
+            cur_x = prev_x - seg_len;
+            cur_y = prev_y;
+        }
+        e->eel_spine_x[i] = cur_x;
+        e->eel_spine_y[i] = cur_y;
+    }
+    if (uses_cylinder && period > 1.0e-5f) {
+        for (int i = 0; i < n; ++i) {
+            e->eel_spine_x[i] = wrap_position_near(e->eel_spine_x[i], e->b.x, period);
+        }
+    }
+}
+
+static void eel_sample_body_point(
+    const enemy* e,
+    float u01,
+    float* out_x,
+    float* out_y
+) {
+    float fx = 1.0f;
+    float fy = 0.0f;
+    float nx = 0.0f;
+    float ny = 1.0f;
+    float u;
+    float body_len;
+    float wave_freq;
+    float wave_amp;
+    float t;
+    float along;
+    float env;
+    float side;
+    int spine_n;
+    if (!e || !out_x || !out_y) {
+        return;
+    }
+    spine_n = clampi(e->eel_spine_count, 0, EEL_SPINE_POINTS);
+    if (spine_n >= 2) {
+        const float u_spine = clampf(u01, 0.0f, 1.0f) * (float)(spine_n - 1);
+        const int i0 = clampi((int)floorf(u_spine), 0, spine_n - 1);
+        const int i1 = (i0 < spine_n - 1) ? (i0 + 1) : i0;
+        const float t_spine = u_spine - (float)i0;
+        *out_x = lerpf(e->eel_spine_x[i0], e->eel_spine_x[i1], t_spine);
+        *out_y = lerpf(e->eel_spine_y[i0], e->eel_spine_y[i1], t_spine);
+        return;
+    }
+    eel_basis(e, &fx, &fy, &nx, &ny);
+    u = clampf(u01, 0.0f, 1.0f);
+    body_len = (e->eel_body_length > 1.0f) ? e->eel_body_length : fmaxf(e->radius * 6.0f, 24.0f);
+    wave_freq = (e->eel_wave_freq > 0.05f) ? e->eel_wave_freq : 2.2f;
+    wave_amp = (e->eel_wave_amp > 0.01f) ? e->eel_wave_amp : fmaxf(e->radius * 0.55f, 4.0f);
+    t = e->ai_timer_s * (1.8f + wave_freq) + e->visual_phase;
+    along = -u * body_len;
+    env = 0.18f + 0.82f * u;
+    side = sinf(t * 1.95f - u * 12.2f) * wave_amp * env;
+    {
+        float base_x;
+        float base_y;
+        eel_tail_anchor(e, &base_x, &base_y);
+        *out_x = base_x + fx * along + nx * side;
+        *out_y = base_y + fy * along + ny * side;
+    }
 }
 
 static void structure_prefab_dims_world(int prefab_id, int* out_w, int* out_h) {
@@ -785,6 +1007,17 @@ static enemy* spawn_enemy_common(game_state* g, float su) {
         e->missile_cooldown_s = 0.0f;
         e->missile_charge_s = 0.0f;
         e->missile_charge_duration_s = 0.0f;
+        e->eel_heading_rad = 0.0f;
+        e->eel_wave_freq = 0.0f;
+        e->eel_wave_amp = 0.0f;
+        e->eel_body_length = 0.0f;
+        e->eel_min_speed = 0.0f;
+        e->eel_turn_rate_rad = 0.0f;
+        e->eel_weapon_range = 0.0f;
+        e->eel_weapon_fire_rate = 0.0f;
+        e->eel_weapon_duration_s = 0.0f;
+        e->eel_weapon_damage_interval_s = 0.0f;
+        e->eel_spine_count = 0;
         return e;
     }
     return NULL;
@@ -957,6 +1190,8 @@ static int resolve_boid_profile_by_variant(const leveldef_db* db, const leveldef
         pid = leveldef_find_boid_profile(db, "BIRD");
     } else if (variant_kind_or_pattern == 15) {
         pid = leveldef_find_boid_profile(db, "JELLY");
+    } else if (variant_kind_or_pattern == 17) {
+        pid = leveldef_find_boid_profile(db, "EEL");
     }
     if (pid < 0) {
         pid = lvl->default_boid_profile;
@@ -1033,7 +1268,7 @@ void enemy_spawn_curated_enemy(
     if (count > 24) {
         count = 24;
     }
-    if (ce->kind == 5 || ce->kind == 10 || ce->kind == 11 || ce->kind == 12 || ce->kind == 15) {
+    if (ce->kind == 5 || ce->kind == 10 || ce->kind == 11 || ce->kind == 12 || ce->kind == 15 || ce->kind == 17) {
         const int profile_id = resolve_boid_profile_by_variant(db, lvl, ce->kind);
         const leveldef_boid_profile* p = leveldef_get_boid_profile(db, profile_id);
         if (!p) {
@@ -1097,6 +1332,42 @@ void enemy_spawn_curated_enemy(
                 e->visual_phase = hash01_u32(seed) * 6.2831853f;
                 e->visual_param_a = lerpf(1.6f, 2.4f, hash01_u32(seed ^ 0xA53u));
                 e->visual_param_b = lerpf(0.08f, 0.18f, hash01_u32(seed ^ 0xB71u));
+            }
+            if (ce->kind == 17) {
+                const uint32_t seed = enemy_visual_seed_from_ids(wave_id, i);
+                const float size_scale = clampf((ce->d > 0.0f) ? ce->d : 1.0f, 0.55f, 2.40f);
+                const float eel_speed = ((ce->b > 0.0f && !legacy_default_override) ? ce->b : 250.0f) * su;
+                const float eel_accel = (ce->c > 0.0f && !legacy_default_override) ? ce->c : 6.4f;
+                e->visual_kind = ENEMY_VISUAL_EEL;
+                e->visual_seed = seed;
+                e->visual_phase = hash01_u32(seed ^ 0x51du) * 6.2831853f;
+                e->visual_param_a = lerpf(1.7f, 2.9f, hash01_u32(seed ^ 0x913u));
+                e->visual_param_b = lerpf(0.20f, 0.36f, hash01_u32(seed ^ 0x347u));
+                e->radius = fmaxf(8.0f * su, e->radius * 0.82f * size_scale);
+                e->hp = 2;
+                e->max_speed = fmaxf(120.0f * su, eel_speed);
+                e->accel = fmaxf(1.4f, eel_accel);
+                e->eel_wave_freq = e->visual_param_a;
+                e->eel_wave_amp = fmaxf(4.0f * su, e->radius * (0.54f + 0.18f * e->visual_param_b));
+                e->eel_body_length = fmaxf(e->radius * 6.2f, e->radius * (7.2f + 1.6f * size_scale));
+                e->eel_min_speed = fmaxf(92.0f * su, e->max_speed * 0.42f);
+                e->eel_turn_rate_rad = (360.0f + 200.0f * hash01_u32(seed ^ 0xA73u)) * (3.14159265359f / 180.0f);
+                e->eel_weapon_range = fmaxf(112.0f * su, g->world_w * 0.24f);
+                e->eel_weapon_fire_rate = 1.25f + 1.10f * hash01_u32(seed ^ 0xCC1u);
+                e->eel_weapon_duration_s = 1.7f + 0.9f * hash01_u32(seed ^ 0x1B5u);
+                e->eel_weapon_damage_interval_s = 0.30f;
+                e->swarm_min_speed = e->eel_min_speed;
+                e->swarm_turn_rate_rad = e->eel_turn_rate_rad;
+                e->facing_x = lane_dir_toward_player_x(g, e->b.x, uses_cylinder, period);
+                e->facing_y = frands1() * 0.18f;
+                normalize2(&e->facing_x, &e->facing_y);
+                e->eel_heading_rad = atan2f(e->facing_y, e->facing_x);
+                eel_seed_spine(e, uses_cylinder, period);
+                e->armed = 1;
+                e->weapon_id = ENEMY_WEAPON_BURST;
+                e->fire_cooldown_s = 0.25f + frand01() * 0.35f;
+                e->burst_shots_left = 0;
+                e->burst_gap_timer_s = 0.0f;
             }
             enemy_adjust_spawn_clear(g, e, su);
         }
@@ -1253,6 +1524,8 @@ void enemy_spawn_next_wave(
                 announce_wave(g, "curated jelly swarm");
             } else if (ce->kind == 16) {
                 announce_wave(g, "curated manta ray");
+            } else if (ce->kind == 17) {
+                announce_wave(g, "curated electric eels");
             } else if (ce->kind == 4) {
                 announce_wave(g, "curated kamikaze contact");
             } else if (ce->kind == 3) {
@@ -1345,6 +1618,176 @@ static void enemy_fire_projectiles(game_state* g, const enemy* e, const enemy_we
     }
 }
 
+static int alloc_eel_arc_slot(game_state* g) {
+    if (!g) {
+        return -1;
+    }
+    for (int i = 0; i < MAX_EEL_ARCS; ++i) {
+        if (!g->eel_arcs[i].active) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static void eel_arc_build_points(const enemy* e, eel_arc_effect* arc) {
+    const int seg_n = EEL_ARC_MAX_POINTS - 1;
+    float sx;
+    float sy;
+    float tx;
+    float ty;
+    float dir_x;
+    float dir_y;
+    float side_x;
+    float side_y;
+    float ray_x;
+    float ray_y;
+    float ray_nx;
+    float ray_ny;
+    uint32_t tick;
+    if (!e || !arc || seg_n < 1) {
+        return;
+    }
+
+    eel_sample_body_point(e, arc->start_u, &sx, &sy);
+    eel_sample_body_point(e, clampf(arc->start_u + 0.03f, 0.0f, 1.0f), &tx, &ty);
+    dir_x = tx - sx;
+    dir_y = ty - sy;
+    normalize2(&dir_x, &dir_y);
+    if (length2(dir_x, dir_y) < 1.0e-5f) {
+        eel_basis(e, &dir_x, &dir_y, NULL, NULL);
+    }
+    side_x = -dir_y;
+    side_y = dir_x;
+
+    {
+        const float anim = sinf(arc->age_s * (2.2f + arc->start_u * 0.9f) + arc->base_angle * 0.65f) * 0.12f;
+        const float a = arc->base_angle + anim;
+        const float ca = cosf(a);
+        const float sa = sinf(a);
+        ray_x = dir_x * ca + side_x * sa;
+        ray_y = dir_y * ca + side_y * sa;
+        normalize2(&ray_x, &ray_y);
+        ray_nx = -ray_y;
+        ray_ny = ray_x;
+    }
+    tick = (uint32_t)floorf(arc->age_s * 9.0f);
+    arc->point_count = EEL_ARC_MAX_POINTS;
+    for (int i = 0; i <= seg_n; ++i) {
+        const float u = (float)i / (float)seg_n;
+        const float stem = 1.0f - u;
+        const uint32_t h = arc->seed ^ (uint32_t)(i * 0x9e37u) ^ (tick * 0x85ebu);
+        const float n0 = hash01_u32(h) * 2.0f - 1.0f;
+        const float n1 = hash01_u32(h ^ 0x68c9u) * 2.0f - 1.0f;
+        const float wobble = sinf(arc->age_s * (3.6f + 1.8f * n1) - u * (6.0f + 2.2f * arc->start_u) + n0 * 1.4f);
+        const float jag = (n0 * 0.80f + wobble * 0.20f) * arc->range * (0.052f + 0.032f * stem) * stem;
+        arc->point_x[i] = sx + ray_x * (arc->range * u) + ray_nx * jag;
+        arc->point_y[i] = sy + ray_y * (arc->range * u) + ray_ny * jag;
+    }
+}
+
+static void spawn_eel_arc_burst(game_state* g, const enemy* e, int owner_index) {
+    const int ray_count = 12;
+    const float range = (e->eel_weapon_range > 1.0f) ? e->eel_weapon_range : fmaxf(96.0f, e->radius * 8.4f);
+    const float life = (e->eel_weapon_duration_s > 0.2f) ? e->eel_weapon_duration_s : 2.2f;
+    if (!g || !e || !e->active) {
+        return;
+    }
+    for (int i = 0; i < ray_count; ++i) {
+        const int slot = alloc_eel_arc_slot(g);
+        const uint32_t seed = e->visual_seed ^ (uint32_t)(i * 0x517cu) ^ (uint32_t)(rand() & 0xffff);
+        eel_arc_effect* arc;
+        if (slot < 0) {
+            break;
+        }
+        arc = &g->eel_arcs[slot];
+        memset(arc, 0, sizeof(*arc));
+        arc->active = 1;
+        arc->owner_index = owner_index;
+        arc->owner_wave_id = e->wave_id;
+        arc->owner_slot_index = e->slot_index;
+        arc->seed = seed;
+        arc->start_u = clampf(0.10f + 0.84f * hash01_u32(seed ^ 0x2ab9u), 0.08f, 0.96f);
+        arc->base_angle = ((float)i / (float)ray_count) * 6.2831853f + frands1() * 0.10f;
+        arc->range = range * (0.92f + 0.16f * hash01_u32(seed ^ 0x84du));
+        arc->age_s = 0.0f;
+        arc->life_s = life * (0.92f + 0.18f * hash01_u32(seed ^ 0x1fd3u));
+        arc->damage_timer_s = 0.05f + 0.25f * hash01_u32(seed ^ 0x73eu);
+        eel_arc_build_points(e, arc);
+    }
+}
+
+static void update_eel_arc_effects(
+    game_state* g,
+    float dt,
+    float su,
+    int uses_cylinder,
+    float period,
+    int* io_player_hit_this_frame
+) {
+    int active_n = 0;
+    if (!g) {
+        return;
+    }
+    for (int i = 0; i < MAX_EEL_ARCS; ++i) {
+        eel_arc_effect* arc = &g->eel_arcs[i];
+        enemy* owner = NULL;
+        if (!arc->active) {
+            continue;
+        }
+        if (arc->owner_index >= 0 && arc->owner_index < MAX_ENEMIES) {
+            owner = &g->enemies[arc->owner_index];
+        }
+        if (!owner || !owner->active || owner->visual_kind != ENEMY_VISUAL_EEL ||
+            owner->wave_id != arc->owner_wave_id || owner->slot_index != arc->owner_slot_index) {
+            arc->active = 0;
+            continue;
+        }
+
+        arc->age_s += dt;
+        if (arc->damage_timer_s > 0.0f) {
+            arc->damage_timer_s -= dt;
+        }
+        if (arc->age_s >= arc->life_s) {
+            arc->active = 0;
+            continue;
+        }
+        eel_arc_build_points(owner, arc);
+        active_n += 1;
+
+        if (!io_player_hit_this_frame || *io_player_hit_this_frame || g->shield_active || g->lives <= 0) {
+            continue;
+        }
+        if (arc->damage_timer_s > 0.0f) {
+            continue;
+        }
+        {
+            const float arc_r = 8.0f * su;
+            const float rr = arc_r + 10.0f * su;
+            const float rr2 = rr * rr;
+            for (int pi = 0; pi + 1 < arc->point_count; ++pi) {
+                float ax = arc->point_x[pi];
+                float ay = arc->point_y[pi];
+                float bx = arc->point_x[pi + 1];
+                float by = arc->point_y[pi + 1];
+                float d2;
+                if (uses_cylinder) {
+                    ax = g->player.b.x + wrap_delta(ax, g->player.b.x, period);
+                    bx = g->player.b.x + wrap_delta(bx, g->player.b.x, period);
+                }
+                d2 = point_segment_dist_sq(g->player.b.x, g->player.b.y, ax, ay, bx, by);
+                if (d2 <= rr2) {
+                    apply_player_hit(g, g->player.b.x, g->player.b.y, owner->b.vx, owner->b.vy, su);
+                    *io_player_hit_this_frame = 1;
+                    arc->damage_timer_s = fmaxf(owner->eel_weapon_damage_interval_s, 0.20f);
+                    break;
+                }
+            }
+        }
+    }
+    g->eel_arc_count = active_n;
+}
+
 static void enemy_try_fire(game_state* g, enemy* e, float dt, float su, const leveldef_db* db, int uses_cylinder, float period) {
     const leveldef_combat_tuning* combat;
     enemy_weapon_def w_local;
@@ -1382,6 +1825,41 @@ static void enemy_try_fire(game_state* g, enemy* e, float dt, float su, const le
     }
     if (e->missile_cooldown_s > 0.0f) {
         e->missile_cooldown_s -= dt;
+    }
+    if (e->visual_kind == ENEMY_VISUAL_EEL) {
+        const float range = (e->eel_weapon_range > 1.0f) ? e->eel_weapon_range : fmaxf(100.0f * su, g->world_w * 0.20f);
+        const float rate = (e->eel_weapon_fire_rate > 0.01f) ? e->eel_weapon_fire_rate : 0.30f;
+        const float dx = uses_cylinder ? wrap_delta(g->player.b.x, e->b.x, period) : (g->player.b.x - e->b.x);
+        const float dy = g->player.b.y - e->b.y;
+        const float d2 = dx * dx + dy * dy;
+        const float close_r = range * 0.34f;
+        int in_fire_region = 0;
+        if (uses_cylinder) {
+            in_fire_region = (fabsf(dx) <= period * 0.26f) ? 1 : 0;
+        } else {
+            in_fire_region =
+                (fabsf(dx) <= g->world_w * 0.56f) &&
+                (fabsf(dy) <= g->world_h * 0.56f);
+        }
+        if (e->fire_cooldown_s > 0.0f || !in_fire_region || d2 > range * range) {
+            if (e->fire_cooldown_s <= 0.0f) {
+                e->fire_cooldown_s = 0.05f + frand01() * 0.08f;
+            }
+            return;
+        }
+        {
+            const float try_window_s = 0.18f;
+            const float p_try = 1.0f - expf(-rate * try_window_s);
+            if (d2 <= close_r * close_r || frand01() < p_try) {
+                const int owner_index = (int)(e - g->enemies);
+                spawn_eel_arc_burst(g, e, owner_index);
+                game_push_audio_event(g, GAME_AUDIO_EVENT_LIGHTNING, e->b.x, e->b.y);
+                e->fire_cooldown_s = 0.60f + frand01() * 0.45f;
+            } else {
+                e->fire_cooldown_s = 0.08f + frand01() * 0.12f;
+            }
+        }
+        return;
     }
     if (e->visual_kind == ENEMY_VISUAL_MANTA && e->missile_charge_duration_s > 0.0f) {
         e->missile_charge_s += dt;
@@ -1635,6 +2113,143 @@ static void update_enemy_formation(game_state* g, enemy* e, float dt, float su, 
             e->break_delay_s = 0.0f;
         }
     }
+}
+
+static void update_enemy_eel(game_state* g, enemy* e, float dt, int uses_cylinder, float period, float su) {
+    float desired_x;
+    float desired_y;
+    float avoid_x = 0.0f;
+    float avoid_y = 0.0f;
+    float to_player_x;
+    float to_player_y;
+    float heading;
+    float speed;
+    float min_speed;
+    float max_turn;
+    float desired_a;
+    float target_speed;
+    if (!g || !e || dt <= 0.0f) {
+        return;
+    }
+
+    e->ai_timer_s += dt;
+    heading = e->eel_heading_rad;
+    if (length2(e->facing_x, e->facing_y) > 1.0e-5f) {
+        heading = atan2f(e->facing_y, e->facing_x);
+    } else if (length2(e->b.vx, e->b.vy) > 1.0e-5f) {
+        heading = atan2f(e->b.vy, e->b.vx);
+    }
+
+    {
+        const float lead_s = 0.26f;
+        const float tx = g->player.b.x + g->player.b.vx * lead_s;
+        const float ty = g->player.b.y + g->player.b.vy * lead_s;
+        to_player_x = uses_cylinder ? wrap_delta(tx, e->b.x, period) : (tx - e->b.x);
+        to_player_y = ty - e->b.y;
+    }
+    normalize2(&to_player_x, &to_player_y);
+
+    if (!uses_cylinder) {
+        const float pad_x = fmaxf(32.0f * su, e->radius * 2.4f);
+        const float left = g->camera_x - g->world_w * 0.50f + pad_x;
+        const float right = g->camera_x + g->world_w * 0.50f - pad_x;
+        if (e->b.x < left) {
+            avoid_x += clampf((left - e->b.x) / fmaxf(pad_x, 1.0f), 0.0f, 1.2f);
+        } else if (e->b.x > right) {
+            avoid_x -= clampf((e->b.x - right) / fmaxf(pad_x, 1.0f), 0.0f, 1.2f);
+        }
+    }
+    {
+        const float pad_y = fmaxf(30.0f * su, e->radius * 2.2f);
+        if (e->b.y < pad_y) {
+            avoid_y += clampf((pad_y - e->b.y) / fmaxf(pad_y, 1.0f), 0.0f, 1.2f);
+        } else if (e->b.y > g->world_h - pad_y) {
+            avoid_y -= clampf((e->b.y - (g->world_h - pad_y)) / fmaxf(pad_y, 1.0f), 0.0f, 1.2f);
+        }
+    }
+    if (!uses_cylinder && g->render_style != LEVEL_RENDER_CYLINDER) {
+        float sx = 0.0f;
+        float sy = 0.0f;
+        game_structure_avoidance_vector(
+            g,
+            e->b.x,
+            e->b.y,
+            fmaxf(8.0f * su, e->radius * 0.95f),
+            fmaxf(32.0f * su, e->radius * 2.8f),
+            &sx,
+            &sy
+        );
+        if (fabsf(sx) > 1.0e-5f || fabsf(sy) > 1.0e-5f) {
+            normalize2(&sx, &sy);
+            avoid_x += sx * 1.6f;
+            avoid_y += sy * 1.6f;
+        }
+    }
+    for (int i = 0; i < MAX_ENEMIES; ++i) {
+        const enemy* o = &g->enemies[i];
+        float dx;
+        float dy;
+        float d2;
+        if (!o->active || o == e || o->visual_kind != ENEMY_VISUAL_EEL) {
+            continue;
+        }
+        dx = uses_cylinder ? wrap_delta(e->b.x, o->b.x, period) : (e->b.x - o->b.x);
+        dy = e->b.y - o->b.y;
+        d2 = dx * dx + dy * dy;
+        if (d2 < 1.0e-4f || d2 > (110.0f * su) * (110.0f * su)) {
+            continue;
+        }
+        avoid_x += (dx / d2) * (26.0f * su);
+        avoid_y += (dy / d2) * (26.0f * su);
+    }
+
+    desired_x = to_player_x;
+    desired_y = to_player_y;
+    {
+        const float weave = sinf(e->ai_timer_s * (0.80f + e->eel_wave_freq * 0.25f) + e->visual_phase) * 0.30f;
+        const float px = -desired_y;
+        const float py = desired_x;
+        desired_x += px * weave;
+        desired_y += py * weave;
+    }
+    desired_x += avoid_x;
+    desired_y += avoid_y;
+    if (length2(desired_x, desired_y) < 1.0e-5f) {
+        desired_x = cosf(heading);
+        desired_y = sinf(heading);
+    }
+    normalize2(&desired_x, &desired_y);
+
+    desired_a = atan2f(desired_y, desired_x);
+    max_turn = (e->eel_turn_rate_rad > 0.05f) ? e->eel_turn_rate_rad : (420.0f * (3.14159265359f / 180.0f));
+    {
+        const float max_da = max_turn * dt;
+        float da = wrap_angle_pi(desired_a - heading);
+        if (da > max_da) da = max_da;
+        if (da < -max_da) da = -max_da;
+        heading += da;
+    }
+    e->eel_heading_rad = heading;
+    e->facing_x = cosf(heading);
+    e->facing_y = sinf(heading);
+    normalize2(&e->facing_x, &e->facing_y);
+    e->lane_dir = (e->facing_x < 0.0f) ? -1.0f : 1.0f;
+
+    speed = length2(e->b.vx, e->b.vy);
+    min_speed = (e->eel_min_speed > 1.0f) ? e->eel_min_speed : fmaxf(70.0f * su, e->max_speed * 0.42f);
+    target_speed = e->max_speed * (0.70f + 0.18f * sinf(e->ai_timer_s * 0.65f + e->visual_phase));
+    target_speed += clampf(length2(avoid_x, avoid_y), 0.0f, 1.2f) * e->max_speed * 0.35f;
+    if (speed < min_speed) {
+        target_speed = fmaxf(target_speed, min_speed + (min_speed - speed) * 0.35f);
+    }
+    target_speed = clampf(target_speed, min_speed, fmaxf(min_speed, e->max_speed));
+    steer_to_velocity(
+        &e->b,
+        e->facing_x * target_speed,
+        e->facing_y * target_speed,
+        e->accel * 1.42f,
+        0.86f
+    );
 }
 
 static void update_enemy_kamikaze(game_state* g, enemy* e, float dt, int uses_cylinder, float period, float su) {
@@ -2415,7 +3030,9 @@ void enemy_update_system(
         if (!e->active) {
             continue;
         }
-        if (e->archetype == ENEMY_ARCH_SWARM) {
+        if (e->visual_kind == ENEMY_VISUAL_EEL) {
+            update_enemy_eel(g, e, dt, uses_cylinder, period, su);
+        } else if (e->archetype == ENEMY_ARCH_SWARM) {
             update_enemy_swarm(g, e, dt, uses_cylinder, period, su);
         } else if (e->archetype == ENEMY_ARCH_KAMIKAZE) {
             update_enemy_kamikaze(g, e, dt, uses_cylinder, period, su);
@@ -2612,7 +3229,14 @@ void enemy_update_system(
                 player_hit_this_frame = 1;
             }
         }
+        if (e->active && e->visual_kind == ENEMY_VISUAL_EEL) {
+            eel_update_spine(e, dt, uses_cylinder, period);
+        }
         enemy_try_fire(g, e, dt, su, db, uses_cylinder, period);
+    }
+
+    if (g->eel_arc_count > 0 || g->lives > 0) {
+        update_eel_arc_effects(g, dt, su, uses_cylinder, period, &player_hit_this_frame);
     }
 
     for (size_t i = 0; i < MAX_ENEMY_BULLETS; ++i) {

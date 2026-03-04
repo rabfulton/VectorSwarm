@@ -2113,6 +2113,7 @@ static int set_level_index(game_state* g, int index) {
     memset(g->missiles, 0, sizeof(g->missiles));
     memset(g->missile_launchers, 0, sizeof(g->missile_launchers));
     memset(g->arc_nodes, 0, sizeof(g->arc_nodes));
+    memset(g->eel_arcs, 0, sizeof(g->eel_arcs));
     memset(g->powerups, 0, sizeof(g->powerups));
     g->active_particles = 0;
     g->wave_index = 0;
@@ -2144,6 +2145,7 @@ static int set_level_index(game_state* g, int index) {
     g->missile_count = 0;
     g->missile_launcher_count = 0;
     g->arc_node_count = 0;
+    g->eel_arc_count = 0;
     g->powerup_count = 0;
     g->powerup_drop_credit = 0.0f;
     g->asteroid_storm_active = 0;

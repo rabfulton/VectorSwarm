@@ -20,6 +20,9 @@
 #define MAX_MISSILES 256
 #define MAX_ARC_NODES 64
 #define MAX_POWERUPS 64
+#define MAX_EEL_ARCS 384
+#define EEL_ARC_MAX_POINTS 10
+#define EEL_SPINE_POINTS 28
 #define PLAYER_ALT_WEAPON_COUNT 4
 
 struct leveldef_db;
@@ -50,7 +53,8 @@ enum level_render_style_id {
 enum enemy_visual_kind {
     ENEMY_VISUAL_DEFAULT = 0,
     ENEMY_VISUAL_JELLY = 1,
-    ENEMY_VISUAL_MANTA = 2
+    ENEMY_VISUAL_MANTA = 2,
+    ENEMY_VISUAL_EEL = 3
 };
 
 typedef struct star {
@@ -155,6 +159,19 @@ typedef struct enemy {
     float missile_cooldown_s;
     float missile_charge_s;
     float missile_charge_duration_s;
+    float eel_heading_rad;
+    float eel_wave_freq;
+    float eel_wave_amp;
+    float eel_body_length;
+    float eel_min_speed;
+    float eel_turn_rate_rad;
+    float eel_weapon_range;
+    float eel_weapon_fire_rate;
+    float eel_weapon_duration_s;
+    float eel_weapon_damage_interval_s;
+    int eel_spine_count;
+    float eel_spine_x[EEL_SPINE_POINTS];
+    float eel_spine_y[EEL_SPINE_POINTS];
 } enemy;
 
 typedef struct enemy_bullet {
@@ -325,6 +342,23 @@ typedef struct powerup_pickup {
     float bob_phase;
 } powerup_pickup;
 
+typedef struct eel_arc_effect {
+    int active;
+    int owner_index;
+    int owner_wave_id;
+    int owner_slot_index;
+    uint32_t seed;
+    float start_u;
+    float base_angle;
+    float range;
+    float age_s;
+    float life_s;
+    float damage_timer_s;
+    int point_count;
+    float point_x[EEL_ARC_MAX_POINTS];
+    float point_y[EEL_ARC_MAX_POINTS];
+} eel_arc_effect;
+
 typedef struct arc_node_runtime {
     int active;
     float x;
@@ -424,6 +458,8 @@ typedef struct game_state {
     int arc_node_count;
     powerup_pickup powerups[MAX_POWERUPS];
     int powerup_count;
+    eel_arc_effect eel_arcs[MAX_EEL_ARCS];
+    int eel_arc_count;
     int powerup_magnet_active;
     float powerup_drop_credit; /* Smooths drop cadence while preserving average drop chance. */
     int exit_portal_active;

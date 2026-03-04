@@ -281,7 +281,8 @@ static int is_wave_kind(int kind) {
             kind == LEVEL_EDITOR_MARKER_BOID_FIREFLY ||
             kind == LEVEL_EDITOR_MARKER_BOID_BIRD ||
             kind == LEVEL_EDITOR_MARKER_JELLY_SWARM ||
-            kind == LEVEL_EDITOR_MARKER_MANTA_WING);
+            kind == LEVEL_EDITOR_MARKER_MANTA_WING ||
+            kind == LEVEL_EDITOR_MARKER_EEL_SWARM);
 }
 
 static int is_boid_wave_kind(int kind) {
@@ -289,10 +290,14 @@ static int is_boid_wave_kind(int kind) {
             kind == LEVEL_EDITOR_MARKER_BOID_FISH ||
             kind == LEVEL_EDITOR_MARKER_BOID_FIREFLY ||
             kind == LEVEL_EDITOR_MARKER_BOID_BIRD ||
-            kind == LEVEL_EDITOR_MARKER_JELLY_SWARM);
+            kind == LEVEL_EDITOR_MARKER_JELLY_SWARM ||
+            kind == LEVEL_EDITOR_MARKER_EEL_SWARM);
 }
 
 static float boid_turn_rate_default_deg_for_kind(int kind) {
+    if (kind == LEVEL_EDITOR_MARKER_EEL_SWARM) {
+        return 190.0f;
+    }
     if (kind == LEVEL_EDITOR_MARKER_JELLY_SWARM) {
         return 300.0f;
     }
@@ -306,6 +311,9 @@ static float boid_turn_rate_default_deg_for_kind(int kind) {
 }
 
 static float boid_speed_default_for_kind(int kind) {
+    if (kind == LEVEL_EDITOR_MARKER_EEL_SWARM) {
+        return 250.0f;
+    }
     if (kind == LEVEL_EDITOR_MARKER_JELLY_SWARM) {
         return 240.0f;
     }
@@ -319,6 +327,9 @@ static float boid_speed_default_for_kind(int kind) {
 }
 
 static float boid_accel_default_for_kind(int kind) {
+    if (kind == LEVEL_EDITOR_MARKER_EEL_SWARM) {
+        return 6.4f;
+    }
     if (kind == LEVEL_EDITOR_MARKER_JELLY_SWARM) {
         return 5.8f;
     }
@@ -812,6 +823,7 @@ static const char* curated_kind_name(int kind) {
     if (kind == LEVEL_EDITOR_MARKER_BOID_BIRD) return "boid_bird";
     if (kind == LEVEL_EDITOR_MARKER_JELLY_SWARM) return "jelly_swarm";
     if (kind == LEVEL_EDITOR_MARKER_MANTA_WING) return "manta_wing";
+    if (kind == LEVEL_EDITOR_MARKER_EEL_SWARM) return "eel_swarm";
     return "sine";
 }
 
@@ -829,6 +841,7 @@ static const char* marker_kind_name(int kind) {
     if (kind == LEVEL_EDITOR_MARKER_BOID_BIRD) return "swarm_bird";
     if (kind == LEVEL_EDITOR_MARKER_JELLY_SWARM) return "jelly_swarm";
     if (kind == LEVEL_EDITOR_MARKER_MANTA_WING) return "manta_wing";
+    if (kind == LEVEL_EDITOR_MARKER_EEL_SWARM) return "eel_swarm";
     return "marker";
 }
 
@@ -853,6 +866,7 @@ static int event_kind_from_marker_kind(int marker_kind) {
     if (marker_kind == LEVEL_EDITOR_MARKER_BOID_FIREFLY) return LEVELDEF_EVENT_WAVE_SWARM_FIREFLY;
     if (marker_kind == LEVEL_EDITOR_MARKER_BOID_BIRD) return LEVELDEF_EVENT_WAVE_SWARM_BIRD;
     if (marker_kind == LEVEL_EDITOR_MARKER_JELLY_SWARM) return LEVELDEF_EVENT_WAVE_SWARM;
+    if (marker_kind == LEVEL_EDITOR_MARKER_EEL_SWARM) return LEVELDEF_EVENT_WAVE_SWARM;
     if (marker_kind == LEVEL_EDITOR_MARKER_BOID) return LEVELDEF_EVENT_WAVE_SWARM;
     return LEVELDEF_EVENT_WAVE_SINE;
 }
@@ -866,6 +880,7 @@ static int wave_pattern_from_marker_kind(int marker_kind) {
     if (marker_kind == LEVEL_EDITOR_MARKER_BOID_FIREFLY) return LEVELDEF_WAVE_SWARM_FIREFLY;
     if (marker_kind == LEVEL_EDITOR_MARKER_BOID_BIRD) return LEVELDEF_WAVE_SWARM_BIRD;
     if (marker_kind == LEVEL_EDITOR_MARKER_JELLY_SWARM) return LEVELDEF_WAVE_SWARM;
+    if (marker_kind == LEVEL_EDITOR_MARKER_EEL_SWARM) return LEVELDEF_WAVE_SWARM;
     if (marker_kind == LEVEL_EDITOR_MARKER_BOID) return LEVELDEF_WAVE_SWARM;
     return LEVELDEF_WAVE_SINE_SNAKE;
 }
@@ -1560,7 +1575,8 @@ static int cycle_wave_kind(int kind, int step) {
         LEVEL_EDITOR_MARKER_BOID_FISH,
         LEVEL_EDITOR_MARKER_BOID_FIREFLY,
         LEVEL_EDITOR_MARKER_BOID_BIRD,
-        LEVEL_EDITOR_MARKER_JELLY_SWARM
+        LEVEL_EDITOR_MARKER_JELLY_SWARM,
+        LEVEL_EDITOR_MARKER_EEL_SWARM
     };
     const int nk = (int)(sizeof(kinds) / sizeof(kinds[0]));
     int idx = 0;
@@ -2114,7 +2130,7 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
                 (is_boid_wave_kind(ce->kind) && ce->b <= 0.0f) ? boid_speed_default_for_kind(ce->kind) : ce->b,
                 (is_boid_wave_kind(ce->kind) && ce->c <= 0.0f) ? boid_accel_default_for_kind(ce->kind) : ce->c,
                 is_boid_wave_kind(ce->kind)
-                    ? ((ce->kind == LEVEL_EDITOR_MARKER_JELLY_SWARM)
+                    ? ((ce->kind == LEVEL_EDITOR_MARKER_JELLY_SWARM || ce->kind == LEVEL_EDITOR_MARKER_EEL_SWARM)
                         ? ((ce->d > 0.0f) ? ce->d : 1.0f)
                         : ((ce->d > 0.0f) ? ce->d : boid_turn_rate_default_deg_for_kind(ce->kind)))
                     : 0.0f
@@ -2436,7 +2452,7 @@ static void add_marker_at_view(
             12.0f,
             boid_speed_default_for_kind(kind),
             boid_accel_default_for_kind(kind),
-            (kind == LEVEL_EDITOR_MARKER_JELLY_SWARM) ? 1.0f : boid_turn_rate_default_deg_for_kind(kind)
+            (kind == LEVEL_EDITOR_MARKER_JELLY_SWARM || kind == LEVEL_EDITOR_MARKER_EEL_SWARM) ? 1.0f : boid_turn_rate_default_deg_for_kind(kind)
         );
     } else if (kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
         push_marker(s, LEVEL_EDITOR_MARKER_ASTEROID_STORM, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, x01, y01, 10.0f, 30.0f, 520.0f, 1.3f);
@@ -2511,7 +2527,7 @@ static void add_spatial_marker_at_x01(level_editor_state* s, int kind, float x01
             12.0f,
             boid_speed_default_for_kind(kind),
             boid_accel_default_for_kind(kind),
-            (kind == LEVEL_EDITOR_MARKER_JELLY_SWARM) ? 1.0f : boid_turn_rate_default_deg_for_kind(kind)
+            (kind == LEVEL_EDITOR_MARKER_JELLY_SWARM || kind == LEVEL_EDITOR_MARKER_EEL_SWARM) ? 1.0f : boid_turn_rate_default_deg_for_kind(kind)
         );
     } else if (kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
         push_marker(s, LEVEL_EDITOR_MARKER_ASTEROID_STORM, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, xx, yy, 10.0f, 30.0f, 520.0f, 1.3f);
@@ -2560,7 +2576,7 @@ static void add_marker_at_timeline(level_editor_state* s, int kind, float x01) {
                 12.0f,
                 boid_speed_default_for_kind(kind),
                 boid_accel_default_for_kind(kind),
-                (kind == LEVEL_EDITOR_MARKER_JELLY_SWARM) ? 1.0f : boid_turn_rate_default_deg_for_kind(kind)
+                (kind == LEVEL_EDITOR_MARKER_JELLY_SWARM || kind == LEVEL_EDITOR_MARKER_EEL_SWARM) ? 1.0f : boid_turn_rate_default_deg_for_kind(kind)
             );
         } else if (kind == LEVEL_EDITOR_MARKER_MANTA_WING) {
             push_marker(s, LEVEL_EDITOR_MARKER_MANTA_WING, LEVEL_EDITOR_TRACK_EVENT, ord, 0.0f, cx, 0.50f, 1.0f, 1.9f, 2.0f, 0.0f);
@@ -3248,7 +3264,7 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             case 0:
                 m->kind = cycle_wave_kind(m->kind, (delta >= 0.0f) ? 1 : -1);
                 if (is_boid_wave_kind(m->kind) && m->d <= 0.0f) {
-                    m->d = (m->kind == LEVEL_EDITOR_MARKER_JELLY_SWARM)
+                    m->d = (m->kind == LEVEL_EDITOR_MARKER_JELLY_SWARM || m->kind == LEVEL_EDITOR_MARKER_EEL_SWARM)
                         ? 1.0f
                         : boid_turn_rate_default_deg_for_kind(m->kind);
                 } else if (m->kind == LEVEL_EDITOR_MARKER_MANTA_WING) {
@@ -3282,7 +3298,7 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
                 break;
             case 6:
                 if (boid_item) {
-                    if (m->kind == LEVEL_EDITOR_MARKER_JELLY_SWARM) {
+                    if (m->kind == LEVEL_EDITOR_MARKER_JELLY_SWARM || m->kind == LEVEL_EDITOR_MARKER_EEL_SWARM) {
                         m->d = clampf(m->d + delta * 0.05f, 0.20f, 4.00f);
                     } else {
                         m->d = clampf(m->d + delta * 1.0f, 10.0f, 720.0f);

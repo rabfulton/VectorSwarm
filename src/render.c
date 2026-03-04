@@ -4056,6 +4056,7 @@ static const char* level_editor_marker_name(int kind) {
         case 12: return "SWARM BIRD";
         case 15: return "JELLY SWARM";
         case 16: return "MANTA WING";
+        case 17: return "EEL SWARM";
         case 6: return "ASTEROID STORM";
         case 7: return "MINEFIELD";
         case 8: return "MISSILE LAUNCHER";
@@ -4091,7 +4092,7 @@ static vg_color level_editor_marker_color(const palette_theme* pal, int kind) {
     if (kind == 9) {
         return (vg_color){0.48f, 0.90f, 1.0f, 1.0f};
     }
-    if (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 15 || kind == 16) {
+    if (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 15 || kind == 16 || kind == 17) {
         return (vg_color){1.0f, 0.26f, 0.26f, 1.0f};
     }
     return pal->secondary;
@@ -4413,6 +4414,7 @@ static const char* editor_wave_type_name(int kind) {
         case 12: return "SWARM BIRD";
         case 15: return "JELLY SWARM";
         case 16: return "MANTA WING";
+        case 17: return "EEL SWARM";
         default: return "UNKNOWN";
     }
 }
@@ -4556,9 +4558,9 @@ static int editor_marker_properties_text(
         if (n < cap) { out_labels[n] = "VENT HEIGHT"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_g[sel]); n++; }
         return n;
     }
-    if (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 15 || kind == 16) {
+    if (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 15 || kind == 16 || kind == 17) {
         const int event_item = (metrics->level_editor_marker_track[sel] == 1);
-        const int boid_item = (kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 15);
+        const int boid_item = (kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 15 || kind == 17);
         const int kamikaze_item = (kind == 4);
         if (n < cap) { out_labels[n] = "TYPE"; snprintf(out_values[n], 32, "%s", editor_wave_type_name(kind)); n++; }
         if (event_item) {
@@ -4572,6 +4574,8 @@ static int editor_marker_properties_text(
         if (n < cap) {
             if (kind == 16) {
                 out_labels[n] = "SIZE";
+            } else if (kind == 17) {
+                out_labels[n] = "MAX SPEED";
             } else {
                 out_labels[n] = (kind == 2 || kind == 3) ? "FORMATION AMP" : "MAX SPEED";
             }
@@ -4583,6 +4587,10 @@ static int editor_marker_properties_text(
                 out_labels[n] = "MISSILES";
                 snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_c[sel]);
                 n++;
+            } else if (kind == 17) {
+                out_labels[n] = "ACCEL";
+                snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_c[sel]);
+                n++;
             } else {
                 out_labels[n] = (kind == 2 || kind == 3) ? "MAX SPEED" : "ACCEL";
                 snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_c[sel]);
@@ -4590,7 +4598,7 @@ static int editor_marker_properties_text(
             }
         }
         if (boid_item && n < cap) {
-            if (kind == 15) {
+            if (kind == 15 || kind == 17) {
                 out_labels[n] = "SIZE SCALE";
                 snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_d[sel]);
             } else {
@@ -4945,7 +4953,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 const int track_i = metrics->level_editor_marker_track[i];
                 const int is_enemy_i =
                     (kind_i == 2 || kind_i == 3 || kind_i == 4 || kind_i == 5 || kind_i == 6 ||
-                     kind_i == 10 || kind_i == 11 || kind_i == 12 || kind_i == 15);
+                     kind_i == 10 || kind_i == 11 || kind_i == 12 || kind_i == 15 || kind_i == 17);
                 const int event_item_i = is_enemy_i && (track_i == 1);
                 if (event_item_i) {
                     event_n += 1;
@@ -4957,7 +4965,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             const float my01 = clampf(metrics->level_editor_marker_y01[i], 0.0f, 1.0f);
             const int kind = metrics->level_editor_marker_kind[i];
             const int track = metrics->level_editor_marker_track[i];
-            const int is_enemy = (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 6 || kind == 10 || kind == 11 || kind == 12 || kind == 15);
+            const int is_enemy = (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 6 || kind == 10 || kind == 11 || kind == 12 || kind == 15 || kind == 17);
             const int event_item = is_enemy && (track == 1);
             const vg_color c = level_editor_marker_color(&pal, kind);
 
@@ -4981,7 +4989,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                     const int track_j = metrics->level_editor_marker_track[j];
                     const int is_enemy_j =
                         (kind_j == 2 || kind_j == 3 || kind_j == 4 || kind_j == 5 || kind_j == 6 ||
-                         kind_j == 10 || kind_j == 11 || kind_j == 12 || kind_j == 15);
+                         kind_j == 10 || kind_j == 11 || kind_j == 12 || kind_j == 15 || kind_j == 17);
                     const int event_item_j = is_enemy_j && (track_j == 1);
                     if (!event_item_j) {
                         continue;
@@ -5081,7 +5089,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                     mk2.intensity *= 0.74f;
                     r = draw_editor_diamond(ctx, (vg_vec2){vx, vy}, 6.0f * ui * glyph_scale, &mk2);
                 }
-            } else if (kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 15) {
+            } else if (kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 15 || kind == 17) {
                 vg_stroke_style mk2 = mk;
                 mk2.intensity *= 0.78f;
                 r = draw_editor_diamond(ctx, (vg_vec2){vx, vy}, 21.0f * ui * glyph_scale, &mk);
@@ -5346,7 +5354,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     );
     if (r != VG_OK) return r;
     if (metrics->level_editor_drag_active &&
-        (metrics->level_editor_drag_kind == 5 || metrics->level_editor_drag_kind == 10 || metrics->level_editor_drag_kind == 11 || metrics->level_editor_drag_kind == 12 || metrics->level_editor_drag_kind == 15 || metrics->level_editor_drag_kind == 1 || metrics->level_editor_drag_kind == 6 || metrics->level_editor_drag_kind == 7 || metrics->level_editor_drag_kind == 8 || metrics->level_editor_drag_kind == 9 || metrics->level_editor_drag_kind == 13 || metrics->level_editor_drag_kind == 14)) {
+        (metrics->level_editor_drag_kind == 5 || metrics->level_editor_drag_kind == 10 || metrics->level_editor_drag_kind == 11 || metrics->level_editor_drag_kind == 12 || metrics->level_editor_drag_kind == 15 || metrics->level_editor_drag_kind == 17 || metrics->level_editor_drag_kind == 1 || metrics->level_editor_drag_kind == 6 || metrics->level_editor_drag_kind == 7 || metrics->level_editor_drag_kind == 8 || metrics->level_editor_drag_kind == 9 || metrics->level_editor_drag_kind == 13 || metrics->level_editor_drag_kind == 14)) {
         vg_stroke_style gs = frame;
         gs.intensity = 1.2f;
         gs.color = level_editor_marker_color(&pal, metrics->level_editor_drag_kind);
@@ -8364,8 +8372,189 @@ static vg_result draw_enemy_glyph_manta(vg_context* ctx, const enemy* e, float x
     return VG_OK;
 }
 
+static vg_result draw_enemy_glyph_eel(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
+    float fx = 0.0f;
+    float fy = 0.0f;
+    float nx = 0.0f;
+    float ny = 0.0f;
+    const float body_len = (e->eel_body_length > 1.0f) ? e->eel_body_length : fmaxf(rr * 6.4f, 26.0f);
+    const float wave_freq = (e->eel_wave_freq > 0.05f) ? e->eel_wave_freq : 2.2f;
+    const float wave_amp = (e->eel_wave_amp > 0.05f) ? e->eel_wave_amp : fmaxf(rr * 0.58f, 3.8f);
+    const float phase = e->ai_timer_s * (1.8f + wave_freq) + e->visual_phase;
+    vg_stroke_style body_main = *enemy_style;
+    vg_stroke_style body_glow = *enemy_style;
+    vg_stroke_style ribbon = *enemy_style;
+    vg_stroke_style head_main = *enemy_style;
+    vg_stroke_style head_glow = *enemy_style;
+    enum { EEL_SEG_N = 28 };
+    enum { EEL_STRAND_N = 4 };
+    static const float k_strand_bias[EEL_STRAND_N] = {-0.56f, -0.22f, 0.22f, 0.56f};
+    vg_vec2 body[EEL_SEG_N + 1];
+    vg_vec2 ribbon_pts[EEL_STRAND_N][EEL_SEG_N + 1];
+    float ribbon_wave[EEL_STRAND_N][EEL_SEG_N + 1];
+    float normal_x[EEL_SEG_N + 1];
+    float normal_y[EEL_SEG_N + 1];
+    const int spine_n = clampi(e->eel_spine_count, 0, EEL_SPINE_POINTS);
+    vg_result r = VG_OK;
+
+    enemy_glyph_basis(e, &fx, &fy, &nx, &ny);
+    body_main.width_px *= 0.84f;
+    body_main.intensity *= 1.04f;
+    body_glow.width_px *= 1.55f;
+    body_glow.intensity *= 0.68f;
+    body_glow.color.a *= 0.74f;
+    body_glow.blend = VG_BLEND_ADDITIVE;
+    ribbon.width_px *= 0.54f;
+    ribbon.intensity *= 0.92f;
+    ribbon.blend = VG_BLEND_ADDITIVE;
+    head_main.width_px *= 1.04f;
+    head_main.intensity *= 1.20f;
+    head_glow.width_px *= 1.70f;
+    head_glow.intensity *= 0.78f;
+    head_glow.color.a *= 0.78f;
+    head_glow.blend = VG_BLEND_ADDITIVE;
+
+    for (int i = 0; i <= EEL_SEG_N; ++i) {
+        const float u = (float)i / (float)EEL_SEG_N;
+        if (spine_n >= 2) {
+            const float s = u * (float)(spine_n - 1);
+            const int i0 = clampi((int)floorf(s), 0, spine_n - 1);
+            const int i1 = (i0 < spine_n - 1) ? (i0 + 1) : i0;
+            const float t = s - (float)i0;
+            body[i].x = lerpf(e->eel_spine_x[i0], e->eel_spine_x[i1], t);
+            body[i].y = lerpf(e->eel_spine_y[i0], e->eel_spine_y[i1], t);
+        } else {
+            const float anchor_x = x - fx * (0.58f * rr);
+            const float anchor_y = y - fy * (0.58f * rr);
+            const float along = -u * body_len;
+            const float env = 0.18f + 0.82f * u;
+            const float side = sinf(phase * 1.95f - u * 12.2f) * wave_amp * env;
+            body[i].x = anchor_x + fx * along + nx * side;
+            body[i].y = anchor_y + fy * along + ny * side;
+        }
+    }
+
+    for (int i = 0; i <= EEL_SEG_N; ++i) {
+        const int i0 = (i > 0) ? (i - 1) : i;
+        const int i1 = (i < EEL_SEG_N) ? (i + 1) : i;
+        float tx = body[i1].x - body[i0].x;
+        float ty = body[i1].y - body[i0].y;
+        float tl = sqrtf(tx * tx + ty * ty);
+        if (tl < 1.0e-4f) {
+            tx = fx;
+            ty = fy;
+            tl = 1.0f;
+        }
+        tx /= tl;
+        ty /= tl;
+        normal_x[i] = -ty;
+        normal_y[i] = tx;
+    }
+
+    for (int s = 0; s < EEL_STRAND_N; ++s) {
+        for (int i = 0; i <= EEL_SEG_N; ++i) {
+            const float u = (float)i / (float)EEL_SEG_N;
+            const float wave = sinf(
+                phase * (2.55f + 0.12f * (float)s) -
+                u * (13.8f + 4.2f * (float)s) +
+                e->visual_phase * (0.58f + 0.18f * (float)s)
+            );
+            const float spread = (0.08f + 0.24f * u) * rr;
+            const float off = k_strand_bias[s] * spread + wave * rr * (0.05f + 0.10f * u);
+            ribbon_pts[s][i].x = body[i].x + normal_x[i] * off;
+            ribbon_pts[s][i].y = body[i].y + normal_y[i] * off;
+            ribbon_wave[s][i] = wave;
+        }
+    }
+
+    r = vg_draw_polyline(ctx, body, EEL_SEG_N + 1, &body_glow, 0);
+    if (r != VG_OK) {
+        return r;
+    }
+    r = vg_draw_polyline(ctx, body, EEL_SEG_N + 1, &body_main, 0);
+    if (r != VG_OK) {
+        return r;
+    }
+
+    for (int s = 0; s < EEL_STRAND_N; ++s) {
+        for (int i = 0; i < EEL_SEG_N; ++i) {
+            const float u = ((float)i + 0.5f) / (float)EEL_SEG_N;
+            const float wave01 = 0.5f + 0.5f * clampf(0.5f * (ribbon_wave[s][i] + ribbon_wave[s][i + 1]), -1.0f, 1.0f);
+            vg_stroke_style seg = ribbon;
+            seg.width_px *= (0.72f + 0.34f * (1.0f - fabsf(k_strand_bias[s])));
+            seg.intensity *= (0.28f + 1.24f * wave01) * (0.50f + 0.50f * (1.0f - u));
+            seg.color.r = lerpf(seg.color.r, 0.38f, wave01 * 0.42f);
+            seg.color.g = lerpf(seg.color.g, 0.98f, wave01 * 0.70f);
+            seg.color.b = lerpf(seg.color.b, 1.00f, wave01 * 0.92f);
+            seg.color.a *= (0.38f + 0.48f * wave01) * (0.86f - 0.18f * fabsf(k_strand_bias[s]));
+            {
+                const vg_vec2 seg_pts[] = {ribbon_pts[s][i], ribbon_pts[s][i + 1]};
+                r = vg_draw_polyline(ctx, seg_pts, 2, &seg, 0);
+            }
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+    }
+
+    {
+        const vg_vec2 tail_a = body[EEL_SEG_N - 2];
+        const vg_vec2 tail_b = body[EEL_SEG_N];
+        float tx = tail_b.x - tail_a.x;
+        float ty = tail_b.y - tail_a.y;
+        float tl = sqrtf(tx * tx + ty * ty);
+        if (tl < 1.0e-4f) {
+            tx = -fx;
+            ty = -fy;
+            tl = 1.0f;
+        }
+        tx /= tl;
+        ty /= tl;
+        for (int s = 0; s < EEL_STRAND_N; ++s) {
+            const float side = k_strand_bias[s] * rr * 0.38f;
+            const float flick = sinf(phase * (2.0f + 0.3f * (float)s) + e->visual_phase * (0.7f + 0.2f * (float)s));
+            const float sway = rr * 0.11f * flick;
+            vg_stroke_style tail = ribbon;
+            const vg_vec2 tail_seg[] = {
+                {tail_b.x + normal_x[EEL_SEG_N] * side, tail_b.y + normal_y[EEL_SEG_N] * side},
+                {tail_b.x + tx * (0.52f * rr) + normal_x[EEL_SEG_N] * (side + sway * 0.6f), tail_b.y + ty * (0.52f * rr) + normal_y[EEL_SEG_N] * (side + sway * 0.6f)},
+                {tail_b.x + tx * (1.06f * rr) + normal_x[EEL_SEG_N] * (side + sway * 1.1f), tail_b.y + ty * (1.06f * rr) + normal_y[EEL_SEG_N] * (side + sway * 1.1f)}
+            };
+            tail.width_px *= 0.72f;
+            tail.intensity *= 0.74f;
+            tail.color.a *= 0.68f;
+            r = vg_draw_polyline(ctx, tail_seg, 3, &tail, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+    }
+
+    {
+        const float head_scale = 0.5f;
+        const vg_vec2 head[] = {
+            {x + fx * (1.04f * rr * head_scale), y + fy * (1.04f * rr * head_scale)},
+            {x + fx * (-0.30f * rr * head_scale) + nx * (0.88f * rr * head_scale), y + fy * (-0.30f * rr * head_scale) + ny * (0.88f * rr * head_scale)},
+            {x + fx * (-0.72f * rr * head_scale), y + fy * (-0.72f * rr * head_scale)},
+            {x + fx * (-0.30f * rr * head_scale) + nx * (-0.88f * rr * head_scale), y + fy * (-0.30f * rr * head_scale) + ny * (-0.88f * rr * head_scale)},
+            {x + fx * (1.04f * rr * head_scale), y + fy * (1.04f * rr * head_scale)}
+        };
+        r = vg_draw_polyline(ctx, head, 5, &head_glow, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_draw_polyline(ctx, head, 5, &head_main, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+    }
+    return VG_OK;
+}
+
 static vg_result draw_enemy_glyph(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
     switch (e->visual_kind) {
+        case ENEMY_VISUAL_EEL:
+            return draw_enemy_glyph_eel(ctx, e, x, y, rr, enemy_style);
         case ENEMY_VISUAL_MANTA:
             return draw_enemy_glyph_manta(ctx, e, x, y, rr, enemy_style);
         case ENEMY_VISUAL_JELLY:
@@ -8421,6 +8610,18 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         4.0f,
         0.21f * intensity_scale,
         (vg_color){1.0f, 0.38f, 0.38f, 0.28f},
+        VG_BLEND_ADDITIVE
+    );
+    const vg_stroke_style eel_arc_style = make_stroke(
+        1.28f,
+        1.05f * intensity_scale,
+        (vg_color){0.58f, 0.96f, 1.0f, 0.84f},
+        VG_BLEND_ALPHA
+    );
+    const vg_stroke_style eel_arc_halo_style = make_stroke(
+        4.1f,
+        0.34f * intensity_scale,
+        (vg_color){0.42f, 0.86f, 1.0f, 0.34f},
         VG_BLEND_ADDITIVE
     );
     const vg_fill_style thruster_fill = make_fill(1.0f * intensity_scale, pal.thruster, VG_BLEND_ADDITIVE);
@@ -8860,6 +9061,46 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             }
         }
 
+        for (size_t i = 0; i < MAX_EEL_ARCS; ++i) {
+            const eel_arc_effect* arc = &g->eel_arcs[i];
+            if (!arc->active || arc->point_count < 2) {
+                continue;
+            }
+            {
+                const float life01 = 1.0f - clampf(arc->age_s / fmaxf(arc->life_s, 1.0e-4f), 0.0f, 1.0f);
+                for (int p = 0; p + 1 < arc->point_count; ++p) {
+                    float d0 = 0.0f;
+                    float d1 = 0.0f;
+                    const vg_vec2 a = project_cylinder_point(g, arc->point_x[p], arc->point_y[p], &d0);
+                    const vg_vec2 b = project_cylinder_point(g, arc->point_x[p + 1], arc->point_y[p + 1], &d1);
+                    const float depth = 0.5f * (d0 + d1);
+                    const float jitter = 0.50f + 0.50f * hash01_u32(arc->seed ^ (uint32_t)(p * 0x9e37u));
+                    vg_stroke_style core = eel_arc_style;
+                    vg_stroke_style halo = eel_arc_halo_style;
+                    core.width_px *= 0.46f + 0.92f * depth;
+                    halo.width_px *= 0.44f + 0.96f * depth;
+                    core.intensity *= (0.24f + 0.86f * depth) * life01 * (0.72f + 0.56f * jitter);
+                    halo.intensity *= (0.20f + 0.88f * depth) * life01 * (0.72f + 0.44f * jitter);
+                    core.color.a *= life01 * (0.68f + 0.32f * jitter);
+                    halo.color.a *= life01 * (0.64f + 0.30f * jitter);
+                    {
+                        const vg_vec2 seg[] = {a, b};
+                        r = vg_draw_polyline(ctx, seg, 2, &halo, 0);
+                    }
+                    if (r != VG_OK) {
+                        return r;
+                    }
+                    {
+                        const vg_vec2 seg[] = {a, b};
+                        r = vg_draw_polyline(ctx, seg, 2, &core, 0);
+                    }
+                    if (r != VG_OK) {
+                        return r;
+                    }
+                }
+            }
+        }
+
         for (size_t i = 0; i < MAX_ENEMY_DEBRIS; ++i) {
             const enemy_debris* dbr = &g->debris[i];
             if (!dbr->active || dbr->alpha <= 0.01f) {
@@ -8919,6 +9160,17 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
                     sfy /= sl;
                     e_proj.facing_x = sfx;
                     e_proj.facing_y = sfy;
+                }
+                if (e->visual_kind == ENEMY_VISUAL_EEL && e->eel_spine_count >= 2) {
+                    const int spine_n = clampi(e->eel_spine_count, 0, EEL_SPINE_POINTS);
+                    e_proj.eel_spine_count = spine_n;
+                    for (int si = 0; si < spine_n; ++si) {
+                        const vg_vec2 sp = project_cylinder_point(g, e->eel_spine_x[si], e->eel_spine_y[si], NULL);
+                        e_proj.eel_spine_x[si] = sp.x;
+                        e_proj.eel_spine_y[si] = sp.y;
+                    }
+                } else {
+                    e_proj.eel_spine_count = 0;
                 }
                 r = draw_enemy_glyph(ctx, &e_proj, c.x, c.y, rr, &es);
             }
@@ -9439,6 +9691,47 @@ skip_legacy_landscape:
         if (r != VG_OK) {
             (void)vg_transform_pop(ctx);
             return r;
+        }
+    }
+
+    for (size_t i = 0; i < MAX_EEL_ARCS; ++i) {
+        const eel_arc_effect* arc = &g->eel_arcs[i];
+        if (!arc->active || arc->point_count < 2) {
+            continue;
+        }
+        {
+            const float life01 = 1.0f - clampf(arc->age_s / fmaxf(arc->life_s, 1.0e-4f), 0.0f, 1.0f);
+            for (int p = 0; p + 1 < arc->point_count; ++p) {
+                const float jitter = 0.50f + 0.50f * hash01_u32(arc->seed ^ (uint32_t)(p * 0x9e37u));
+                vg_stroke_style core = eel_arc_style;
+                vg_stroke_style halo = eel_arc_halo_style;
+                core.intensity *= life01 * (0.70f + 0.62f * jitter);
+                halo.intensity *= life01 * (0.66f + 0.58f * jitter);
+                core.color.a *= life01 * (0.66f + 0.34f * jitter);
+                halo.color.a *= life01 * (0.60f + 0.30f * jitter);
+                {
+                    const vg_vec2 seg[] = {
+                        {arc->point_x[p], arc->point_y[p]},
+                        {arc->point_x[p + 1], arc->point_y[p + 1]}
+                    };
+                    r = vg_draw_polyline(ctx, seg, 2, &halo, 0);
+                }
+                if (r != VG_OK) {
+                    (void)vg_transform_pop(ctx);
+                    return r;
+                }
+                {
+                    const vg_vec2 seg[] = {
+                        {arc->point_x[p], arc->point_y[p]},
+                        {arc->point_x[p + 1], arc->point_y[p + 1]}
+                    };
+                    r = vg_draw_polyline(ctx, seg, 2, &core, 0);
+                }
+                if (r != VG_OK) {
+                    (void)vg_transform_pop(ctx);
+                    return r;
+                }
+            }
         }
     }
 
