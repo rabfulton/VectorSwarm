@@ -13,15 +13,45 @@ layout(push_constant) uniform GridPC {
     vec4 p4;      /* x=camera_x, y=camera_y, z=world_w, w=world_h */
 } pc;
 
-float line_band(float coord, float spacing) {
-    float s = max(spacing, 1.0);
-    float cell = coord / s;
-    float frac_v = fract(cell);
-    float d_px = min(frac_v, 1.0 - frac_v) * s;
-    float aa_px = max(fwidth(coord), 0.65);
-    const float line_px = 0.72;
-    float half_w_px = 0.5 * line_px;
-    return 1.0 - smoothstep(half_w_px, half_w_px + aa_px, d_px);
+vec2 hash22(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.xx + p3.yz) * p3.zy);
+}
+
+float voronoi_edge_band(vec2 world, vec2 cell_spacing) {
+    vec2 s = max(cell_spacing, vec2(1.0));
+    vec2 p = world / s;
+    vec2 cell = floor(p);
+    vec2 f = fract(p);
+
+    float f1 = 1.0e9;
+    float f2 = 1.0e9;
+    for (int j = -1; j <= 1; ++j) {
+        for (int i = -1; i <= 1; ++i) {
+            vec2 g = vec2(float(i), float(j));
+            vec2 h = hash22(cell + g);
+            vec2 seed = g + vec2(0.16) + h * vec2(0.68);
+            vec2 d = seed - f;
+            float dist2 = dot(d, d);
+            if (dist2 < f1) {
+                f2 = f1;
+                f1 = dist2;
+            } else if (dist2 < f2) {
+                f2 = dist2;
+            }
+        }
+    }
+
+    float d1 = sqrt(max(f1, 1.0e-8));
+    float d2 = sqrt(max(f2, 1.0e-8));
+    float edge = d2 - d1;
+
+    float px_to_cell = 1.0 / max(min(s.x, s.y), 1.0);
+    const float line_px = 1.60;
+    float half_w = 0.5 * line_px * px_to_cell;
+    float aa = max(fwidth(edge), 0.90 * px_to_cell);
+    return 1.0 - smoothstep(half_w, half_w + aa, edge);
 }
 
 void main() {
@@ -36,9 +66,7 @@ void main() {
         (pc.p4.y - pc.p4.w * 0.5) + (pc.p0.y - p.y)
     );
 
-    float gx = line_band(world.x, pc.p0.z);
-    float gy = line_band(world.y, pc.p0.w);
-    float line = max(gx, gy);
+    float line = voronoi_edge_band(world, vec2(pc.p0.z, pc.p0.w));
     if (line <= 0.001) {
         discard;
     }
