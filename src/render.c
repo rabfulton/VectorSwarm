@@ -103,6 +103,18 @@ static float clampf(float v, float lo, float hi) {
     return v;
 }
 
+static int eel_arc_pulse_is_on(const eel_arc_effect* arc) {
+    float phase;
+    if (!arc) {
+        return 0;
+    }
+    phase = fmodf(arc->age_s, EEL_ARC_PULSE_PERIOD_S);
+    if (phase < 0.0f) {
+        phase += EEL_ARC_PULSE_PERIOD_S;
+    }
+    return (phase <= EEL_ARC_PULSE_ON_S) ? 1 : 0;
+}
+
 static float hash01_u32(uint32_t x) {
     x ^= x >> 16;
     x *= 0x7feb352dU;
@@ -8408,10 +8420,10 @@ static vg_result draw_enemy_glyph_eel(vg_context* ctx, const enemy* e, float x, 
     ribbon.intensity *= 0.92f;
     ribbon.blend = VG_BLEND_ADDITIVE;
     head_main.width_px *= 1.04f;
-    head_main.intensity *= 1.20f;
+    head_main.intensity *= 0.82f;
     head_glow.width_px *= 1.70f;
-    head_glow.intensity *= 0.78f;
-    head_glow.color.a *= 0.78f;
+    head_glow.intensity *= 0.46f;
+    head_glow.color.a *= 0.52f;
     head_glow.blend = VG_BLEND_ADDITIVE;
 
     for (int i = 0; i <= EEL_SEG_N; ++i) {
@@ -9063,7 +9075,7 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
 
         for (size_t i = 0; i < MAX_EEL_ARCS; ++i) {
             const eel_arc_effect* arc = &g->eel_arcs[i];
-            if (!arc->active || arc->point_count < 2) {
+            if (!arc->active || arc->point_count < 2 || !eel_arc_pulse_is_on(arc)) {
                 continue;
             }
             {
@@ -9696,7 +9708,7 @@ skip_legacy_landscape:
 
     for (size_t i = 0; i < MAX_EEL_ARCS; ++i) {
         const eel_arc_effect* arc = &g->eel_arcs[i];
-        if (!arc->active || arc->point_count < 2) {
+        if (!arc->active || arc->point_count < 2 || !eel_arc_pulse_is_on(arc)) {
             continue;
         }
         {

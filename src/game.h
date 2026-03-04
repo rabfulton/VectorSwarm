@@ -23,6 +23,8 @@
 #define MAX_EEL_ARCS 384
 #define EEL_ARC_MAX_POINTS 10
 #define EEL_SPINE_POINTS 28
+#define EEL_ARC_PULSE_PERIOD_S 0.60f
+#define EEL_ARC_PULSE_ON_S 0.20f
 #define PLAYER_ALT_WEAPON_COUNT 4
 
 struct leveldef_db;
@@ -354,6 +356,9 @@ typedef struct eel_arc_effect {
     float age_s;
     float life_s;
     float damage_timer_s;
+    int pulse_prev_on;
+    int pulse_sound_anchor;
+    int strike_slot;
     int point_count;
     float point_x[EEL_ARC_MAX_POINTS];
     float point_y[EEL_ARC_MAX_POINTS];
