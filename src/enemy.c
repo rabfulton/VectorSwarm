@@ -111,6 +111,16 @@ static float smoothstepf(float edge0, float edge1, float x) {
     }
 }
 
+static float noise_signed_1d(uint32_t seed, float x) {
+    const int i0 = (int)floorf(x);
+    const int i1 = i0 + 1;
+    const float f = x - (float)i0;
+    const float u = smoothstepf(0.0f, 1.0f, f);
+    const float n0 = hash01_u32(seed ^ ((uint32_t)i0 * 0x9e3779b9u)) * 2.0f - 1.0f;
+    const float n1 = hash01_u32(seed ^ ((uint32_t)i1 * 0x9e3779b9u)) * 2.0f - 1.0f;
+    return lerpf(n0, n1, u);
+}
+
 static uint32_t enemy_visual_seed_from_ids(int wave_id, int slot_index) {
     return (uint32_t)((uint32_t)wave_id * 73856093u) ^ (uint32_t)((uint32_t)slot_index * 19349663u);
 }
@@ -1696,7 +1706,9 @@ static void eel_arc_build_points(const enemy* e, eel_arc_effect* arc) {
     float ray_y;
     float ray_nx;
     float ray_ny;
-    uint32_t tick;
+    float focus_x;
+    float focus_y;
+    float focus_range;
     if (!e || !arc || seg_n < 1) {
         return;
     }
@@ -1716,18 +1728,118 @@ static void eel_arc_build_points(const enemy* e, eel_arc_effect* arc) {
         ray_nx = -ray_y;
         ray_ny = ray_x;
     }
-    tick = (uint32_t)floorf(arc->age_s * 9.0f);
+    focus_x = arc->focus_dir_x;
+    focus_y = arc->focus_dir_y;
+    focus_range = (arc->focus_range > 1.0f) ? arc->focus_range : arc->range;
+    if (length2(focus_x, focus_y) < 1.0e-5f) {
+        focus_x = ray_x;
+        focus_y = ray_y;
+    } else {
+        normalize2(&focus_x, &focus_y);
+    }
     arc->point_count = EEL_ARC_MAX_POINTS;
     for (int i = 0; i <= seg_n; ++i) {
         const float u = (float)i / (float)seg_n;
         const float stem = 1.0f - u;
-        const uint32_t h = arc->seed ^ (uint32_t)(i * 0x9e37u) ^ (tick * 0x85ebu);
-        const float n0 = hash01_u32(h) * 2.0f - 1.0f;
-        const float n1 = hash01_u32(h ^ 0x68c9u) * 2.0f - 1.0f;
-        const float wobble = sinf(arc->age_s * (3.6f + 1.8f * n1) - u * (6.0f + 2.2f * arc->start_u) + n0 * 1.4f);
-        const float jag = (n0 * 0.80f + wobble * 0.20f) * arc->range * (0.052f + 0.032f * stem) * stem;
-        arc->point_x[i] = sx + ray_x * (arc->range * u) + ray_nx * jag;
-        arc->point_y[i] = sy + ray_y * (arc->range * u) + ray_ny * jag;
+        const float u_pow = u * u;
+        const float converge = 0.88f * u_pow;
+        const float focus_u = smoothstepf(0.60f, 1.0f, u);
+        const float t0 = u * 7.2f + arc->age_s * (1.8f + 0.35f * arc->strike_slot) + arc->start_u * 2.9f;
+        const float t1 = u * 14.5f + arc->age_s * (2.5f + 0.24f * arc->strike_slot) + 9.1f;
+        const float n0 = noise_signed_1d(arc->seed ^ 0x9e37u, t0);
+        const float n1 = noise_signed_1d(arc->seed ^ 0x68c9u, t1);
+        const float wobble = sinf(arc->age_s * (2.8f + 0.8f * arc->start_u) - u * 4.7f + n0 * 1.7f);
+        const float jag = (n0 * 0.72f + n1 * 0.20f + wobble * 0.08f) * arc->range * (0.036f + 0.018f * stem) * stem;
+        const float base_len = arc->range * u;
+        const float focus_len = focus_range * u;
+        float px = lerpf(sx + ray_x * base_len, sx + focus_x * focus_len, converge);
+        float py = lerpf(sy + ray_y * base_len, sy + focus_y * focus_len, converge);
+        const float focus_xw = sx + focus_x * focus_range;
+        const float focus_yw = sy + focus_y * focus_range;
+        px = lerpf(px, focus_xw, 0.26f * focus_u);
+        py = lerpf(py, focus_yw, 0.26f * focus_u);
+        arc->point_x[i] = px + ray_nx * jag;
+        arc->point_y[i] = py + ray_ny * jag;
+    }
+}
+
+static void emit_eel_arc_sparks(game_state* g, const enemy* e, const eel_arc_effect* arc, float su) {
+    const int source_count = 3;
+    const int tip_count = 2;
+    float sx;
+    float sy;
+    float tip_x;
+    float tip_y;
+    float dir_x;
+    float dir_y;
+    float side_x;
+    float side_y;
+    if (!g || !e || !arc || arc->point_count < 2) {
+        return;
+    }
+    sx = arc->point_x[0];
+    sy = arc->point_y[0];
+    tip_x = arc->point_x[arc->point_count - 1];
+    tip_y = arc->point_y[arc->point_count - 1];
+    dir_x = tip_x - sx;
+    dir_y = tip_y - sy;
+    if (length2(dir_x, dir_y) < 1.0e-5f) {
+        dir_x = e->facing_x;
+        dir_y = e->facing_y;
+        if (length2(dir_x, dir_y) < 1.0e-5f) {
+            dir_x = cosf(e->eel_heading_rad);
+            dir_y = sinf(e->eel_heading_rad);
+        }
+    }
+    normalize2(&dir_x, &dir_y);
+    side_x = -dir_y;
+    side_y = dir_x;
+
+    for (int i = 0; i < source_count; ++i) {
+        const float fwd = (22.0f + 86.0f * frand01()) * su;
+        particle* p = alloc_particle(g);
+        if (!p) {
+            return;
+        }
+        p->type = PARTICLE_FLASH;
+        p->b.x = sx + dir_x * (1.4f + frand01() * 5.2f) * su + side_x * frands1() * 2.8f * su;
+        p->b.y = sy + dir_y * (1.4f + frand01() * 5.2f) * su + side_y * frands1() * 2.8f * su;
+        p->b.vx = e->b.vx * 0.22f + dir_x * fwd + side_x * frands1() * 58.0f * su;
+        p->b.vy = e->b.vy * 0.22f + dir_y * fwd + side_y * frands1() * 58.0f * su;
+        p->b.ax = -p->b.vx * (5.0f + frand01() * 2.0f);
+        p->b.ay = -p->b.vy * (5.0f + frand01() * 2.0f);
+        p->age_s = 0.0f;
+        p->life_s = 0.09f + frand01() * 0.11f;
+        p->size = (1.3f + frand01() * 2.0f) * su;
+        p->spin = frand01() * 6.2831853f;
+        p->spin_rate = frands1() * 10.0f;
+        p->r = 0.36f + frand01() * 0.20f;
+        p->g = 0.86f + frand01() * 0.14f;
+        p->bcol = 1.00f;
+        p->a = 0.12f + 0.12f * frand01();
+    }
+    for (int i = 0; i < tip_count; ++i) {
+        const float out = (42.0f + 94.0f * frand01()) * su;
+        particle* p = alloc_particle(g);
+        if (!p) {
+            return;
+        }
+        p->type = PARTICLE_FLASH;
+        p->b.x = tip_x + side_x * frands1() * 3.1f * su;
+        p->b.y = tip_y + side_y * frands1() * 3.1f * su;
+        p->b.vx = e->b.vx * 0.14f + dir_x * out + side_x * frands1() * 46.0f * su;
+        p->b.vy = e->b.vy * 0.14f + dir_y * out + side_y * frands1() * 46.0f * su;
+        p->b.ax = -p->b.vx * (5.2f + frand01() * 2.6f);
+        p->b.ay = -p->b.vy * (5.2f + frand01() * 2.6f);
+        p->age_s = 0.0f;
+        p->life_s = 0.08f + frand01() * 0.08f;
+        p->size = (1.0f + frand01() * 1.7f) * su;
+        p->spin = frand01() * 6.2831853f;
+        p->spin_rate = frands1() * 8.0f;
+        p->r = 0.44f + frand01() * 0.18f;
+        p->g = 0.90f + frand01() * 0.10f;
+        p->bcol = 1.00f;
+        p->a = 0.10f + 0.12f * frand01();
     }
 }
 
@@ -1816,6 +1928,7 @@ static void update_eel_arc_effects(
         active_n += 1;
         {
             const int pulse_on = eel_arc_pulse_is_on(arc);
+            const int pulse_just_started = (!arc->pulse_prev_on && pulse_on) ? 1 : 0;
             float sx = owner->b.x;
             float sy = owner->b.y;
             float dir_x = 1.0f;
@@ -1832,7 +1945,7 @@ static void update_eel_arc_effects(
             eel_arc_source_and_dir(owner, arc, &sx, &sy, &dir_x, &dir_y);
             dx = uses_cylinder ? wrap_delta(sx, g->player.b.x, period) : (sx - g->player.b.x);
             dy = sy - g->player.b.y;
-            if (!arc->pulse_prev_on) {
+            if (pulse_just_started) {
                 float fwd_x = owner->facing_x;
                 float fwd_y = owner->facing_y;
                 float to_x = -dx;
@@ -1863,6 +1976,17 @@ static void update_eel_arc_effects(
                     } else {
                         normalize2(&aim_x, &aim_y);
                     }
+                    arc->focus_dir_x = aim_x;
+                    arc->focus_dir_y = aim_y;
+                    {
+                        const float dist_to_player = length2(-dx, -dy);
+                        float max_focus = arc->range * 0.96f;
+                        const float min_focus = owner->radius * 2.0f;
+                        if (max_focus < min_focus) {
+                            max_focus = min_focus;
+                        }
+                        arc->focus_range = clampf(dist_to_player, min_focus, max_focus);
+                    }
                     side_x = -dir_y;
                     side_y = dir_x;
                     {
@@ -1880,6 +2004,9 @@ static void update_eel_arc_effects(
                 continue;
             }
             eel_arc_build_points(owner, arc);
+            if (pulse_just_started) {
+                emit_eel_arc_sparks(g, owner, arc, su);
+            }
             d = sqrtf(dx * dx + dy * dy);
             near01 = 1.0f - smoothstepf(
                 fmaxf(owner->radius * 4.0f, owner->eel_weapon_range * 0.20f),

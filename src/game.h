@@ -360,6 +360,9 @@ typedef struct eel_arc_effect {
     int pulse_emit_on;
     int pulse_sound_anchor;
     int strike_slot;
+    float focus_dir_x;
+    float focus_dir_y;
+    float focus_range;
     int point_count;
     float point_x[EEL_ARC_MAX_POINTS];
     float point_y[EEL_ARC_MAX_POINTS];

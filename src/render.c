@@ -115,6 +115,18 @@ static int eel_arc_pulse_is_on(const eel_arc_effect* arc) {
     return (phase <= EEL_ARC_PULSE_ON_S) ? 1 : 0;
 }
 
+static float eel_arc_pulse_t01(const eel_arc_effect* arc) {
+    float phase;
+    if (!arc) {
+        return 0.0f;
+    }
+    phase = fmodf(arc->age_s, EEL_ARC_PULSE_PERIOD_S);
+    if (phase < 0.0f) {
+        phase += EEL_ARC_PULSE_PERIOD_S;
+    }
+    return clampf(phase / fmaxf(EEL_ARC_PULSE_ON_S, 1.0e-4f), 0.0f, 1.0f);
+}
+
 static float hash01_u32(uint32_t x) {
     x ^= x >> 16;
     x *= 0x7feb352dU;
@@ -9080,21 +9092,53 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             }
             {
                 const float life01 = 1.0f - clampf(arc->age_s / fmaxf(arc->life_s, 1.0e-4f), 0.0f, 1.0f);
+                const float pulse_t = eel_arc_pulse_t01(arc);
+                const float roll_u = pulse_t * 1.16f;
+                vg_vec2 arc_line[EEL_ARC_MAX_POINTS];
+                float depth_line[EEL_ARC_MAX_POINTS];
+                float depth_sum = 0.0f;
+                for (int p = 0; p < arc->point_count; ++p) {
+                    float dp = 0.0f;
+                    arc_line[p] = project_cylinder_point(g, arc->point_x[p], arc->point_y[p], &dp);
+                    depth_line[p] = dp;
+                    depth_sum += dp;
+                }
+                {
+                    const float depth_avg = depth_sum / fmaxf((float)arc->point_count, 1.0f);
+                    vg_stroke_style bg = eel_arc_halo_style;
+                    bg.width_px *= (2.8f + 1.2f * (1.0f - pulse_t)) * (0.45f + depth_avg * 0.86f);
+                    bg.intensity *= life01 * (0.14f + 0.30f * (1.0f - pulse_t)) * (0.45f + depth_avg * 0.70f);
+                    bg.color = (vg_color){0.25f, 0.80f, 1.0f, 0.10f * life01 * (0.78f + 0.22f * (1.0f - pulse_t))};
+                    r = vg_draw_polyline(ctx, arc_line, arc->point_count, &bg, 0);
+                    if (r != VG_OK) {
+                        return r;
+                    }
+                }
                 for (int p = 0; p + 1 < arc->point_count; ++p) {
-                    float d0 = 0.0f;
-                    float d1 = 0.0f;
-                    const vg_vec2 a = project_cylinder_point(g, arc->point_x[p], arc->point_y[p], &d0);
-                    const vg_vec2 b = project_cylinder_point(g, arc->point_x[p + 1], arc->point_y[p + 1], &d1);
+                    const vg_vec2 a = arc_line[p];
+                    const vg_vec2 b = arc_line[p + 1];
+                    const float d0 = depth_line[p];
+                    const float d1 = depth_line[p + 1];
                     const float depth = 0.5f * (d0 + d1);
                     const float jitter = 0.50f + 0.50f * hash01_u32(arc->seed ^ (uint32_t)(p * 0x9e37u));
+                    const float seg_u = ((float)p + 0.5f) / fmaxf((float)(arc->point_count - 1), 1.0f);
+                    float roll = 1.0f - fabsf(seg_u - roll_u) / 0.22f;
+                    float trail = 1.0f - clampf((roll_u - seg_u) / 0.90f, 0.0f, 1.0f);
                     vg_stroke_style core = eel_arc_style;
                     vg_stroke_style halo = eel_arc_halo_style;
+                    roll = clampf(roll, 0.0f, 1.0f);
+                    roll = roll * roll * (3.0f - 2.0f * roll);
+                    trail = clampf(trail, 0.0f, 1.0f);
                     core.width_px *= 0.46f + 0.92f * depth;
                     halo.width_px *= 0.44f + 0.96f * depth;
-                    core.intensity *= (0.24f + 0.86f * depth) * life01 * (0.72f + 0.56f * jitter);
-                    halo.intensity *= (0.20f + 0.88f * depth) * life01 * (0.72f + 0.44f * jitter);
-                    core.color.a *= life01 * (0.68f + 0.32f * jitter);
-                    halo.color.a *= life01 * (0.64f + 0.30f * jitter);
+                    core.intensity *= (0.24f + 0.86f * depth) * life01 * (0.66f + 0.50f * jitter) * (0.66f + 0.96f * roll + 0.20f * trail);
+                    halo.intensity *= (0.20f + 0.88f * depth) * life01 * (0.64f + 0.40f * jitter) * (0.62f + 0.80f * roll + 0.18f * trail);
+                    core.color.r = clampf(core.color.r * (0.84f + 0.52f * roll), 0.0f, 1.0f);
+                    core.color.g = clampf(core.color.g * (0.94f + 0.16f * roll), 0.0f, 1.0f);
+                    halo.color.r = clampf(halo.color.r * (0.86f + 0.42f * roll), 0.0f, 1.0f);
+                    halo.color.g = clampf(halo.color.g * (0.94f + 0.12f * roll), 0.0f, 1.0f);
+                    core.color.a *= life01 * (0.64f + 0.28f * jitter) * (0.72f + 0.62f * roll);
+                    halo.color.a *= life01 * (0.62f + 0.26f * jitter) * (0.70f + 0.58f * roll);
                     {
                         const vg_vec2 seg[] = {a, b};
                         r = vg_draw_polyline(ctx, seg, 2, &halo, 0);
@@ -9713,18 +9757,45 @@ skip_legacy_landscape:
         }
         {
             const float life01 = 1.0f - clampf(arc->age_s / fmaxf(arc->life_s, 1.0e-4f), 0.0f, 1.0f);
+            const float pulse_t = eel_arc_pulse_t01(arc);
+            const float roll_u = pulse_t * 1.16f;
+            vg_vec2 arc_line[EEL_ARC_MAX_POINTS];
+            for (int p = 0; p < arc->point_count; ++p) {
+                arc_line[p] = (vg_vec2){arc->point_x[p], arc->point_y[p]};
+            }
+            {
+                vg_stroke_style bg = eel_arc_halo_style;
+                bg.width_px *= 2.5f + 1.1f * (1.0f - pulse_t);
+                bg.intensity *= life01 * (0.14f + 0.28f * (1.0f - pulse_t));
+                bg.color = (vg_color){0.24f, 0.78f, 1.0f, 0.10f * life01 * (0.78f + 0.22f * (1.0f - pulse_t))};
+                r = vg_draw_polyline(ctx, arc_line, arc->point_count, &bg, 0);
+                if (r != VG_OK) {
+                    (void)vg_transform_pop(ctx);
+                    return r;
+                }
+            }
             for (int p = 0; p + 1 < arc->point_count; ++p) {
                 const float jitter = 0.50f + 0.50f * hash01_u32(arc->seed ^ (uint32_t)(p * 0x9e37u));
+                const float seg_u = ((float)p + 0.5f) / fmaxf((float)(arc->point_count - 1), 1.0f);
+                float roll = 1.0f - fabsf(seg_u - roll_u) / 0.22f;
+                float trail = 1.0f - clampf((roll_u - seg_u) / 0.90f, 0.0f, 1.0f);
                 vg_stroke_style core = eel_arc_style;
                 vg_stroke_style halo = eel_arc_halo_style;
-                core.intensity *= life01 * (0.70f + 0.62f * jitter);
-                halo.intensity *= life01 * (0.66f + 0.58f * jitter);
-                core.color.a *= life01 * (0.66f + 0.34f * jitter);
-                halo.color.a *= life01 * (0.60f + 0.30f * jitter);
+                roll = clampf(roll, 0.0f, 1.0f);
+                roll = roll * roll * (3.0f - 2.0f * roll);
+                trail = clampf(trail, 0.0f, 1.0f);
+                core.intensity *= life01 * (0.64f + 0.52f * jitter) * (0.66f + 0.96f * roll + 0.20f * trail);
+                halo.intensity *= life01 * (0.62f + 0.44f * jitter) * (0.62f + 0.80f * roll + 0.18f * trail);
+                core.color.r = clampf(core.color.r * (0.84f + 0.52f * roll), 0.0f, 1.0f);
+                core.color.g = clampf(core.color.g * (0.94f + 0.16f * roll), 0.0f, 1.0f);
+                halo.color.r = clampf(halo.color.r * (0.86f + 0.42f * roll), 0.0f, 1.0f);
+                halo.color.g = clampf(halo.color.g * (0.94f + 0.12f * roll), 0.0f, 1.0f);
+                core.color.a *= life01 * (0.62f + 0.28f * jitter) * (0.72f + 0.62f * roll);
+                halo.color.a *= life01 * (0.58f + 0.24f * jitter) * (0.70f + 0.58f * roll);
                 {
                     const vg_vec2 seg[] = {
-                        {arc->point_x[p], arc->point_y[p]},
-                        {arc->point_x[p + 1], arc->point_y[p + 1]}
+                        arc_line[p],
+                        arc_line[p + 1]
                     };
                     r = vg_draw_polyline(ctx, seg, 2, &halo, 0);
                 }
@@ -9734,8 +9805,8 @@ skip_legacy_landscape:
                 }
                 {
                     const vg_vec2 seg[] = {
-                        {arc->point_x[p], arc->point_y[p]},
-                        {arc->point_x[p + 1], arc->point_y[p + 1]}
+                        arc_line[p],
+                        arc_line[p + 1]
                     };
                     r = vg_draw_polyline(ctx, seg, 2, &core, 0);
                 }
