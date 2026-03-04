@@ -439,6 +439,10 @@ typedef struct app {
     void* terrain_wire_vertex_map;
     uint32_t terrain_tri_index_count;
     uint32_t terrain_wire_vertex_count;
+    int terrain_cache_valid;
+    int terrain_cache_x0;
+    float terrain_cache_col_spacing;
+    float terrain_cache_h;
     int terrain_wire_enabled;
     terrain_tuning terrain_tuning;
     int terrain_tuning_enabled;
@@ -6340,6 +6344,10 @@ static int create_terrain_resources(app* a) {
     vkDestroyShaderModule(a->device, fs_wire, NULL);
     vkDestroyShaderModule(a->device, fs, NULL);
     vkDestroyShaderModule(a->device, vs, NULL);
+    a->terrain_cache_valid = 0;
+    a->terrain_cache_x0 = 0;
+    a->terrain_cache_col_spacing = 0.0f;
+    a->terrain_cache_h = 0.0f;
     return 1;
 #endif
 }
@@ -8219,29 +8227,108 @@ static void update_gpu_high_plains_vertices(app* a) {
     const float col_spacing = w * 0.050f;
     const float col_span = col_spacing * (float)(TERRAIN_COLS - 1);
     const int x0 = (int)floorf((cam - col_span * 0.5f) / col_spacing) - 2;
-    const float y_quant_step = h * 0.010f;
+    float row_z[TERRAIN_ROWS];
+    float row_zw[TERRAIN_ROWS];
+    float row_y_base[TERRAIN_ROWS];
+    float row_scale[TERRAIN_ROWS];
+    float row_amp[TERRAIN_ROWS];
     for (int r = 0; r < TERRAIN_ROWS; ++r) {
         const float z = (float)r / (float)(TERRAIN_ROWS - 1);
         const float p = powf(z, 0.82f);
-        const float zw = lerpf(360.0f, 4200.0f, p);
-        const float y_base = lerpf(y_near, y_far, p);
-        const float row_scale = lerpf(1.04f, 0.23f, p);
-        const float amp = lerpf(h * 0.21f, h * 0.08f, p);
-        for (int c = 0; c < TERRAIN_COLS; ++c) {
-            const float xw = (float)(x0 + c) * col_spacing;
-            const float dx = xw - cam;
-            const float x = center_x + dx * row_scale;
-            const float n = high_plains_looped_noise(xw * 0.72f, zw * 0.0021f) * 1.95f;
-            float y = y_base + n * amp;
-            y = floorf(y / y_quant_step + 0.5f) * y_quant_step;
-            const uint32_t idx = (uint32_t)r * TERRAIN_COLS + (uint32_t)c;
-            vtx[idx].x = x;
-            vtx[idx].y = y;
-            vtx[idx].z = z;
+        row_z[r] = z;
+        row_zw[r] = lerpf(360.0f, 4200.0f, p);
+        row_y_base[r] = lerpf(y_near, y_far, p);
+        row_scale[r] = lerpf(1.04f, 0.23f, p);
+        row_amp[r] = lerpf(h * 0.21f, h * 0.08f, p);
+    }
+
+    int rebuild_all_heights = (!a->terrain_cache_valid);
+    if (!rebuild_all_heights && (fabsf(a->terrain_cache_col_spacing - col_spacing) > 0.0001f || fabsf(a->terrain_cache_h - h) > 0.0001f)) {
+        rebuild_all_heights = 1;
+    }
+
+    if (rebuild_all_heights) {
+        for (int r = 0; r < TERRAIN_ROWS; ++r) {
+            const float z = row_z[r];
+            const float zw = row_zw[r];
+            const float y_base = row_y_base[r];
+            const float amp = row_amp[r];
+            for (int c = 0; c < TERRAIN_COLS; ++c) {
+                const float xw = (float)(x0 + c) * col_spacing;
+                const float n = high_plains_looped_noise(xw * 0.72f, zw * 0.0021f) * 1.95f;
+                const uint32_t idx = (uint32_t)r * TERRAIN_COLS + (uint32_t)c;
+                vtx[idx].y = y_base + n * amp;
+                vtx[idx].z = z;
+            }
+        }
+    } else if (x0 != a->terrain_cache_x0) {
+        const int shift = x0 - a->terrain_cache_x0;
+        const int shift_abs = abs(shift);
+        if (shift_abs >= TERRAIN_COLS) {
+            for (int r = 0; r < TERRAIN_ROWS; ++r) {
+                const float z = row_z[r];
+                const float zw = row_zw[r];
+                const float y_base = row_y_base[r];
+                const float amp = row_amp[r];
+                for (int c = 0; c < TERRAIN_COLS; ++c) {
+                    const float xw = (float)(x0 + c) * col_spacing;
+                    const float n = high_plains_looped_noise(xw * 0.72f, zw * 0.0021f) * 1.95f;
+                    const uint32_t idx = (uint32_t)r * TERRAIN_COLS + (uint32_t)c;
+                    vtx[idx].y = y_base + n * amp;
+                    vtx[idx].z = z;
+                }
+            }
+        } else if (shift > 0) {
+            for (int r = 0; r < TERRAIN_ROWS; ++r) {
+                terrain_vertex* row = &vtx[(uint32_t)r * TERRAIN_COLS];
+                memmove(row, row + shift, (size_t)(TERRAIN_COLS - shift) * sizeof(*row));
+                const float z = row_z[r];
+                const float zw = row_zw[r];
+                const float y_base = row_y_base[r];
+                const float amp = row_amp[r];
+                for (int c = TERRAIN_COLS - shift; c < TERRAIN_COLS; ++c) {
+                    const float xw = (float)(x0 + c) * col_spacing;
+                    const float n = high_plains_looped_noise(xw * 0.72f, zw * 0.0021f) * 1.95f;
+                    row[c].y = y_base + n * amp;
+                    row[c].z = z;
+                }
+            }
+        } else {
+            const int left_new = -shift;
+            for (int r = 0; r < TERRAIN_ROWS; ++r) {
+                terrain_vertex* row = &vtx[(uint32_t)r * TERRAIN_COLS];
+                memmove(row + left_new, row, (size_t)(TERRAIN_COLS - left_new) * sizeof(*row));
+                const float z = row_z[r];
+                const float zw = row_zw[r];
+                const float y_base = row_y_base[r];
+                const float amp = row_amp[r];
+                for (int c = 0; c < left_new; ++c) {
+                    const float xw = (float)(x0 + c) * col_spacing;
+                    const float n = high_plains_looped_noise(xw * 0.72f, zw * 0.0021f) * 1.95f;
+                    row[c].y = y_base + n * amp;
+                    row[c].z = z;
+                }
+            }
         }
     }
 
-    if (a->terrain_wire_vertex_map) {
+    for (int r = 0; r < TERRAIN_ROWS; ++r) {
+        const float scale = row_scale[r];
+        for (int c = 0; c < TERRAIN_COLS; ++c) {
+            const float xw = (float)(x0 + c) * col_spacing;
+            const float dx = xw - cam;
+            const uint32_t idx = (uint32_t)r * TERRAIN_COLS + (uint32_t)c;
+            vtx[idx].x = center_x + dx * scale;
+        }
+    }
+
+    a->terrain_cache_valid = 1;
+    a->terrain_cache_x0 = x0;
+    a->terrain_cache_col_spacing = col_spacing;
+    a->terrain_cache_h = h;
+
+    const int draw_wire = (a->game.render_style == LEVEL_RENDER_DRIFTER) ? 1 : a->terrain_wire_enabled;
+    if (draw_wire && a->terrain_wire_vertex_map) {
         terrain_wire_vertex* wv = (terrain_wire_vertex*)a->terrain_wire_vertex_map;
         uint32_t wi = 0;
         for (int r = 0; r < TERRAIN_ROWS - 1; ++r) {
@@ -9867,6 +9954,7 @@ static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd) {
 }
 
 static int record_submit_present(app* a, uint32_t image_index, float t, float dt, float fps) {
+
     VkCommandBuffer cmd = a->command_buffers[image_index];
     if (!check_vk(vkResetCommandBuffer(cmd, 0), "vkResetCommandBuffer")) return 0;
     VkCommandBufferBeginInfo begin = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
@@ -10211,13 +10299,17 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             metrics.use_gpu_arc = use_gpu_arc ? 1 : 0;
             metrics.use_gpu_industry = 0;
             clear_scene_color_depth(cmd, a->swapchain_extent);
-            record_gpu_high_plains_terrain(a, cmd);
+            {
+                record_gpu_high_plains_terrain(a, cmd);
+            }
             clear_scene_depth(cmd, a->swapchain_extent);
             if (use_gpu_arc) {
                 record_gpu_arc_beam(a, cmd, t);
             }
             metrics.scene_phase = 3; /* overlay-no-clear */
-            vr = render_frame(a->vg, &a->game, &metrics);
+            {
+                vr = render_frame(a->vg, &a->game, &metrics);
+            }
             if (vr != VG_OK) {
                 fprintf(stderr, "VG failure: render_frame(overlay) -> %s (%d)\n", vg_result_string(vr), (int)vr);
                 return 0;
@@ -10239,7 +10331,9 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
                 record_gpu_arc_beam(a, cmd, t);
             }
             metrics.scene_phase = 3; /* overlay-no-clear */
-            vr = render_frame(a->vg, &a->game, &metrics);
+            {
+                vr = render_frame(a->vg, &a->game, &metrics);
+            }
             if (vr != VG_OK) {
                 fprintf(stderr, "VG failure: render_frame(overlay) -> %s (%d)\n", vg_result_string(vr), (int)vr);
                 return 0;
@@ -10265,7 +10359,9 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
                 clear_scene_color_depth(cmd, a->swapchain_extent);
             } else {
                 metrics.scene_phase = 1; /* background-only */
-                vr = render_frame(a->vg, &a->game, &metrics);
+                {
+                    vr = render_frame(a->vg, &a->game, &metrics);
+                }
                 if (vr != VG_OK) {
                     fprintf(stderr, "VG failure: render_frame(background) -> %s (%d)\n", vg_result_string(vr), (int)vr);
                     return 0;
@@ -10327,7 +10423,9 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             /* Keep foreground pass depth ordering deterministic after split background/GPU passes. */
             clear_scene_depth(cmd, a->swapchain_extent);
             metrics.scene_phase = stable_underwater_overlay ? 3 : 2;
-            vr = render_frame(a->vg, &a->game, &metrics);
+            {
+                vr = render_frame(a->vg, &a->game, &metrics);
+            }
             if (vr != VG_OK) {
                 fprintf(stderr,
                         "VG failure: render_frame(%s) -> %s (%d)\n",
@@ -10347,7 +10445,9 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             metrics.use_gpu_arc = 0;
             metrics.use_gpu_industry = 0;
             metrics.scene_phase = 0;
-            vr = render_frame(a->vg, &a->game, &metrics);
+            {
+                vr = render_frame(a->vg, &a->game, &metrics);
+            }
             if (vr != VG_OK) {
                 fprintf(stderr, "VG failure: render_frame -> %s (%d)\n", vg_result_string(vr), (int)vr);
                 return 0;
@@ -10451,7 +10551,8 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .signalSemaphoreCount = 1,
         .pSignalSemaphores = &a->render_finished
     };
-    if (!check_vk(vkQueueSubmit(a->graphics_queue, 1, &submit, a->in_flight), "vkQueueSubmit")) return 0;
+    VkResult submit_r = vkQueueSubmit(a->graphics_queue, 1, &submit, a->in_flight);
+    if (!check_vk(submit_r, "vkQueueSubmit")) return 0;
 
     VkPresentInfoKHR present = {
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,

@@ -6748,10 +6748,30 @@ static int horizon_bin_index(float x, float w, int bins) {
     float t = x / w;
     if (t < 0.0f) t = 0.0f;
     if (t > 1.0f) t = 1.0f;
-    int i = (int)floorf(t * (float)(bins - 1) + 0.5f);
+    int i = (int)floorf(t * (float)(bins - 1));
     if (i < 0) i = 0;
     if (i >= bins) i = bins - 1;
     return i;
+}
+
+static float horizon_sample_linear(const float* horizon, int bins, float x, float w) {
+    if (!horizon || bins <= 0) {
+        return -1.0e9f;
+    }
+    if (bins == 1 || w <= 1.0e-6f) {
+        return horizon[0];
+    }
+    float t = x / w;
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    const float u = t * (float)(bins - 1);
+    int i0 = (int)floorf(u);
+    if (i0 < 0) i0 = 0;
+    if (i0 >= bins) i0 = bins - 1;
+    int i1 = i0 + 1;
+    if (i1 >= bins) i1 = bins - 1;
+    const float f = u - (float)i0;
+    return lerpf(horizon[i0], horizon[i1], f);
 }
 
 static void horizon_segment_update(float* horizon, int bins, float w, vg_vec2 a, vg_vec2 b) {
@@ -6830,6 +6850,7 @@ static vg_result draw_high_plains_drifter_terrain(
 
     if (enable_horizon_cull) {
         const float eps = h * 0.0025f;
+        const float vis_hysteresis = h * 0.0035f;
         for (int i = 0; i < HORIZON_BINS; ++i) {
             horizon[i] = -1e9f;
         }
@@ -6845,15 +6866,16 @@ static vg_result draw_high_plains_drifter_terrain(
                 const vg_vec2 p01 = pts[r + 1][c];
                 const vg_vec2 p11 = pts[r + 1][c + 1];
 
-                const int i00 = horizon_bin_index(p00.x, w, HORIZON_BINS);
-                const int i10 = horizon_bin_index(p10.x, w, HORIZON_BINS);
-                const int i01 = horizon_bin_index(p01.x, w, HORIZON_BINS);
-                const int i11 = horizon_bin_index(p11.x, w, HORIZON_BINS);
+                const float h00 = horizon_sample_linear(horizon, HORIZON_BINS, p00.x, w);
+                const float h10 = horizon_sample_linear(horizon, HORIZON_BINS, p10.x, w);
+                const float h01 = horizon_sample_linear(horizon, HORIZON_BINS, p01.x, w);
+                const float h11 = horizon_sample_linear(horizon, HORIZON_BINS, p11.x, w);
+                const float vis_bias = eps - vis_hysteresis;
                 const int quad_vis =
-                    (p00.y > horizon[i00] + eps) ||
-                    (p10.y > horizon[i10] + eps) ||
-                    (p01.y > horizon[i01] + eps) ||
-                    (p11.y > horizon[i11] + eps);
+                    (p00.y > h00 + vis_bias) ||
+                    (p10.y > h10 + vis_bias) ||
+                    (p01.y > h01 + vis_bias) ||
+                    (p11.y > h11 + vis_bias);
                 if (!quad_vis) {
                     continue;
                 }
