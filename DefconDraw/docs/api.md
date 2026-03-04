@@ -69,6 +69,14 @@ Point transform:
 - `blend`: `VG_BLEND_ALPHA | VG_BLEND_ADDITIVE`.
 - `stencil`: optional per-draw stencil state (`enabled == 0` disables stencil).
 
+### `vg_polyline_view`
+
+Lightweight polyline descriptor used by `vg_draw_polylines(...)`.
+
+- `points`: pointer to polyline vertices.
+- `count`: number of points in `points`; must be `>= 2`.
+- `closed`: non-zero to close the path (`last -> first`), `0` for open.
+
 ### `vg_stencil_state`
 
 - `enabled`: non-zero enables stencil test/write for the draw.
@@ -360,6 +368,20 @@ Requirements:
 - active frame
 - `points != NULL`, `count >= 2`
 - valid `style`
+
+### `vg_draw_polylines(vg_context* ctx, const vg_polyline_view* polylines, size_t polyline_count, const vg_stroke_style* style)`
+
+Records multiple stroked polylines using one API call.
+
+Requirements:
+- active frame
+- `polylines != NULL`, `polyline_count >= 1`
+- each polyline has `points != NULL` and `count >= 2`
+- valid `style`
+
+Notes:
+- Uses one shared stroke style for all polylines in the batch.
+- Useful for reducing front-end call overhead and improving backend merge opportunities.
 
 ### `vg_draw_path_stroke(vg_context* ctx, const vg_path* path, const vg_stroke_style* style)`
 
@@ -917,5 +939,8 @@ vg_frame_desc frame = {
 };
 vg_begin_frame(ctx, &frame);
 vg_draw_polyline(ctx, pts, count, &style, 0);
+/* Optional batched variant: */
+/* vg_polyline_view batch[] = { {pts0, n0, 0}, {pts1, n1, 1} }; */
+/* vg_draw_polylines(ctx, batch, 2, &style); */
 vg_end_frame(ctx);
 ```

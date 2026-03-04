@@ -906,6 +906,72 @@ vg_result vg_draw_polyline(vg_context* ctx, const vg_vec2* points, size_t count,
     return r;
 }
 
+vg_result vg_draw_polylines(vg_context* ctx, const vg_polyline_view* polylines, size_t polyline_count, const vg_stroke_style* style) {
+    if (!ctx || !polylines || !style || polyline_count == 0u) {
+        return VG_ERROR_INVALID_ARGUMENT;
+    }
+    if (!ctx->in_frame || !vg_style_is_valid(style)) {
+        return VG_ERROR_INVALID_ARGUMENT;
+    }
+    if (!ctx->backend.ops || (!ctx->backend.ops->draw_polylines && !ctx->backend.ops->draw_polyline)) {
+        return VG_ERROR_UNSUPPORTED;
+    }
+
+    for (size_t i = 0; i < polyline_count; ++i) {
+        if (!polylines[i].points || polylines[i].count < 2u) {
+            return VG_ERROR_INVALID_ARGUMENT;
+        }
+    }
+
+    if (!ctx->backend.ops->draw_polylines) {
+        for (size_t i = 0; i < polyline_count; ++i) {
+            vg_result r = vg_draw_polyline(ctx, polylines[i].points, polylines[i].count, style, polylines[i].closed);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+        return VG_OK;
+    }
+
+    if (vg_mat_is_identity(ctx->transform)) {
+        return ctx->backend.ops->draw_polylines(ctx, polylines, polyline_count, style);
+    }
+
+    size_t total_points = 0u;
+    for (size_t i = 0; i < polyline_count; ++i) {
+        if (total_points > (size_t)-1 - polylines[i].count) {
+            return VG_ERROR_OUT_OF_MEMORY;
+        }
+        total_points += polylines[i].count;
+    }
+
+    vg_vec2* transformed = (vg_vec2*)malloc(sizeof(*transformed) * total_points);
+    if (!transformed) {
+        return VG_ERROR_OUT_OF_MEMORY;
+    }
+    vg_polyline_view* transformed_views = (vg_polyline_view*)malloc(sizeof(*transformed_views) * polyline_count);
+    if (!transformed_views) {
+        free(transformed);
+        return VG_ERROR_OUT_OF_MEMORY;
+    }
+
+    size_t cursor = 0u;
+    for (size_t i = 0; i < polyline_count; ++i) {
+        transformed_views[i].points = transformed + cursor;
+        transformed_views[i].count = polylines[i].count;
+        transformed_views[i].closed = polylines[i].closed;
+        for (size_t p = 0; p < polylines[i].count; ++p) {
+            transformed[cursor + p] = vg_transform_point(ctx->transform, polylines[i].points[p]);
+        }
+        cursor += polylines[i].count;
+    }
+
+    vg_result r = ctx->backend.ops->draw_polylines(ctx, transformed_views, polyline_count, style);
+    free(transformed_views);
+    free(transformed);
+    return r;
+}
+
 vg_result vg_fill_convex(vg_context* ctx, const vg_vec2* points, size_t count, const vg_fill_style* style) {
     if (!ctx || !points || count < 3u || !style) {
         return VG_ERROR_INVALID_ARGUMENT;

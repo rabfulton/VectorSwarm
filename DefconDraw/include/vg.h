@@ -125,6 +125,12 @@ typedef struct vg_fill_style {
     vg_stencil_state stencil;
 } vg_fill_style;
 
+typedef struct vg_polyline_view {
+    const vg_vec2* points;
+    size_t count;
+    int closed;
+} vg_polyline_view;
+
 typedef struct vg_frame_desc {
     uint32_t width;
     uint32_t height;
@@ -224,6 +230,7 @@ vg_result vg_path_close(vg_path* path);
 
 vg_result vg_draw_path_stroke(vg_context* ctx, const vg_path* path, const vg_stroke_style* style);
 vg_result vg_draw_polyline(vg_context* ctx, const vg_vec2* points, size_t count, const vg_stroke_style* style, int closed);
+vg_result vg_draw_polylines(vg_context* ctx, const vg_polyline_view* polylines, size_t polyline_count, const vg_stroke_style* style);
 vg_result vg_fill_convex(vg_context* ctx, const vg_vec2* points, size_t count, const vg_fill_style* style);
 vg_result vg_fill_rect(vg_context* ctx, vg_rect rect, const vg_fill_style* style);
 vg_result vg_fill_circle(vg_context* ctx, vg_vec2 center, float radius_px, const vg_fill_style* style, int segments);

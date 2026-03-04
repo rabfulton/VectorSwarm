@@ -1798,15 +1798,22 @@ static vg_result draw_minefields(
             tentacle_halo.color = (vg_color){tentacle_c.r, tentacle_c.g, tentacle_c.b, 0.44f + 0.30f * pulse};
             tentacle_main.color = (vg_color){tentacle_c.r, tentacle_c.g, tentacle_c.b, 0.76f + 0.20f * pulse};
 
-            const int tentacles = 22;
+            enum {
+                ANEMONE_TENTACLES = 22,
+                ANEMONE_RING_POINTS = 17,
+                ANEMONE_POLYLINES = ANEMONE_TENTACLES + 1
+            };
             const float sway_rate = lerpf(0.50f, 1.85f, proximity);
             const float sway_amp = r * (0.12f + 0.18f * proximity);
-            for (int k = 0; k < tentacles; ++k) {
+            vg_vec2 strand[ANEMONE_TENTACLES][4];
+            vg_vec2 ring[ANEMONE_RING_POINTS];
+            vg_polyline_view lines[ANEMONE_POLYLINES];
+            for (int k = 0; k < ANEMONE_TENTACLES; ++k) {
                 const uint32_t seed0 = (uint32_t)(i * 2654435761u) ^ (uint32_t)(k * 2246822519u);
                 const uint32_t seed1 = seed0 ^ 0x85ebca6bu;
                 const float jitter0 = hash01_u32(seed0);
                 const float jitter1 = hash01_u32(seed1);
-                const float base_a = ((float)k / (float)tentacles) * 6.2831853f + jitter0 * 0.30f;
+                const float base_a = ((float)k / (float)ANEMONE_TENTACLES) * 6.2831853f + jitter0 * 0.30f;
                 const float nx = cosf(base_a);
                 const float ny = sinf(base_a);
                 const float tx = -ny;
@@ -1816,20 +1823,45 @@ static vg_result draw_minefields(
                 const float sway0 = sinf(phase);
                 const float sway1 = sinf(phase * 1.37f + 0.75f);
                 const float sway2 = sinf(phase * 1.83f + 1.25f);
-                const vg_vec2 strand[4] = {
-                    {m->b.x + nx * (r * 0.52f), m->b.y + ny * (r * 0.52f)},
-                    {m->b.x + nx * (len * 0.46f) + tx * sway_amp * 0.52f * sway0, m->b.y + ny * (len * 0.46f) + ty * sway_amp * 0.52f * sway0},
-                    {m->b.x + nx * (len * 0.78f) + tx * sway_amp * 0.85f * sway1, m->b.y + ny * (len * 0.78f) + ty * sway_amp * 0.85f * sway1},
-                    {m->b.x + nx * len + tx * sway_amp * 1.18f * sway2, m->b.y + ny * len + ty * sway_amp * 1.18f * sway2}
+                strand[k][0] = (vg_vec2){m->b.x + nx * (r * 0.52f), m->b.y + ny * (r * 0.52f)};
+                strand[k][1] = (vg_vec2){
+                    m->b.x + nx * (len * 0.46f) + tx * sway_amp * 0.52f * sway0,
+                    m->b.y + ny * (len * 0.46f) + ty * sway_amp * 0.52f * sway0
                 };
-                vg_result vr = vg_draw_polyline(ctx, strand, 4, &tentacle_halo, 0);
-                if (vr != VG_OK) {
-                    return vr;
-                }
-                vr = vg_draw_polyline(ctx, strand, 4, &tentacle_main, 0);
-                if (vr != VG_OK) {
-                    return vr;
-                }
+                strand[k][2] = (vg_vec2){
+                    m->b.x + nx * (len * 0.78f) + tx * sway_amp * 0.85f * sway1,
+                    m->b.y + ny * (len * 0.78f) + ty * sway_amp * 0.85f * sway1
+                };
+                strand[k][3] = (vg_vec2){
+                    m->b.x + nx * len + tx * sway_amp * 1.18f * sway2,
+                    m->b.y + ny * len + ty * sway_amp * 1.18f * sway2
+                };
+                lines[k] = (vg_polyline_view){
+                    .points = strand[k],
+                    .count = 4u,
+                    .closed = 0
+                };
+            }
+
+            for (int k = 0; k < ANEMONE_RING_POINTS - 1; ++k) {
+                const float a = ((float)k / (float)(ANEMONE_RING_POINTS - 1)) * 6.2831853f;
+                const float wobble = 1.0f + 0.10f * sinf(a * 3.0f + t_s * 2.1f + m->angle);
+                ring[k] = (vg_vec2){m->b.x + cosf(a) * r * wobble * 0.78f, m->b.y + sinf(a) * r * wobble * 0.78f};
+            }
+            ring[ANEMONE_RING_POINTS - 1] = ring[0];
+            lines[ANEMONE_TENTACLES] = (vg_polyline_view){
+                .points = ring,
+                .count = ANEMONE_RING_POINTS,
+                .closed = 0
+            };
+
+            vg_result vr = vg_draw_polylines(ctx, lines, ANEMONE_POLYLINES, &tentacle_halo);
+            if (vr != VG_OK) {
+                return vr;
+            }
+            vr = vg_draw_polylines(ctx, lines, ANEMONE_POLYLINES, &tentacle_main);
+            if (vr != VG_OK) {
+                return vr;
             }
 
             vg_fill_style core_fill = make_fill(
@@ -1842,29 +1874,13 @@ static vg_result draw_minefields(
                 },
                 VG_BLEND_ALPHA
             );
-            vg_result vr = vg_fill_circle(
+            vr = vg_fill_circle(
                 ctx,
                 (vg_vec2){m->b.x, m->b.y},
                 r * (0.68f + 0.05f * pulse),
                 &core_fill,
                 26
             );
-            if (vr != VG_OK) {
-                return vr;
-            }
-
-            vg_vec2 ring[17];
-            for (int k = 0; k < 16; ++k) {
-                const float a = ((float)k / 16.0f) * 6.2831853f;
-                const float wobble = 1.0f + 0.10f * sinf(a * 3.0f + t_s * 2.1f + m->angle);
-                ring[k] = (vg_vec2){m->b.x + cosf(a) * r * wobble * 0.78f, m->b.y + sinf(a) * r * wobble * 0.78f};
-            }
-            ring[16] = ring[0];
-            vr = vg_draw_polyline(ctx, ring, 17, &tentacle_halo, 0);
-            if (vr != VG_OK) {
-                return vr;
-            }
-            vr = vg_draw_polyline(ctx, ring, 17, &tentacle_main, 0);
             if (vr != VG_OK) {
                 return vr;
             }
@@ -1885,7 +1901,11 @@ static vg_result draw_minefields(
             if (vr != VG_OK) {
                 return vr;
             }
-            for (int k = 0; k < 6; ++k) {
+
+            enum { CLASSIC_SPIKES = 6, CLASSIC_POLYLINES = CLASSIC_SPIKES + 1 };
+            vg_vec2 spike[CLASSIC_SPIKES][3];
+            vg_polyline_view lines[CLASSIC_POLYLINES];
+            for (int k = 0; k < CLASSIC_SPIKES; ++k) {
                 const int k1 = (k + 1) % 6;
                 const float mx = (hex[k].x + hex[k1].x) * 0.5f;
                 const float my = (hex[k].y + hex[k1].y) * 0.5f;
@@ -1896,25 +1916,25 @@ static vg_result draw_minefields(
                     nx /= nl;
                     ny /= nl;
                 }
-                const vg_vec2 spike[3] = {
-                    {hex[k].x, hex[k].y},
-                    {mx + nx * (r * 0.68f), my + ny * (r * 0.68f)},
-                    {hex[k1].x, hex[k1].y}
+                spike[k][0] = (vg_vec2){hex[k].x, hex[k].y};
+                spike[k][1] = (vg_vec2){mx + nx * (r * 0.68f), my + ny * (r * 0.68f)};
+                spike[k][2] = (vg_vec2){hex[k1].x, hex[k1].y};
+                lines[k] = (vg_polyline_view){
+                    .points = spike[k],
+                    .count = 3u,
+                    .closed = 0
                 };
-                vr = vg_draw_polyline(ctx, spike, 3, &classic_halo, 0);
-                if (vr != VG_OK) {
-                    return vr;
-                }
-                vr = vg_draw_polyline(ctx, spike, 3, &classic_main, 0);
-                if (vr != VG_OK) {
-                    return vr;
-                }
             }
-            vr = vg_draw_polyline(ctx, hex, 7, &classic_halo, 0);
+            lines[CLASSIC_SPIKES] = (vg_polyline_view){
+                .points = hex,
+                .count = 7u,
+                .closed = 0
+            };
+            vr = vg_draw_polylines(ctx, lines, CLASSIC_POLYLINES, &classic_halo);
             if (vr != VG_OK) {
                 return vr;
             }
-            vr = vg_draw_polyline(ctx, hex, 7, &classic_main, 0);
+            vr = vg_draw_polylines(ctx, lines, CLASSIC_POLYLINES, &classic_main);
             if (vr != VG_OK) {
                 return vr;
             }

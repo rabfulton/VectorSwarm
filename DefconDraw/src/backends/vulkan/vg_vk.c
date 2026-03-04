@@ -1599,6 +1599,35 @@ static vg_result vg_vk_draw_polyline(vg_context* ctx, const vg_vec2* points, siz
     return vg_vk_draw_polyline_impl(ctx, backend, points, count, style, closed);
 }
 
+static vg_result vg_vk_draw_polylines(
+    vg_context* ctx,
+    const vg_polyline_view* polylines,
+    size_t polyline_count,
+    const vg_stroke_style* style
+) {
+    vg_vk_backend* backend = vg_vk_backend_from(ctx);
+    if (!backend || !polylines || !style || polyline_count == 0u) {
+        return VG_ERROR_INVALID_ARGUMENT;
+    }
+    for (size_t i = 0; i < polyline_count; ++i) {
+        if (!polylines[i].points || polylines[i].count < 2u) {
+            return VG_ERROR_INVALID_ARGUMENT;
+        }
+        vg_result r = vg_vk_draw_polyline_impl(
+            ctx,
+            backend,
+            polylines[i].points,
+            polylines[i].count,
+            style,
+            polylines[i].closed
+        );
+        if (r != VG_OK) {
+            return r;
+        }
+    }
+    return VG_OK;
+}
+
 static vg_result vg_vk_fill_convex(vg_context* ctx, const vg_vec2* points, size_t count, const vg_fill_style* style) {
     vg_vk_backend* backend = vg_vk_backend_from(ctx);
     if (!backend || !points || !style || count < 3u) {
@@ -1632,6 +1661,7 @@ vg_result vg_vk_backend_create(vg_context* ctx) {
         .set_crt_profile = vg_vk_set_crt_profile,
         .draw_path_stroke = vg_vk_draw_path_stroke,
         .draw_polyline = vg_vk_draw_polyline,
+        .draw_polylines = vg_vk_draw_polylines,
         .fill_convex = vg_vk_fill_convex,
         .stencil_clear = vg_vk_stencil_clear,
         .debug_rasterize_rgba8 = vg_vk_debug_rasterize_rgba8
