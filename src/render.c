@@ -2525,7 +2525,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
     static const char* fx_lightning_labels[8] = {
         "LEVEL", "PITCH HZ", "ATTACK MS", "DECAY MS", "CRACKLE", "FM DEPTH", "FM RATE", "CUTOFF KHZ"
     };
-    static const char* fx_future_labels[8] = {
+    static const char* fx_pickup_labels[8] = {
         "LEVEL", "PITCH HZ", "ATTACK MS", "DECAY MS", "NOISE MIX", "FM DEPTH", "FM RATE", "CUTOFF KHZ"
     };
     const int page = metrics->acoustics_page;
@@ -2806,7 +2806,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
         const float* disp = effects_page ? metrics->acoustics_effects_display : metrics->acoustics_equipment_display;
         const int selected = effects_page ? metrics->acoustics_effects_selected : metrics->acoustics_equipment_selected;
         const char** left_labels = effects_page ? fx_lightning_labels : equip_shield_labels;
-        const char** right_labels = effects_page ? fx_future_labels : equip_aux_labels;
+        const char** right_labels = effects_page ? fx_pickup_labels : equip_aux_labels;
         for (int i = 0; i < 8; ++i) {
             fire_items[i].label = left_labels[i];
             fire_items[i].value_01 = v01[i];
@@ -2871,7 +2871,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
     vg_ui_slider_panel_desc thr = fire;
     thr.rect = thr_rect;
     thr.title_line_0 = effects_page
-                           ? "SHIPYARD ACOUSTICS - FUTURE FX"
+                           ? "SHIPYARD ACOUSTICS - PICKUP FX"
                            : (equipment_page ? "SHIPYARD ACOUSTICS - EMP"
                                              : (combat_page ? "SHIPYARD ACOUSTICS - EXPLOSION"
                                                             : "SHIPYARD ACOUSTICS - THRUST"));
@@ -2936,7 +2936,7 @@ static vg_result draw_acoustics_ui(vg_context* ctx, float w, float h, const rend
                                     ? "LIGHTNING"
                                     : (equipment_page ? "TEST SHIELD" : (combat_page ? "TEST ENEMY" : "TEST FIRE"));
         const char* thr_test = effects_page
-                                   ? "TEST FUTURE"
+                                   ? "TEST PICKUP"
                                    : (equipment_page ? "TEST EMP" : (combat_page ? "TEST BOOM" : "TEST THRUST"));
         r = draw_ui_button_shaded(ctx, fire_btn, fire_test, 11.5f * ui, &panel, &text, 0);
         if (r != VG_OK) {
@@ -7491,8 +7491,8 @@ static vg_result draw_powerup_symbol(
     const float x_scale_abs = fabsf(x_scale);
     vg_stroke_style sym = make_stroke(
         fmaxf(0.8f, rr * 0.10f),
-        0.92f * intensity_scale,
-        (vg_color){c.r, c.g, c.b, 0.92f},
+        0.98f * intensity_scale,
+        (vg_color){c.r, c.g, c.b, 0.97f},
         VG_BLEND_ALPHA
     );
     vg_result r = VG_OK;
@@ -7602,20 +7602,20 @@ static vg_result draw_powerup_medallion(
     inner[6] = inner[0];
 
     vg_fill_style fill = make_fill(
-        (0.22f + 0.16f * face01) * intensity_scale,
-        (vg_color){c.r * 0.76f, c.g * 0.76f, c.b * 0.76f, 0.24f},
+        (0.30f + 0.20f * face01) * intensity_scale,
+        (vg_color){c.r * 0.76f, c.g * 0.76f, c.b * 0.76f, 0.34f},
         VG_BLEND_ALPHA
     );
     vg_stroke_style edge = make_stroke(
         fmaxf(0.7f, rr * 0.045f),
-        (0.56f + 0.16f * face01) * intensity_scale,
-        (vg_color){c.r, c.g, c.b, 0.56f},
+        (0.66f + 0.18f * face01) * intensity_scale,
+        (vg_color){c.r, c.g, c.b, 0.74f},
         VG_BLEND_ALPHA
     );
     vg_stroke_style ring = edge;
     ring.width_px *= 0.78f;
-    ring.intensity *= 0.78f;
-    ring.color.a *= 0.72f;
+    ring.intensity *= 0.86f;
+    ring.color.a *= 0.86f;
 
     vg_result r = vg_fill_convex(ctx, outer, 6, &fill);
     if (r != VG_OK) {

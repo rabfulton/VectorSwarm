@@ -423,6 +423,7 @@ typedef struct game_state {
     int arc_node_count;
     powerup_pickup powerups[MAX_POWERUPS];
     int powerup_count;
+    float powerup_drop_credit; /* Smooths drop cadence while preserving average drop chance. */
     int exit_portal_active;
     float exit_portal_x;
     float exit_portal_y;

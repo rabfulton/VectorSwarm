@@ -187,6 +187,7 @@ static void game_reset_powerup_state(game_state* g, int clear_pickups) {
         return;
     }
     g->weapon_level = 1;
+    g->powerup_drop_credit = 0.0f;
     if (!clear_pickups) {
         return;
     }
@@ -273,13 +274,20 @@ static void game_try_spawn_powerup_drop(game_state* g, float x, float y, float v
         return;
     }
     drop_p = clampf(lvl->powerup_drop_chance, 0.0f, 1.0f);
-    if (drop_p <= 0.0f || frand01() > drop_p) {
+    if (drop_p <= 0.0f) {
+        g->powerup_drop_credit = 0.0f;
+        return;
+    }
+    /* Credit carry avoids long droughts/clumps while honoring level drop chance long-term. */
+    g->powerup_drop_credit = fminf(g->powerup_drop_credit + drop_p, 2.0f);
+    if (g->powerup_drop_credit < 1.0f && frand01() > g->powerup_drop_credit) {
         return;
     }
     p = alloc_powerup_pickup(g);
     if (!p) {
         return;
     }
+    g->powerup_drop_credit = fmaxf(g->powerup_drop_credit - 1.0f, 0.0f);
     p->type = powerup_pick_drop_type(g);
     p->b.x = x;
     p->b.y = y;
@@ -1977,9 +1985,12 @@ static void update_minefields(game_state* g, float dt) {
                 b->active = 0;
                 m->hp -= 1;
                 if (m->hp <= 0) {
+                    const float kill_x = m->b.x;
+                    const float kill_y = m->b.y;
+                    const float kill_vx = m->b.vx;
+                    const float kill_vy = m->b.vy;
                     explode_mine(g, m, b->b.vx, b->b.vy);
-                    g->kills += 1;
-                    g->score += 120;
+                    game_on_enemy_destroyed(g, kill_x, kill_y, kill_vx, kill_vy, 120);
                 }
                 break;
             }
@@ -2128,6 +2139,7 @@ static int set_level_index(game_state* g, int index) {
     g->missile_launcher_count = 0;
     g->arc_node_count = 0;
     g->powerup_count = 0;
+    g->powerup_drop_credit = 0.0f;
     g->asteroid_storm_active = 0;
     g->asteroid_storm_completed = 0;
     g->asteroid_storm_announced = 0;
@@ -2802,6 +2814,7 @@ static void game_update_powerups(game_state* g, float dt) {
         rr = p->radius + 20.0f * su;
         if (dx * dx + dy * dy <= rr * rr) {
             game_apply_powerup(g, p->type);
+            game_push_audio_event(g, GAME_AUDIO_EVENT_FX2, px, py);
             kill_powerup_pickup(g, p);
         }
     }

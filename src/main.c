@@ -1887,7 +1887,7 @@ static void trigger_lightning_test(app* a) {
     (void)audio_spatial_enqueue(a, (uint8_t)GAME_AUDIO_EVENT_LIGHTNING, 0.0f, 1.0f);
 }
 
-static void trigger_fx2_test(app* a) {
+static void trigger_pickup_test(app* a) {
     if (!a || !a->audio_ready) {
         return;
     }
@@ -2406,7 +2406,7 @@ static void trigger_explosion_test(app* a);
 static void trigger_shield_test(app* a);
 static void trigger_emp_test(app* a);
 static void trigger_lightning_test(app* a);
-static void trigger_fx2_test(app* a);
+static void trigger_pickup_test(app* a);
 static int create_swapchain(app* a);
 static int create_render_passes(app* a);
 static int create_offscreen_targets(app* a);
@@ -2710,7 +2710,7 @@ static int handle_acoustics_ui_mouse(app* a, int mouse_x, int mouse_y, int set_v
                         if (p == 0) {
                             trigger_lightning_test(a);
                         } else {
-                            trigger_fx2_test(a);
+                            trigger_pickup_test(a);
                         }
                     } else if (a->acoustics_page == ACOUSTICS_PAGE_EQUIPMENT) {
                         if (p == 0) {
@@ -10934,7 +10934,7 @@ int main(void) {
                     if (a.acoustics_page == ACOUSTICS_PAGE_COMBAT) {
                         trigger_explosion_test(&a);
                     } else if (a.acoustics_page == ACOUSTICS_PAGE_EFFECTS) {
-                        trigger_fx2_test(&a);
+                        trigger_pickup_test(&a);
                     } else if (a.acoustics_page == ACOUSTICS_PAGE_EQUIPMENT) {
                         trigger_emp_test(&a);
                     } else {

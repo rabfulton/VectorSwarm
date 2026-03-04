@@ -362,14 +362,14 @@ void acoustics_effects_defaults_init(float out_values_01[ACOUST_FX_SLIDER_COUNT]
     out_values_01[ACOUST_FX_LIGHT_FM_RATE] = 0.58f;
     out_values_01[ACOUST_FX_LIGHT_CUTOFF] = 0.36f;
 
-    out_values_01[ACOUST_FX_FUTURE_LEVEL] = 0.44f;
-    out_values_01[ACOUST_FX_FUTURE_PITCH] = 0.18f;
-    out_values_01[ACOUST_FX_FUTURE_ATTACK] = 0.04f;
-    out_values_01[ACOUST_FX_FUTURE_DECAY] = 0.26f;
-    out_values_01[ACOUST_FX_FUTURE_NOISE] = 0.50f;
-    out_values_01[ACOUST_FX_FUTURE_FM_DEPTH] = 0.28f;
-    out_values_01[ACOUST_FX_FUTURE_FM_RATE] = 0.30f;
-    out_values_01[ACOUST_FX_FUTURE_CUTOFF] = 0.24f;
+    out_values_01[ACOUST_FX_FUTURE_LEVEL] = 0.52f;
+    out_values_01[ACOUST_FX_FUTURE_PITCH] = 0.20f;
+    out_values_01[ACOUST_FX_FUTURE_ATTACK] = 0.02f;
+    out_values_01[ACOUST_FX_FUTURE_DECAY] = 0.22f;
+    out_values_01[ACOUST_FX_FUTURE_NOISE] = 0.18f;
+    out_values_01[ACOUST_FX_FUTURE_FM_DEPTH] = 0.16f;
+    out_values_01[ACOUST_FX_FUTURE_FM_RATE] = 0.44f;
+    out_values_01[ACOUST_FX_FUTURE_CUTOFF] = 0.46f;
 }
 
 static int file_exists_readable(const char* path) {
@@ -1281,8 +1281,16 @@ void audio_render_combat_voices(
             }
 
             float freq = v->freq_hz;
-            if (v->type == GAME_AUDIO_EVENT_EXPLOSION || v->type == GAME_AUDIO_EVENT_EMP ||
-                v->type == GAME_AUDIO_EVENT_LIGHTNING || v->type == GAME_AUDIO_EVENT_FX2) {
+            if (v->type == GAME_AUDIO_EVENT_FX2) {
+                const float up = clampf((t / (v->decay_s + v->attack_s + 0.001f)), 0.0f, 1.0f);
+                const float rise = up * up;
+                freq *= (0.68f + 0.84f * rise);
+                if (v->fm_depth_hz > 0.0f) {
+                    const float fm = sinf(v->fm_phase) * v->fm_depth_hz * (0.18f + 0.52f * (1.0f - up));
+                    freq = fmaxf(8.0f, freq + fm);
+                }
+            } else if (v->type == GAME_AUDIO_EVENT_EXPLOSION || v->type == GAME_AUDIO_EVENT_EMP ||
+                       v->type == GAME_AUDIO_EVENT_LIGHTNING) {
                 const float down = clampf((t / (v->decay_s + v->attack_s + 0.001f)), 0.0f, 1.0f);
                 freq *= (1.0f - 0.55f * down);
                 if (v->fm_depth_hz > 0.0f) {
