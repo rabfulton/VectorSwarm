@@ -7469,6 +7469,7 @@ static vg_color powerup_symbol_color(int type) {
         case POWERUP_TRIPLE_SHOT: return (vg_color){1.00f, 0.86f, 0.54f, 1.0f};
         case POWERUP_VITALITY: return (vg_color){0.64f, 1.00f, 0.72f, 1.0f};
         case POWERUP_ORBITAL_BOOST: return (vg_color){0.70f, 0.86f, 1.00f, 1.0f};
+        case POWERUP_MAGNET: return (vg_color){1.00f, 0.76f, 0.72f, 1.0f};
         default: return (vg_color){0.92f, 0.92f, 0.92f, 1.0f};
     }
 }
@@ -7552,6 +7553,52 @@ static vg_result draw_powerup_symbol(
             }
         }
         return VG_OK;
+    }
+
+    if (type == POWERUP_MAGNET) {
+        const float arm_x = rr * 0.23f;
+        const float top_y = rr * 0.28f;
+        const float mid_y = rr * 0.02f;
+        vg_vec2 curve[17];
+        for (int i = 0; i < 17; ++i) {
+            const float a = 3.14159265359f + ((float)i / 16.0f) * 3.14159265359f;
+            curve[i] = powerup_project_local(cx, cy, x_scale, cosf(a) * arm_x, mid_y + sinf(a) * arm_x);
+        }
+        {
+            const vg_vec2 left_arm[2] = {
+                powerup_project_local(cx, cy, x_scale, -arm_x, top_y),
+                powerup_project_local(cx, cy, x_scale, -arm_x, mid_y)
+            };
+            const vg_vec2 right_arm[2] = {
+                powerup_project_local(cx, cy, x_scale, arm_x, top_y),
+                powerup_project_local(cx, cy, x_scale, arm_x, mid_y)
+            };
+            const vg_vec2 left_cap[2] = {
+                powerup_project_local(cx, cy, x_scale, -arm_x * 1.24f, top_y),
+                powerup_project_local(cx, cy, x_scale, -arm_x * 0.76f, top_y)
+            };
+            const vg_vec2 right_cap[2] = {
+                powerup_project_local(cx, cy, x_scale, arm_x * 0.76f, top_y),
+                powerup_project_local(cx, cy, x_scale, arm_x * 1.24f, top_y)
+            };
+            r = vg_draw_polyline(ctx, left_arm, 2, &sym, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_draw_polyline(ctx, right_arm, 2, &sym, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_draw_polyline(ctx, left_cap, 2, &sym, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_draw_polyline(ctx, right_cap, 2, &sym, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            return vg_draw_polyline(ctx, curve, 17, &sym, 0);
+        }
     }
 
     {

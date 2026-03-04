@@ -187,6 +187,7 @@ static void game_reset_powerup_state(game_state* g, int clear_pickups) {
         return;
     }
     g->weapon_level = 1;
+    g->powerup_magnet_active = 0;
     g->powerup_drop_credit = 0.0f;
     if (!clear_pickups) {
         return;
@@ -225,14 +226,16 @@ static void kill_powerup_pickup(game_state* g, powerup_pickup* p) {
 static int powerup_pick_drop_type(const game_state* g) {
     const float r = frand01();
     if (level_uses_cylinder(g)) {
-        if (r < 0.34f) return POWERUP_DOUBLE_SHOT;
-        if (r < 0.56f) return POWERUP_TRIPLE_SHOT;
-        if (r < 0.80f) return POWERUP_VITALITY;
-        return POWERUP_ORBITAL_BOOST;
+        if (r < 0.27f) return POWERUP_DOUBLE_SHOT;
+        if (r < 0.48f) return POWERUP_TRIPLE_SHOT;
+        if (r < 0.68f) return POWERUP_VITALITY;
+        if (r < 0.84f) return POWERUP_ORBITAL_BOOST;
+        return POWERUP_MAGNET;
     }
-    if (r < 0.45f) return POWERUP_DOUBLE_SHOT;
-    if (r < 0.72f) return POWERUP_TRIPLE_SHOT;
-    return POWERUP_VITALITY;
+    if (r < 0.34f) return POWERUP_DOUBLE_SHOT;
+    if (r < 0.56f) return POWERUP_TRIPLE_SHOT;
+    if (r < 0.80f) return POWERUP_VITALITY;
+    return POWERUP_MAGNET;
 }
 
 static void game_apply_powerup(game_state* g, int type) {
@@ -255,6 +258,9 @@ static void game_apply_powerup(game_state* g, int type) {
             if (level_uses_cylinder(g)) {
                 g->level_time_remaining_s = fmaxf(g->level_time_remaining_s, 0.0f) + 15.0f;
             }
+            break;
+        case POWERUP_MAGNET:
+            g->powerup_magnet_active = 1;
             break;
         default:
             break;
@@ -320,7 +326,7 @@ static void game_set_player_dead(game_state* g, int queue_message) {
         return;
     }
     g->lives = 0;
-    game_reset_powerup_state(g, 1);
+    game_reset_powerup_state(g, 0);
     if (queue_message) {
         game_queue_death_message(g);
     }
@@ -334,7 +340,7 @@ void game_on_player_life_lost(game_state* g) {
     if (g->lives < 0) {
         g->lives = 0;
     }
-    game_reset_powerup_state(g, 1);
+    game_reset_powerup_state(g, 0);
     if (g->lives == 0) {
         game_queue_death_message(g);
     }
@@ -2791,6 +2797,20 @@ static void game_update_powerups(game_state* g, float dt) {
         p->bob_phase += dt * 2.8f;
         p->b.vx *= fmaxf(0.0f, 1.0f - dt * 1.6f);
         p->b.vy *= fmaxf(0.0f, 1.0f - dt * 1.6f);
+        if (g->powerup_magnet_active && g->lives > 0) {
+            const float to_x = uses_cylinder ? wrap_delta(g->player.b.x, p->b.x, period) : (g->player.b.x - p->b.x);
+            const float to_y = g->player.b.y - p->b.y;
+            const float d2 = to_x * to_x + to_y * to_y;
+            if (d2 > 1.0e-6f) {
+                const float d = sqrtf(d2);
+                const float nx = to_x / d;
+                const float ny = to_y / d;
+                const float near_t = 1.0f - clampf((d - 28.0f * su) / (420.0f * su), 0.0f, 1.0f);
+                const float accel = (90.0f + 560.0f * near_t) * su;
+                p->b.vx += nx * accel * dt;
+                p->b.vy += ny * accel * dt;
+            }
+        }
         integrate_body(&p->b, dt);
         if (uses_cylinder) {
             p->b.x = g->camera_x + wrap_delta(p->b.x, g->camera_x, period);

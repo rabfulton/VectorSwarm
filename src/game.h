@@ -310,7 +310,8 @@ typedef enum powerup_type {
     POWERUP_TRIPLE_SHOT = 1,
     POWERUP_VITALITY = 2,
     POWERUP_ORBITAL_BOOST = 3,
-    POWERUP_COUNT = 4
+    POWERUP_MAGNET = 4,
+    POWERUP_COUNT = 5
 } powerup_type;
 
 typedef struct powerup_pickup {
@@ -423,6 +424,7 @@ typedef struct game_state {
     int arc_node_count;
     powerup_pickup powerups[MAX_POWERUPS];
     int powerup_count;
+    int powerup_magnet_active;
     float powerup_drop_credit; /* Smooths drop cadence while preserving average drop chance. */
     int exit_portal_active;
     float exit_portal_x;
