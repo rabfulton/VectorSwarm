@@ -9214,24 +9214,6 @@ static void record_gpu_underwater(app* a, VkCommandBuffer cmd, float t) {
     pc.p7[1] = lvl->underwater_kelp_tint_g;
     pc.p7[2] = lvl->underwater_kelp_tint_b;
     pc.p7[3] = lvl->underwater_kelp_tint_strength;
-    {
-        static float s_last_trace_t = -1000.0f;
-        if ((t - s_last_trace_t) > 1.0f) {
-            const char* lvl_name = game_current_level_name(&a->game);
-            fprintf(
-                stderr,
-                "[underwater_trace] level='%s' bg=%d kelp_tint=(%.3f,%.3f,%.3f) strength=%.3f highq=%d\n",
-                (lvl_name && lvl_name[0] != '\0') ? lvl_name : "(none)",
-                lvl->background_style,
-                lvl->underwater_kelp_tint_r,
-                lvl->underwater_kelp_tint_g,
-                lvl->underwater_kelp_tint_b,
-                lvl->underwater_kelp_tint_strength,
-                a->video_menu_high_quality
-            );
-            s_last_trace_t = t;
-        }
-    }
 
     set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_pipeline);
