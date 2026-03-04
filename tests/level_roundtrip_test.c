@@ -84,7 +84,7 @@ int main(void) {
     }
 
     level_editor_init(&editor);
-    if (!level_editor_load_by_name(&editor, &db, "level_defender")) {
+    if (!level_editor_load_by_name(&editor, &db, "level_blank")) {
         fprintf(stderr, "roundtrip: level load failed\n");
         return 1;
     }

@@ -301,6 +301,7 @@ typedef struct leveldef_level {
     float wave_cooldown_between_s;
     int bidirectional_spawns;
     float cylinder_double_swarm_chance;
+    float powerup_drop_chance;
     int exit_enabled;
     float exit_x01;
     float exit_y01;

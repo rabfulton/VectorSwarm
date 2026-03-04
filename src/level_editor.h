@@ -96,6 +96,7 @@ typedef struct level_editor_state {
     float level_asteroid_storm_speed;
     float level_asteroid_storm_duration_s;
     float level_asteroid_storm_density;
+    float level_powerup_drop_chance;
     float level_kamikaze_radius_min;
     float level_kamikaze_radius_max;
     char level_name[LEVEL_EDITOR_NAME_CAP];
@@ -134,6 +135,7 @@ typedef struct level_editor_state {
     float snapshot_level_asteroid_storm_speed;
     float snapshot_level_asteroid_storm_duration_s;
     float snapshot_level_asteroid_storm_density;
+    float snapshot_level_powerup_drop_chance;
     float snapshot_level_kamikaze_radius_min;
     float snapshot_level_kamikaze_radius_max;
     char snapshot_level_name[LEVEL_EDITOR_NAME_CAP];

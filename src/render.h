@@ -161,6 +161,7 @@ typedef struct render_metrics {
     float level_editor_asteroid_storm_speed;
     float level_editor_asteroid_storm_duration_s;
     float level_editor_asteroid_storm_density;
+    float level_editor_powerup_drop_chance;
     float level_editor_kamikaze_radius_min;
     float level_editor_kamikaze_radius_max;
     int level_editor_selected_marker;

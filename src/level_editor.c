@@ -419,6 +419,7 @@ static void level_editor_save_snapshot(level_editor_state* s) {
     s->snapshot_level_asteroid_storm_speed = s->level_asteroid_storm_speed;
     s->snapshot_level_asteroid_storm_duration_s = s->level_asteroid_storm_duration_s;
     s->snapshot_level_asteroid_storm_density = s->level_asteroid_storm_density;
+    s->snapshot_level_powerup_drop_chance = s->level_powerup_drop_chance;
     s->snapshot_level_kamikaze_radius_min = s->level_kamikaze_radius_min;
     s->snapshot_level_kamikaze_radius_max = s->level_kamikaze_radius_max;
     snprintf(s->snapshot_level_name, sizeof(s->snapshot_level_name), "%s", s->level_name);
@@ -942,6 +943,7 @@ static int build_level_serialized_text(
     lvl.theme_palette = s->level_theme_palette;
     lvl.background_style = s->level_background_style;
     lvl.background_mask_style = s->level_background_mask_style;
+    lvl.powerup_drop_chance = clampf(s->level_powerup_drop_chance, 0.0f, 1.0f);
     lvl.editor_length_screens = level_len;
     lvl.searchlight_count = 0;
     lvl.minefield_count = 0;
@@ -1312,6 +1314,7 @@ static int build_level_serialized_text(
     if (!appendf(out, out_cap, &used, "wave_cooldown_between_s=%.3f\n", lvl.wave_cooldown_between_s)) return 0;
     if (!appendf(out, out_cap, &used, "bidirectional_spawns=%d\n", lvl.bidirectional_spawns ? 1 : 0)) return 0;
     if (!appendf(out, out_cap, &used, "cylinder_double_swarm_chance=%.3f\n", lvl.cylinder_double_swarm_chance)) return 0;
+    if (!appendf(out, out_cap, &used, "powerup_drop_chance=%.3f\n", lvl.powerup_drop_chance)) return 0;
     if (!appendf(out, out_cap, &used, "exit_enabled=%d\n", lvl.exit_enabled ? 1 : 0)) return 0;
     if (!appendf(out, out_cap, &used, "exit_x01=%.3f\n", lvl.exit_x01)) return 0;
     if (!appendf(out, out_cap, &used, "exit_y01=%.3f\n", lvl.exit_y01)) return 0;
@@ -1493,7 +1496,7 @@ static int marker_property_count(const level_editor_state* s) {
         return 0;
     }
     if (s->selected_marker < 0 || s->selected_marker >= s->marker_count) {
-        return 6; /* WAVE MODE, RENDER STYLE, THEME, BACKGROUND, MASK, LENGTH */
+        return 7; /* WAVE MODE, RENDER STYLE, THEME, BACKGROUND, MASK, LENGTH, POWERUP DROP */
     }
     const int kind = s->markers[s->selected_marker].kind;
     if (kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
@@ -2190,6 +2193,7 @@ void level_editor_init(level_editor_state* s) {
     s->level_asteroid_storm_speed = 190.0f;
     s->level_asteroid_storm_duration_s = 12.0f;
     s->level_asteroid_storm_density = 1.0f;
+    s->level_powerup_drop_chance = 0.12f;
     s->level_kamikaze_radius_min = 11.0f;
     s->level_kamikaze_radius_max = 17.0f;
     snprintf(s->level_name, sizeof(s->level_name), "%s", level_style_name(s->level_style));
@@ -2322,6 +2326,7 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
             s->level_asteroid_storm_speed = lvl->asteroid_storm_speed;
             s->level_asteroid_storm_duration_s = lvl->asteroid_storm_duration_s;
             s->level_asteroid_storm_density = lvl->asteroid_storm_density;
+            s->level_powerup_drop_chance = lvl->powerup_drop_chance;
             s->level_kamikaze_radius_min = lvl->kamikaze.radius_min;
             s->level_kamikaze_radius_max = lvl->kamikaze.radius_max;
         } else {
@@ -2332,6 +2337,7 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
                 (s->level_render_style == LEVEL_RENDER_DRIFTER || s->level_render_style == LEVEL_RENDER_DRIFTER_SHADED)
                 ? LEVELDEF_BG_MASK_TERRAIN
                 : LEVELDEF_BG_MASK_NONE;
+            s->level_powerup_drop_chance = 0.12f;
         }
     }
     build_markers(s, db, style, lvl);
@@ -3045,6 +3051,13 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
                     400.0f
                 );
                 break;
+            case 6:
+                s->level_powerup_drop_chance = clampf(
+                    s->level_powerup_drop_chance + delta * 0.01f,
+                    0.0f,
+                    1.0f
+                );
+                break;
             default:
                 break;
         }
@@ -3441,6 +3454,7 @@ int level_editor_revert(level_editor_state* s) {
     s->level_asteroid_storm_speed = s->snapshot_level_asteroid_storm_speed;
     s->level_asteroid_storm_duration_s = s->snapshot_level_asteroid_storm_duration_s;
     s->level_asteroid_storm_density = s->snapshot_level_asteroid_storm_density;
+    s->level_powerup_drop_chance = s->snapshot_level_powerup_drop_chance;
     s->level_kamikaze_radius_min = s->snapshot_level_kamikaze_radius_min;
     s->level_kamikaze_radius_max = s->snapshot_level_kamikaze_radius_max;
     s->level_style = level_style_from_render_style(s->level_render_style);
@@ -3487,6 +3501,7 @@ void level_editor_new_blank(level_editor_state* s) {
     s->level_asteroid_storm_speed = 190.0f;
     s->level_asteroid_storm_duration_s = 12.0f;
     s->level_asteroid_storm_density = 1.0f;
+    s->level_powerup_drop_chance = 0.12f;
     s->level_kamikaze_radius_min = 11.0f;
     s->level_kamikaze_radius_max = 17.0f;
     snprintf(s->level_name, sizeof(s->level_name), "level_blank");

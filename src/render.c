@@ -5292,7 +5292,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             {
                 int selected_prop = metrics->level_editor_selected_property;
                 if (selected_prop < 0) selected_prop = 0;
-                if (selected_prop > 5) selected_prop = 5;
+                if (selected_prop > 6) selected_prop = 6;
                 char row[96];
                 const vg_rect rb0 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
                 snprintf(row, sizeof(row), "WAVE MODE      %s", editor_wave_mode_name(metrics->level_editor_wave_mode));
@@ -5322,6 +5322,11 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 const vg_rect rb5 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
                 snprintf(row, sizeof(row), "LENGTH         %.1f", metrics->level_editor_level_length_screens);
                 r = draw_ui_button_shaded(ctx, rb5, row, 10.4f * ui, &frame, &text, (selected_prop == 5) ? 1 : 0);
+                if (r != VG_OK) return r;
+                ty -= 32.0f * ui;
+                const vg_rect rb6 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
+                snprintf(row, sizeof(row), "POWERUP DROP   %.2f", metrics->level_editor_powerup_drop_chance);
+                r = draw_ui_button_shaded(ctx, rb6, row, 10.4f * ui, &frame, &text, (selected_prop == 6) ? 1 : 0);
                 if (r != VG_OK) return r;
             }
             ty -= 34.0f * ui;
@@ -7458,6 +7463,187 @@ static vg_result draw_player_shield(
     );
 }
 
+static vg_color powerup_symbol_color(int type) {
+    switch (clampi(type, 0, POWERUP_COUNT - 1)) {
+        case POWERUP_DOUBLE_SHOT: return (vg_color){0.90f, 0.95f, 1.00f, 1.0f};
+        case POWERUP_TRIPLE_SHOT: return (vg_color){1.00f, 0.86f, 0.54f, 1.0f};
+        case POWERUP_VITALITY: return (vg_color){0.64f, 1.00f, 0.72f, 1.0f};
+        case POWERUP_ORBITAL_BOOST: return (vg_color){0.70f, 0.86f, 1.00f, 1.0f};
+        default: return (vg_color){0.92f, 0.92f, 0.92f, 1.0f};
+    }
+}
+
+static vg_vec2 powerup_project_local(float cx, float cy, float x_scale, float lx, float ly) {
+    return (vg_vec2){cx + lx * x_scale, cy + ly};
+}
+
+static vg_result draw_powerup_symbol(
+    vg_context* ctx,
+    float cx,
+    float cy,
+    float rr,
+    float x_scale,
+    float spin,
+    int type,
+    float intensity_scale,
+    vg_color c
+) {
+    const float x_scale_abs = fabsf(x_scale);
+    vg_stroke_style sym = make_stroke(
+        fmaxf(0.8f, rr * 0.10f),
+        0.92f * intensity_scale,
+        (vg_color){c.r, c.g, c.b, 0.92f},
+        VG_BLEND_ALPHA
+    );
+    vg_result r = VG_OK;
+    if (x_scale_abs < 0.20f) {
+        return VG_OK;
+    }
+
+    if (type == POWERUP_VITALITY) {
+        const vg_vec2 h[2] = {
+            powerup_project_local(cx, cy, x_scale, -rr * 0.34f, 0.0f),
+            powerup_project_local(cx, cy, x_scale, rr * 0.34f, 0.0f)
+        };
+        const vg_vec2 v[2] = {
+            powerup_project_local(cx, cy, x_scale, 0.0f, -rr * 0.34f),
+            powerup_project_local(cx, cy, x_scale, 0.0f, rr * 0.34f)
+        };
+        r = vg_draw_polyline(ctx, h, 2, &sym, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        return vg_draw_polyline(ctx, v, 2, &sym, 0);
+    }
+
+    if (type == POWERUP_ORBITAL_BOOST) {
+        vg_vec2 ring[21];
+        for (int i = 0; i < 20; ++i) {
+            const float a = ((float)i / 20.0f) * 6.2831853f;
+            ring[i] = powerup_project_local(cx, cy, x_scale, cosf(a) * rr * 0.33f, sinf(a) * rr * 0.33f);
+        }
+        ring[20] = ring[0];
+        r = vg_draw_polyline(ctx, ring, 21, &sym, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        {
+            const float oa = spin * 1.8f + 0.7f;
+            const vg_vec2 dot = powerup_project_local(cx, cy, x_scale, cosf(oa) * rr * 0.52f, sinf(oa) * rr * 0.52f);
+            vg_fill_style df = make_fill(
+                0.92f * intensity_scale,
+                (vg_color){c.r, c.g, c.b, 0.95f},
+                VG_BLEND_ALPHA
+            );
+            return vg_fill_circle(ctx, dot, fmaxf(1.5f, rr * 0.09f), &df, 12);
+        }
+    }
+
+    if (type == POWERUP_TRIPLE_SHOT) {
+        const float yv[3] = {-0.23f, 0.0f, 0.23f};
+        for (int i = 0; i < 3; ++i) {
+            const vg_vec2 line[2] = {
+                powerup_project_local(cx, cy, x_scale, -rr * 0.44f, rr * yv[i]),
+                powerup_project_local(cx, cy, x_scale, rr * 0.38f, rr * yv[i])
+            };
+            r = vg_draw_polyline(ctx, line, 2, &sym, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+        return VG_OK;
+    }
+
+    {
+        const float yv[2] = {-0.18f, 0.18f};
+        for (int i = 0; i < 2; ++i) {
+            const vg_vec2 line[2] = {
+                powerup_project_local(cx, cy, x_scale, -rr * 0.44f, rr * yv[i]),
+                powerup_project_local(cx, cy, x_scale, rr * 0.38f, rr * yv[i])
+            };
+            r = vg_draw_polyline(ctx, line, 2, &sym, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+        return VG_OK;
+    }
+}
+
+static vg_result draw_powerup_medallion(
+    vg_context* ctx,
+    float x,
+    float y,
+    float radius,
+    float spin,
+    float bob_phase,
+    int type,
+    float intensity_scale,
+    const vg_stroke_style* txt_halo,
+    const vg_stroke_style* txt_main
+) {
+    const vg_color c = powerup_symbol_color(type);
+    const float bob = sinf(bob_phase) * fmaxf(2.6f, radius * 0.20f);
+    const float rr = fmaxf(radius * 2.03f, 10.0f);
+    const float face = cosf(spin);
+    const float face01 = fabsf(face);
+    const float x_scale_abs = 0.12f + 0.88f * face01;
+    const float x_scale = x_scale_abs * ((face >= 0.0f) ? 1.0f : -1.0f);
+    const float cy = y + bob;
+    vg_vec2 outer[7];
+    vg_vec2 inner[7];
+    const float base_a = 0.5235987756f;
+    for (int i = 0; i < 6; ++i) {
+        const float a = base_a + ((float)i / 6.0f) * 6.2831853f;
+        outer[i] = powerup_project_local(x, cy, x_scale, cosf(a) * rr, sinf(a) * rr);
+        inner[i] = powerup_project_local(x, cy, x_scale, cosf(a) * rr * 0.58f, sinf(a) * rr * 0.58f);
+    }
+    outer[6] = outer[0];
+    inner[6] = inner[0];
+
+    vg_fill_style fill = make_fill(
+        (0.22f + 0.16f * face01) * intensity_scale,
+        (vg_color){c.r * 0.76f, c.g * 0.76f, c.b * 0.76f, 0.24f},
+        VG_BLEND_ALPHA
+    );
+    vg_stroke_style edge = make_stroke(
+        fmaxf(0.7f, rr * 0.045f),
+        (0.56f + 0.16f * face01) * intensity_scale,
+        (vg_color){c.r, c.g, c.b, 0.56f},
+        VG_BLEND_ALPHA
+    );
+    vg_stroke_style ring = edge;
+    ring.width_px *= 0.78f;
+    ring.intensity *= 0.78f;
+    ring.color.a *= 0.72f;
+
+    vg_result r = vg_fill_convex(ctx, outer, 6, &fill);
+    if (r != VG_OK) {
+        return r;
+    }
+    r = vg_draw_polyline(ctx, outer, 7, &edge, 0);
+    if (r != VG_OK) {
+        return r;
+    }
+    r = vg_draw_polyline(ctx, inner, 7, &ring, 0);
+    if (r != VG_OK) {
+        return r;
+    }
+    (void)txt_halo;
+    (void)txt_main;
+    return draw_powerup_symbol(
+        ctx,
+        x,
+        cy,
+        rr * 0.92f,
+        x_scale,
+        spin,
+        type,
+        intensity_scale * (0.55f + 0.45f * face01),
+        c
+    );
+}
+
 static vg_result draw_emp_blast(
     vg_context* ctx,
     const game_state* g,
@@ -8450,6 +8636,35 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
                 }
             }
         }
+        for (int i = 0; i < MAX_POWERUPS; ++i) {
+            const powerup_pickup* p = &g->powerups[i];
+            float depth = 0.0f;
+            vg_vec2 cp;
+            float rr;
+            if (!p->active) {
+                continue;
+            }
+            cp = project_cylinder_point(g, p->b.x, p->b.y, &depth);
+            if (cp.x < -36.0f || cp.x > g->world_w + 36.0f || cp.y < -36.0f || cp.y > g->world_h + 36.0f) {
+                continue;
+            }
+            rr = p->radius * (0.42f + depth * 0.96f);
+            r = draw_powerup_medallion(
+                ctx,
+                cp.x,
+                cp.y,
+                rr,
+                p->spin,
+                p->bob_phase,
+                p->type,
+                intensity_scale * (0.45f + depth * 0.95f),
+                &txt_halo,
+                &txt_main
+            );
+            if (r != VG_OK) {
+                return r;
+            }
+        }
         if (g->emp_effect_active) {
             r = draw_emp_blast(ctx, g, &pal, intensity_scale, 1);
             if (r != VG_OK) {
@@ -9020,6 +9235,28 @@ skip_legacy_landscape:
                 (void)vg_transform_pop(ctx);
                 return r;
             }
+        }
+    }
+    for (int i = 0; i < MAX_POWERUPS; ++i) {
+        const powerup_pickup* p = &g->powerups[i];
+        if (!p->active) {
+            continue;
+        }
+        r = draw_powerup_medallion(
+            ctx,
+            p->b.x,
+            p->b.y,
+            p->radius,
+            p->spin,
+            p->bob_phase,
+            p->type,
+            intensity_scale,
+            &txt_halo,
+            &txt_main
+        );
+        if (r != VG_OK) {
+            (void)vg_transform_pop(ctx);
+            return r;
         }
     }
     if (g->emp_effect_active) {

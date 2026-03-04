@@ -1,5 +1,4 @@
 #include "enemy.h"
-#include "death_teletype_messages.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -556,21 +555,7 @@ static void apply_player_hit(game_state* g, float impact_x, float impact_y, floa
         return;
     }
     emit_explosion(g, impact_x, impact_y, impact_vx, impact_vy, 48, su);
-    g->lives -= 1;
-    if (g->lives < 0) {
-        g->lives = 0;
-    }
-    if (g->lives == 0) {
-        const size_t n = death_teletype_message_count();
-        if (n > 0) {
-            const size_t idx = (size_t)(rand() % (int)n);
-            const char* msg = death_teletype_message_at(idx);
-            if (msg && msg[0] != '\0') {
-                g->wave_announce_pending = 1;
-                snprintf(g->wave_announce_text, sizeof(g->wave_announce_text), "%s", msg);
-            }
-        }
-    }
+    game_on_player_life_lost(g);
 }
 
 static int shield_deflect_body(
@@ -2691,8 +2676,7 @@ void enemy_update_system(
                         emit_enemy_debris(g, hit, g->bullets[bi].b.vx, g->bullets[bi].b.vy);
                         hit->active = 0;
                         emit_explosion(g, hit->b.x, hit->b.y, hit->b.vx, hit->b.vy, 26, su);
-                        g->kills += 1;
-                        g->score += 100;
+                        game_on_enemy_destroyed(g, hit->b.x, hit->b.y, hit->b.vx, hit->b.vy, 100);
                     } else {
                         hit->b.vx += g->bullets[bi].b.vx * 0.05f;
                         hit->b.vy += g->bullets[bi].b.vy * 0.05f;
@@ -2763,8 +2747,7 @@ void enemy_apply_emp(
             emit_enemy_debris(g, e, e->b.vx, e->b.vy);
             emit_explosion(g, e->b.x, e->b.y, e->b.vx, e->b.vy, 26, su);
             e->active = 0;
-            g->kills += 1;
-            g->score += 100;
+            game_on_enemy_destroyed(g, e->b.x, e->b.y, e->b.vx, e->b.vy, 100);
             continue;
         }
         if (d2 <= blast_sq) {

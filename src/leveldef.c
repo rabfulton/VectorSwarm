@@ -361,6 +361,7 @@ void leveldef_init_defaults(leveldef_db* db) {
         db->levels[i].render_style = -1;
         db->levels[i].spawn_mode = -1;
         db->levels[i].default_boid_profile = -1;
+        db->levels[i].powerup_drop_chance = 0.12f;
     }
     {
         leveldef_level* b = &db->levels[LEVEL_STYLE_BLANK];
@@ -375,6 +376,7 @@ void leveldef_init_defaults(leveldef_db* db) {
         b->wave_cooldown_between_s = 2.0f;
         b->bidirectional_spawns = 0;
         b->cylinder_double_swarm_chance = 0.0f;
+        b->powerup_drop_chance = 0.12f;
         b->exit_enabled = 0;
         b->exit_x01 = 2.0f;
         b->exit_y01 = 0.5f;
@@ -969,6 +971,8 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_level->bidirectional_spawns = atoi(v) ? 1 : 0;
                     } else if (strcmp(k, "cylinder_double_swarm_chance") == 0) {
                         cur_level->cylinder_double_swarm_chance = strtof(v, NULL);
+                    } else if (strcmp(k, "powerup_drop_chance") == 0) {
+                        cur_level->powerup_drop_chance = strtof(v, NULL);
                     } else if (strcmp(k, "exit_enabled") == 0) {
                         cur_level->exit_enabled = atoi(v) ? 1 : 0;
                     } else if (strcmp(k, "exit_x01") == 0) {
@@ -1398,6 +1402,12 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
         if (l->cylinder_double_swarm_chance < 0.0f || l->cylinder_double_swarm_chance > 1.0f) {
             if (log_out) {
                 fprintf(log_out, "leveldef: level %d invalid cylinder_double_swarm_chance (expected 0..1)\n", i);
+            }
+            ok = 0;
+        }
+        if (l->powerup_drop_chance < 0.0f || l->powerup_drop_chance > 1.0f) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid powerup_drop_chance (expected 0..1)\n", i);
             }
             ok = 0;
         }

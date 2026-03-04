@@ -10061,6 +10061,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .level_editor_asteroid_storm_speed = a->level_editor.level_asteroid_storm_speed,
         .level_editor_asteroid_storm_duration_s = a->level_editor.level_asteroid_storm_duration_s,
         .level_editor_asteroid_storm_density = a->level_editor.level_asteroid_storm_density,
+        .level_editor_powerup_drop_chance = a->level_editor.level_powerup_drop_chance,
         .level_editor_kamikaze_radius_min = a->level_editor.level_kamikaze_radius_min,
         .level_editor_kamikaze_radius_max = a->level_editor.level_kamikaze_radius_max,
         .level_editor_selected_marker = a->level_editor.selected_marker,

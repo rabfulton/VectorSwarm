@@ -19,6 +19,7 @@
 #define MAX_MISSILE_LAUNCHERS 64
 #define MAX_MISSILES 256
 #define MAX_ARC_NODES 64
+#define MAX_POWERUPS 64
 #define PLAYER_ALT_WEAPON_COUNT 4
 
 struct leveldef_db;
@@ -304,6 +305,25 @@ typedef struct homing_missile {
     float trail_emit_accum;
 } homing_missile;
 
+typedef enum powerup_type {
+    POWERUP_DOUBLE_SHOT = 0,
+    POWERUP_TRIPLE_SHOT = 1,
+    POWERUP_VITALITY = 2,
+    POWERUP_ORBITAL_BOOST = 3,
+    POWERUP_COUNT = 4
+} powerup_type;
+
+typedef struct powerup_pickup {
+    int active;
+    int type; /* enum powerup_type */
+    body b;
+    float ttl_s;
+    float radius;
+    float spin;
+    float spin_rate;
+    float bob_phase;
+} powerup_pickup;
+
 typedef struct arc_node_runtime {
     int active;
     float x;
@@ -401,6 +421,8 @@ typedef struct game_state {
     int missile_count;
     arc_node_runtime arc_nodes[MAX_ARC_NODES];
     int arc_node_count;
+    powerup_pickup powerups[MAX_POWERUPS];
+    int powerup_count;
     int exit_portal_active;
     float exit_portal_x;
     float exit_portal_y;
@@ -445,6 +467,8 @@ int game_apply_level_override(game_state* g, const struct leveldef_level* level,
 void game_set_alt_weapon(game_state* g, int weapon_id);
 int game_get_alt_weapon(const game_state* g);
 int game_get_alt_weapon_ammo(const game_state* g, int weapon_id);
+void game_on_enemy_destroyed(game_state* g, float x, float y, float vx, float vy, int score_delta);
+void game_on_player_life_lost(game_state* g);
 int game_structure_circle_overlap(const game_state* g, float x, float y, float radius);
 int game_find_noncolliding_spawn(
     const game_state* g,

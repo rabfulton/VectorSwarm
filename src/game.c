@@ -160,6 +160,10 @@ static void configure_missile_launchers_for_level(game_state* g);
 static void update_missile_system(game_state* g, float dt);
 static void configure_arc_nodes_for_level(game_state* g);
 static void update_arc_nodes(game_state* g, float dt);
+static void game_reset_powerup_state(game_state* g, int clear_pickups);
+static void game_set_player_dead(game_state* g, int queue_message);
+static void game_update_powerups(game_state* g, float dt);
+static void game_try_spawn_powerup_drop(game_state* g, float x, float y, float vx, float vy);
 
 static void game_queue_death_message(game_state* g) {
     if (!g || g->lives > 0) {
@@ -176,6 +180,156 @@ static void game_queue_death_message(game_state* g) {
     }
     g->wave_announce_pending = 1;
     snprintf(g->wave_announce_text, sizeof(g->wave_announce_text), "%s", msg);
+}
+
+static void game_reset_powerup_state(game_state* g, int clear_pickups) {
+    if (!g) {
+        return;
+    }
+    g->weapon_level = 1;
+    if (!clear_pickups) {
+        return;
+    }
+    memset(g->powerups, 0, sizeof(g->powerups));
+    g->powerup_count = 0;
+}
+
+static powerup_pickup* alloc_powerup_pickup(game_state* g) {
+    if (!g) {
+        return NULL;
+    }
+    for (int i = 0; i < MAX_POWERUPS; ++i) {
+        if (g->powerups[i].active) {
+            continue;
+        }
+        powerup_pickup* p = &g->powerups[i];
+        memset(p, 0, sizeof(*p));
+        p->active = 1;
+        g->powerup_count += 1;
+        return p;
+    }
+    return NULL;
+}
+
+static void kill_powerup_pickup(game_state* g, powerup_pickup* p) {
+    if (!g || !p || !p->active) {
+        return;
+    }
+    p->active = 0;
+    if (g->powerup_count > 0) {
+        g->powerup_count -= 1;
+    }
+}
+
+static int powerup_pick_drop_type(const game_state* g) {
+    const float r = frand01();
+    if (level_uses_cylinder(g)) {
+        if (r < 0.34f) return POWERUP_DOUBLE_SHOT;
+        if (r < 0.56f) return POWERUP_TRIPLE_SHOT;
+        if (r < 0.80f) return POWERUP_VITALITY;
+        return POWERUP_ORBITAL_BOOST;
+    }
+    if (r < 0.45f) return POWERUP_DOUBLE_SHOT;
+    if (r < 0.72f) return POWERUP_TRIPLE_SHOT;
+    return POWERUP_VITALITY;
+}
+
+static void game_apply_powerup(game_state* g, int type) {
+    if (!g || g->lives <= 0) {
+        return;
+    }
+    switch (type) {
+        case POWERUP_DOUBLE_SHOT:
+            if (g->weapon_level < 2) {
+                g->weapon_level = 2;
+            }
+            break;
+        case POWERUP_TRIPLE_SHOT:
+            g->weapon_level = 3;
+            break;
+        case POWERUP_VITALITY:
+            g->lives = clampi(g->lives + 1, 0, 3);
+            break;
+        case POWERUP_ORBITAL_BOOST:
+            if (level_uses_cylinder(g)) {
+                g->level_time_remaining_s = fmaxf(g->level_time_remaining_s, 0.0f) + 15.0f;
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+static void game_try_spawn_powerup_drop(game_state* g, float x, float y, float vx, float vy) {
+    const leveldef_level* lvl;
+    powerup_pickup* p;
+    const float su = gameplay_ui_scale(g);
+    float drop_p;
+    if (!g || g->lives <= 0) {
+        return;
+    }
+    lvl = current_leveldef(g);
+    if (!lvl) {
+        return;
+    }
+    drop_p = clampf(lvl->powerup_drop_chance, 0.0f, 1.0f);
+    if (drop_p <= 0.0f || frand01() > drop_p) {
+        return;
+    }
+    p = alloc_powerup_pickup(g);
+    if (!p) {
+        return;
+    }
+    p->type = powerup_pick_drop_type(g);
+    p->b.x = x;
+    p->b.y = y;
+    p->b.vx = vx * 0.08f + frands1() * 42.0f * su;
+    p->b.vy = vy * 0.08f + frands1() * 36.0f * su;
+    p->b.ax = 0.0f;
+    p->b.ay = 0.0f;
+    p->ttl_s = 13.0f;
+    p->radius = 14.0f * su;
+    p->spin = frand01() * 6.2831853f;
+    p->spin_rate = frands1() * 2.5f;
+    if (fabsf(p->spin_rate) < 0.8f) {
+        p->spin_rate = (p->spin_rate < 0.0f) ? -0.8f : 0.8f;
+    }
+    p->bob_phase = frand01() * 6.2831853f;
+}
+
+void game_on_enemy_destroyed(game_state* g, float x, float y, float vx, float vy, int score_delta) {
+    if (!g) {
+        return;
+    }
+    g->kills += 1;
+    g->score += score_delta;
+    game_try_spawn_powerup_drop(g, x, y, vx, vy);
+}
+
+static void game_set_player_dead(game_state* g, int queue_message) {
+    const int was_alive = (g && g->lives > 0) ? 1 : 0;
+    if (!g || !was_alive) {
+        return;
+    }
+    g->lives = 0;
+    game_reset_powerup_state(g, 1);
+    if (queue_message) {
+        game_queue_death_message(g);
+    }
+}
+
+void game_on_player_life_lost(game_state* g) {
+    if (!g || g->lives <= 0) {
+        return;
+    }
+    g->lives -= 1;
+    if (g->lives < 0) {
+        g->lives = 0;
+    }
+    game_reset_powerup_state(g, 1);
+    if (g->lives == 0) {
+        game_queue_death_message(g);
+    }
 }
 
 static float dist_sq(float ax, float ay, float bx, float by) {
@@ -1069,8 +1223,7 @@ static void update_asteroid_storm(game_state* g, float dt) {
             const float rr = a->radius + player_hit_r;
             if (dist_sq(a->b.x, a->b.y, g->player.b.x, g->player.b.y) <= rr * rr) {
                 emit_player_asteroid_explosion(g);
-                g->lives = 0;
-                game_queue_death_message(g);
+                game_set_player_dead(g, 1);
                 player_hit_this_tick = 1;
                 a->active = 0;
             }
@@ -1222,13 +1375,7 @@ static void explode_missile(game_state* g, homing_missile* m, int direct_hit) {
             }
         }
         if (direct_hit && d2 <= hit2 && !g->shield_active && g->lives > 0) {
-            g->lives -= 1;
-            if (g->lives < 0) {
-                g->lives = 0;
-            }
-            if (g->lives == 0) {
-                game_queue_death_message(g);
-            }
+            game_on_player_life_lost(g);
         }
     } else {
         const float blast_accel = 2200.0f * su;
@@ -1246,8 +1393,7 @@ static void explode_missile(game_state* g, homing_missile* m, int direct_hit) {
                 e->hp = hp_max - 1;
                 if (e->hp <= 0) {
                     e->active = 0;
-                    g->kills += 1;
-                    g->score += 100;
+                    game_on_enemy_destroyed(g, e->b.x, e->b.y, e->b.vx, e->b.vy, 100);
                 }
                 continue;
             }
@@ -1428,8 +1574,7 @@ static void update_arc_nodes(game_state* g, float dt) {
             continue;
         }
         emit_player_asteroid_explosion(g);
-        g->lives = 0;
-        game_queue_death_message(g);
+        game_set_player_dead(g, 1);
         return;
     }
 }
@@ -1859,13 +2004,7 @@ static void update_minefields(game_state* g, float dt) {
                 g->mine_push_time_s = t.push_duration_s;
             }
             if (!g->shield_active && g->lives > 0) {
-                g->lives -= 1;
-                if (g->lives < 0) {
-                    g->lives = 0;
-                }
-                if (g->lives == 0) {
-                    game_queue_death_message(g);
-                }
+                game_on_player_life_lost(g);
             }
             explode_mine(g, m, g->player.b.vx, g->player.b.vy);
         }
@@ -1957,6 +2096,7 @@ static int set_level_index(game_state* g, int index) {
     memset(g->missiles, 0, sizeof(g->missiles));
     memset(g->missile_launchers, 0, sizeof(g->missile_launchers));
     memset(g->arc_nodes, 0, sizeof(g->arc_nodes));
+    memset(g->powerups, 0, sizeof(g->powerups));
     g->active_particles = 0;
     g->wave_index = 0;
     g->wave_id_alloc = 0;
@@ -1987,6 +2127,7 @@ static int set_level_index(game_state* g, int index) {
     g->missile_count = 0;
     g->missile_launcher_count = 0;
     g->arc_node_count = 0;
+    g->powerup_count = 0;
     g->asteroid_storm_active = 0;
     g->asteroid_storm_completed = 0;
     g->asteroid_storm_announced = 0;
@@ -2564,8 +2705,7 @@ static int game_update_player(game_state* g, float dt, const game_input* in, flo
     }
     if (game_structure_circle_overlap(g, g->player.b.x, g->player.b.y, 14.0f * su)) {
         emit_player_asteroid_explosion(g);
-        g->lives = 0;
-        game_queue_death_message(g);
+        game_set_player_dead(g, 1);
         return 0;
     }
     if (g->exit_portal_active &&
@@ -2602,13 +2742,6 @@ static void game_update_player_weapons(game_state* g, float dt, const game_input
             g->emp_effect_t = 0.0f;
         }
     }
-    if (g->score >= 3000) {
-        g->weapon_level = 3;
-    } else if (g->score >= 1200) {
-        g->weapon_level = 2;
-    } else {
-        g->weapon_level = 1;
-    }
     g->weapon_heat = clampf(g->weapon_heat - dt * 0.58f, 0.0f, 1.0f);
     if (g->lives > 0 && !g->shield_active && in->fire && g->fire_cooldown_s <= 0.0f) {
         spawn_bullet(g);
@@ -2620,6 +2753,57 @@ static void game_update_player_weapons(game_state* g, float dt, const game_input
         in->secondary_fire &&
         g->secondary_fire_cooldown_s <= 0.0f) {
         use_secondary_weapon(g);
+    }
+}
+
+static void game_update_powerups(game_state* g, float dt) {
+    const float su = gameplay_ui_scale(g);
+    const int uses_cylinder = level_uses_cylinder(g);
+    const float period = cylinder_period(g);
+    for (int i = 0; i < MAX_POWERUPS; ++i) {
+        powerup_pickup* p = &g->powerups[i];
+        float px;
+        float py;
+        float dx;
+        float dy;
+        float rr;
+        if (!p->active) {
+            continue;
+        }
+        p->ttl_s -= dt;
+        if (p->ttl_s <= 0.0f) {
+            kill_powerup_pickup(g, p);
+            continue;
+        }
+        p->spin += p->spin_rate * dt;
+        p->bob_phase += dt * 2.8f;
+        p->b.vx *= fmaxf(0.0f, 1.0f - dt * 1.6f);
+        p->b.vy *= fmaxf(0.0f, 1.0f - dt * 1.6f);
+        integrate_body(&p->b, dt);
+        if (uses_cylinder) {
+            p->b.x = g->camera_x + wrap_delta(p->b.x, g->camera_x, period);
+            p->b.y = clampf(p->b.y, 20.0f * su, g->world_h - 20.0f * su);
+        } else {
+            const float x_margin = g->world_w * 1.35f;
+            if (fabsf(p->b.x - g->camera_x) > x_margin ||
+                p->b.y < -56.0f * su ||
+                p->b.y > g->world_h + 56.0f * su) {
+                kill_powerup_pickup(g, p);
+                continue;
+            }
+        }
+        if (g->lives <= 0) {
+            continue;
+        }
+        px = p->b.x;
+        py = p->b.y + sinf(p->bob_phase) * (4.2f * su);
+        dx = uses_cylinder ? wrap_delta(px, g->player.b.x, period) : (px - g->player.b.x);
+        dy = py - g->player.b.y;
+        rr = p->radius + 20.0f * su;
+        if (dx * dx + dy * dy <= rr * rr) {
+            game_apply_powerup(g, p->type);
+            kill_powerup_pickup(g, p);
+        }
     }
 }
 
@@ -2864,13 +3048,14 @@ void game_update(game_state* g, float dt, const game_input* in) {
         if (g->level_time_remaining_s <= 0.0f) {
             g->level_time_remaining_s = 0.0f;
             g->orbit_decay_timeout = 1;
-            g->lives = 0;
+            game_set_player_dead(g, 0);
             return;
         }
     }
     if (game_update_player(g, dt, in, su)) {
         return;
     }
+    game_update_powerups(g, dt);
     game_update_player_weapons(g, dt, in);
     game_update_player_bullets(g, dt);
     game_update_wave_spawning(g, dt);
