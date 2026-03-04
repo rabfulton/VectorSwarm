@@ -194,6 +194,11 @@ typedef enum searchlight_source_type {
     SEARCHLIGHT_SOURCE_ORB = 1
 } searchlight_source_type;
 
+typedef enum mine_style_id {
+    MINE_STYLE_CLASSIC = 0,
+    MINE_STYLE_ANEMONE = 1
+} mine_style_id;
+
 typedef struct searchlight {
     int active;
     float origin_x;
@@ -281,6 +286,7 @@ typedef struct mine {
     float angle;
     float spin_rate;
     int hp;
+    int style; /* enum mine_style_id */
 } mine;
 
 typedef enum missile_owner_type {

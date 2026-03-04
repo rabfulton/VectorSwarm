@@ -1009,6 +1009,14 @@ static const char* searchlight_source_name(int source) {
     }
 }
 
+static const char* minefield_style_name(int style) {
+    switch (style) {
+        case MINE_STYLE_ANEMONE: return "anemone";
+        case MINE_STYLE_CLASSIC:
+        default: return "classic";
+    }
+}
+
 static const char* curated_kind_name(int kind) {
     if (kind == LEVEL_EDITOR_MARKER_WAVE_SINE) return "sine";
     if (kind == LEVEL_EDITOR_MARKER_WAVE_V) return "v";
@@ -1248,6 +1256,7 @@ static int build_level_serialized_text(
         mf.anchor_x01 = m->x01 * level_len;
         mf.anchor_y01 = m->y01;
         mf.count = (int)lroundf(fmaxf(m->a, 1.0f));
+        mf.style = clampi((int)lroundf(m->b), MINE_STYLE_CLASSIC, MINE_STYLE_ANEMONE);
         lvl.minefields[lvl.minefield_count++] = mf;
     }
     lvl.missile_launcher_count = 0;
@@ -1650,14 +1659,27 @@ static int build_level_serialized_text(
     }
     for (i = 0; i < lvl.minefield_count; ++i) {
         const leveldef_minefield* mf = &lvl.minefields[i];
-        if (!appendf(
-                out,
-                out_cap,
-                &used,
-                "minefield=%.6f,%.6f,%d\n",
-                mf->anchor_x01,
-                mf->anchor_y01,
-                mf->count)) return 0;
+        const int style = clampi(mf->style, MINE_STYLE_CLASSIC, MINE_STYLE_ANEMONE);
+        if (style == MINE_STYLE_CLASSIC) {
+            if (!appendf(
+                    out,
+                    out_cap,
+                    &used,
+                    "minefield=%.6f,%.6f,%d\n",
+                    mf->anchor_x01,
+                    mf->anchor_y01,
+                    mf->count)) return 0;
+        } else {
+            if (!appendf(
+                    out,
+                    out_cap,
+                    &used,
+                    "minefield=%.6f,%.6f,%d,%s\n",
+                    mf->anchor_x01,
+                    mf->anchor_y01,
+                    mf->count,
+                    minefield_style_name(style))) return 0;
+        }
     }
     for (i = 0; i < lvl.missile_launcher_count; ++i) {
         const leveldef_missile_launcher* ml = &lvl.missile_launchers[i];
@@ -1732,7 +1754,7 @@ static int marker_property_count(const level_editor_state* s) {
         return 9;
     }
     if (kind == LEVEL_EDITOR_MARKER_MINEFIELD) {
-        return 3;
+        return 4;
     }
     if (kind == LEVEL_EDITOR_MARKER_MISSILE) {
         return 6;
@@ -2226,7 +2248,7 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
             mf->anchor_x01 / fmaxf(s->level_length_screens, 1.0f),
             mf->anchor_y01,
             (float)mf->count,
-            0.0f,
+            (float)clampi(mf->style, MINE_STYLE_CLASSIC, MINE_STYLE_ANEMONE),
             0.0f,
             0.0f
         );
@@ -3361,6 +3383,13 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             case 0: move_marker_x(s, s->selected_marker, delta); break;
             case 1: m->y01 = clampf(m->y01 + delta, 0.0f, 1.0f); break;
             case 2: m->a = clampf(m->a + delta * 1.0f, 1.0f, 128.0f); break;
+            case 3: {
+                const int dir = (delta >= 0.0f) ? 1 : -1;
+                const int n = MINE_STYLE_ANEMONE - MINE_STYLE_CLASSIC + 1;
+                int style = clampi((int)lroundf(m->b), MINE_STYLE_CLASSIC, MINE_STYLE_ANEMONE);
+                style = MINE_STYLE_CLASSIC + ((style - MINE_STYLE_CLASSIC + dir + n) % n);
+                m->b = (float)style;
+            } break;
             default: break;
         }
         mark_editor_dirty(s);

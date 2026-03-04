@@ -41,6 +41,27 @@ static int searchlight_source_from_name(const char* name) {
     return -1;
 }
 
+static int mine_style_from_name(const char* name) {
+    char* end = NULL;
+    long v;
+    if (!name) {
+        return -1;
+    }
+    if (strcmp(name, "classic") == 0 || strcmp(name, "default") == 0) {
+        return MINE_STYLE_CLASSIC;
+    }
+    if (strcmp(name, "anemone") == 0 ||
+        strcmp(name, "sea_anemone") == 0 ||
+        strcmp(name, "underwater") == 0) {
+        return MINE_STYLE_ANEMONE;
+    }
+    v = strtol(name, &end, 10);
+    if (end && *end == '\0') {
+        return (int)v;
+    }
+    return -1;
+}
+
 static int wave_pattern_from_name(const char* name) {
     if (!name) {
         return -1;
@@ -498,8 +519,9 @@ static int parse_minefield(leveldef_level* lvl, const char* value, FILE* log_out
     char buf[192];
     char* tok;
     char* save = NULL;
-    const int expected = 3;
-    char* fields[3];
+    const int expected_min = 3;
+    const int expected_max = 4;
+    char* fields[4];
     int i = 0;
     leveldef_minefield mf;
 
@@ -511,13 +533,19 @@ static int parse_minefield(leveldef_level* lvl, const char* value, FILE* log_out
     buf[sizeof(buf) - 1] = '\0';
 
     tok = strtok_r(buf, ",", &save);
-    while (tok && i < expected) {
+    while (tok && i < expected_max) {
         fields[i++] = trim(tok);
         tok = strtok_r(NULL, ",", &save);
     }
-    if (i != expected) {
+    if (tok != NULL || i < expected_min || i > expected_max) {
         if (log_out) {
-            fprintf(log_out, "leveldef: minefield expects %d fields, got %d\n", expected, i);
+            fprintf(
+                log_out,
+                "leveldef: minefield expects %d or %d fields, got %d\n",
+                expected_min,
+                expected_max,
+                i
+            );
         }
         return 0;
     }
@@ -525,9 +553,19 @@ static int parse_minefield(leveldef_level* lvl, const char* value, FILE* log_out
     mf.anchor_x01 = strtof(fields[0], NULL);
     mf.anchor_y01 = strtof(fields[1], NULL);
     mf.count = (int)strtol(fields[2], NULL, 10);
+    mf.style = MINE_STYLE_CLASSIC;
+    if (i >= 4) {
+        mf.style = mine_style_from_name(fields[3]);
+    }
     if (mf.count <= 0) {
         if (log_out) {
             fprintf(log_out, "leveldef: minefield count must be > 0\n");
+        }
+        return 0;
+    }
+    if (mf.style < MINE_STYLE_CLASSIC || mf.style > MINE_STYLE_ANEMONE) {
+        if (log_out) {
+            fprintf(log_out, "leveldef: minefield style must be CLASSIC or ANEMONE\n");
         }
         return 0;
     }
@@ -1537,7 +1575,10 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
         }
         for (int m = 0; m < l->minefield_count; ++m) {
             const leveldef_minefield* mf = &l->minefields[m];
-            if (mf->count <= 0 || mf->anchor_x01 < 0.0f || mf->anchor_y01 < 0.0f || mf->anchor_y01 > 1.0f) {
+            if (mf->count <= 0 ||
+                mf->anchor_x01 < 0.0f ||
+                mf->anchor_y01 < 0.0f || mf->anchor_y01 > 1.0f ||
+                mf->style < MINE_STYLE_CLASSIC || mf->style > MINE_STYLE_ANEMONE) {
                 if (log_out) {
                     fprintf(log_out, "leveldef: level %d invalid minefield entry\n", i);
                 }

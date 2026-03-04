@@ -1668,75 +1668,185 @@ static vg_result draw_minefields(
     const game_state* g,
     const palette_theme* pal,
     const vg_stroke_style* land_halo,
-    const vg_stroke_style* land_main
+    const vg_stroke_style* land_main,
+    float t_s
 ) {
     if (!ctx || !g || !pal || !land_halo || !land_main || g->mine_count <= 0) {
         return VG_OK;
     }
-    vg_stroke_style halo = *land_halo;
-    vg_stroke_style main = *land_main;
-    halo.width_px *= 1.14f;
-    main.width_px *= 1.08f;
-    halo.intensity *= 0.95f;
-    main.intensity *= 1.05f;
-    halo.color = (vg_color){pal->primary.r, pal->primary.g, pal->primary.b, 0.62f};
-    main.color = (vg_color){pal->secondary.r, pal->secondary.g, pal->secondary.b, 0.90f};
+
+    vg_stroke_style classic_halo = *land_halo;
+    vg_stroke_style classic_main = *land_main;
+    classic_halo.width_px *= 1.14f;
+    classic_main.width_px *= 1.08f;
+    classic_halo.intensity *= 0.95f;
+    classic_main.intensity *= 1.05f;
+    classic_halo.color = (vg_color){pal->primary.r, pal->primary.g, pal->primary.b, 0.62f};
+    classic_main.color = (vg_color){pal->secondary.r, pal->secondary.g, pal->secondary.b, 0.90f};
     vg_color fill_c = pal->primary_dim;
     fill_c.a = fminf(fill_c.a, 0.30f);
-    const vg_fill_style fill = make_fill(0.75f, fill_c, VG_BLEND_ALPHA);
+    const vg_fill_style classic_fill = make_fill(0.75f, fill_c, VG_BLEND_ALPHA);
+
     for (int i = 0; i < g->mine_count && i < MAX_MINES; ++i) {
         const mine* m = &g->mines[i];
         if (!m->active) {
             continue;
         }
-        vg_vec2 hex[7];
-        const float c = cosf(m->angle);
-        const float s = sinf(m->angle);
-        const float r = m->radius;
-        for (int k = 0; k < 6; ++k) {
-            const float a = ((float)k / 6.0f) * 6.2831853f;
-            const float px = cosf(a) * r;
-            const float py = sinf(a) * r;
-            hex[k].x = m->b.x + px * c - py * s;
-            hex[k].y = m->b.y + px * s + py * c;
-        }
-        hex[6] = hex[0];
-        vg_result vr = vg_fill_convex(ctx, hex, 6, &fill);
-        if (vr != VG_OK) {
-            return vr;
-        }
-        for (int k = 0; k < 6; ++k) {
-            const int k1 = (k + 1) % 6;
-            const float mx = (hex[k].x + hex[k1].x) * 0.5f;
-            const float my = (hex[k].y + hex[k1].y) * 0.5f;
-            float nx = mx - m->b.x;
-            float ny = my - m->b.y;
-            const float nl = sqrtf(nx * nx + ny * ny);
-            if (nl > 1e-4f) {
-                nx /= nl;
-                ny /= nl;
-            }
-            const vg_vec2 spike[3] = {
-                {hex[k].x, hex[k].y},
-                {mx + nx * (r * 0.68f), my + ny * (r * 0.68f)},
-                {hex[k1].x, hex[k1].y}
+
+        const int style = clampi(m->style, MINE_STYLE_CLASSIC, MINE_STYLE_ANEMONE);
+        if (style == MINE_STYLE_ANEMONE) {
+            const float dx = g->player.b.x - m->b.x;
+            const float dy = g->player.b.y - m->b.y;
+            const float d = sqrtf(dx * dx + dy * dy);
+            const float r = fmaxf(m->radius, 1.0f);
+            const float prox_range = fmaxf(r * 18.0f, 1.0f);
+            const float proximity = 1.0f - clampf(d / prox_range, 0.0f, 1.0f);
+            const float pulse_hz = lerpf(0.9f, 4.6f, proximity);
+            const float pulse = 0.5f + 0.5f * sinf((t_s * pulse_hz * 6.2831853f) + m->angle * 0.65f);
+
+            const float cool_r = lerpf(0.16f, 0.36f, proximity);
+            const float cool_g = lerpf(0.78f, 0.98f, proximity);
+            const float cool_b = lerpf(0.72f, 0.92f, proximity);
+            const float hot_r = lerpf(0.40f, 0.80f, proximity);
+            const float hot_g = lerpf(0.94f, 1.00f, proximity);
+            const float hot_b = lerpf(0.86f, 0.96f, proximity);
+            const float pulse_mix = 0.22f + pulse * 0.78f;
+            const vg_color tentacle_c = {
+                lerpf(cool_r, hot_r, pulse_mix),
+                lerpf(cool_g, hot_g, pulse_mix),
+                lerpf(cool_b, hot_b, pulse_mix),
+                0.90f
             };
-            vr = vg_draw_polyline(ctx, spike, 3, &halo, 0);
+
+            vg_stroke_style tentacle_halo = *land_halo;
+            vg_stroke_style tentacle_main = *land_main;
+            tentacle_halo.width_px *= 1.00f + 0.34f * proximity;
+            tentacle_main.width_px *= 0.90f + 0.30f * proximity;
+            tentacle_halo.intensity *= 0.78f + 0.55f * pulse;
+            tentacle_main.intensity *= 0.98f + 0.65f * pulse;
+            tentacle_halo.color = (vg_color){tentacle_c.r, tentacle_c.g, tentacle_c.b, 0.44f + 0.30f * pulse};
+            tentacle_main.color = (vg_color){tentacle_c.r, tentacle_c.g, tentacle_c.b, 0.76f + 0.20f * pulse};
+
+            const int tentacles = 22;
+            const float sway_rate = lerpf(0.50f, 1.85f, proximity);
+            const float sway_amp = r * (0.12f + 0.18f * proximity);
+            for (int k = 0; k < tentacles; ++k) {
+                const uint32_t seed0 = (uint32_t)(i * 2654435761u) ^ (uint32_t)(k * 2246822519u);
+                const uint32_t seed1 = seed0 ^ 0x85ebca6bu;
+                const float jitter0 = hash01_u32(seed0);
+                const float jitter1 = hash01_u32(seed1);
+                const float base_a = ((float)k / (float)tentacles) * 6.2831853f + jitter0 * 0.30f;
+                const float nx = cosf(base_a);
+                const float ny = sinf(base_a);
+                const float tx = -ny;
+                const float ty = nx;
+                const float len = r * (1.10f + jitter1 * 0.95f);
+                const float phase = t_s * 6.2831853f * sway_rate * (0.70f + jitter1 * 1.20f) + jitter0 * 6.2831853f;
+                const float sway0 = sinf(phase);
+                const float sway1 = sinf(phase * 1.37f + 0.75f);
+                const float sway2 = sinf(phase * 1.83f + 1.25f);
+                const vg_vec2 strand[4] = {
+                    {m->b.x + nx * (r * 0.52f), m->b.y + ny * (r * 0.52f)},
+                    {m->b.x + nx * (len * 0.46f) + tx * sway_amp * 0.52f * sway0, m->b.y + ny * (len * 0.46f) + ty * sway_amp * 0.52f * sway0},
+                    {m->b.x + nx * (len * 0.78f) + tx * sway_amp * 0.85f * sway1, m->b.y + ny * (len * 0.78f) + ty * sway_amp * 0.85f * sway1},
+                    {m->b.x + nx * len + tx * sway_amp * 1.18f * sway2, m->b.y + ny * len + ty * sway_amp * 1.18f * sway2}
+                };
+                vg_result vr = vg_draw_polyline(ctx, strand, 4, &tentacle_halo, 0);
+                if (vr != VG_OK) {
+                    return vr;
+                }
+                vr = vg_draw_polyline(ctx, strand, 4, &tentacle_main, 0);
+                if (vr != VG_OK) {
+                    return vr;
+                }
+            }
+
+            vg_fill_style core_fill = make_fill(
+                0.52f + 0.34f * pulse,
+                (vg_color){
+                    lerpf(0.08f, 0.20f, proximity),
+                    lerpf(0.36f, 0.64f, proximity),
+                    lerpf(0.34f, 0.56f, proximity),
+                    0.44f + 0.20f * pulse
+                },
+                VG_BLEND_ALPHA
+            );
+            vg_result vr = vg_fill_circle(
+                ctx,
+                (vg_vec2){m->b.x, m->b.y},
+                r * (0.68f + 0.05f * pulse),
+                &core_fill,
+                26
+            );
             if (vr != VG_OK) {
                 return vr;
             }
-            vr = vg_draw_polyline(ctx, spike, 3, &main, 0);
+
+            vg_vec2 ring[17];
+            for (int k = 0; k < 16; ++k) {
+                const float a = ((float)k / 16.0f) * 6.2831853f;
+                const float wobble = 1.0f + 0.10f * sinf(a * 3.0f + t_s * 2.1f + m->angle);
+                ring[k] = (vg_vec2){m->b.x + cosf(a) * r * wobble * 0.78f, m->b.y + sinf(a) * r * wobble * 0.78f};
+            }
+            ring[16] = ring[0];
+            vr = vg_draw_polyline(ctx, ring, 17, &tentacle_halo, 0);
             if (vr != VG_OK) {
                 return vr;
             }
-        }
-        vr = vg_draw_polyline(ctx, hex, 7, &halo, 0);
-        if (vr != VG_OK) {
-            return vr;
-        }
-        vr = vg_draw_polyline(ctx, hex, 7, &main, 0);
-        if (vr != VG_OK) {
-            return vr;
+            vr = vg_draw_polyline(ctx, ring, 17, &tentacle_main, 0);
+            if (vr != VG_OK) {
+                return vr;
+            }
+        } else {
+            vg_vec2 hex[7];
+            const float c = cosf(m->angle);
+            const float s = sinf(m->angle);
+            const float r = m->radius;
+            for (int k = 0; k < 6; ++k) {
+                const float a = ((float)k / 6.0f) * 6.2831853f;
+                const float px = cosf(a) * r;
+                const float py = sinf(a) * r;
+                hex[k].x = m->b.x + px * c - py * s;
+                hex[k].y = m->b.y + px * s + py * c;
+            }
+            hex[6] = hex[0];
+            vg_result vr = vg_fill_convex(ctx, hex, 6, &classic_fill);
+            if (vr != VG_OK) {
+                return vr;
+            }
+            for (int k = 0; k < 6; ++k) {
+                const int k1 = (k + 1) % 6;
+                const float mx = (hex[k].x + hex[k1].x) * 0.5f;
+                const float my = (hex[k].y + hex[k1].y) * 0.5f;
+                float nx = mx - m->b.x;
+                float ny = my - m->b.y;
+                const float nl = sqrtf(nx * nx + ny * ny);
+                if (nl > 1e-4f) {
+                    nx /= nl;
+                    ny /= nl;
+                }
+                const vg_vec2 spike[3] = {
+                    {hex[k].x, hex[k].y},
+                    {mx + nx * (r * 0.68f), my + ny * (r * 0.68f)},
+                    {hex[k1].x, hex[k1].y}
+                };
+                vr = vg_draw_polyline(ctx, spike, 3, &classic_halo, 0);
+                if (vr != VG_OK) {
+                    return vr;
+                }
+                vr = vg_draw_polyline(ctx, spike, 3, &classic_main, 0);
+                if (vr != VG_OK) {
+                    return vr;
+                }
+            }
+            vr = vg_draw_polyline(ctx, hex, 7, &classic_halo, 0);
+            if (vr != VG_OK) {
+                return vr;
+            }
+            vr = vg_draw_polyline(ctx, hex, 7, &classic_main, 0);
+            if (vr != VG_OK) {
+                return vr;
+            }
         }
     }
     return VG_OK;
@@ -4462,6 +4572,12 @@ static const char* editor_searchlight_source_name(float v) {
     return "DOME";
 }
 
+static const char* editor_mine_style_name(float v) {
+    const int style = clampi((int)lroundf(v), MINE_STYLE_CLASSIC, MINE_STYLE_ANEMONE);
+    if (style == MINE_STYLE_ANEMONE) return "ANEMONE";
+    return "CLASSIC";
+}
+
 static const char* editor_render_style_name(int style) {
     if (style == LEVEL_RENDER_CYLINDER) return "CYLINDER";
     if (style == LEVEL_RENDER_DRIFTER) return "DRIFTER";
@@ -4541,6 +4657,7 @@ static int editor_marker_properties_text(
         if (n < cap) { out_labels[n] = "POS X"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
         if (n < cap) { out_labels[n] = "POS Y"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
         if (n < cap) { out_labels[n] = "COUNT"; snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_a[sel]); n++; }
+        if (n < cap) { out_labels[n] = "STYLE"; snprintf(out_values[n], 32, "%s", editor_mine_style_name(metrics->level_editor_marker_b[sel])); n++; }
         return n;
     }
     if (kind == 8) {
@@ -9506,7 +9623,7 @@ skip_legacy_landscape:
         }
     }
     if (g->mine_count > 0) {
-        r = draw_minefields(ctx, g, &pal, &land_halo, &land_main);
+        r = draw_minefields(ctx, g, &pal, &land_halo, &land_main, metrics ? metrics->ui_time_s : 0.0f);
         if (r != VG_OK) {
             (void)vg_transform_pop(ctx);
             return r;

@@ -128,6 +128,7 @@ typedef struct leveldef_minefield {
     float anchor_x01;
     float anchor_y01;
     int count;
+    int style; /* enum mine_style_id */
 } leveldef_minefield;
 
 typedef struct leveldef_missile_launcher {
