@@ -6,6 +6,7 @@ layout(set = 0, binding = 0) uniform UnderwaterLUT {
     vec4 kelp_seed_xjit[3 * 26];
     vec4 bubble_lut[8];
 } lut;
+layout(set = 0, binding = 2) uniform sampler2D u_noise;
 
 layout(push_constant) uniform UnderwaterPC {
     vec4 p0; /* x=viewport_w, y=viewport_h, z=time_s, w=density */
@@ -17,6 +18,41 @@ layout(push_constant) uniform UnderwaterPC {
     vec4 p6; /* x=kelp_parallax_strength, y=kelp_rt_w, z=kelp_rt_h */
     vec4 p7; /* x=kelp_tint_r, y=kelp_tint_g, z=kelp_tint_b, w=kelp_tint_strength */
 } pc;
+
+vec3 sample_underwater_noise_fast(vec2 n_uv, vec2 flow) {
+    vec2 uv0 = n_uv * vec2(1.00, 0.46) + flow * 0.18;
+    vec2 uv1 = n_uv * vec2(2.10, 1.05) - flow * 0.24 + vec2(0.41, -0.37);
+    vec4 n0 = texture(u_noise, uv0);
+    vec4 n1 = texture(u_noise, uv1);
+    float z = n0.a * 0.62 + n1.b * 0.38;
+    return vec3(n0.r, n1.g, z);
+}
+
+float bubble_field_fast(vec2 world_px, float t, float bubble_rate) {
+    if (bubble_rate <= 0.0) {
+        return 0.0;
+    }
+    float tile_w = max(pc.p4.z, 1.0);
+    float d = 0.0;
+    const int emit_n = 3;
+    for (int i = 0; i < emit_n; ++i) {
+        float fi = float(i);
+        vec4 bl = lut.bubble_lut[i];
+        float ex = bl.x;
+        float phase = fract((t * (0.10 + 0.03 * fi) * bubble_rate) + bl.y);
+        float y01 = 1.0 - phase;
+        float x01 = ex + sin((phase * 1.7 + fi * 0.5) * 3.14159265) * bl.z;
+        vec2 c = vec2(x01 * pc.p4.z, y01 * pc.p4.w);
+        vec2 delta = world_px - c;
+        delta.x -= tile_w * round(delta.x / tile_w);
+        float r = mix(7.0, 15.0, bl.z);
+        float dd = length(delta);
+        float edge = abs(dd - r) / max(r * 0.26, 1.0);
+        float ring = 1.0 - smoothstep(0.0, 1.0, edge);
+        d += 0.28 * ring;
+    }
+    return clamp(d, 0.0, 1.0);
+}
 
 vec4 kelp_field(vec2 world_px, float t) {
     float kelp_density = max(pc.p5.x, 0.0);
@@ -122,5 +158,32 @@ void main() {
     vec2 scale = vec2(max(pc.p0.x, 1.0) / rt_w, max(pc.p0.y, 1.0) / rt_h);
     vec2 frag_px = vec2(gl_FragCoord.xy) * scale;
     vec2 world_px = vec2(pc.p3.x, pc.p3.y) + frag_px;
-    out_color = kelp_field(world_px, t) * density;
+    vec2 world_uv = world_px / vec2(max(pc.p4.z, 1.0), max(pc.p4.w, 1.0));
+    vec2 flow = vec2(t * 0.040, -t * 0.022) * max(pc.p3.w, 0.0);
+    vec2 n_uv = world_uv * max(pc.p3.z, 0.05);
+    vec3 n = sample_underwater_noise_fast(n_uv, flow);
+    float haze = smoothstep(0.28, 0.86, n.x * 0.72 + n.y * 0.28) * density;
+    float nz = clamp(n.z, 0.0, 1.0);
+    float ca = (nz * nz * (1.16 - 0.16 * nz)) * max(pc.p1.w, 0.0) * density;
+    float bubbles = bubble_field_fast(world_px, t, pc.p4.x) * density;
+
+    vec4 kelp = kelp_field(world_px, t) * density;
+    float kelp_override = clamp(pc.p7.w, 0.0, 1.0);
+    if (kelp_override > 0.0) {
+        vec3 tint_rgb = max(pc.p7.rgb, vec3(0.0));
+        kelp.rgb = mix(kelp.rgb, tint_rgb, kelp_override);
+    }
+
+    float shade = clamp(0.18 + haze * 0.75 + ca * 0.60, 0.0, 1.0);
+    vec3 col = mix(pc.p1.rgb, pc.p2.rgb, clamp(shade + pc.p4.y * 0.20, 0.0, 1.0));
+    col += vec3(0.55, 0.72, 0.88) * (0.42 * bubbles + 0.18 * ca);
+    float kelp_mix_a = clamp(kelp.a * mix(1.05, 2.60, kelp_override), 0.0, 1.0);
+    float kelp_bg_dim = kelp_mix_a * mix(0.08, 0.42, kelp_override);
+    col *= (1.0 - kelp_bg_dim);
+    vec3 kelp_mix_col = mix(kelp.rgb + col * 0.10, kelp.rgb, 0.70 + 0.30 * kelp_override);
+    col = mix(col, kelp_mix_col, kelp_mix_a);
+
+    float alpha = clamp((0.07 + 0.20 * haze + 0.14 * ca + 0.30 * bubbles) * max(pc.p2.w, 0.0), 0.0, 0.60);
+    alpha = clamp(alpha + kelp_mix_a * max(pc.p2.w, 0.0), 0.0, 0.70);
+    out_color = vec4(col, alpha);
 }

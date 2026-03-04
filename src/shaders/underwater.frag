@@ -42,10 +42,22 @@ vec3 sample_underwater_noise(vec2 n_uv, vec2 flow, float t, float cur) {
     );
 }
 
-float bubble_field(vec2 world_px, float t, float bubble_rate) {
+vec3 sample_underwater_noise_fast(vec2 n_uv, vec2 flow) {
+    vec2 uv0 = n_uv * vec2(1.00, 0.46) + flow * 0.18;
+    vec2 uv1 = n_uv * vec2(2.10, 1.05) - flow * 0.24 + vec2(0.41, -0.37);
+    vec4 n0 = texture(u_noise, uv0);
+    vec4 n1 = texture(u_noise, uv1);
+    float z = n0.a * 0.62 + n1.b * 0.38;
+    return vec3(n0.r, n1.g, z);
+}
+
+float bubble_field_hq(vec2 world_px, float t, float bubble_rate) {
+    if (bubble_rate <= 0.0) {
+        return 0.0;
+    }
     float tile_w = max(pc.p4.z, 1.0);
     float d = 0.0;
-    const int emit_n = 7;
+    const int emit_n = 5;
     for (int i = 0; i < emit_n; ++i) {
         float fi = float(i);
         vec4 bl = lut.bubble_lut[i];
@@ -61,6 +73,32 @@ float bubble_field(vec2 world_px, float t, float bubble_rate) {
         float dd = length(delta);
         float ring = exp(-pow((dd - r) / max(r * 0.20, 1.0), 2.0));
         d += 0.36 * ring;
+    }
+    return clamp(d, 0.0, 1.0);
+}
+
+float bubble_field_fast(vec2 world_px, float t, float bubble_rate) {
+    if (bubble_rate <= 0.0) {
+        return 0.0;
+    }
+    float tile_w = max(pc.p4.z, 1.0);
+    float d = 0.0;
+    const int emit_n = 3;
+    for (int i = 0; i < emit_n; ++i) {
+        float fi = float(i);
+        vec4 bl = lut.bubble_lut[i];
+        float ex = bl.x;
+        float phase = fract((t * (0.10 + 0.03 * fi) * bubble_rate) + bl.y);
+        float y01 = 1.0 - phase;
+        float x01 = ex + sin((phase * 1.7 + fi * 0.5) * 3.14159265) * bl.z;
+        vec2 c = vec2(x01 * pc.p4.z, y01 * pc.p4.w);
+        vec2 delta = world_px - c;
+        delta.x -= tile_w * round(delta.x / tile_w);
+        float r = mix(7.0, 15.0, bl.z);
+        float dd = length(delta);
+        float edge = abs(dd - r) / max(r * 0.26, 1.0);
+        float ring = 1.0 - smoothstep(0.0, 1.0, edge);
+        d += 0.28 * ring;
     }
     return clamp(d, 0.0, 1.0);
 }
@@ -158,13 +196,8 @@ vec4 kelp_field(vec2 world_px, float t) {
 }
 
 vec4 sample_kelp_tent(vec2 uv) {
-    ivec2 ts = textureSize(u_kelp, 0);
-    vec2 texel = 1.0 / vec2(max(ts.x, 1), max(ts.y, 1));
-    vec4 c = texture(u_kelp, uv) * 0.40;
-    c += texture(u_kelp, uv + vec2(texel.x, 0.0)) * 0.15;
-    c += texture(u_kelp, uv - vec2(texel.x, 0.0)) * 0.15;
-    c += texture(u_kelp, uv + vec2(0.0, texel.y)) * 0.15;
-    c += texture(u_kelp, uv - vec2(0.0, texel.y)) * 0.15;
+    vec4 c = texture(u_kelp, uv);
+    c.a *= 0.88;
     return c;
 }
 
@@ -174,6 +207,12 @@ void main() {
     float h = max(pc.p0.y, 1.0);
     float t = pc.p0.z;
     float density = max(pc.p0.w, 0.0);
+    float high_quality = step(0.5, pc.p6.w);
+
+    if (high_quality <= 0.5) {
+        out_color = texture(u_kelp, frag_px / vec2(w, h));
+        return;
+    }
 
     vec2 world_px = vec2(pc.p3.x, pc.p3.y) + frag_px;
     vec2 world_uv = world_px / vec2(max(pc.p4.z, 1.0), max(pc.p4.w, 1.0));
@@ -187,13 +226,12 @@ void main() {
     float haze = smoothstep(0.28, 0.86, n.x * 0.72 + n.y * 0.28);
     haze *= density;
 
-    float ca = pow(clamp(n.z, 0.0, 1.0), 2.2);
+    float nz = clamp(n.z, 0.0, 1.0);
+    float ca = pow(nz, 2.2);
     ca *= max(pc.p1.w, 0.0) * density;
 
-    float bubbles = bubble_field(world_px, t, pc.p4.x) * density;
-    vec4 kelp = (pc.p6.w > 0.5)
-        ? (kelp_field(world_px, t) * density)
-        : sample_kelp_tent(frag_px / vec2(w, h));
+    float bubbles = bubble_field_hq(world_px, t, pc.p4.x) * density;
+    vec4 kelp = kelp_field(world_px, t) * density;
     float kelp_override = clamp(pc.p7.w, 0.0, 1.0);
     if (kelp_override > 0.0) {
         vec3 tint_rgb = max(pc.p7.rgb, vec3(0.0));

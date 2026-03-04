@@ -142,6 +142,50 @@ static int clampi(int v, int lo, int hi) {
     return v;
 }
 
+static int rects_intersect(
+    float min_x,
+    float min_y,
+    float max_x,
+    float max_y,
+    float clip_min_x,
+    float clip_min_y,
+    float clip_max_x,
+    float clip_max_y
+) {
+    if (max_x < clip_min_x || min_x > clip_max_x) {
+        return 0;
+    }
+    if (max_y < clip_min_y || min_y > clip_max_y) {
+        return 0;
+    }
+    return 1;
+}
+
+static void world_view_bounds(
+    const game_state* g,
+    float pad_x,
+    float pad_y,
+    float* out_min_x,
+    float* out_min_y,
+    float* out_max_x,
+    float* out_max_y
+) {
+    const float hw = g->world_w * 0.5f;
+    const float hh = g->world_h * 0.5f;
+    if (out_min_x) {
+        *out_min_x = g->camera_x - hw - pad_x;
+    }
+    if (out_min_y) {
+        *out_min_y = g->camera_y - hh - pad_y;
+    }
+    if (out_max_x) {
+        *out_max_x = g->camera_x + hw + pad_x;
+    }
+    if (out_max_y) {
+        *out_max_y = g->camera_y + hh + pad_y;
+    }
+}
+
 static v3 v3_norm(v3 a) {
     const float l2 = a.x * a.x + a.y * a.y + a.z * a.z;
     if (l2 > 1e-12f) {
@@ -1632,10 +1676,25 @@ static vg_result draw_asteroid_storm(
     vg_color fill_c = pal->primary_dim;
     fill_c.a = fminf(fill_c.a, 0.22f);
     const vg_fill_style fill = make_fill(0.55f, fill_c, VG_BLEND_ALPHA);
+    const float view_min_x = g->camera_x - g->world_w * 0.58f;
+    const float view_max_x = g->camera_x + g->world_w * 0.58f;
+    const float view_min_y = g->camera_y - g->world_h * 0.58f;
+    const float view_max_y = g->camera_y + g->world_h * 0.58f;
 
     for (int i = 0; i < g->asteroid_count && i < MAX_ASTEROIDS; ++i) {
         const asteroid_body* a = &g->asteroids[i];
         if (!a->active) {
+            continue;
+        }
+        if (!rects_intersect(
+                a->b.x - a->size,
+                a->b.y - a->size,
+                a->b.x + a->size,
+                a->b.y + a->size,
+                view_min_x,
+                view_min_y,
+                view_max_x,
+                view_max_y)) {
             continue;
         }
         const float c = cosf(a->angle);
@@ -1686,11 +1745,23 @@ static vg_result draw_minefields(
     vg_color fill_c = pal->primary_dim;
     fill_c.a = fminf(fill_c.a, 0.30f);
     const vg_fill_style classic_fill = make_fill(0.75f, fill_c, VG_BLEND_ALPHA);
+    const float view_x_min = g->camera_x - g->world_w * 0.5f;
+    const float view_x_max = g->camera_x + g->world_w * 0.5f;
+    const float view_y_min = g->camera_y - g->world_h * 0.5f;
+    const float view_y_max = g->camera_y + g->world_h * 0.5f;
 
     for (int i = 0; i < g->mine_count && i < MAX_MINES; ++i) {
         const mine* m = &g->mines[i];
         if (!m->active) {
             continue;
+        }
+        {
+            /* Cull off-screen mines early: underwater anemone style is draw-call heavy. */
+            const float cull_pad = fmaxf(m->radius * 2.2f, 36.0f);
+            if (m->b.x + cull_pad < view_x_min || m->b.x - cull_pad > view_x_max ||
+                m->b.y + cull_pad < view_y_min || m->b.y - cull_pad > view_y_max) {
+                continue;
+            }
         }
 
         const int style = clampi(m->style, MINE_STYLE_CLASSIC, MINE_STYLE_ANEMONE);
@@ -8975,6 +9046,10 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         if (background_only) {
             return VG_OK;
         }
+        const float cyl_cull_min_x = -64.0f;
+        const float cyl_cull_min_y = -64.0f;
+        const float cyl_cull_max_x = g->world_w + 64.0f;
+        const float cyl_cull_max_y = g->world_h + 64.0f;
 
         if (!metrics->use_gpu_particles) {
             for (size_t i = 0; i < MAX_PARTICLES; ++i) {
@@ -9114,6 +9189,23 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             const vg_vec2 p0 = project_cylinder_point(g, x0w, y0w, &d0);
             const vg_vec2 p1 = project_cylinder_point(g, x1w, y1w, &d1);
             const vg_vec2 p2 = project_cylinder_point(g, x2w, y2w, &d2);
+            {
+                const float min_x = fminf(p0.x, fminf(p1.x, p2.x));
+                const float min_y = fminf(p0.y, fminf(p1.y, p2.y));
+                const float max_x = fmaxf(p0.x, fmaxf(p1.x, p2.x));
+                const float max_y = fmaxf(p0.y, fmaxf(p1.y, p2.y));
+                if (!rects_intersect(
+                        min_x,
+                        min_y,
+                        max_x,
+                        max_y,
+                        cyl_cull_min_x,
+                        cyl_cull_min_y,
+                        cyl_cull_max_x,
+                        cyl_cull_max_y)) {
+                    continue;
+                }
+            }
             const float depth = (d0 + d1 + d2) * (1.0f / 3.0f);
             vg_stroke_style core = bullet_style;
             vg_stroke_style halo = bullet_halo_style;
@@ -9178,6 +9270,23 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             const vg_vec2 p0 = project_cylinder_point(g, x0w, y0w, &d0);
             const vg_vec2 p1 = project_cylinder_point(g, x1w, y1w, &d1);
             const vg_vec2 p2 = project_cylinder_point(g, x2w, y2w, &d2);
+            {
+                const float min_x = fminf(p0.x, fminf(p1.x, p2.x));
+                const float min_y = fminf(p0.y, fminf(p1.y, p2.y));
+                const float max_x = fmaxf(p0.x, fmaxf(p1.x, p2.x));
+                const float max_y = fmaxf(p0.y, fmaxf(p1.y, p2.y));
+                if (!rects_intersect(
+                        min_x,
+                        min_y,
+                        max_x,
+                        max_y,
+                        cyl_cull_min_x,
+                        cyl_cull_min_y,
+                        cyl_cull_max_x,
+                        cyl_cull_max_y)) {
+                    continue;
+                }
+            }
             const float depth = (d0 + d1 + d2) * (1.0f / 3.0f);
             vg_stroke_style core = enemy_bullet_style;
             vg_stroke_style halo = enemy_bullet_halo_style;
@@ -9225,11 +9334,30 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
                 vg_vec2 arc_line[EEL_ARC_MAX_POINTS];
                 float depth_line[EEL_ARC_MAX_POINTS];
                 float depth_sum = 0.0f;
+                float arc_min_x = 1.0e9f;
+                float arc_min_y = 1.0e9f;
+                float arc_max_x = -1.0e9f;
+                float arc_max_y = -1.0e9f;
                 for (int p = 0; p < arc->point_count; ++p) {
                     float dp = 0.0f;
                     arc_line[p] = project_cylinder_point(g, arc->point_x[p], arc->point_y[p], &dp);
                     depth_line[p] = dp;
                     depth_sum += dp;
+                    arc_min_x = fminf(arc_min_x, arc_line[p].x);
+                    arc_min_y = fminf(arc_min_y, arc_line[p].y);
+                    arc_max_x = fmaxf(arc_max_x, arc_line[p].x);
+                    arc_max_y = fmaxf(arc_max_y, arc_line[p].y);
+                }
+                if (!rects_intersect(
+                        arc_min_x,
+                        arc_min_y,
+                        arc_max_x,
+                        arc_max_y,
+                        cyl_cull_min_x,
+                        cyl_cull_min_y,
+                        cyl_cull_max_x,
+                        cyl_cull_max_y)) {
+                    continue;
                 }
                 {
                     const float depth_avg = depth_sum / fmaxf((float)arc->point_count, 1.0f);
@@ -9298,6 +9426,17 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             float d1 = 0.0f;
             const vg_vec2 a = project_cylinder_point(g, dbr->b.x - hx, dbr->b.y - hy, &d0);
             const vg_vec2 b = project_cylinder_point(g, dbr->b.x + hx, dbr->b.y + hy, &d1);
+            if (!rects_intersect(
+                    fminf(a.x, b.x),
+                    fminf(a.y, b.y),
+                    fmaxf(a.x, b.x),
+                    fmaxf(a.y, b.y),
+                    cyl_cull_min_x,
+                    cyl_cull_min_y,
+                    cyl_cull_max_x,
+                    cyl_cull_max_y)) {
+                continue;
+            }
             const float depth = 0.5f * (d0 + d1);
             vg_stroke_style ds = enemy_style;
             ds.width_px *= 0.72f + depth * 0.90f;
@@ -9320,6 +9459,17 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             float d = 0.0f;
             const vg_vec2 c = project_cylinder_point(g, e->b.x, e->b.y, &d);
             const float rr = e->radius * (0.45f + d * 0.9f);
+            if (!rects_intersect(
+                    c.x - rr,
+                    c.y - rr,
+                    c.x + rr,
+                    c.y + rr,
+                    cyl_cull_min_x,
+                    cyl_cull_min_y,
+                    cyl_cull_max_x,
+                    cyl_cull_max_y)) {
+                continue;
+            }
             vg_stroke_style es = enemy_style;
             es.width_px *= 0.55f + d * 0.8f;
             es.intensity *= 0.20f + d * 0.80f;
@@ -9600,6 +9750,11 @@ skip_legacy_landscape:
         return r;
     }
     vg_transform_translate(ctx, g->world_w * 0.5f - g->camera_x, g->world_h * 0.5f - g->camera_y);
+    float world_cull_min_x = 0.0f;
+    float world_cull_min_y = 0.0f;
+    float world_cull_max_x = 0.0f;
+    float world_cull_max_y = 0.0f;
+    world_view_bounds(g, 48.0f, 48.0f, &world_cull_min_x, &world_cull_min_y, &world_cull_max_x, &world_cull_max_y);
 
     if (g->searchlight_count > 0) {
         r = draw_searchlights(ctx, g, &pal, intensity_scale, &land_halo, &land_main);
@@ -9738,6 +9893,17 @@ skip_legacy_landscape:
         if (!p->active) {
             continue;
         }
+        if (!rects_intersect(
+                p->b.x - p->radius,
+                p->b.y - p->radius,
+                p->b.x + p->radius,
+                p->b.y + p->radius,
+                world_cull_min_x,
+                world_cull_min_y,
+                world_cull_max_x,
+                world_cull_max_y)) {
+            continue;
+        }
         r = draw_powerup_medallion(
             ctx,
             p->b.x,
@@ -9791,6 +9957,23 @@ skip_legacy_landscape:
             {b->b.x - ux * core_b, b->b.y - uy * core_b},
             {b->b.x + ux * core_f, b->b.y + uy * core_f}
         };
+        {
+            const float min_x = fminf(seg_tail[0].x, fminf(seg_tail[1].x, seg_core[1].x));
+            const float min_y = fminf(seg_tail[0].y, fminf(seg_tail[1].y, seg_core[1].y));
+            const float max_x = fmaxf(seg_tail[0].x, fmaxf(seg_tail[1].x, seg_core[1].x));
+            const float max_y = fmaxf(seg_tail[0].y, fmaxf(seg_tail[1].y, seg_core[1].y));
+            if (!rects_intersect(
+                    min_x,
+                    min_y,
+                    max_x,
+                    max_y,
+                    world_cull_min_x,
+                    world_cull_min_y,
+                    world_cull_max_x,
+                    world_cull_max_y)) {
+                continue;
+            }
+        }
         vg_stroke_style core = bullet_style;
         vg_stroke_style halo = bullet_halo_style;
         vg_stroke_style core_tail = core;
@@ -9848,6 +10031,23 @@ skip_legacy_landscape:
             {b->b.x - ux * core_b, b->b.y - uy * core_b},
             {b->b.x + ux * core_f, b->b.y + uy * core_f}
         };
+        {
+            const float min_x = fminf(seg_tail[0].x, fminf(seg_tail[1].x, seg_core[1].x));
+            const float min_y = fminf(seg_tail[0].y, fminf(seg_tail[1].y, seg_core[1].y));
+            const float max_x = fmaxf(seg_tail[0].x, fmaxf(seg_tail[1].x, seg_core[1].x));
+            const float max_y = fmaxf(seg_tail[0].y, fmaxf(seg_tail[1].y, seg_core[1].y));
+            if (!rects_intersect(
+                    min_x,
+                    min_y,
+                    max_x,
+                    max_y,
+                    world_cull_min_x,
+                    world_cull_min_y,
+                    world_cull_max_x,
+                    world_cull_max_y)) {
+                continue;
+            }
+        }
         vg_stroke_style core = enemy_bullet_style;
         vg_stroke_style halo = enemy_bullet_halo_style;
         vg_stroke_style core_tail = core;
@@ -9888,8 +10088,27 @@ skip_legacy_landscape:
             const float pulse_t = eel_arc_pulse_t01(arc);
             const float roll_u = pulse_t * 1.16f;
             vg_vec2 arc_line[EEL_ARC_MAX_POINTS];
+            float arc_min_x = 1.0e9f;
+            float arc_min_y = 1.0e9f;
+            float arc_max_x = -1.0e9f;
+            float arc_max_y = -1.0e9f;
             for (int p = 0; p < arc->point_count; ++p) {
                 arc_line[p] = (vg_vec2){arc->point_x[p], arc->point_y[p]};
+                arc_min_x = fminf(arc_min_x, arc_line[p].x);
+                arc_min_y = fminf(arc_min_y, arc_line[p].y);
+                arc_max_x = fmaxf(arc_max_x, arc_line[p].x);
+                arc_max_y = fmaxf(arc_max_y, arc_line[p].y);
+            }
+            if (!rects_intersect(
+                    arc_min_x,
+                    arc_min_y,
+                    arc_max_x,
+                    arc_max_y,
+                    world_cull_min_x,
+                    world_cull_min_y,
+                    world_cull_max_x,
+                    world_cull_max_y)) {
+                continue;
             }
             {
                 vg_stroke_style bg = eel_arc_halo_style;
@@ -9959,6 +10178,17 @@ skip_legacy_landscape:
             {dbr->b.x - hx, dbr->b.y - hy},
             {dbr->b.x + hx, dbr->b.y + hy}
         };
+        if (!rects_intersect(
+                fminf(seg[0].x, seg[1].x),
+                fminf(seg[0].y, seg[1].y),
+                fmaxf(seg[0].x, seg[1].x),
+                fmaxf(seg[0].y, seg[1].y),
+                world_cull_min_x,
+                world_cull_min_y,
+                world_cull_max_x,
+                world_cull_max_y)) {
+            continue;
+        }
         vg_stroke_style ds = enemy_style;
         ds.width_px *= 0.90f;
         ds.intensity *= 0.92f * dbr->alpha;
@@ -9976,6 +10206,17 @@ skip_legacy_landscape:
         }
         const enemy* e = &g->enemies[i];
         const float rr = e->radius;
+        if (!rects_intersect(
+                e->b.x - rr,
+                e->b.y - rr,
+                e->b.x + rr,
+                e->b.y + rr,
+                world_cull_min_x,
+                world_cull_min_y,
+                world_cull_max_x,
+                world_cull_max_y)) {
+            continue;
+        }
         r = draw_enemy_glyph(ctx, e, e->b.x, e->b.y, rr, &enemy_style);
         if (r != VG_OK) {
             (void)vg_transform_pop(ctx);

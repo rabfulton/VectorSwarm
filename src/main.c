@@ -9374,18 +9374,17 @@ static void record_gpu_underwater_kelp(app* a, VkCommandBuffer cmd, float t) {
     pc.p7[2] = lvl->underwater_kelp_tint_b;
     pc.p7[3] = lvl->underwater_kelp_tint_strength;
 
-    const uint32_t kelp_y0_px = (uint32_t)((float)a->underwater_kelp_h * UNDERWATER_KELP_RT_Y_START_NORM);
     VkViewport vp = {
         .x = 0.0f,
-        .y = (float)kelp_y0_px,
+        .y = 0.0f,
         .width = (float)a->underwater_kelp_w,
-        .height = (float)(a->underwater_kelp_h - kelp_y0_px),
+        .height = (float)a->underwater_kelp_h,
         .minDepth = 0.0f,
         .maxDepth = 1.0f
     };
     VkRect2D sc = {
-        .offset = {(int32_t)0, (int32_t)kelp_y0_px},
-        .extent = {a->underwater_kelp_w, a->underwater_kelp_h - kelp_y0_px}
+        .offset = {0, 0},
+        .extent = {a->underwater_kelp_w, a->underwater_kelp_h}
     };
     vkCmdSetViewport(cmd, 0, 1, &vp);
     vkCmdSetScissor(cmd, 0, 1, &sc);
@@ -10273,12 +10272,22 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             metrics.use_gpu_radar = use_gpu_radar ? 1 : 0;
             metrics.use_gpu_arc = use_gpu_arc ? 1 : 0;
             metrics.use_gpu_industry = use_gpu_industry ? 1 : 0;
+            const int stable_underwater_overlay =
+                use_gpu_underwater &&
+                !use_gpu_terrain &&
+                !use_gpu_industry;
 
-            metrics.scene_phase = 1; /* background-only */
-            vr = render_frame(a->vg, &a->game, &metrics);
-            if (vr != VG_OK) {
-                fprintf(stderr, "VG failure: render_frame(background) -> %s (%d)\n", vg_result_string(vr), (int)vr);
-                return 0;
+            if (stable_underwater_overlay) {
+                /* Underwater flickers in split background/foreground mode.
+                   Keep terrain-style stable ordering for this path. */
+                clear_scene_color_depth(cmd, a->swapchain_extent);
+            } else {
+                metrics.scene_phase = 1; /* background-only */
+                vr = render_frame(a->vg, &a->game, &metrics);
+                if (vr != VG_OK) {
+                    fprintf(stderr, "VG failure: render_frame(background) -> %s (%d)\n", vg_result_string(vr), (int)vr);
+                    return 0;
+                }
             }
             if (use_gpu_terrain) {
                 record_gpu_high_plains_terrain(a, cmd);
@@ -10333,10 +10342,16 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
                 record_gpu_fire(a, cmd, t);
             }
 
-            metrics.scene_phase = 2; /* foreground-only */
+            /* Keep foreground pass depth ordering deterministic after split background/GPU passes. */
+            clear_scene_depth(cmd, a->swapchain_extent);
+            metrics.scene_phase = stable_underwater_overlay ? 3 : 2;
             vr = render_frame(a->vg, &a->game, &metrics);
             if (vr != VG_OK) {
-                fprintf(stderr, "VG failure: render_frame(foreground) -> %s (%d)\n", vg_result_string(vr), (int)vr);
+                fprintf(stderr,
+                        "VG failure: render_frame(%s) -> %s (%d)\n",
+                        stable_underwater_overlay ? "overlay" : "foreground",
+                        vg_result_string(vr),
+                        (int)vr);
                 return 0;
             }
             if (use_gpu_particles) {
