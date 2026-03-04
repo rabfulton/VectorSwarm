@@ -45,13 +45,19 @@ float voronoi_edge_band(vec2 world, vec2 cell_spacing) {
 
     float d1 = sqrt(max(f1, 1.0e-8));
     float d2 = sqrt(max(f2, 1.0e-8));
-    float edge = d2 - d1;
+    float edge_cell = d2 - d1;
 
-    float px_to_cell = 1.0 / max(min(s.x, s.y), 1.0);
-    const float line_px = 1.60;
-    float half_w = 0.5 * line_px * px_to_cell;
-    float aa = max(fwidth(edge), 0.90 * px_to_cell);
-    return 1.0 - smoothstep(half_w, half_w + aa, edge);
+    /* Convert to pixel space so line width/AA are resolution-consistent. */
+    float px_per_cell = max(min(s.x, s.y), 1.0);
+    float edge_px = edge_cell * px_per_cell;
+
+    const float reference_h = 720.0;
+    float viewport_scale = max(min(pc.p0.x, pc.p0.y) / reference_h, 0.001);
+    float line_px = 2.00 * viewport_scale;
+    float aa_min_px = 1.35 * viewport_scale;
+    float half_w_px = 0.5 * line_px;
+    float aa_px = max(fwidth(edge_px), aa_min_px);
+    return 1.0 - smoothstep(half_w_px, half_w_px + aa_px, edge_px);
 }
 
 void main() {
