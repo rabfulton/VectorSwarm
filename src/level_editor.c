@@ -2105,6 +2105,12 @@ void level_editor_compute_layout(float w, float h, level_editor_layout* out) {
         out->entities.w - 16.0f * ui,
         42.0f * ui
     };
+    out->exit_button = (vg_rect){
+        out->entities.x + 8.0f * ui,
+        out->entities.y + out->entities.h - 418.0f * ui,
+        out->entities.w - 16.0f * ui,
+        42.0f * ui
+    };
     {
         const float tb_x = out->construction_toolbar.x + 8.0f * ui;
         const float tb_y = out->construction_toolbar.y + 3.0f * ui;
@@ -2431,7 +2437,7 @@ void level_editor_init(level_editor_state* s) {
     s->timeline_drag = 0;
     s->selected_marker = -1;
     s->selected_property = 0;
-    s->entity_tool_selected = 0;
+    s->entity_tool_selected = LEVEL_EDITOR_TOOL_NONE;
     s->entity_drag_active = 0;
     s->entity_drag_kind = 0;
     s->entity_drag_x = 0.0f;
@@ -2568,6 +2574,10 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
         }
     }
     build_markers(s, db, style, lvl);
+    s->entity_tool_selected = LEVEL_EDITOR_TOOL_NONE;
+    s->entity_drag_active = 0;
+    s->entity_drag_kind = 0;
+    s->structure_tool_selected = 0;
     s->dirty = 0;
     s->edit_revision += 1u;
     s->loaded_level_valid = (lvl != NULL) ? 1 : 0;
@@ -2635,6 +2645,9 @@ static void add_marker_at_view(
             m->g = (float)SEARCHLIGHT_MOTION_PENDULUM;
             added = 1;
         }
+    } else if (kind == LEVEL_EDITOR_MARKER_EXIT) {
+        push_marker(s, LEVEL_EDITOR_MARKER_EXIT, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, x01, y01, 0.0f, 0.0f, 0.0f, 0.0f);
+        added = 1;
     } else if (is_wave_kind(kind)) {
         if (s->level_wave_mode != LEVELDEF_WAVES_CURATED) {
             s->level_wave_mode = LEVELDEF_WAVES_CURATED;
@@ -2687,7 +2700,7 @@ static void add_marker_at_view(
     }
     s->selected_marker = s->marker_count - 1;
     s->selected_property = 0;
-    s->entity_tool_selected = 0;
+    s->entity_tool_selected = LEVEL_EDITOR_TOOL_NONE;
     mark_editor_dirty(s);
     snprintf(s->status_text, sizeof(s->status_text), "added %s", marker_kind_name(kind));
 }
@@ -2709,6 +2722,9 @@ static void add_spatial_marker_at_x01(level_editor_state* s, int kind, float x01
             m->g = (float)SEARCHLIGHT_MOTION_PENDULUM;
             added = 1;
         }
+    } else if (kind == LEVEL_EDITOR_MARKER_EXIT) {
+        push_marker(s, LEVEL_EDITOR_MARKER_EXIT, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, xx, yy, 0.0f, 0.0f, 0.0f, 0.0f);
+        added = 1;
     } else if (is_wave_kind(kind)) {
         if (s->level_wave_mode != LEVELDEF_WAVES_CURATED) {
             s->level_wave_mode = LEVELDEF_WAVES_CURATED;
@@ -2740,7 +2756,7 @@ static void add_spatial_marker_at_x01(level_editor_state* s, int kind, float x01
     }
     s->selected_marker = s->marker_count - 1;
     s->selected_property = 0;
-    s->entity_tool_selected = 0;
+    s->entity_tool_selected = LEVEL_EDITOR_TOOL_NONE;
     mark_editor_dirty(s);
     snprintf(s->status_text, sizeof(s->status_text), "added %s", marker_kind_name(kind));
 }
@@ -2772,7 +2788,7 @@ static void add_marker_at_timeline(level_editor_state* s, int kind, float x01) {
     }
     s->selected_marker = s->marker_count - 1;
     s->selected_property = 0;
-    s->entity_tool_selected = 0;
+    s->entity_tool_selected = LEVEL_EDITOR_TOOL_NONE;
     mark_editor_dirty(s);
     snprintf(s->status_text, sizeof(s->status_text), "added %s", marker_kind_name(kind));
 }
@@ -2850,7 +2866,7 @@ static void toggle_structure_tool(level_editor_state* s, int tool_id, const char
         return;
     }
     s->structure_tool_selected = tool_id;
-    s->entity_tool_selected = 0;
+    s->entity_tool_selected = LEVEL_EDITOR_TOOL_NONE;
     s->entity_drag_active = 1;
     s->entity_drag_kind = LEVEL_EDITOR_MARKER_STRUCTURE;
     s->entity_drag_x = mouse_x;
@@ -3003,6 +3019,14 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
             s->entity_drag_y = mouse_y;
             return 1;
         }
+        if (point_in_rect(mouse_x, mouse_y, l.exit_button)) {
+            s->entity_tool_selected = LEVEL_EDITOR_MARKER_EXIT;
+            s->entity_drag_active = 1;
+            s->entity_drag_kind = LEVEL_EDITOR_MARKER_EXIT;
+            s->entity_drag_x = mouse_x;
+            s->entity_drag_y = mouse_y;
+            return 1;
+        }
         if (s->level_background_mask_style == LEVELDEF_BG_MASK_WINDOWS &&
             point_in_rect(mouse_x, mouse_y, l.window_button)) {
             s->entity_tool_selected = LEVEL_EDITOR_MARKER_WINDOW_MASK;
@@ -3046,7 +3070,7 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
                     level_editor_enemy_spatial(s)
                 );
             }
-            if (s->structure_tool_selected > 0 && s->entity_tool_selected == 0) {
+            if (s->structure_tool_selected > 0 && s->entity_tool_selected == LEVEL_EDITOR_TOOL_NONE) {
                 if (best >= 0) {
                     s->selected_marker = best;
                     s->selected_property = 0;
@@ -3065,6 +3089,7 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
                        s->entity_tool_selected == LEVEL_EDITOR_MARKER_MINEFIELD ||
                        s->entity_tool_selected == LEVEL_EDITOR_MARKER_MISSILE ||
                        s->entity_tool_selected == LEVEL_EDITOR_MARKER_ARC_NODE ||
+                       s->entity_tool_selected == LEVEL_EDITOR_MARKER_EXIT ||
                        s->entity_tool_selected == LEVEL_EDITOR_MARKER_WINDOW_MASK) {
                 if (best >= 0) {
                     s->selected_marker = best;
@@ -3139,10 +3164,13 @@ int level_editor_handle_mouse_release(level_editor_state* s, float mouse_x, floa
             s->entity_drag_kind == LEVEL_EDITOR_MARKER_MINEFIELD ||
             s->entity_drag_kind == LEVEL_EDITOR_MARKER_MISSILE ||
             s->entity_drag_kind == LEVEL_EDITOR_MARKER_ARC_NODE ||
+            s->entity_drag_kind == LEVEL_EDITOR_MARKER_EXIT ||
             s->entity_drag_kind == LEVEL_EDITOR_MARKER_WINDOW_MASK ||
             s->entity_drag_kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
             const float default_y01 =
-                (is_wave_kind(s->entity_drag_kind) || s->entity_drag_kind == LEVEL_EDITOR_MARKER_WINDOW_MASK)
+                (is_wave_kind(s->entity_drag_kind) ||
+                 s->entity_drag_kind == LEVEL_EDITOR_MARKER_WINDOW_MASK ||
+                 s->entity_drag_kind == LEVEL_EDITOR_MARKER_EXIT)
                     ? 0.50f
                     : 0.10f;
             add_spatial_marker_at_x01(
@@ -3159,7 +3187,7 @@ int level_editor_handle_mouse_release(level_editor_state* s, float mouse_x, floa
         }
     }
     if (s->entity_drag_kind != LEVEL_EDITOR_MARKER_STRUCTURE) {
-        s->entity_tool_selected = 0;
+        s->entity_tool_selected = LEVEL_EDITOR_TOOL_NONE;
     }
     s->entity_drag_active = 0;
     s->entity_drag_kind = 0;
@@ -3675,6 +3703,10 @@ int level_editor_revert(level_editor_state* s) {
     }
     s->selected_marker = (s->marker_count > 0) ? 0 : -1;
     s->selected_property = 0;
+    s->entity_tool_selected = LEVEL_EDITOR_TOOL_NONE;
+    s->entity_drag_active = 0;
+    s->entity_drag_kind = 0;
+    s->structure_tool_selected = 0;
     s->dirty = 0;
     s->edit_revision += 1u;
     snprintf(s->status_text, sizeof(s->status_text), "reverted %s", s->level_name);
@@ -3696,6 +3728,10 @@ void level_editor_new_blank(level_editor_state* s) {
     s->snapshot_valid = 0;
     s->marker_drag_active = 0;
     s->marker_drag_index = -1;
+    s->entity_tool_selected = LEVEL_EDITOR_TOOL_NONE;
+    s->entity_drag_active = 0;
+    s->entity_drag_kind = 0;
+    s->structure_tool_selected = 0;
     mark_editor_dirty(s);
     s->level_render_style = LEVEL_RENDER_BLANK;
     s->level_style = LEVEL_STYLE_BLANK;

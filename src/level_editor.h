@@ -8,6 +8,7 @@
 #define LEVEL_EDITOR_NAME_CAP 64
 #define LEVEL_EDITOR_STATUS_CAP 128
 #define LEVEL_EDITOR_PATH_CAP 512
+#define LEVEL_EDITOR_TOOL_NONE (-1)
 
 enum level_editor_marker_kind {
     LEVEL_EDITOR_MARKER_EXIT = 0,
@@ -75,6 +76,7 @@ typedef struct level_editor_layout {
     vg_rect missile_button;
     vg_rect arc_button;
     vg_rect window_button;
+    vg_rect exit_button;
     vg_rect construction_button_0;
     vg_rect construction_button_1;
     vg_rect construction_button_2;
@@ -108,8 +110,8 @@ typedef struct level_editor_state {
     int timeline_drag;
     int selected_marker;
     int selected_property;
-    int entity_tool_selected; /* 0=none, LEVEL_EDITOR_MARKER_* */
-    int structure_tool_selected; /* 0=none, 1..5 construction palette */
+    int entity_tool_selected; /* LEVEL_EDITOR_TOOL_NONE or LEVEL_EDITOR_MARKER_* */
+    int structure_tool_selected; /* 0=none, 1..8 construction palette */
     int entity_drag_active;
     int entity_drag_kind;
     float entity_drag_x;

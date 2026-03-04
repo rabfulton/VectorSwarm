@@ -4699,6 +4699,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     const vg_rect missile_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 262.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
     const vg_rect arc_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 314.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
     const vg_rect window_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 366.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
+    const vg_rect exit_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 418.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
     const float ctb_x = construction_toolbar.x + 8.0f * ui;
     const float ctb_y = construction_toolbar.y + 3.0f * ui;
     const float ctb_w = construction_toolbar.w - 16.0f * ui;
@@ -4815,6 +4816,8 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     if (r != VG_OK) return r;
     r = draw_ui_button_shaded(ctx, arc_btn, "ARC NODE", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 13 ? 1 : 0);
     if (r != VG_OK) return r;
+    r = draw_ui_button_shaded(ctx, exit_btn, "EXIT PORTAL", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 0 ? 1 : 0);
+    if (r != VG_OK) return r;
     if (metrics->level_editor_background_mask_style == LEVELDEF_BG_MASK_WINDOWS) {
         r = draw_ui_button_shaded(ctx, window_btn, "WINDOW", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 14 ? 1 : 0);
         if (r != VG_OK) return r;
@@ -4904,6 +4907,14 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             r = vg_draw_polyline(ctx, n0, 2, &as, 0);
             if (r != VG_OK) return r;
             r = vg_draw_polyline(ctx, n1, 2, &as, 0);
+            if (r != VG_OK) return r;
+        }
+        r = draw_editor_diamond(ctx, (vg_vec2){exit_btn.x + 18.0f * ui, exit_btn.y + exit_btn.h * 0.50f}, 5.0f * ui, &icon);
+        if (r != VG_OK) return r;
+        {
+            vg_stroke_style portal_inner = icon;
+            portal_inner.intensity *= 0.80f;
+            r = draw_editor_diamond(ctx, (vg_vec2){exit_btn.x + 18.0f * ui, exit_btn.y + exit_btn.h * 0.50f}, 3.0f * ui, &portal_inner);
             if (r != VG_OK) return r;
         }
         if (metrics->level_editor_background_mask_style == LEVELDEF_BG_MASK_WINDOWS) {
@@ -5378,7 +5389,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     );
     if (r != VG_OK) return r;
     if (metrics->level_editor_drag_active &&
-        (metrics->level_editor_drag_kind == 5 || metrics->level_editor_drag_kind == 10 || metrics->level_editor_drag_kind == 11 || metrics->level_editor_drag_kind == 12 || metrics->level_editor_drag_kind == 15 || metrics->level_editor_drag_kind == 17 || metrics->level_editor_drag_kind == 1 || metrics->level_editor_drag_kind == 6 || metrics->level_editor_drag_kind == 7 || metrics->level_editor_drag_kind == 8 || metrics->level_editor_drag_kind == 9 || metrics->level_editor_drag_kind == 13 || metrics->level_editor_drag_kind == 14)) {
+        (metrics->level_editor_drag_kind == 0 || metrics->level_editor_drag_kind == 5 || metrics->level_editor_drag_kind == 10 || metrics->level_editor_drag_kind == 11 || metrics->level_editor_drag_kind == 12 || metrics->level_editor_drag_kind == 15 || metrics->level_editor_drag_kind == 17 || metrics->level_editor_drag_kind == 1 || metrics->level_editor_drag_kind == 6 || metrics->level_editor_drag_kind == 7 || metrics->level_editor_drag_kind == 8 || metrics->level_editor_drag_kind == 9 || metrics->level_editor_drag_kind == 13 || metrics->level_editor_drag_kind == 14)) {
         vg_stroke_style gs = frame;
         gs.intensity = 1.2f;
         gs.color = level_editor_marker_color(&pal, metrics->level_editor_drag_kind);

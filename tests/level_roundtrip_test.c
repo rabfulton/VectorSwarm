@@ -125,6 +125,50 @@ static int verify_wave_type_remap_semantics(void) {
     return 1;
 }
 
+static int verify_exit_portal_tool_placement(void) {
+    level_editor_state editor;
+    level_editor_layout layout;
+    const float w = 1280.0f;
+    const float h = 720.0f;
+
+    level_editor_init(&editor);
+    level_editor_compute_layout(w, h, &layout);
+
+    editor.level_background_mask_style = LEVELDEF_BG_MASK_WINDOWS;
+    editor.level_wave_mode = LEVELDEF_WAVES_CURATED;
+
+    {
+        float bx = layout.exit_button.x + layout.exit_button.w * 0.5f;
+        float by = layout.exit_button.y + layout.exit_button.h * 0.5f;
+        float vx = layout.viewport.x + layout.viewport.w * 0.5f;
+        float vy = layout.viewport.y + layout.viewport.h * 0.5f;
+        if (!level_editor_handle_mouse(&editor, bx, by, w, h, 1, 1)) {
+            fprintf(stderr, "roundtrip: exit button click was not handled\n");
+            return 0;
+        }
+        if (!editor.entity_drag_active || editor.entity_drag_kind != LEVEL_EDITOR_MARKER_EXIT) {
+            fprintf(stderr, "roundtrip: exit button did not arm exit drag tool\n");
+            return 0;
+        }
+        if (!level_editor_handle_mouse_release(&editor, vx, vy, w, h)) {
+            fprintf(stderr, "roundtrip: exit drag release did not place marker\n");
+            return 0;
+        }
+    }
+
+    if (editor.marker_count != 1 || editor.markers[0].kind != LEVEL_EDITOR_MARKER_EXIT) {
+        fprintf(stderr, "roundtrip: exit tool placement failed (count=%d kind=%d)\n",
+                editor.marker_count,
+                (editor.marker_count > 0) ? editor.markers[0].kind : -1);
+        return 0;
+    }
+    if (editor.entity_tool_selected != LEVEL_EDITOR_TOOL_NONE) {
+        fprintf(stderr, "roundtrip: exit tool was not cleared after placement\n");
+        return 0;
+    }
+    return 1;
+}
+
 int main(void) {
     leveldef_db db;
     level_editor_state editor;
@@ -143,6 +187,9 @@ int main(void) {
         return 1;
     }
     if (!verify_wave_type_remap_semantics()) {
+        return 1;
+    }
+    if (!verify_exit_portal_tool_placement()) {
         return 1;
     }
 
