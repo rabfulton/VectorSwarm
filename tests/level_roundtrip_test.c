@@ -65,6 +65,66 @@ static int write_file_bytes(const char* path, const char* data, size_t size) {
     return n == size;
 }
 
+static int verify_wave_type_remap_semantics(void) {
+    level_editor_state editor;
+    level_editor_marker* m = NULL;
+
+    level_editor_init(&editor);
+    editor.level_wave_mode = LEVELDEF_WAVES_CURATED;
+    editor.marker_count = 1;
+    editor.selected_marker = 0;
+    editor.selected_property = 0;
+
+    m = &editor.markers[0];
+    memset(m, 0, sizeof(*m));
+    m->track = LEVEL_EDITOR_TRACK_SPATIAL;
+    m->x01 = 0.50f;
+    m->y01 = 0.50f;
+
+    /* Regression: manta B is size, not speed; cycling to kamikaze must not keep B=4. */
+    m->kind = LEVEL_EDITOR_MARKER_MANTA_WING;
+    m->a = 2.0f;
+    m->b = 4.0f;
+    m->c = 2.0f;
+    m->d = 0.0f;
+    level_editor_adjust_selected_property(&editor, 1.0f);
+    if (m->kind != LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
+        fprintf(stderr, "roundtrip: wave remap failed to cycle manta->kamikaze\n");
+        return 0;
+    }
+    if (m->b < 100.0f || m->c < 1.0f) {
+        fprintf(stderr, "roundtrip: wave remap kept incompatible manta params for kamikaze (b=%.3f c=%.3f)\n", m->b, m->c);
+        return 0;
+    }
+
+    /* Regression: fish D is turn rate; cycling to jelly/eel must not keep huge D as size scale. */
+    m->kind = LEVEL_EDITOR_MARKER_BOID_BIRD;
+    m->a = 12.0f;
+    m->b = 300.0f;
+    m->c = 7.8f;
+    m->d = 440.0f;
+    level_editor_adjust_selected_property(&editor, 1.0f); /* bird -> jelly */
+    if (m->kind != LEVEL_EDITOR_MARKER_JELLY_SWARM) {
+        fprintf(stderr, "roundtrip: wave remap failed to cycle bird->jelly\n");
+        return 0;
+    }
+    if (m->d > 4.0f) {
+        fprintf(stderr, "roundtrip: wave remap kept incompatible turn-rate as jelly size (d=%.3f)\n", m->d);
+        return 0;
+    }
+    level_editor_adjust_selected_property(&editor, 1.0f); /* jelly -> eel */
+    if (m->kind != LEVEL_EDITOR_MARKER_EEL_SWARM) {
+        fprintf(stderr, "roundtrip: wave remap failed to cycle jelly->eel\n");
+        return 0;
+    }
+    if (m->d <= 0.0f || m->d > 4.0f) {
+        fprintf(stderr, "roundtrip: wave remap produced invalid eel size scale (d=%.3f)\n", m->d);
+        return 0;
+    }
+
+    return 1;
+}
+
 int main(void) {
     leveldef_db db;
     level_editor_state editor;
@@ -80,6 +140,9 @@ int main(void) {
     }
     if (!leveldef_load_project_layout(&db, "data/levels", stderr)) {
         fprintf(stderr, "roundtrip: failed to load leveldef db\n");
+        return 1;
+    }
+    if (!verify_wave_type_remap_semantics()) {
         return 1;
     }
 
