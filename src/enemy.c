@@ -1764,8 +1764,10 @@ static void eel_arc_build_points(const enemy* e, eel_arc_effect* arc) {
 }
 
 static void emit_eel_arc_sparks(game_state* g, const enemy* e, const eel_arc_effect* arc, float su) {
-    const int source_count = 3;
+    const int source_count = 2;
     const int tip_count = 2;
+    const int extra_seg_ok_threshold = (int)(MAX_PARTICLES * 0.70f);
+    const int seg_n = arc ? (arc->point_count - 1) : 0;
     float sx;
     float sy;
     float tip_x;
@@ -1774,7 +1776,7 @@ static void emit_eel_arc_sparks(game_state* g, const enemy* e, const eel_arc_eff
     float dir_y;
     float side_x;
     float side_y;
-    if (!g || !e || !arc || arc->point_count < 2) {
+    if (!g || !e || !arc || seg_n < 1) {
         return;
     }
     sx = arc->point_x[0];
@@ -1795,8 +1797,57 @@ static void emit_eel_arc_sparks(game_state* g, const enemy* e, const eel_arc_eff
     side_x = -dir_y;
     side_y = dir_x;
 
+    for (int si = 0; si < seg_n; ++si) {
+        const float ax = arc->point_x[si];
+        const float ay = arc->point_y[si];
+        const float bx = arc->point_x[si + 1];
+        const float by = arc->point_y[si + 1];
+        float seg_x = bx - ax;
+        float seg_y = by - ay;
+        float seg_len = length2(seg_x, seg_y);
+        float seg_nx;
+        float seg_ny;
+        int emit_n = 1;
+        if (seg_len < 1.0e-4f) {
+            continue;
+        }
+        seg_x /= seg_len;
+        seg_y /= seg_len;
+        seg_nx = -seg_y;
+        seg_ny = seg_x;
+        if (g->active_particles < extra_seg_ok_threshold && frand01() < 0.45f) {
+            emit_n = 2;
+        }
+        for (int ei = 0; ei < emit_n; ++ei) {
+            const float t = ((float)ei + 0.22f + frand01() * 0.56f) / (float)emit_n;
+            const float line_u = ((float)si + t) / fmaxf((float)seg_n, 1.0f);
+            const float tan_spd = (22.0f + 72.0f * frand01()) * su;
+            const float nor_spd = frands1() * 44.0f * su;
+            particle* p = alloc_particle(g);
+            if (!p) {
+                return;
+            }
+            p->type = PARTICLE_FLASH;
+            p->b.x = ax + (bx - ax) * t + seg_nx * frands1() * 2.0f * su;
+            p->b.y = ay + (by - ay) * t + seg_ny * frands1() * 2.0f * su;
+            p->b.vx = e->b.vx * 0.16f + seg_x * tan_spd + seg_nx * nor_spd;
+            p->b.vy = e->b.vy * 0.16f + seg_y * tan_spd + seg_ny * nor_spd;
+            p->b.ax = -p->b.vx * (3.4f + frand01() * 1.8f);
+            p->b.ay = -p->b.vy * (3.4f + frand01() * 1.8f);
+            p->age_s = 0.0f;
+            p->life_s = 0.14f + frand01() * 0.14f;
+            p->size = (1.5f + frand01() * 2.2f) * su;
+            p->spin = frand01() * 6.2831853f;
+            p->spin_rate = frands1() * 9.0f;
+            p->r = 0.38f + 0.18f * line_u + frand01() * 0.08f;
+            p->g = 0.86f + frand01() * 0.14f;
+            p->bcol = 1.00f;
+            p->a = 0.20f + 0.16f * frand01();
+        }
+    }
+
     for (int i = 0; i < source_count; ++i) {
-        const float fwd = (22.0f + 86.0f * frand01()) * su;
+        const float fwd = (18.0f + 60.0f * frand01()) * su;
         particle* p = alloc_particle(g);
         if (!p) {
             return;
@@ -1806,20 +1857,20 @@ static void emit_eel_arc_sparks(game_state* g, const enemy* e, const eel_arc_eff
         p->b.y = sy + dir_y * (1.4f + frand01() * 5.2f) * su + side_y * frands1() * 2.8f * su;
         p->b.vx = e->b.vx * 0.22f + dir_x * fwd + side_x * frands1() * 58.0f * su;
         p->b.vy = e->b.vy * 0.22f + dir_y * fwd + side_y * frands1() * 58.0f * su;
-        p->b.ax = -p->b.vx * (5.0f + frand01() * 2.0f);
-        p->b.ay = -p->b.vy * (5.0f + frand01() * 2.0f);
+        p->b.ax = -p->b.vx * (3.8f + frand01() * 1.8f);
+        p->b.ay = -p->b.vy * (3.8f + frand01() * 1.8f);
         p->age_s = 0.0f;
-        p->life_s = 0.09f + frand01() * 0.11f;
-        p->size = (1.3f + frand01() * 2.0f) * su;
+        p->life_s = 0.13f + frand01() * 0.12f;
+        p->size = (1.5f + frand01() * 2.2f) * su;
         p->spin = frand01() * 6.2831853f;
         p->spin_rate = frands1() * 10.0f;
         p->r = 0.36f + frand01() * 0.20f;
         p->g = 0.86f + frand01() * 0.14f;
         p->bcol = 1.00f;
-        p->a = 0.12f + 0.12f * frand01();
+        p->a = 0.20f + 0.16f * frand01();
     }
     for (int i = 0; i < tip_count; ++i) {
-        const float out = (42.0f + 94.0f * frand01()) * su;
+        const float out = (34.0f + 82.0f * frand01()) * su;
         particle* p = alloc_particle(g);
         if (!p) {
             return;
@@ -1829,17 +1880,17 @@ static void emit_eel_arc_sparks(game_state* g, const enemy* e, const eel_arc_eff
         p->b.y = tip_y + side_y * frands1() * 3.1f * su;
         p->b.vx = e->b.vx * 0.14f + dir_x * out + side_x * frands1() * 46.0f * su;
         p->b.vy = e->b.vy * 0.14f + dir_y * out + side_y * frands1() * 46.0f * su;
-        p->b.ax = -p->b.vx * (5.2f + frand01() * 2.6f);
-        p->b.ay = -p->b.vy * (5.2f + frand01() * 2.6f);
+        p->b.ax = -p->b.vx * (3.8f + frand01() * 1.8f);
+        p->b.ay = -p->b.vy * (3.8f + frand01() * 1.8f);
         p->age_s = 0.0f;
-        p->life_s = 0.08f + frand01() * 0.08f;
-        p->size = (1.0f + frand01() * 1.7f) * su;
+        p->life_s = 0.12f + frand01() * 0.10f;
+        p->size = (1.3f + frand01() * 1.9f) * su;
         p->spin = frand01() * 6.2831853f;
         p->spin_rate = frands1() * 8.0f;
         p->r = 0.44f + frand01() * 0.18f;
         p->g = 0.90f + frand01() * 0.10f;
         p->bcol = 1.00f;
-        p->a = 0.10f + 0.12f * frand01();
+        p->a = 0.18f + 0.14f * frand01();
     }
 }
 
