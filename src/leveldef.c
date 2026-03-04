@@ -71,8 +71,8 @@ static int kamikaze_style_from_name(const char* name) {
     if (strcmp(name, "classic") == 0 || strcmp(name, "default") == 0) {
         return KAMIKAZE_STYLE_CLASSIC;
     }
-    if (strcmp(name, "spider") == 0) {
-        return KAMIKAZE_STYLE_SPIDER;
+    if (strcmp(name, "phoenix") == 0) {
+        return KAMIKAZE_STYLE_PHOENIX;
     }
     v = strtol(name, &end, 10);
     if (end && *end == '\0') {
@@ -1595,7 +1595,7 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
                 }
             }
         }
-        if (l->kamikaze.style < KAMIKAZE_STYLE_CLASSIC || l->kamikaze.style > KAMIKAZE_STYLE_SPIDER) {
+        if (l->kamikaze.style < KAMIKAZE_STYLE_CLASSIC || l->kamikaze.style > KAMIKAZE_STYLE_PHOENIX) {
             if (log_out) {
                 fprintf(log_out, "leveldef: level %d has invalid kamikaze.style\n", i);
             }

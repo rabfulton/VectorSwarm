@@ -175,7 +175,10 @@
 - `kamikaze.accel`
 - `kamikaze.radius_min`
 - `kamikaze.radius_max`
-- `kamikaze.style` enum: `classic` or `spider`
+- `kamikaze.style` enum: `classic` or `phoenix` (used by non-`curated` wave modes)
+- `curated_enemy` CSV rows are used by `wave_mode=curated`:
+- `kind,x01,y01,a,b,c[,d]`
+- For `kind=kamikaze`, `d` is style id (`0=classic`, `1=phoenix`)
 - `searchlight` repeated CSV rows
 
 ### `searchlight` CSV Field Order

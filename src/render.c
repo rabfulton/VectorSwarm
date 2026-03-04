@@ -4670,8 +4670,8 @@ static const char* editor_mine_style_name(float v) {
 }
 
 static const char* editor_kamikaze_style_name(int style) {
-    style = clampi(style, KAMIKAZE_STYLE_CLASSIC, KAMIKAZE_STYLE_SPIDER);
-    if (style == KAMIKAZE_STYLE_SPIDER) return "SPIDER";
+    style = clampi(style, KAMIKAZE_STYLE_CLASSIC, KAMIKAZE_STYLE_PHOENIX);
+    if (style == KAMIKAZE_STYLE_PHOENIX) return "PHOENIX";
     return "CLASSIC";
 }
 
@@ -4845,7 +4845,7 @@ static int editor_marker_properties_text(
             }
             n++;
         }
-        if (kamikaze_item && n < cap) { out_labels[n] = "STYLE"; snprintf(out_values[n], 32, "%s", editor_kamikaze_style_name(metrics->level_editor_kamikaze_style)); n++; }
+        if (kamikaze_item && n < cap) { out_labels[n] = "STYLE"; snprintf(out_values[n], 32, "%s", editor_kamikaze_style_name((int)lroundf(metrics->level_editor_marker_d[sel]))); n++; }
         if (kamikaze_item && n < cap) { out_labels[n] = "RADIUS MIN"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_kamikaze_radius_min); n++; }
         if (kamikaze_item && n < cap) { out_labels[n] = "RADIUS MAX"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_kamikaze_radius_max); n++; }
         if (!event_item && n < cap) { out_labels[n] = "DELAY S"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_delay_s[sel]); n++; }
@@ -8223,7 +8223,7 @@ static vg_result draw_enemy_glyph_default(vg_context* ctx, const enemy* e, float
     return draw_enemy_tail(ctx, e, x, y, rr, enemy_style);
 }
 
-static vg_result draw_enemy_glyph_spider(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
+static vg_result draw_enemy_glyph_phoenix(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
     float fx = 0.0f;
     float fy = 0.0f;
     float nx = 0.0f;
@@ -9013,8 +9013,8 @@ static vg_result draw_enemy_glyph_eel(vg_context* ctx, const enemy* e, float x, 
 
 static vg_result draw_enemy_glyph(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
     switch (e->visual_kind) {
-        case ENEMY_VISUAL_SPIDER:
-            return draw_enemy_glyph_spider(ctx, e, x, y, rr, enemy_style);
+        case ENEMY_VISUAL_PHOENIX:
+            return draw_enemy_glyph_phoenix(ctx, e, x, y, rr, enemy_style);
         case ENEMY_VISUAL_EEL:
             return draw_enemy_glyph_eel(ctx, e, x, y, rr, enemy_style);
         case ENEMY_VISUAL_MANTA:

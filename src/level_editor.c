@@ -422,6 +422,9 @@ static float wave_default_param_c_for_kind(int kind) {
 }
 
 static float wave_default_param_d_for_kind(int kind) {
+    if (kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
+        return (float)KAMIKAZE_STYLE_CLASSIC;
+    }
     if (kind == LEVEL_EDITOR_MARKER_JELLY_SWARM || kind == LEVEL_EDITOR_MARKER_EEL_SWARM) {
         return 1.0f;
     }
@@ -487,7 +490,7 @@ static void remap_wave_marker_fields_for_kind(level_editor_marker* m, int old_ki
         m->b = fmaxf(1.0f, m->b);
         m->c = fmaxf(0.1f, m->c);
         if (new_kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
-            m->d = 0.0f;
+            m->d = (float)KAMIKAZE_STYLE_CLASSIC;
             return;
         }
         if (new_kind == LEVEL_EDITOR_MARKER_JELLY_SWARM || new_kind == LEVEL_EDITOR_MARKER_EEL_SWARM) {
@@ -1020,7 +1023,7 @@ static const char* minefield_style_name(int style) {
 
 static const char* kamikaze_style_name(int style) {
     switch (style) {
-        case KAMIKAZE_STYLE_SPIDER: return "spider";
+        case KAMIKAZE_STYLE_PHOENIX: return "phoenix";
         case KAMIKAZE_STYLE_CLASSIC:
         default: return "classic";
     }
@@ -1377,7 +1380,14 @@ static int build_level_serialized_text(
     }
     lvl.kamikaze.radius_min = fmaxf(1.0f, s->level_kamikaze_radius_min);
     lvl.kamikaze.radius_max = fmaxf(lvl.kamikaze.radius_min, s->level_kamikaze_radius_max);
-    lvl.kamikaze.style = clampi(s->level_kamikaze_style, KAMIKAZE_STYLE_CLASSIC, KAMIKAZE_STYLE_SPIDER);
+    lvl.kamikaze.style = KAMIKAZE_STYLE_CLASSIC;
+    for (i = 0; i < wave_n; ++i) {
+        const level_editor_marker* m = &waves[i].marker;
+        if (m->kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
+            lvl.kamikaze.style = clampi((int)lroundf(m->d), KAMIKAZE_STYLE_CLASSIC, KAMIKAZE_STYLE_PHOENIX);
+            break;
+        }
+    }
     lvl.event_count = 0;
     if (lvl.wave_mode != LEVELDEF_WAVES_CURATED) {
         for (i = 0; i < wave_n && lvl.event_count < LEVELDEF_MAX_EVENTS; ++i) {
@@ -1656,8 +1666,8 @@ static int build_level_serialized_text(
             if (!appendf(out, out_cap, &used, "kamikaze.radius_min=%.3f\n", lvl.kamikaze.radius_min)) return 0;
             if (!appendf(out, out_cap, &used, "kamikaze.radius_max=%.3f\n", lvl.kamikaze.radius_max)) return 0;
             {
-                const int style = clampi(lvl.kamikaze.style, KAMIKAZE_STYLE_CLASSIC, KAMIKAZE_STYLE_SPIDER);
-                if (style != KAMIKAZE_STYLE_CLASSIC) {
+                if (lvl.wave_mode != LEVELDEF_WAVES_CURATED) {
+                    const int style = clampi(lvl.kamikaze.style, KAMIKAZE_STYLE_CLASSIC, KAMIKAZE_STYLE_PHOENIX);
                     if (!appendf(out, out_cap, &used, "kamikaze.style=%s\n", kamikaze_style_name(style))) return 0;
                 }
             }
@@ -2375,11 +2385,13 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
                 ce->a,
                 (is_boid_wave_kind(ce->kind) && ce->b <= 0.0f) ? boid_speed_default_for_kind(ce->kind) : ce->b,
                 (is_boid_wave_kind(ce->kind) && ce->c <= 0.0f) ? boid_accel_default_for_kind(ce->kind) : ce->c,
-                is_boid_wave_kind(ce->kind)
-                    ? ((ce->kind == LEVEL_EDITOR_MARKER_JELLY_SWARM || ce->kind == LEVEL_EDITOR_MARKER_EEL_SWARM)
-                        ? ((ce->d > 0.0f) ? ce->d : 1.0f)
-                        : ((ce->d > 0.0f) ? ce->d : boid_turn_rate_default_deg_for_kind(ce->kind)))
-                    : 0.0f
+                (ce->kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE)
+                    ? (float)clampi((int)lroundf(ce->d), KAMIKAZE_STYLE_CLASSIC, KAMIKAZE_STYLE_PHOENIX)
+                    : (is_boid_wave_kind(ce->kind)
+                        ? ((ce->kind == LEVEL_EDITOR_MARKER_JELLY_SWARM || ce->kind == LEVEL_EDITOR_MARKER_EEL_SWARM)
+                            ? ((ce->d > 0.0f) ? ce->d : 1.0f)
+                            : ((ce->d > 0.0f) ? ce->d : boid_turn_rate_default_deg_for_kind(ce->kind)))
+                        : 0.0f)
             );
         }
     } else if (lvl->event_count > 0) {
@@ -2394,7 +2406,7 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
                 } else if (ev->kind == LEVELDEF_EVENT_WAVE_V) {
                     push_marker(s, LEVEL_EDITOR_MARKER_WAVE_V, LEVEL_EDITOR_TRACK_EVENT, ev->order, ev->delay_s, x01, lvl->v.home_y01, lvl->v.count, lvl->v.form_amp, lvl->v.max_speed, 0.0f);
                 } else if (ev->kind == LEVELDEF_EVENT_WAVE_KAMIKAZE) {
-                    push_marker(s, LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE, LEVEL_EDITOR_TRACK_EVENT, ev->order, ev->delay_s, x01, 0.5f, lvl->kamikaze.count, lvl->kamikaze.max_speed, lvl->kamikaze.accel, 0.0f);
+                    push_marker(s, LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE, LEVEL_EDITOR_TRACK_EVENT, ev->order, ev->delay_s, x01, 0.5f, lvl->kamikaze.count, lvl->kamikaze.max_speed, lvl->kamikaze.accel, (float)clampi(lvl->kamikaze.style, KAMIKAZE_STYLE_CLASSIC, KAMIKAZE_STYLE_PHOENIX));
                 } else if (ev->kind == LEVELDEF_EVENT_WAVE_SWARM) {
                     const leveldef_boid_profile* p = leveldef_get_boid_profile(db, lvl->default_boid_profile);
                     push_marker(s, LEVEL_EDITOR_MARKER_BOID, LEVEL_EDITOR_TRACK_EVENT, ev->order, ev->delay_s, x01, p ? p->spawn_y01 : 0.5f, p ? p->count : 12.0f, p ? p->max_speed : boid_speed_default_for_kind(LEVEL_EDITOR_MARKER_BOID), p ? p->accel : boid_accel_default_for_kind(LEVEL_EDITOR_MARKER_BOID), p ? p->max_turn_rate_deg : boid_turn_rate_default_deg_for_kind(LEVEL_EDITOR_MARKER_BOID));
@@ -2427,7 +2439,7 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
                 push_marker(s, LEVEL_EDITOR_MARKER_WAVE_V, LEVEL_EDITOR_TRACK_EVENT, i + 1, 0.0f, x01, lvl->v.home_y01, lvl->v.count, lvl->v.form_amp, lvl->v.max_speed, 0.0f);
             } else if (pattern == LEVELDEF_WAVE_KAMIKAZE) {
                 const float x01 = (wave_base + lvl->kamikaze.start_x01) / s->level_length_screens;
-                push_marker(s, LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE, LEVEL_EDITOR_TRACK_EVENT, i + 1, 0.0f, x01, 0.50f, lvl->kamikaze.count, lvl->kamikaze.max_speed, lvl->kamikaze.accel, 0.0f);
+                push_marker(s, LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE, LEVEL_EDITOR_TRACK_EVENT, i + 1, 0.0f, x01, 0.50f, lvl->kamikaze.count, lvl->kamikaze.max_speed, lvl->kamikaze.accel, (float)clampi(lvl->kamikaze.style, KAMIKAZE_STYLE_CLASSIC, KAMIKAZE_STYLE_PHOENIX));
             } else if (pattern == LEVELDEF_WAVE_ASTEROID_STORM) {
                 const float x01 = (float)(i + 1) / fmaxf((float)(lvl->wave_cycle_count + 1), 1.0f);
                 push_marker(s, LEVEL_EDITOR_MARKER_ASTEROID_STORM, LEVEL_EDITOR_TRACK_EVENT, i + 1, 0.0f, x01, 0.50f, lvl->asteroid_storm_duration_s, lvl->asteroid_storm_angle_deg, lvl->asteroid_storm_speed, lvl->asteroid_storm_density);
@@ -2607,7 +2619,7 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
             s->level_powerup_drop_chance = lvl->powerup_drop_chance;
             s->level_kamikaze_radius_min = lvl->kamikaze.radius_min;
             s->level_kamikaze_radius_max = lvl->kamikaze.radius_max;
-            s->level_kamikaze_style = clampi(lvl->kamikaze.style, KAMIKAZE_STYLE_CLASSIC, KAMIKAZE_STYLE_SPIDER);
+            s->level_kamikaze_style = clampi(lvl->kamikaze.style, KAMIKAZE_STYLE_CLASSIC, KAMIKAZE_STYLE_PHOENIX);
         } else {
             s->level_background_style = (s->level_render_style == LEVEL_RENDER_BLANK)
                 ? LEVELDEF_BACKGROUND_NONE
@@ -3559,10 +3571,10 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
                     }
                 } else if (m->kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
                     const int dir = (delta >= 0.0f) ? 1 : -1;
-                    const int n = KAMIKAZE_STYLE_SPIDER - KAMIKAZE_STYLE_CLASSIC + 1;
-                    int style = clampi(s->level_kamikaze_style, KAMIKAZE_STYLE_CLASSIC, KAMIKAZE_STYLE_SPIDER);
+                    const int n = KAMIKAZE_STYLE_PHOENIX - KAMIKAZE_STYLE_CLASSIC + 1;
+                    int style = clampi((int)lroundf(m->d), KAMIKAZE_STYLE_CLASSIC, KAMIKAZE_STYLE_PHOENIX);
                     style = KAMIKAZE_STYLE_CLASSIC + ((style - KAMIKAZE_STYLE_CLASSIC + dir + n) % n);
-                    s->level_kamikaze_style = style;
+                    m->d = (float)style;
                 } else if (!ev_item) {
                     m->delay_s = fmaxf(0.0f, m->delay_s + delta * 0.1f);
                 }

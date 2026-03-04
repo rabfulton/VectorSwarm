@@ -57,12 +57,12 @@ enum enemy_visual_kind {
     ENEMY_VISUAL_JELLY = 1,
     ENEMY_VISUAL_MANTA = 2,
     ENEMY_VISUAL_EEL = 3,
-    ENEMY_VISUAL_SPIDER = 4
+    ENEMY_VISUAL_PHOENIX = 4
 };
 
 typedef enum kamikaze_style_id {
     KAMIKAZE_STYLE_CLASSIC = 0,
-    KAMIKAZE_STYLE_SPIDER = 1
+    KAMIKAZE_STYLE_PHOENIX = 1
 } kamikaze_style_id;
 
 typedef struct star {

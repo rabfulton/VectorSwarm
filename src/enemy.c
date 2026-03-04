@@ -1226,9 +1226,9 @@ static void apply_kamikaze_visual_style(enemy* e, int style, int wave_id, int sl
     if (!e) {
         return;
     }
-    if (style == KAMIKAZE_STYLE_SPIDER) {
+    if (style == KAMIKAZE_STYLE_PHOENIX) {
         const uint32_t seed = enemy_visual_seed_from_ids(wave_id, slot_index);
-        e->visual_kind = ENEMY_VISUAL_SPIDER;
+        e->visual_kind = ENEMY_VISUAL_PHOENIX;
         e->visual_seed = seed;
         e->visual_phase = hash01_u32(seed ^ 0x7b3u) * 6.2831853f;
         e->visual_param_a = lerpf(0.80f, 1.25f, hash01_u32(seed ^ 0x2d9u));
@@ -1435,7 +1435,12 @@ void enemy_spawn_curated_enemy(
             e->archetype = ENEMY_ARCH_KAMIKAZE;
             e->state = ENEMY_STATE_KAMIKAZE_COIL;
             enemy_assign_combat_loadout(g, e, db);
-            apply_kamikaze_visual_style(e, lvl->kamikaze.style, wave_id, i);
+            apply_kamikaze_visual_style(
+                e,
+                clampi((int)lroundf(ce->d), KAMIKAZE_STYLE_CLASSIC, KAMIKAZE_STYLE_PHOENIX),
+                wave_id,
+                i
+            );
             e->b.x = base_x + slot * spread_x + jitter_x;
             e->b.y = base_y + jitter_y;
             e->max_speed = ((ce->b > 0.0f) ? ce->b : lvl->kamikaze.max_speed) * su;
