@@ -1853,6 +1853,12 @@ static void auto_pan_to_marker(level_editor_state* s, int marker_index) {
     s->timeline_01 = (span > 0.0f) ? (start_screen / span) : 0.0f;
 }
 
+/* Map editor property increments (1.0 / 10.0) to normalized position nudges. */
+static float marker_position_delta(float delta) {
+    const float pos_step = (fabsf(delta) >= 9.0f) ? 0.10f : 0.01f;
+    return (delta >= 0.0f) ? pos_step : -pos_step;
+}
+
 static void move_marker_x(level_editor_state* s, int marker_index, float delta01) {
     if (!s || marker_index < 0 || marker_index >= s->marker_count || delta01 == 0.0f) {
         return;
@@ -3262,6 +3268,7 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
     if (s->selected_property >= prop_count) {
         s->selected_property = prop_count - 1;
     }
+    const float pos_delta = marker_position_delta(delta);
     if (s->selected_marker < 0 || s->selected_marker >= s->marker_count) {
         switch (s->selected_property) {
             case 0: {
@@ -3332,11 +3339,11 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
         switch (s->selected_property) {
             case 0:
                 if (ev_item) m->order = (int)fmaxf(1.0f, (float)m->order + ((delta >= 0.0f) ? 1.0f : -1.0f));
-                else move_marker_x(s, s->selected_marker, delta);
+                else move_marker_x(s, s->selected_marker, pos_delta);
                 break;
             case 1:
                 if (ev_item) m->delay_s = fmaxf(0.0f, m->delay_s + delta * 0.1f);
-                else m->y01 = clampf(m->y01 + delta, 0.0f, 1.0f);
+                else m->y01 = clampf(m->y01 + pos_delta, 0.0f, 1.0f);
                 break;
             case 2: m->a = fmaxf(0.01f, m->a + delta * 0.5f); break;
             case 3: m->b += delta * 1.0f; break;
@@ -3349,8 +3356,6 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
     }
 
     if (m->kind == LEVEL_EDITOR_MARKER_SEARCHLIGHT) {
-        const float pos_step = (fabsf(delta) >= 9.0f) ? 0.1f : 0.01f;
-        const float pos_delta = (delta >= 0.0f) ? pos_step : -pos_step;
         switch (s->selected_property) {
             case 0: move_marker_x(s, s->selected_marker, pos_delta); break;
             case 1: m->y01 = clampf(m->y01 + pos_delta, 0.0f, 1.0f); break;
@@ -3380,8 +3385,8 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
     }
     if (m->kind == LEVEL_EDITOR_MARKER_MINEFIELD) {
         switch (s->selected_property) {
-            case 0: move_marker_x(s, s->selected_marker, delta); break;
-            case 1: m->y01 = clampf(m->y01 + delta, 0.0f, 1.0f); break;
+            case 0: move_marker_x(s, s->selected_marker, pos_delta); break;
+            case 1: m->y01 = clampf(m->y01 + pos_delta, 0.0f, 1.0f); break;
             case 2: m->a = clampf(m->a + delta * 1.0f, 1.0f, 128.0f); break;
             case 3: {
                 const int dir = (delta >= 0.0f) ? 1 : -1;
@@ -3397,8 +3402,8 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
     }
     if (m->kind == LEVEL_EDITOR_MARKER_MISSILE) {
         switch (s->selected_property) {
-            case 0: move_marker_x(s, s->selected_marker, delta); break;
-            case 1: m->y01 = clampf(m->y01 + delta, 0.0f, 1.0f); break;
+            case 0: move_marker_x(s, s->selected_marker, pos_delta); break;
+            case 1: m->y01 = clampf(m->y01 + pos_delta, 0.0f, 1.0f); break;
             case 2: m->a = clampf(m->a + delta * 1.0f, 1.0f, 128.0f); break;
             case 3: m->b = clampf(m->b + delta * 5.0f, 0.0f, 400.0f); break;
             case 4: m->c = clampf(m->c + delta * 10.0f, 20.0f, 2500.0f); break;
@@ -3484,8 +3489,8 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
 
     if (m->kind == LEVEL_EDITOR_MARKER_EXIT) {
         switch (s->selected_property) {
-            case 0: move_marker_x(s, s->selected_marker, delta); break;
-            case 1: m->y01 = clampf(m->y01 + delta, 0.0f, 1.0f); break;
+            case 0: move_marker_x(s, s->selected_marker, pos_delta); break;
+            case 1: m->y01 = clampf(m->y01 + pos_delta, 0.0f, 1.0f); break;
             default: break;
         }
         mark_editor_dirty(s);
@@ -3495,8 +3500,6 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
     if (is_wave_kind(m->kind)) {
         const int ev_item = marker_is_event_item(s, m);
         const int boid_item = is_boid_wave_kind(m->kind);
-        const float pos_step = (fabsf(delta) >= 9.0f) ? 0.10f : 0.01f;
-        const float pos_delta = (delta >= 0.0f) ? pos_step : -pos_step;
         switch (s->selected_property) {
             case 0:
             {
