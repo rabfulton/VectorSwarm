@@ -9075,7 +9075,7 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
 
         for (size_t i = 0; i < MAX_EEL_ARCS; ++i) {
             const eel_arc_effect* arc = &g->eel_arcs[i];
-            if (!arc->active || arc->point_count < 2 || !eel_arc_pulse_is_on(arc)) {
+            if (!arc->active || !arc->pulse_emit_on || arc->point_count < 2 || !eel_arc_pulse_is_on(arc)) {
                 continue;
             }
             {
@@ -9708,7 +9708,7 @@ skip_legacy_landscape:
 
     for (size_t i = 0; i < MAX_EEL_ARCS; ++i) {
         const eel_arc_effect* arc = &g->eel_arcs[i];
-        if (!arc->active || arc->point_count < 2 || !eel_arc_pulse_is_on(arc)) {
+        if (!arc->active || !arc->pulse_emit_on || arc->point_count < 2 || !eel_arc_pulse_is_on(arc)) {
             continue;
         }
         {

@@ -357,6 +357,7 @@ typedef struct eel_arc_effect {
     float life_s;
     float damage_timer_s;
     int pulse_prev_on;
+    int pulse_emit_on;
     int pulse_sound_anchor;
     int strike_slot;
     int point_count;

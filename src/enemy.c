@@ -1375,7 +1375,7 @@ void enemy_spawn_curated_enemy(
                 eel_seed_spine(e, uses_cylinder, period);
                 e->armed = 1;
                 e->weapon_id = ENEMY_WEAPON_BURST;
-                e->fire_cooldown_s = 0.25f + frand01() * 0.35f;
+                e->fire_cooldown_s = 0.18f + 0.95f * hash01_u32(seed ^ 0xD41u);
                 e->burst_shots_left = 0;
                 e->burst_gap_timer_s = 0.0f;
             }
@@ -1640,12 +1640,54 @@ static int alloc_eel_arc_slot(game_state* g) {
     return -1;
 }
 
+static void eel_arc_source_and_dir(
+    const enemy* e,
+    const eel_arc_effect* arc,
+    float* out_sx,
+    float* out_sy,
+    float* out_dir_x,
+    float* out_dir_y
+) {
+    float sx = 0.0f;
+    float sy = 0.0f;
+    float dir_x = 1.0f;
+    float dir_y = 0.0f;
+    if (!e || !out_sx || !out_sy || !out_dir_x || !out_dir_y) {
+        return;
+    }
+    if (arc && arc->start_u <= 0.001f) {
+        eel_basis(e, &dir_x, &dir_y, NULL, NULL);
+        sx = e->b.x + dir_x * (e->radius * 0.46f);
+        sy = e->b.y + dir_y * (e->radius * 0.46f);
+        *out_sx = sx;
+        *out_sy = sy;
+        *out_dir_x = dir_x;
+        *out_dir_y = dir_y;
+        return;
+    }
+    {
+        float tx;
+        float ty;
+        const float u0 = arc ? arc->start_u : 0.0f;
+        eel_sample_body_point(e, u0, &sx, &sy);
+        eel_sample_body_point(e, clampf(u0 + 0.03f, 0.0f, 1.0f), &tx, &ty);
+        dir_x = tx - sx;
+        dir_y = ty - sy;
+        normalize2(&dir_x, &dir_y);
+        if (length2(dir_x, dir_y) < 1.0e-5f) {
+            eel_basis(e, &dir_x, &dir_y, NULL, NULL);
+        }
+        *out_sx = sx;
+        *out_sy = sy;
+        *out_dir_x = dir_x;
+        *out_dir_y = dir_y;
+    }
+}
+
 static void eel_arc_build_points(const enemy* e, eel_arc_effect* arc) {
     const int seg_n = EEL_ARC_MAX_POINTS - 1;
     float sx;
     float sy;
-    float tx;
-    float ty;
     float dir_x;
     float dir_y;
     float side_x;
@@ -1659,14 +1701,7 @@ static void eel_arc_build_points(const enemy* e, eel_arc_effect* arc) {
         return;
     }
 
-    eel_sample_body_point(e, arc->start_u, &sx, &sy);
-    eel_sample_body_point(e, clampf(arc->start_u + 0.03f, 0.0f, 1.0f), &tx, &ty);
-    dir_x = tx - sx;
-    dir_y = ty - sy;
-    normalize2(&dir_x, &dir_y);
-    if (length2(dir_x, dir_y) < 1.0e-5f) {
-        eel_basis(e, &dir_x, &dir_y, NULL, NULL);
-    }
+    eel_arc_source_and_dir(e, arc, &sx, &sy, &dir_x, &dir_y);
     side_x = -dir_y;
     side_y = dir_x;
 
@@ -1729,13 +1764,14 @@ static void spawn_eel_arc_burst(game_state* g, const enemy* e, int owner_index) 
         arc->owner_wave_id = e->wave_id;
         arc->owner_slot_index = e->slot_index;
         arc->seed = seed;
-        arc->start_u = clampf(0.24f + (float)i * 0.20f + frands1() * 0.04f, 0.12f, 0.84f);
+        arc->start_u = 0.0f;
         arc->base_angle = 0.0f;
-        arc->range = range * (0.92f + 0.16f * hash01_u32(seed ^ 0x84du));
+        arc->range = range * (0.97f + 0.06f * hash01_u32(seed ^ 0x84du));
         arc->age_s = 0.0f;
         arc->life_s = life * (0.92f + 0.18f * hash01_u32(seed ^ 0x1fd3u));
         arc->damage_timer_s = 0.05f + 0.25f * hash01_u32(seed ^ 0x73eu);
         arc->pulse_prev_on = 0;
+        arc->pulse_emit_on = 0;
         arc->pulse_sound_anchor = (i == 0) ? 1 : 0;
         arc->strike_slot = i;
         eel_arc_build_points(e, arc);
@@ -1780,41 +1816,52 @@ static void update_eel_arc_effects(
         active_n += 1;
         {
             const int pulse_on = eel_arc_pulse_is_on(arc);
-            if (pulse_on) {
-                const float mid_u = clampf(arc->start_u, 0.0f, 1.0f);
-                float sx = owner->b.x;
-                float sy = owner->b.y;
-                float dx;
-                float dy;
-                float d;
-                float near01;
-                eel_sample_body_point(owner, mid_u, &sx, &sy);
-                dx = uses_cylinder ? wrap_delta(sx, g->player.b.x, period) : (sx - g->player.b.x);
-                dy = sy - g->player.b.y;
-                if (!arc->pulse_prev_on) {
+            float sx = owner->b.x;
+            float sy = owner->b.y;
+            float dir_x = 1.0f;
+            float dir_y = 0.0f;
+            float dx;
+            float dy;
+            float d;
+            float near01;
+            if (!pulse_on) {
+                arc->pulse_prev_on = 0;
+                arc->pulse_emit_on = 0;
+                continue;
+            }
+            eel_arc_source_and_dir(owner, arc, &sx, &sy, &dir_x, &dir_y);
+            dx = uses_cylinder ? wrap_delta(sx, g->player.b.x, period) : (sx - g->player.b.x);
+            dy = sy - g->player.b.y;
+            if (!arc->pulse_prev_on) {
+                float fwd_x = owner->facing_x;
+                float fwd_y = owner->facing_y;
+                float to_x = -dx;
+                float to_y = -dy;
+                float dot = 1.0f;
+                if (length2(fwd_x, fwd_y) < 1.0e-5f) {
+                    fwd_x = cosf(owner->eel_heading_rad);
+                    fwd_y = sinf(owner->eel_heading_rad);
+                }
+                normalize2(&fwd_x, &fwd_y);
+                if (length2(to_x, to_y) > 1.0e-5f) {
+                    normalize2(&to_x, &to_y);
+                    dot = fwd_x * to_x + fwd_y * to_y;
+                }
+                arc->pulse_emit_on = (dot >= 0.0f) ? 1 : 0;
+                if (arc->pulse_emit_on) {
                     const int slot = clampi(arc->strike_slot, 0, 2);
                     const uint32_t pulse_i = (uint32_t)floorf(arc->age_s / EEL_ARC_PULSE_PERIOD_S);
                     float aim_x = -dx;
                     float aim_y = -dy;
-                    float tx = sx;
-                    float ty = sy;
-                    float dir_x;
-                    float dir_y;
                     float side_x;
                     float side_y;
-                    float spread = ((float)slot - 1.0f) * 0.20f;
-                    float jitter = (hash01_u32(arc->seed ^ (pulse_i * 0x9e37u)) - 0.5f) * 0.12f;
+                    float spread = ((float)slot - 1.0f) * 0.08f;
+                    float jitter = (hash01_u32(arc->seed ^ (pulse_i * 0x9e37u)) - 0.5f) * 0.05f;
                     if (length2(aim_x, aim_y) < 1.0e-4f) {
-                        eel_basis(owner, &aim_x, &aim_y, NULL, NULL);
+                        aim_x = dir_x;
+                        aim_y = dir_y;
                     } else {
                         normalize2(&aim_x, &aim_y);
-                    }
-                    eel_sample_body_point(owner, clampf(arc->start_u + 0.03f, 0.0f, 1.0f), &tx, &ty);
-                    dir_x = tx - sx;
-                    dir_y = ty - sy;
-                    normalize2(&dir_x, &dir_y);
-                    if (length2(dir_x, dir_y) < 1.0e-5f) {
-                        eel_basis(owner, &dir_x, &dir_y, NULL, NULL);
                     }
                     side_x = -dir_y;
                     side_y = dir_x;
@@ -1823,29 +1870,29 @@ static void update_eel_arc_effects(
                         const float sa = side_x * aim_x + side_y * aim_y;
                         arc->base_angle = atan2f(sa, ca) + spread + jitter;
                     }
-                }
-                eel_arc_build_points(owner, arc);
-                d = sqrtf(dx * dx + dy * dy);
-                near01 = 1.0f - smoothstepf(
-                    fmaxf(owner->radius * 4.0f, owner->eel_weapon_range * 0.20f),
-                    fmaxf(owner->eel_weapon_range * 1.18f, g->world_w * 0.72f),
-                    d
-                );
-                if (near01 > 0.0f) {
-                    const float pan = clampf(dx / (g->world_w * 0.45f), -1.0f, 1.0f);
-                    g->lightning_active = 1;
-                    if (near01 > g->lightning_audio_gain) {
-                        g->lightning_audio_gain = near01;
-                        g->lightning_audio_pan = pan;
+                    if (arc->pulse_sound_anchor) {
+                        game_push_audio_event(g, GAME_AUDIO_EVENT_LIGHTNING, sx, sy);
                     }
                 }
-                if (!arc->pulse_prev_on && arc->pulse_sound_anchor) {
-                    game_push_audio_event(g, GAME_AUDIO_EVENT_LIGHTNING, sx, sy);
-                }
             }
-            arc->pulse_prev_on = pulse_on;
-            if (!pulse_on) {
+            arc->pulse_prev_on = 1;
+            if (!arc->pulse_emit_on) {
                 continue;
+            }
+            eel_arc_build_points(owner, arc);
+            d = sqrtf(dx * dx + dy * dy);
+            near01 = 1.0f - smoothstepf(
+                fmaxf(owner->radius * 4.0f, owner->eel_weapon_range * 0.20f),
+                fmaxf(owner->eel_weapon_range * 1.18f, g->world_w * 0.72f),
+                d
+            );
+            if (near01 > 0.0f) {
+                const float pan = clampf(dx / (g->world_w * 0.45f), -1.0f, 1.0f);
+                g->lightning_active = 1;
+                if (near01 > g->lightning_audio_gain) {
+                    g->lightning_audio_gain = near01;
+                    g->lightning_audio_pan = pan;
+                }
             }
         }
 
@@ -1926,8 +1973,21 @@ static void enemy_try_fire(game_state* g, enemy* e, float dt, float su, const le
         const float dx = uses_cylinder ? wrap_delta(g->player.b.x, e->b.x, period) : (g->player.b.x - e->b.x);
         const float dy = g->player.b.y - e->b.y;
         const float d2 = dx * dx + dy * dy;
-        const float close_r = range * 0.34f;
+        float fwd_x = e->facing_x;
+        float fwd_y = e->facing_y;
+        int in_front = 1;
         int in_fire_region = 0;
+        if (length2(fwd_x, fwd_y) < 1.0e-5f) {
+            fwd_x = cosf(e->eel_heading_rad);
+            fwd_y = sinf(e->eel_heading_rad);
+        }
+        normalize2(&fwd_x, &fwd_y);
+        if (d2 > 1.0e-6f) {
+            const float inv_d = 1.0f / sqrtf(d2);
+            const float to_x = dx * inv_d;
+            const float to_y = dy * inv_d;
+            in_front = ((fwd_x * to_x + fwd_y * to_y) >= 0.0f) ? 1 : 0;
+        }
         if (uses_cylinder) {
             in_fire_region = (fabsf(dx) <= period * 0.26f) ? 1 : 0;
         } else {
@@ -1935,21 +1995,25 @@ static void enemy_try_fire(game_state* g, enemy* e, float dt, float su, const le
                 (fabsf(dx) <= g->world_w * 0.56f) &&
                 (fabsf(dy) <= g->world_h * 0.56f);
         }
-        if (e->fire_cooldown_s > 0.0f || !in_fire_region || d2 > range * range) {
+        if (e->fire_cooldown_s > 0.0f || !in_front || !in_fire_region || d2 > range * range) {
             if (e->fire_cooldown_s <= 0.0f) {
-                e->fire_cooldown_s = 0.05f + frand01() * 0.08f;
+                e->fire_cooldown_s = 0.06f + frand01() * 0.14f;
             }
             return;
         }
         {
-            const float try_window_s = 0.18f;
-            const float p_try = 1.0f - expf(-rate * try_window_s);
-            if (d2 <= close_r * close_r || frand01() < p_try) {
+            const float try_window_s = 0.17f;
+            const float p_try_base = 1.0f - expf(-rate * try_window_s);
+            const float dist01 = clampf(sqrtf(d2) / fmaxf(range, 1.0f), 0.0f, 1.0f);
+            const float dist_weight = lerpf(1.12f, 0.52f, dist01);
+            const float indiv_weight = 0.80f + 0.40f * hash01_u32(e->visual_seed ^ 0x73Bu);
+            const float p_try = clampf(p_try_base * dist_weight * indiv_weight, 0.02f, 0.92f);
+            if (frand01() < p_try) {
                 const int owner_index = (int)(e - g->enemies);
                 spawn_eel_arc_burst(g, e, owner_index);
-                e->fire_cooldown_s = 0.60f + frand01() * 0.45f;
+                e->fire_cooldown_s = 0.42f + frand01() * 0.68f;
             } else {
-                e->fire_cooldown_s = 0.08f + frand01() * 0.12f;
+                e->fire_cooldown_s = 0.08f + frand01() * 0.22f;
             }
         }
         return;
