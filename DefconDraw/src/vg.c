@@ -894,7 +894,11 @@ vg_result vg_draw_polyline(vg_context* ctx, const vg_vec2* points, size_t count,
         return ctx->backend.ops->draw_polyline(ctx, points, count, style, closed);
     }
 
-    vg_vec2* transformed = (vg_vec2*)malloc(sizeof(*transformed) * count);
+    enum { VG_STACK_POINT_CAP = 32 };
+    vg_vec2 stack_points[VG_STACK_POINT_CAP];
+    vg_vec2* transformed = (count <= VG_STACK_POINT_CAP)
+        ? stack_points
+        : (vg_vec2*)malloc(sizeof(*transformed) * count);
     if (!transformed) {
         return VG_ERROR_OUT_OF_MEMORY;
     }
@@ -902,7 +906,9 @@ vg_result vg_draw_polyline(vg_context* ctx, const vg_vec2* points, size_t count,
         transformed[i] = vg_transform_point(ctx->transform, points[i]);
     }
     vg_result r = ctx->backend.ops->draw_polyline(ctx, transformed, count, style, closed);
-    free(transformed);
+    if (transformed != stack_points) {
+        free(transformed);
+    }
     return r;
 }
 
@@ -986,7 +992,11 @@ vg_result vg_fill_convex(vg_context* ctx, const vg_vec2* points, size_t count, c
         return ctx->backend.ops->fill_convex(ctx, points, count, style);
     }
 
-    vg_vec2* transformed = (vg_vec2*)malloc(sizeof(*transformed) * count);
+    enum { VG_STACK_POINT_CAP = 32 };
+    vg_vec2 stack_points[VG_STACK_POINT_CAP];
+    vg_vec2* transformed = (count <= VG_STACK_POINT_CAP)
+        ? stack_points
+        : (vg_vec2*)malloc(sizeof(*transformed) * count);
     if (!transformed) {
         return VG_ERROR_OUT_OF_MEMORY;
     }
@@ -994,7 +1004,9 @@ vg_result vg_fill_convex(vg_context* ctx, const vg_vec2* points, size_t count, c
         transformed[i] = vg_transform_point(ctx->transform, points[i]);
     }
     vg_result r = ctx->backend.ops->fill_convex(ctx, transformed, count, style);
-    free(transformed);
+    if (transformed != stack_points) {
+        free(transformed);
+    }
     return r;
 }
 

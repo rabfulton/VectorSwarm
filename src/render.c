@@ -8250,48 +8250,72 @@ static vg_result draw_enemy_glyph_jelly(vg_context* ctx, const enemy* e, float x
         }
     }
 
-    for (int arc_i = 0; arc_i < 2; ++arc_i) {
-        const float af = (arc_i == 0) ? 0.40f : 0.18f;
-        const float aw = (arc_i == 0) ? 0.36f : 0.25f;
-        const vg_vec2 arc[5] = {
-            {x + fx * (rr * af) + nx * (-rr * aw), draw_y + fy * (rr * af) + ny * (-rr * aw)},
-            {x + fx * (rr * (af + 0.05f)) + nx * (-rr * aw * 0.35f), draw_y + fy * (rr * (af + 0.05f)) + ny * (-rr * aw * 0.35f)},
-            {x + fx * (rr * (af + 0.06f)), draw_y + fy * (rr * (af + 0.06f))},
-            {x + fx * (rr * (af + 0.05f)) + nx * (rr * aw * 0.35f), draw_y + fy * (rr * (af + 0.05f)) + ny * (rr * aw * 0.35f)},
-            {x + fx * (rr * af) + nx * (rr * aw), draw_y + fy * (rr * af) + ny * (rr * aw)}
-        };
-        vg_result r = vg_draw_polyline(ctx, arc, 5, &inner, 0);
-        if (r != VG_OK) {
-            return r;
-        }
-    }
-
     {
-        const int seg_n = (rr < 10.0f) ? 5 : 6;
-        int tentacle_n = 8 + (int)(e->visual_seed % 5u);
-        if (rr < 9.0f) {
-            tentacle_n = 5;
-        } else if (rr < 14.0f) {
-            tentacle_n = 7;
+        enum {
+            JELLY_INNER_MAX = 14, /* 2 arcs + up to 12 tentacles */
+            JELLY_INNER_POINTS_MAX = 7 /* seg_n <= 6 -> seg_n + 1 <= 7 */
+        };
+        vg_vec2 inner_lines[JELLY_INNER_MAX][JELLY_INNER_POINTS_MAX];
+        vg_polyline_view inner_views[JELLY_INNER_MAX];
+        size_t inner_count = 0u;
+
+        for (int arc_i = 0; arc_i < 2; ++arc_i) {
+            const float af = (arc_i == 0) ? 0.40f : 0.18f;
+            const float aw = (arc_i == 0) ? 0.36f : 0.25f;
+            inner_lines[inner_count][0] = (vg_vec2){x + fx * (rr * af) + nx * (-rr * aw), draw_y + fy * (rr * af) + ny * (-rr * aw)};
+            inner_lines[inner_count][1] = (vg_vec2){
+                x + fx * (rr * (af + 0.05f)) + nx * (-rr * aw * 0.35f),
+                draw_y + fy * (rr * (af + 0.05f)) + ny * (-rr * aw * 0.35f)
+            };
+            inner_lines[inner_count][2] = (vg_vec2){x + fx * (rr * (af + 0.06f)), draw_y + fy * (rr * (af + 0.06f))};
+            inner_lines[inner_count][3] = (vg_vec2){
+                x + fx * (rr * (af + 0.05f)) + nx * (rr * aw * 0.35f),
+                draw_y + fy * (rr * (af + 0.05f)) + ny * (rr * aw * 0.35f)
+            };
+            inner_lines[inner_count][4] = (vg_vec2){x + fx * (rr * af) + nx * (rr * aw), draw_y + fy * (rr * af) + ny * (rr * aw)};
+            inner_views[inner_count] = (vg_polyline_view){
+                .points = inner_lines[inner_count],
+                .count = 5u,
+                .closed = 0
+            };
+            inner_count++;
         }
-        tentacle_n = clampi(tentacle_n, 4, 12);
-        const float wave_freq = 2.2f + 1.2f * hash01_u32(e->visual_seed ^ 0x517u);
-        const float wave_phase = 5.0f + 3.0f * hash01_u32(e->visual_seed ^ 0x19fu);
-        for (int ti = 0; ti < tentacle_n; ++ti) {
-            vg_vec2 line[6];
-            const float v = ((float)ti + 0.5f) / (float)tentacle_n;
-            const float side = (v * 2.0f - 1.0f) * 0.84f;
-            const float tent_phase = 6.2831853f * hash01_u32(e->visual_seed ^ (uint32_t)(ti * 0x9e37u));
-            for (int si = 0; si <= seg_n; ++si) {
-                const float u = (float)si / (float)seg_n;
-                const float amp_u = rr * tentacle_amp * powf(u, 1.25f);
-                const float offset = amp_u * sinf(e->ai_timer_s * wave_freq - u * wave_phase + tent_phase);
-                const float local_f = rr * (-0.24f - u * (1.70f + 0.20f * pulse01));
-                const float local_n = rr * side + offset;
-                line[si].x = x + fx * local_f + nx * local_n;
-                line[si].y = draw_y + fy * local_f + ny * local_n;
+
+        {
+            const int seg_n = (rr < 10.0f) ? 5 : 6;
+            int tentacle_n = 8 + (int)(e->visual_seed % 5u);
+            if (rr < 9.0f) {
+                tentacle_n = 5;
+            } else if (rr < 14.0f) {
+                tentacle_n = 7;
             }
-            vg_result r = vg_draw_polyline(ctx, line, seg_n + 1, &inner, 0);
+            tentacle_n = clampi(tentacle_n, 4, 12);
+            const float wave_freq = 2.2f + 1.2f * hash01_u32(e->visual_seed ^ 0x517u);
+            const float wave_phase = 5.0f + 3.0f * hash01_u32(e->visual_seed ^ 0x19fu);
+            for (int ti = 0; ti < tentacle_n; ++ti) {
+                const float v = ((float)ti + 0.5f) / (float)tentacle_n;
+                const float side = (v * 2.0f - 1.0f) * 0.84f;
+                const float tent_phase = 6.2831853f * hash01_u32(e->visual_seed ^ (uint32_t)(ti * 0x9e37u));
+                for (int si = 0; si <= seg_n; ++si) {
+                    const float u = (float)si / (float)seg_n;
+                    const float amp_u = rr * tentacle_amp * powf(u, 1.25f);
+                    const float offset = amp_u * sinf(e->ai_timer_s * wave_freq - u * wave_phase + tent_phase);
+                    const float local_f = rr * (-0.24f - u * (1.70f + 0.20f * pulse01));
+                    const float local_n = rr * side + offset;
+                    inner_lines[inner_count][si].x = x + fx * local_f + nx * local_n;
+                    inner_lines[inner_count][si].y = draw_y + fy * local_f + ny * local_n;
+                }
+                inner_views[inner_count] = (vg_polyline_view){
+                    .points = inner_lines[inner_count],
+                    .count = (size_t)seg_n + 1u,
+                    .closed = 0
+                };
+                inner_count++;
+            }
+        }
+
+        if (inner_count > 0u) {
+            vg_result r = vg_draw_polylines(ctx, inner_views, inner_count, &inner);
             if (r != VG_OK) {
                 return r;
             }
@@ -8581,14 +8605,26 @@ static vg_result draw_enemy_glyph_manta(vg_context* ctx, const enemy* e, float x
             return r;
         }
         const int rib_idx[] = {6, 14, 22, 30};
+        vg_vec2 rib_lines[4][2];
+        vg_polyline_view rib_views[4];
+        size_t rib_count = 0u;
         for (int i = 0; i < (int)(sizeof(rib_idx) / sizeof(rib_idx[0])); ++i) {
             const int idx = clampi(rib_idx[i], 0, WING_SEG_N);
             const vg_vec2 root_out = (vg_vec2){
                 lerpf(wing_root[idx].x, wing_edge[idx].x, 0.10f),
                 lerpf(wing_root[idx].y, wing_edge[idx].y, 0.10f)
             };
-            const vg_vec2 rib[] = {root_out, wing_edge[idx]};
-            r = vg_draw_polyline(ctx, rib, 2, &detail, 0);
+            rib_lines[rib_count][0] = root_out;
+            rib_lines[rib_count][1] = wing_edge[idx];
+            rib_views[rib_count] = (vg_polyline_view){
+                .points = rib_lines[rib_count],
+                .count = 2u,
+                .closed = 0
+            };
+            rib_count++;
+        }
+        if (rib_count > 0u) {
+            r = vg_draw_polylines(ctx, rib_views, rib_count, &detail);
             if (r != VG_OK) {
                 return r;
             }
@@ -8753,23 +8789,34 @@ static vg_result draw_enemy_glyph_eel(vg_context* ctx, const enemy* e, float x, 
         }
         tx /= tl;
         ty /= tl;
+        vg_stroke_style tail = ribbon;
+        vg_vec2 tail_lines[EEL_STRAND_N][3];
+        vg_polyline_view tail_views[EEL_STRAND_N];
+        tail.width_px *= 0.72f;
+        tail.intensity *= 0.74f;
+        tail.color.a *= 0.68f;
         for (int s = 0; s < EEL_STRAND_N; ++s) {
             const float side = k_strand_bias[s] * rr * 0.38f;
             const float flick = sinf(phase * (2.0f + 0.3f * (float)s) + e->visual_phase * (0.7f + 0.2f * (float)s));
             const float sway = rr * 0.11f * flick;
-            vg_stroke_style tail = ribbon;
-            const vg_vec2 tail_seg[] = {
-                {tail_b.x + normal_x[EEL_SEG_N] * side, tail_b.y + normal_y[EEL_SEG_N] * side},
-                {tail_b.x + tx * (0.52f * rr) + normal_x[EEL_SEG_N] * (side + sway * 0.6f), tail_b.y + ty * (0.52f * rr) + normal_y[EEL_SEG_N] * (side + sway * 0.6f)},
-                {tail_b.x + tx * (1.06f * rr) + normal_x[EEL_SEG_N] * (side + sway * 1.1f), tail_b.y + ty * (1.06f * rr) + normal_y[EEL_SEG_N] * (side + sway * 1.1f)}
+            tail_lines[s][0] = (vg_vec2){tail_b.x + normal_x[EEL_SEG_N] * side, tail_b.y + normal_y[EEL_SEG_N] * side};
+            tail_lines[s][1] = (vg_vec2){
+                tail_b.x + tx * (0.52f * rr) + normal_x[EEL_SEG_N] * (side + sway * 0.6f),
+                tail_b.y + ty * (0.52f * rr) + normal_y[EEL_SEG_N] * (side + sway * 0.6f)
             };
-            tail.width_px *= 0.72f;
-            tail.intensity *= 0.74f;
-            tail.color.a *= 0.68f;
-            r = vg_draw_polyline(ctx, tail_seg, 3, &tail, 0);
-            if (r != VG_OK) {
-                return r;
-            }
+            tail_lines[s][2] = (vg_vec2){
+                tail_b.x + tx * (1.06f * rr) + normal_x[EEL_SEG_N] * (side + sway * 1.1f),
+                tail_b.y + ty * (1.06f * rr) + normal_y[EEL_SEG_N] * (side + sway * 1.1f)
+            };
+            tail_views[s] = (vg_polyline_view){
+                .points = tail_lines[s],
+                .count = 3u,
+                .closed = 0
+            };
+        }
+        r = vg_draw_polylines(ctx, tail_views, EEL_STRAND_N, &tail);
+        if (r != VG_OK) {
+            return r;
         }
     }
 
