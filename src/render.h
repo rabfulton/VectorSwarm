@@ -164,6 +164,7 @@ typedef struct render_metrics {
     float level_editor_powerup_drop_chance;
     float level_editor_kamikaze_radius_min;
     float level_editor_kamikaze_radius_max;
+    int level_editor_kamikaze_style;
     int level_editor_selected_marker;
     int level_editor_selected_property;
     int level_editor_tool_selected;

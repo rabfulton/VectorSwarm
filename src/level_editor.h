@@ -102,6 +102,7 @@ typedef struct level_editor_state {
     float level_powerup_drop_chance;
     float level_kamikaze_radius_min;
     float level_kamikaze_radius_max;
+    int level_kamikaze_style; /* enum kamikaze_style_id */
     char level_name[LEVEL_EDITOR_NAME_CAP];
     char status_text[LEVEL_EDITOR_STATUS_CAP];
     int entry_active;
@@ -141,6 +142,7 @@ typedef struct level_editor_state {
     float snapshot_level_powerup_drop_chance;
     float snapshot_level_kamikaze_radius_min;
     float snapshot_level_kamikaze_radius_max;
+    int snapshot_level_kamikaze_style;
     char snapshot_level_name[LEVEL_EDITOR_NAME_CAP];
     int snapshot_marker_count;
     level_editor_marker snapshot_markers[LEVEL_EDITOR_MAX_MARKERS];

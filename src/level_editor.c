@@ -629,6 +629,7 @@ static void level_editor_save_snapshot(level_editor_state* s) {
     s->snapshot_level_powerup_drop_chance = s->level_powerup_drop_chance;
     s->snapshot_level_kamikaze_radius_min = s->level_kamikaze_radius_min;
     s->snapshot_level_kamikaze_radius_max = s->level_kamikaze_radius_max;
+    s->snapshot_level_kamikaze_style = s->level_kamikaze_style;
     snprintf(s->snapshot_level_name, sizeof(s->snapshot_level_name), "%s", s->level_name);
     s->snapshot_marker_count = s->marker_count;
     if (s->snapshot_marker_count > LEVEL_EDITOR_MAX_MARKERS) {
@@ -1017,6 +1018,14 @@ static const char* minefield_style_name(int style) {
     }
 }
 
+static const char* kamikaze_style_name(int style) {
+    switch (style) {
+        case KAMIKAZE_STYLE_SPIDER: return "spider";
+        case KAMIKAZE_STYLE_CLASSIC:
+        default: return "classic";
+    }
+}
+
 static const char* curated_kind_name(int kind) {
     if (kind == LEVEL_EDITOR_MARKER_WAVE_SINE) return "sine";
     if (kind == LEVEL_EDITOR_MARKER_WAVE_V) return "v";
@@ -1368,6 +1377,7 @@ static int build_level_serialized_text(
     }
     lvl.kamikaze.radius_min = fmaxf(1.0f, s->level_kamikaze_radius_min);
     lvl.kamikaze.radius_max = fmaxf(lvl.kamikaze.radius_min, s->level_kamikaze_radius_max);
+    lvl.kamikaze.style = clampi(s->level_kamikaze_style, KAMIKAZE_STYLE_CLASSIC, KAMIKAZE_STYLE_SPIDER);
     lvl.event_count = 0;
     if (lvl.wave_mode != LEVELDEF_WAVES_CURATED) {
         for (i = 0; i < wave_n && lvl.event_count < LEVELDEF_MAX_EVENTS; ++i) {
@@ -1645,6 +1655,12 @@ static int build_level_serialized_text(
             if (!appendf(out, out_cap, &used, "kamikaze.accel=%.3f\n", lvl.kamikaze.accel)) return 0;
             if (!appendf(out, out_cap, &used, "kamikaze.radius_min=%.3f\n", lvl.kamikaze.radius_min)) return 0;
             if (!appendf(out, out_cap, &used, "kamikaze.radius_max=%.3f\n", lvl.kamikaze.radius_max)) return 0;
+            {
+                const int style = clampi(lvl.kamikaze.style, KAMIKAZE_STYLE_CLASSIC, KAMIKAZE_STYLE_SPIDER);
+                if (style != KAMIKAZE_STYLE_CLASSIC) {
+                    if (!appendf(out, out_cap, &used, "kamikaze.style=%s\n", kamikaze_style_name(style))) return 0;
+                }
+            }
         }
     }
 
@@ -1777,7 +1793,7 @@ static int marker_property_count(const level_editor_state* s) {
             return ev_item ? 7 : 8; /* event: TYPE,ORDER,DELAY,COUNT,SPEED,ACCEL,TURN | spatial: TYPE,X,Y,COUNT,SPEED,ACCEL,TURN,DELAY */
         }
         if (kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
-            return ev_item ? 8 : 9; /* event: TYPE,ORDER,DELAY,COUNT,SPEED,ACCEL,R MIN,R MAX | spatial adds DELAY */
+            return ev_item ? 9 : 10; /* event: TYPE,ORDER,DELAY,COUNT,SPEED,ACCEL,STYLE,R MIN,R MAX | spatial adds DELAY */
         }
         return ev_item ? 6 : 7; /* event: TYPE,ORDER,DELAY,A,B,C | spatial: TYPE,X,Y,A,B,C,DELAY */
     }
@@ -2457,6 +2473,7 @@ void level_editor_init(level_editor_state* s) {
     s->level_powerup_drop_chance = 0.12f;
     s->level_kamikaze_radius_min = 11.0f;
     s->level_kamikaze_radius_max = 17.0f;
+    s->level_kamikaze_style = KAMIKAZE_STYLE_CLASSIC;
     snprintf(s->level_name, sizeof(s->level_name), "%s", level_style_name(s->level_style));
     snprintf(s->status_text, sizeof(s->status_text), "ready");
     s->entry_active = 0;
@@ -2590,6 +2607,7 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
             s->level_powerup_drop_chance = lvl->powerup_drop_chance;
             s->level_kamikaze_radius_min = lvl->kamikaze.radius_min;
             s->level_kamikaze_radius_max = lvl->kamikaze.radius_max;
+            s->level_kamikaze_style = clampi(lvl->kamikaze.style, KAMIKAZE_STYLE_CLASSIC, KAMIKAZE_STYLE_SPIDER);
         } else {
             s->level_background_style = (s->level_render_style == LEVEL_RENDER_BLANK)
                 ? LEVELDEF_BACKGROUND_NONE
@@ -2599,6 +2617,7 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
                 ? LEVELDEF_BG_MASK_TERRAIN
                 : LEVELDEF_BG_MASK_NONE;
             s->level_powerup_drop_chance = 0.12f;
+            s->level_kamikaze_style = KAMIKAZE_STYLE_CLASSIC;
         }
     }
     build_markers(s, db, style, lvl);
@@ -3539,25 +3558,34 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
                         m->d = clampf(m->d + delta * 1.0f, 10.0f, 720.0f);
                     }
                 } else if (m->kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
-                    s->level_kamikaze_radius_min = clampf(s->level_kamikaze_radius_min + delta * 1.0f, 1.0f, 200.0f);
-                    if (s->level_kamikaze_radius_max < s->level_kamikaze_radius_min) {
-                        s->level_kamikaze_radius_max = s->level_kamikaze_radius_min;
-                    }
+                    const int dir = (delta >= 0.0f) ? 1 : -1;
+                    const int n = KAMIKAZE_STYLE_SPIDER - KAMIKAZE_STYLE_CLASSIC + 1;
+                    int style = clampi(s->level_kamikaze_style, KAMIKAZE_STYLE_CLASSIC, KAMIKAZE_STYLE_SPIDER);
+                    style = KAMIKAZE_STYLE_CLASSIC + ((style - KAMIKAZE_STYLE_CLASSIC + dir + n) % n);
+                    s->level_kamikaze_style = style;
                 } else if (!ev_item) {
                     m->delay_s = fmaxf(0.0f, m->delay_s + delta * 0.1f);
                 }
                 break;
             case 7:
                 if (m->kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
-                    s->level_kamikaze_radius_max = clampf(s->level_kamikaze_radius_max + delta * 1.0f, 1.0f, 240.0f);
+                    s->level_kamikaze_radius_min = clampf(s->level_kamikaze_radius_min + delta * 1.0f, 1.0f, 200.0f);
                     if (s->level_kamikaze_radius_max < s->level_kamikaze_radius_min) {
-                        s->level_kamikaze_radius_min = s->level_kamikaze_radius_max;
+                        s->level_kamikaze_radius_max = s->level_kamikaze_radius_min;
                     }
                 } else if (boid_item && !ev_item) {
                     m->delay_s = fmaxf(0.0f, m->delay_s + delta * 0.1f);
                 }
                 break;
             case 8:
+                if (m->kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
+                    s->level_kamikaze_radius_max = clampf(s->level_kamikaze_radius_max + delta * 1.0f, 1.0f, 240.0f);
+                    if (s->level_kamikaze_radius_max < s->level_kamikaze_radius_min) {
+                        s->level_kamikaze_radius_min = s->level_kamikaze_radius_max;
+                    }
+                }
+                break;
+            case 9:
                 if (m->kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE && !ev_item) {
                     m->delay_s = fmaxf(0.0f, m->delay_s + delta * 0.1f);
                 }
@@ -3723,6 +3751,7 @@ int level_editor_revert(level_editor_state* s) {
     s->level_powerup_drop_chance = s->snapshot_level_powerup_drop_chance;
     s->level_kamikaze_radius_min = s->snapshot_level_kamikaze_radius_min;
     s->level_kamikaze_radius_max = s->snapshot_level_kamikaze_radius_max;
+    s->level_kamikaze_style = s->snapshot_level_kamikaze_style;
     s->level_style = level_style_from_render_style(s->level_render_style);
     snprintf(s->level_name, sizeof(s->level_name), "%s", s->snapshot_level_name);
     s->marker_count = s->snapshot_marker_count;
@@ -3778,6 +3807,7 @@ void level_editor_new_blank(level_editor_state* s) {
     s->level_powerup_drop_chance = 0.12f;
     s->level_kamikaze_radius_min = 11.0f;
     s->level_kamikaze_radius_max = 17.0f;
+    s->level_kamikaze_style = KAMIKAZE_STYLE_CLASSIC;
     snprintf(s->level_name, sizeof(s->level_name), "level_blank");
     snprintf(s->status_text, sizeof(s->status_text), "new level");
 }

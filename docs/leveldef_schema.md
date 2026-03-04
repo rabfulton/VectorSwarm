@@ -97,7 +97,7 @@
 - `drifter`
 - `drifter_shaded`
 - `fog`
-- `wave_mode` enum: `normal` or `boid_only`
+- `wave_mode` enum: `normal`, `boid_only`, or `curated`
 - `background` enum: `stars`, `none`, `nebula`, `grid`, `solid`, `underwater`, `fire`
 - `underwater.*` tuning keys (density/caustics/kelp variants) when `background=underwater`
 - `fire.magma_scale` float
@@ -175,6 +175,7 @@
 - `kamikaze.accel`
 - `kamikaze.radius_min`
 - `kamikaze.radius_max`
+- `kamikaze.style` enum: `classic` or `spider`
 - `searchlight` repeated CSV rows
 
 ### `searchlight` CSV Field Order

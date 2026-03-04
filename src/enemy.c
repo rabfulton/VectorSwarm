@@ -1222,6 +1222,26 @@ static int resolve_boid_profile_by_variant(const leveldef_db* db, const leveldef
     return pid;
 }
 
+static void apply_kamikaze_visual_style(enemy* e, int style, int wave_id, int slot_index) {
+    if (!e) {
+        return;
+    }
+    if (style == KAMIKAZE_STYLE_SPIDER) {
+        const uint32_t seed = enemy_visual_seed_from_ids(wave_id, slot_index);
+        e->visual_kind = ENEMY_VISUAL_SPIDER;
+        e->visual_seed = seed;
+        e->visual_phase = hash01_u32(seed ^ 0x7b3u) * 6.2831853f;
+        e->visual_param_a = lerpf(0.80f, 1.25f, hash01_u32(seed ^ 0x2d9u));
+        e->visual_param_b = lerpf(0.18f, 0.34f, hash01_u32(seed ^ 0x4f1u));
+        return;
+    }
+    e->visual_kind = ENEMY_VISUAL_DEFAULT;
+    e->visual_seed = 0u;
+    e->visual_phase = 0.0f;
+    e->visual_param_a = 0.0f;
+    e->visual_param_b = 0.0f;
+}
+
 static void spawn_wave_kamikaze(game_state* g, const leveldef_db* db, const leveldef_level* lvl, int wave_id, int bidirectional_spawns, float su) {
     const leveldef_wave_kamikaze_tuning* w = &lvl->kamikaze;
     (void)db;
@@ -1240,6 +1260,7 @@ static void spawn_wave_kamikaze(game_state* g, const leveldef_db* db, const leve
             enemy_assign_combat_loadout(g, e, db);
             e->wave_id = wave_id;
             e->slot_index = i;
+            apply_kamikaze_visual_style(e, w->style, wave_id, i);
             e->b.x = g->camera_x + spawn_side * (g->world_w * w->start_x01 + (float)i * w->spacing_x * su);
             enforce_auto_spawn_side(g, e, bidirectional_spawns);
             {
@@ -1414,6 +1435,7 @@ void enemy_spawn_curated_enemy(
             e->archetype = ENEMY_ARCH_KAMIKAZE;
             e->state = ENEMY_STATE_KAMIKAZE_COIL;
             enemy_assign_combat_loadout(g, e, db);
+            apply_kamikaze_visual_style(e, lvl->kamikaze.style, wave_id, i);
             e->b.x = base_x + slot * spread_x + jitter_x;
             e->b.y = base_y + jitter_y;
             e->max_speed = ((ce->b > 0.0f) ? ce->b : lvl->kamikaze.max_speed) * su;

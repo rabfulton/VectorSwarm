@@ -252,6 +252,7 @@ typedef struct leveldef_wave_kamikaze_tuning {
     float accel;
     float radius_min;
     float radius_max;
+    int style; /* enum kamikaze_style_id */
 } leveldef_wave_kamikaze_tuning;
 
 typedef struct leveldef_curated_enemy {

@@ -10133,6 +10133,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .level_editor_powerup_drop_chance = a->level_editor.level_powerup_drop_chance,
         .level_editor_kamikaze_radius_min = a->level_editor.level_kamikaze_radius_min,
         .level_editor_kamikaze_radius_max = a->level_editor.level_kamikaze_radius_max,
+        .level_editor_kamikaze_style = a->level_editor.level_kamikaze_style,
         .level_editor_selected_marker = a->level_editor.selected_marker,
         .level_editor_selected_property = a->level_editor.selected_property,
         .level_editor_tool_selected = a->level_editor.entity_tool_selected,

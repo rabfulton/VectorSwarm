@@ -62,6 +62,25 @@ static int mine_style_from_name(const char* name) {
     return -1;
 }
 
+static int kamikaze_style_from_name(const char* name) {
+    char* end = NULL;
+    long v;
+    if (!name) {
+        return -1;
+    }
+    if (strcmp(name, "classic") == 0 || strcmp(name, "default") == 0) {
+        return KAMIKAZE_STYLE_CLASSIC;
+    }
+    if (strcmp(name, "spider") == 0) {
+        return KAMIKAZE_STYLE_SPIDER;
+    }
+    v = strtol(name, &end, 10);
+    if (end && *end == '\0') {
+        return (int)v;
+    }
+    return -1;
+}
+
 static int wave_pattern_from_name(const char* name) {
     if (!name) {
         return -1;
@@ -399,6 +418,7 @@ void leveldef_init_defaults(leveldef_db* db) {
         db->levels[i].powerup_magnet_r = 1.00f;
         db->levels[i].powerup_magnet_g = 0.76f;
         db->levels[i].powerup_magnet_b = 0.72f;
+        db->levels[i].kamikaze.style = KAMIKAZE_STYLE_CLASSIC;
     }
     {
         leveldef_level* b = &db->levels[LEVEL_STYLE_BLANK];
@@ -456,6 +476,7 @@ void leveldef_init_defaults(leveldef_db* db) {
         b->kamikaze.accel = 9.0f;
         b->kamikaze.radius_min = 11.0f;
         b->kamikaze.radius_max = 17.0f;
+        b->kamikaze.style = KAMIKAZE_STYLE_CLASSIC;
     }
 }
 
@@ -1165,6 +1186,13 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_level->kamikaze.radius_min = strtof(v, NULL);
                     } else if (strcmp(k, "kamikaze.radius_max") == 0) {
                         cur_level->kamikaze.radius_max = strtof(v, NULL);
+                    } else if (strcmp(k, "kamikaze.style") == 0) {
+                        const int style = kamikaze_style_from_name(v);
+                        if (style >= 0) {
+                            cur_level->kamikaze.style = style;
+                        } else if (log_out) {
+                            fprintf(log_out, "leveldef: invalid kamikaze.style '%s'\n", v);
+                        }
                     } else if (strcmp(k, "searchlight") == 0) {
                         (void)parse_searchlight(cur_level, v, log_out);
                     } else if (strcmp(k, "minefield") == 0) {
@@ -1566,6 +1594,12 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
                     break;
                 }
             }
+        }
+        if (l->kamikaze.style < KAMIKAZE_STYLE_CLASSIC || l->kamikaze.style > KAMIKAZE_STYLE_SPIDER) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d has invalid kamikaze.style\n", i);
+            }
+            ok = 0;
         }
         if (l->minefield_count < 0 || l->minefield_count > LEVELDEF_MAX_MINEFIELDS) {
             if (log_out) {

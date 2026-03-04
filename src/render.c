@@ -4669,6 +4669,12 @@ static const char* editor_mine_style_name(float v) {
     return "CLASSIC";
 }
 
+static const char* editor_kamikaze_style_name(int style) {
+    style = clampi(style, KAMIKAZE_STYLE_CLASSIC, KAMIKAZE_STYLE_SPIDER);
+    if (style == KAMIKAZE_STYLE_SPIDER) return "SPIDER";
+    return "CLASSIC";
+}
+
 static const char* editor_render_style_name(int style) {
     if (style == LEVEL_RENDER_CYLINDER) return "CYLINDER";
     if (style == LEVEL_RENDER_DRIFTER) return "DRIFTER";
@@ -4839,6 +4845,7 @@ static int editor_marker_properties_text(
             }
             n++;
         }
+        if (kamikaze_item && n < cap) { out_labels[n] = "STYLE"; snprintf(out_values[n], 32, "%s", editor_kamikaze_style_name(metrics->level_editor_kamikaze_style)); n++; }
         if (kamikaze_item && n < cap) { out_labels[n] = "RADIUS MIN"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_kamikaze_radius_min); n++; }
         if (kamikaze_item && n < cap) { out_labels[n] = "RADIUS MAX"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_kamikaze_radius_max); n++; }
         if (!event_item && n < cap) { out_labels[n] = "DELAY S"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_delay_s[sel]); n++; }
@@ -8216,6 +8223,147 @@ static vg_result draw_enemy_glyph_default(vg_context* ctx, const enemy* e, float
     return draw_enemy_tail(ctx, e, x, y, rr, enemy_style);
 }
 
+static vg_result draw_enemy_glyph_spider(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
+    float fx = 0.0f;
+    float fy = 0.0f;
+    float nx = 0.0f;
+    float ny = 0.0f;
+    enemy_glyph_basis(e, &fx, &fy, &nx, &ny);
+    const float gait_amp = clampf((e->visual_param_b > 0.01f) ? e->visual_param_b : 0.24f, 0.10f, 0.42f);
+    const float gait_speed = 4.8f + 2.3f * clampf((e->visual_param_a > 0.01f) ? e->visual_param_a : 1.0f, 0.6f, 1.4f);
+    const float phase = e->ai_timer_s * gait_speed + e->visual_phase;
+    const float bob = sinf(phase * 0.55f);
+    const float body_y = y + rr * 0.10f * bob;
+    vg_stroke_style main = *enemy_style;
+    vg_stroke_style inner = *enemy_style;
+    vg_stroke_style glow = *enemy_style;
+    main.intensity *= 1.06f;
+    inner.width_px *= 0.80f;
+    inner.intensity *= 0.76f;
+    inner.color.a *= 0.82f;
+    glow.width_px *= 1.55f;
+    glow.intensity *= 0.42f;
+    glow.color.a *= 0.52f;
+    glow.blend = VG_BLEND_ADDITIVE;
+
+    {
+        const float abdomen_shape[][2] = {
+            {-0.96f, 0.00f}, {-0.72f, 0.52f}, {-0.20f, 0.78f}, {0.34f, 0.60f},
+            {0.62f, 0.18f}, {0.62f, -0.18f}, {0.34f, -0.60f}, {-0.20f, -0.78f},
+            {-0.72f, -0.52f}, {-0.96f, 0.00f}
+        };
+        vg_vec2 abdomen[10];
+        const float body_scale_n = rr * (0.84f + 0.10f * bob);
+        const float body_scale_f = rr * 0.94f;
+        for (int i = 0; i < 10; ++i) {
+            const float local_f = abdomen_shape[i][0] * body_scale_f - rr * 0.28f;
+            const float local_n = abdomen_shape[i][1] * body_scale_n;
+            abdomen[i].x = x + fx * local_f + nx * local_n;
+            abdomen[i].y = body_y + fy * local_f + ny * local_n;
+        }
+        vg_result r = vg_draw_polyline(ctx, abdomen, 10, &glow, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_draw_polyline(ctx, abdomen, 10, &main, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+    }
+
+    {
+        const float thorax_shape[][2] = {
+            {0.56f, 0.00f}, {0.28f, 0.44f}, {-0.12f, 0.46f},
+            {-0.34f, 0.00f}, {-0.12f, -0.46f}, {0.28f, -0.44f}, {0.56f, 0.00f}
+        };
+        vg_vec2 thorax[7];
+        const float thorax_scale_n = rr * (0.58f + 0.06f * bob);
+        const float thorax_scale_f = rr * 0.74f;
+        for (int i = 0; i < 7; ++i) {
+            const float local_f = thorax_shape[i][0] * thorax_scale_f + rr * 0.18f;
+            const float local_n = thorax_shape[i][1] * thorax_scale_n;
+            thorax[i].x = x + fx * local_f + nx * local_n;
+            thorax[i].y = body_y + fy * local_f + ny * local_n;
+        }
+        vg_result r = vg_draw_polyline(ctx, thorax, 7, &main, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_draw_polyline(ctx, thorax, 7, &inner, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+    }
+
+    {
+        const vg_vec2 spine[2] = {
+            {x + fx * (-0.04f * rr), body_y + fy * (-0.04f * rr)},
+            {x + fx * (0.42f * rr), body_y + fy * (0.42f * rr)}
+        };
+        vg_result r = vg_draw_polyline(ctx, spine, 2, &inner, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+    }
+
+    {
+        const float k_base_f[4] = {0.42f, 0.16f, -0.08f, -0.30f};
+        const float k_base_n[4] = {0.38f, 0.46f, 0.52f, 0.48f};
+        for (int side = -1; side <= 1; side += 2) {
+            const float side_sign = (float)side;
+            for (int li = 0; li < 4; ++li) {
+                const float step = sinf(phase * 1.25f + (float)li * 1.10f + (side_sign > 0.0f ? 0.90f : 0.00f));
+                const float base_f = k_base_f[li] * rr + rr * 0.16f;
+                const float base_n = side_sign * k_base_n[li] * rr;
+                const float knee_f = base_f + rr * (-0.24f + 0.10f * (float)li) + rr * 0.05f * step;
+                const float knee_n = side_sign * (rr * (0.90f + 0.20f * (float)li) + rr * 0.48f * gait_amp * step);
+                const float tip_f = knee_f + rr * (-0.64f + 0.16f * (float)li) + rr * 0.10f * step;
+                const float tip_n = side_sign * (rr * (1.52f + 0.30f * (float)li) + rr * 0.62f * gait_amp * step);
+                const vg_vec2 leg[3] = {
+                    {x + fx * base_f + nx * base_n, body_y + fy * base_f + ny * base_n},
+                    {x + fx * knee_f + nx * knee_n, body_y + fy * knee_f + ny * knee_n},
+                    {x + fx * tip_f + nx * tip_n, body_y + fy * tip_f + ny * tip_n}
+                };
+                vg_stroke_style leg_main = main;
+                leg_main.width_px *= (li == 0) ? 0.95f : 0.90f;
+                leg_main.intensity *= (li == 0) ? 1.06f : 0.95f;
+                vg_result r = vg_draw_polyline(ctx, leg, 3, &glow, 0);
+                if (r != VG_OK) {
+                    return r;
+                }
+                r = vg_draw_polyline(ctx, leg, 3, &leg_main, 0);
+                if (r != VG_OK) {
+                    return r;
+                }
+            }
+        }
+    }
+
+    {
+        const vg_vec2 fang_l[2] = {
+            {x + fx * (0.58f * rr) + nx * (-0.14f * rr), body_y + fy * (0.58f * rr) + ny * (-0.14f * rr)},
+            {x + fx * (0.86f * rr) + nx * (-0.28f * rr), body_y + fy * (0.86f * rr) + ny * (-0.28f * rr)}
+        };
+        const vg_vec2 fang_r[2] = {
+            {x + fx * (0.58f * rr) + nx * (0.14f * rr), body_y + fy * (0.58f * rr) + ny * (0.14f * rr)},
+            {x + fx * (0.86f * rr) + nx * (0.28f * rr), body_y + fy * (0.86f * rr) + ny * (0.28f * rr)}
+        };
+        vg_result r = vg_draw_polyline(ctx, fang_l, 2, &inner, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_draw_polyline(ctx, fang_r, 2, &inner, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+    }
+
+    if (e->kamikaze_tail > 0.02f) {
+        return draw_enemy_tail(ctx, e, x, body_y, rr, &inner);
+    }
+    return VG_OK;
+}
+
 static vg_result draw_enemy_glyph_jelly(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
     float fx = 0.0f;
     float fy = 0.0f;
@@ -8865,6 +9013,8 @@ static vg_result draw_enemy_glyph_eel(vg_context* ctx, const enemy* e, float x, 
 
 static vg_result draw_enemy_glyph(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
     switch (e->visual_kind) {
+        case ENEMY_VISUAL_SPIDER:
+            return draw_enemy_glyph_spider(ctx, e, x, y, rr, enemy_style);
         case ENEMY_VISUAL_EEL:
             return draw_enemy_glyph_eel(ctx, e, x, y, rr, enemy_style);
         case ENEMY_VISUAL_MANTA:
