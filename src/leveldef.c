@@ -138,6 +138,10 @@ static int curated_kind_from_name(const char* name) {
     return -1;
 }
 
+static int curated_kind_is_regular_boid(int kind) {
+    return (kind == 5 || kind == 10 || kind == 11 || kind == 12);
+}
+
 static int render_style_from_name(const char* name) {
     if (!name) {
         return -1;
@@ -817,8 +821,8 @@ static int parse_curated_enemy(leveldef_level* lvl, const char* value, FILE* log
     char* tok;
     char* save = NULL;
     const int min_expected = 6;
-    const int max_expected = 7;
-    char* fields[7];
+    const int max_expected = 8;
+    char* fields[8];
     int i = 0;
     leveldef_curated_enemy ce;
 
@@ -834,9 +838,9 @@ static int parse_curated_enemy(leveldef_level* lvl, const char* value, FILE* log
         fields[i++] = trim(tok);
         tok = strtok_r(NULL, ",", &save);
     }
-    if (i != min_expected && i != max_expected) {
+    if (i < min_expected || i > max_expected) {
         if (log_out) {
-            fprintf(log_out, "leveldef: curated_enemy expects %d or %d fields, got %d\n", min_expected, max_expected, i);
+            fprintf(log_out, "leveldef: curated_enemy expects %d..%d fields, got %d\n", min_expected, max_expected, i);
         }
         return 0;
     }
@@ -848,11 +852,15 @@ static int parse_curated_enemy(leveldef_level* lvl, const char* value, FILE* log
     ce.b = strtof(fields[4], NULL);
     ce.c = strtof(fields[5], NULL);
     ce.d = (i >= 7) ? strtof(fields[6], NULL) : 0.0f;
+    ce.e = (i >= 8) ? strtof(fields[7], NULL) : 0.0f;
     if (ce.kind < 0) {
         if (log_out) {
             fprintf(log_out, "leveldef: invalid curated_enemy kind '%s'\n", fields[0]);
         }
         return 0;
+    }
+    if (curated_kind_is_regular_boid(ce.kind) && ce.e <= 0.0f) {
+        ce.e = 1.0f;
     }
     lvl->curated[lvl->curated_count++] = ce;
     return 1;

@@ -56,6 +56,8 @@ typedef struct enemy_fire_tuning {
     float spread_scale;
 } enemy_fire_tuning;
 
+static void apply_boid_visual_style(enemy* e, int style, int wave_id, int slot_index);
+
 static float frand01(void) {
     return (float)rand() / (float)RAND_MAX;
 }
@@ -1215,7 +1217,16 @@ static void spawn_wave_v_formation(game_state* g, const leveldef_db* db, const l
     }
 }
 
-static void spawn_wave_swarm_profile(game_state* g, const leveldef_db* db, int wave_id, int profile_id, float goal_dir, int bidirectional_spawns, float su) {
+static void spawn_wave_swarm_profile(
+    game_state* g,
+    const leveldef_db* db,
+    int wave_id,
+    int profile_id,
+    int boid_style,
+    float goal_dir,
+    int bidirectional_spawns,
+    float su
+) {
     const leveldef_boid_profile* p = leveldef_get_boid_profile(db, profile_id);
     if (!p) {
         return;
@@ -1230,6 +1241,7 @@ static void spawn_wave_swarm_profile(game_state* g, const leveldef_db* db, int w
         enemy_assign_combat_loadout(g, e, db);
         e->wave_id = wave_id;
         e->slot_index = i;
+        apply_boid_visual_style(e, boid_style, wave_id, i);
         if (bidirectional_spawns) {
             const float spawn_side = (goal_dir < 0.0f) ? 1.0f : -1.0f;
             e->b.x = g->camera_x + spawn_side * (g->world_w * p->spawn_x01 + frand01() * p->spawn_x_span * su);
@@ -1287,6 +1299,36 @@ static int resolve_boid_profile_by_variant(const leveldef_db* db, const leveldef
     return pid;
 }
 
+static int boid_style_from_value(float value) {
+    if (!isfinite(value)) {
+        return BOID_STYLE_CLASSIC;
+    }
+    /* Legacy editor data stored boid turn-rate degrees in this slot. Treat large
+     * values as classic style to preserve existing levels. */
+    if (fabsf(value) > 32.0f) {
+        return BOID_STYLE_CLASSIC;
+    }
+    return clampi((int)lroundf(value), BOID_STYLE_CLASSIC, BOID_STYLE_RAZOR);
+}
+
+static float boid_size_scale_from_value(float value) {
+    if (!isfinite(value) || value <= 0.0f) {
+        return 1.0f;
+    }
+    return clampf(value, 0.25f, 4.00f);
+}
+
+static void clear_enemy_visual_style(enemy* e) {
+    if (!e) {
+        return;
+    }
+    e->visual_kind = ENEMY_VISUAL_DEFAULT;
+    e->visual_seed = 0u;
+    e->visual_phase = 0.0f;
+    e->visual_param_a = 0.0f;
+    e->visual_param_b = 0.0f;
+}
+
 static void apply_kamikaze_visual_style(enemy* e, int style, int wave_id, int slot_index) {
     if (!e) {
         return;
@@ -1300,11 +1342,23 @@ static void apply_kamikaze_visual_style(enemy* e, int style, int wave_id, int sl
         e->visual_param_b = lerpf(0.18f, 0.34f, hash01_u32(seed ^ 0x4f1u));
         return;
     }
-    e->visual_kind = ENEMY_VISUAL_DEFAULT;
-    e->visual_seed = 0u;
-    e->visual_phase = 0.0f;
-    e->visual_param_a = 0.0f;
-    e->visual_param_b = 0.0f;
+    clear_enemy_visual_style(e);
+}
+
+static void apply_boid_visual_style(enemy* e, int style, int wave_id, int slot_index) {
+    if (!e) {
+        return;
+    }
+    if (style == BOID_STYLE_RAZOR) {
+        const uint32_t seed = enemy_visual_seed_from_ids(wave_id, slot_index);
+        e->visual_kind = ENEMY_VISUAL_BOID_RAZOR;
+        e->visual_seed = seed;
+        e->visual_phase = hash01_u32(seed ^ 0x2c5u) * 6.2831853f;
+        e->visual_param_a = lerpf(0.90f, 1.35f, hash01_u32(seed ^ 0x113u));
+        e->visual_param_b = lerpf(0.12f, 0.26f, hash01_u32(seed ^ 0x7a9u));
+        return;
+    }
+    clear_enemy_visual_style(e);
 }
 
 static void spawn_wave_kamikaze(game_state* g, const leveldef_db* db, const leveldef_level* lvl, int wave_id, int bidirectional_spawns, float su) {
@@ -1388,6 +1442,7 @@ void enemy_spawn_curated_enemy(
                 (ce->b > 0.0f && ce->c > 0.0f &&
                  fabsf(ce->b - 190.0f) < 0.001f &&
                  fabsf(ce->c - 90.0f) < 0.001f);
+            const int is_regular_boid = (ce->kind == 5 || ce->kind == 10 || ce->kind == 11 || ce->kind == 12);
             if (!e) {
                 break;
             }
@@ -1402,15 +1457,24 @@ void enemy_spawn_curated_enemy(
             e->max_speed = ((ce->b > 0.0f && !legacy_default_override) ? ce->b : p->max_speed) * su;
             e->accel = ((ce->c > 0.0f && !legacy_default_override) ? ce->c : p->accel);
             e->radius = (p->radius_min + frand01() * fmaxf(p->radius_max - p->radius_min, 0.0f)) * su;
+            if (is_regular_boid) {
+                const float size_scale = boid_size_scale_from_value(ce->e);
+                e->radius *= size_scale;
+            }
             {
-                float jelly_sep_scale = 1.0f;
+                float sep_scale = 1.0f;
+                if (is_regular_boid) {
+                    /* Keep boid minimum separation proportional to authored size so
+                     * larger glyphs don't overlap and smaller ones can bunch tighter. */
+                    sep_scale *= boid_size_scale_from_value(ce->e);
+                }
                 if (ce->kind == 15) {
                     const float size_scale = (ce->d > 0.0f) ? ce->d : 1.0f;
                     const float size_scale_clamped = clampf(size_scale, 0.20f, 4.00f);
                     e->radius *= size_scale_clamped;
-                    jelly_sep_scale = lerpf(0.75f, 1.90f, (size_scale_clamped - 0.20f) / (4.00f - 0.20f));
+                    sep_scale *= lerpf(0.75f, 1.90f, (size_scale_clamped - 0.20f) / (4.00f - 0.20f));
                 }
-                e->swarm_sep_r = p->sep_r * su * jelly_sep_scale;
+                e->swarm_sep_r = p->sep_r * su * sep_scale;
             }
             e->swarm_ali_r = p->ali_r * su;
             e->swarm_coh_r = p->coh_r * su;
@@ -1433,6 +1497,9 @@ void enemy_spawn_curated_enemy(
             e->swarm_drag = p->steer_drag;
             e->swarm_min_speed = p->min_speed * su;
             e->swarm_turn_rate_rad = p->max_turn_rate_deg * (3.14159265359f / 180.0f);
+            if (ce->kind == 5 || ce->kind == 10 || ce->kind == 11 || ce->kind == 12) {
+                apply_boid_visual_style(e, boid_style_from_value(ce->d), wave_id, i);
+            }
             if (ce->kind == 15) {
                 const uint32_t seed = enemy_visual_seed_from_ids(wave_id, i);
                 e->visual_kind = ENEMY_VISUAL_JELLY;
@@ -1626,10 +1693,10 @@ void enemy_spawn_next_wave(
             announce_wave(g, p->wave_name);
             {
                 const float dir = bidirectional_spawns ? ((frand01() < 0.5f) ? -1.0f : 1.0f) : 1.0f;
-                spawn_wave_swarm_profile(g, db, wave_id, profile_id, dir, bidirectional_spawns, su);
+                spawn_wave_swarm_profile(g, db, wave_id, profile_id, BOID_STYLE_CLASSIC, dir, bidirectional_spawns, su);
                 if (bidirectional_spawns && g->wave_index >= 4 && frand01() < lvl->cylinder_double_swarm_chance) {
                     const int wave_id_2 = ++g->wave_id_alloc;
-                    spawn_wave_swarm_profile(g, db, wave_id_2, profile_id, -dir, bidirectional_spawns, su);
+                    spawn_wave_swarm_profile(g, db, wave_id_2, profile_id, BOID_STYLE_CLASSIC, -dir, bidirectional_spawns, su);
                 }
             }
         }
@@ -1694,10 +1761,10 @@ void enemy_spawn_next_wave(
             announce_wave(g, wave_name);
             {
                 const float dir = bidirectional_spawns ? ((frand01() < 0.5f) ? -1.0f : 1.0f) : 1.0f;
-                spawn_wave_swarm_profile(g, db, wave_id, profile_id, dir, bidirectional_spawns, su);
+                spawn_wave_swarm_profile(g, db, wave_id, profile_id, BOID_STYLE_CLASSIC, dir, bidirectional_spawns, su);
                 if (bidirectional_spawns && g->wave_index >= 4 && frand01() < lvl->cylinder_double_swarm_chance) {
                     const int wave_id_2 = ++g->wave_id_alloc;
-                    spawn_wave_swarm_profile(g, db, wave_id_2, profile_id, -dir, bidirectional_spawns, su);
+                    spawn_wave_swarm_profile(g, db, wave_id_2, profile_id, BOID_STYLE_CLASSIC, -dir, bidirectional_spawns, su);
                 }
             }
         } else if (pattern == LEVELDEF_WAVE_ASTEROID_STORM) {

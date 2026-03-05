@@ -4675,6 +4675,32 @@ static const char* editor_kamikaze_style_name(int style) {
     return "CLASSIC";
 }
 
+static int editor_boid_style_from_value(float value) {
+    if (!isfinite(value)) {
+        return BOID_STYLE_CLASSIC;
+    }
+    /* Backward-compat: old editor data stored turn-rate degrees here. */
+    if (fabsf(value) > 32.0f) {
+        return BOID_STYLE_CLASSIC;
+    }
+    return clampi((int)lroundf(value), BOID_STYLE_CLASSIC, BOID_STYLE_RAZOR);
+}
+
+static const char* editor_boid_style_name(float value) {
+    const int style = editor_boid_style_from_value(value);
+    if (style == BOID_STYLE_RAZOR) {
+        return "RAZOR";
+    }
+    return "CLASSIC";
+}
+
+static float editor_boid_size_scale_from_value(float value) {
+    if (!isfinite(value) || value <= 0.0f) {
+        return 1.0f;
+    }
+    return clampf(value, 0.25f, 4.00f);
+}
+
 static const char* editor_render_style_name(int style) {
     if (style == LEVEL_RENDER_CYLINDER) return "CYLINDER";
     if (style == LEVEL_RENDER_DRIFTER) return "DRIFTER";
@@ -4853,9 +4879,14 @@ static int editor_marker_properties_text(
                 out_labels[n] = "SIZE SCALE";
                 snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_d[sel]);
             } else {
-                out_labels[n] = "MAX TURN DEG";
-                snprintf(out_values[n], 32, "%.1f", metrics->level_editor_marker_d[sel]);
+                out_labels[n] = "STYLE";
+                snprintf(out_values[n], 32, "%s", editor_boid_style_name(metrics->level_editor_marker_d[sel]));
             }
+            n++;
+        }
+        if (boid_item && kind != 15 && kind != 17 && n < cap) {
+            out_labels[n] = "SIZE SCALE";
+            snprintf(out_values[n], 32, "%.2f", editor_boid_size_scale_from_value(metrics->level_editor_marker_e[sel]));
             n++;
         }
         if (kamikaze_item && n < cap) { out_labels[n] = "STYLE"; snprintf(out_values[n], 32, "%s", editor_kamikaze_style_name((int)lroundf(metrics->level_editor_marker_d[sel]))); n++; }
@@ -8363,6 +8394,170 @@ static vg_result draw_enemy_glyph_default(vg_context* ctx, const enemy* e, float
     return draw_enemy_tail(ctx, e, x, y, rr, enemy_style);
 }
 
+static vg_result draw_enemy_glyph_razor(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
+    float fx = 0.0f;
+    float fy = 0.0f;
+    float nx = 0.0f;
+    float ny = 0.0f;
+    enemy_glyph_basis(e, &fx, &fy, &nx, &ny);
+    {
+        const float beat_speed = 4.2f + 2.0f * clampf((e->visual_param_a > 0.01f) ? e->visual_param_a : 1.0f, 0.6f, 1.4f);
+        const float phase = e->ai_timer_s * beat_speed + e->visual_phase;
+        const float beat = sinf(phase);
+        const float wing_amp = rr * (0.12f + 0.28f * clampf((e->visual_param_b > 0.01f) ? e->visual_param_b : 0.18f, 0.08f, 0.34f));
+        const float wing_n = rr * (0.54f + beat * wing_amp / fmaxf(rr, 1.0e-4f));
+        vg_stroke_style main = *enemy_style;
+        vg_stroke_style detail = *enemy_style;
+        vg_stroke_style glow = *enemy_style;
+        main.intensity *= 1.08f;
+        detail.width_px *= 0.76f;
+        detail.intensity *= 0.80f;
+        detail.color.a *= 0.86f;
+        glow.width_px *= 1.45f;
+        glow.intensity *= 0.42f;
+        glow.color.a *= 0.52f;
+        glow.blend = VG_BLEND_ADDITIVE;
+
+        {
+            const vg_vec2 body[] = {
+                {x + fx * (-1.16f * rr) + nx * (0.0f * rr), y + fy * (-1.16f * rr) + ny * (0.0f * rr)},
+                {x + fx * (-0.10f * rr) + nx * (-0.56f * rr), y + fy * (-0.10f * rr) + ny * (-0.56f * rr)},
+                {x + fx * (1.24f * rr) + nx * (0.0f * rr), y + fy * (1.24f * rr) + ny * (0.0f * rr)},
+                {x + fx * (-0.10f * rr) + nx * (0.56f * rr), y + fy * (-0.10f * rr) + ny * (0.56f * rr)},
+                {x + fx * (-1.16f * rr) + nx * (0.0f * rr), y + fy * (-1.16f * rr) + ny * (0.0f * rr)}
+            };
+            vg_result r = vg_draw_polyline(ctx, body, 5, &glow, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_draw_polyline(ctx, body, 5, &main, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+
+        {
+            const vg_vec2 wing_l[] = {
+                {x + fx * (0.14f * rr) + nx * (-0.12f * rr), y + fy * (0.14f * rr) + ny * (-0.12f * rr)},
+                {x + fx * (-0.34f * rr) + nx * (-wing_n), y + fy * (-0.34f * rr) + ny * (-wing_n)},
+                {x + fx * (-0.86f * rr) + nx * (-0.20f * rr), y + fy * (-0.86f * rr) + ny * (-0.20f * rr)}
+            };
+            const vg_vec2 wing_r[] = {
+                {x + fx * (0.14f * rr) + nx * (0.12f * rr), y + fy * (0.14f * rr) + ny * (0.12f * rr)},
+                {x + fx * (-0.34f * rr) + nx * (wing_n), y + fy * (-0.34f * rr) + ny * (wing_n)},
+                {x + fx * (-0.86f * rr) + nx * (0.20f * rr), y + fy * (-0.86f * rr) + ny * (0.20f * rr)}
+            };
+            vg_result r = vg_draw_polyline(ctx, wing_l, 3, &main, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_draw_polyline(ctx, wing_r, 3, &main, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+
+        {
+            const float mid_pulse01 = 0.5f + 0.5f * sinf(phase * 1.72f - 0.30f);
+            const float mid_f = rr * (0.02f + 0.10f * (mid_pulse01 - 0.5f));
+            const float mid_f_span = rr * (0.14f + 0.40f * mid_pulse01);
+            const float mid_n_span = rr * (0.11f + 0.34f * mid_pulse01);
+            const vg_vec2 mid_diamond[] = {
+                {x + fx * (mid_f + mid_f_span), y + fy * (mid_f + mid_f_span)},
+                {x + fx * mid_f + nx * mid_n_span, y + fy * mid_f + ny * mid_n_span},
+                {x + fx * (mid_f - mid_f_span), y + fy * (mid_f - mid_f_span)},
+                {x + fx * mid_f - nx * mid_n_span, y + fy * mid_f - ny * mid_n_span},
+                {x + fx * (mid_f + mid_f_span), y + fy * (mid_f + mid_f_span)}
+            };
+            vg_stroke_style mid_core = detail;
+            vg_stroke_style mid_glow = glow;
+            mid_core.width_px *= 0.94f;
+            mid_core.intensity *= 0.78f + 1.45f * mid_pulse01;
+            mid_core.color.a *= 0.72f + 0.28f * mid_pulse01;
+            mid_glow.width_px *= 1.58f;
+            mid_glow.intensity *= 0.46f + 2.35f * mid_pulse01;
+            mid_glow.color.a *= 0.28f + 0.72f * mid_pulse01;
+            {
+                vg_result r = vg_draw_polyline(ctx, mid_diamond, 5, &mid_glow, 0);
+                if (r != VG_OK) {
+                    return r;
+                }
+                r = vg_draw_polyline(ctx, mid_diamond, 5, &mid_core, 0);
+                if (r != VG_OK) {
+                    return r;
+                }
+            }
+        }
+
+        {
+            const vg_vec2 spine[2] = {
+                {x + fx * (-0.70f * rr), y + fy * (-0.70f * rr)},
+                {x + fx * (0.90f * rr), y + fy * (0.90f * rr)}
+            };
+            vg_result r = vg_draw_polyline(ctx, spine, 2, &detail, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+
+        {
+            const float pulse01 = 0.5f + 0.5f * sinf(phase * 1.38f + 0.72f);
+            const float rear_f = rr * (-0.98f + 0.08f * pulse01);
+            const float rear_f_span = rr * (0.22f + 0.34f * pulse01);
+            const float rear_n_span = rr * (0.15f + 0.30f * pulse01);
+            const vg_vec2 rear_diamond[] = {
+                {x + fx * (rear_f + rear_f_span), y + fy * (rear_f + rear_f_span)},
+                {x + fx * rear_f + nx * rear_n_span, y + fy * rear_f + ny * rear_n_span},
+                {x + fx * (rear_f - rear_f_span), y + fy * (rear_f - rear_f_span)},
+                {x + fx * rear_f - nx * rear_n_span, y + fy * rear_f - ny * rear_n_span},
+                {x + fx * (rear_f + rear_f_span), y + fy * (rear_f + rear_f_span)}
+            };
+            vg_stroke_style rear_core = detail;
+            vg_stroke_style rear_glow = glow;
+            rear_core.width_px *= 1.02f;
+            rear_core.intensity *= 0.92f + 1.20f * pulse01;
+            rear_core.color.a *= 0.86f + 0.14f * pulse01;
+            rear_glow.width_px *= 1.36f;
+            rear_glow.intensity *= 0.55f + 2.20f * pulse01;
+            rear_glow.color.a *= 0.36f + 0.62f * pulse01;
+            {
+                vg_result r = vg_draw_polyline(ctx, rear_diamond, 5, &rear_glow, 0);
+                if (r != VG_OK) {
+                    return r;
+                }
+                r = vg_draw_polyline(ctx, rear_diamond, 5, &rear_core, 0);
+                if (r != VG_OK) {
+                    return r;
+                }
+            }
+        }
+
+        {
+            const float flick = sinf(phase * 0.68f + 1.1f);
+            const vg_vec2 tail_l[2] = {
+                {x + fx * (-0.98f * rr) + nx * (-0.12f * rr), y + fy * (-0.98f * rr) + ny * (-0.12f * rr)},
+                {x + fx * (-1.34f * rr) + nx * (-0.26f * rr + 0.08f * rr * flick), y + fy * (-1.34f * rr) + ny * (-0.26f * rr + 0.08f * rr * flick)}
+            };
+            const vg_vec2 tail_r[2] = {
+                {x + fx * (-0.98f * rr) + nx * (0.12f * rr), y + fy * (-0.98f * rr) + ny * (0.12f * rr)},
+                {x + fx * (-1.34f * rr) + nx * (0.26f * rr - 0.08f * rr * flick), y + fy * (-1.34f * rr) + ny * (0.26f * rr - 0.08f * rr * flick)}
+            };
+            vg_result r = vg_draw_polyline(ctx, tail_l, 2, &detail, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_draw_polyline(ctx, tail_r, 2, &detail, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+    }
+    if (e->kamikaze_tail <= 0.02f) {
+        return VG_OK;
+    }
+    return draw_enemy_tail(ctx, e, x, y, rr, enemy_style);
+}
+
 static vg_result draw_enemy_glyph_phoenix(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
     float fx = 0.0f;
     float fy = 0.0f;
@@ -9155,6 +9350,8 @@ static vg_result draw_enemy_glyph(vg_context* ctx, const enemy* e, float x, floa
     switch (e->visual_kind) {
         case ENEMY_VISUAL_PHOENIX:
             return draw_enemy_glyph_phoenix(ctx, e, x, y, rr, enemy_style);
+        case ENEMY_VISUAL_BOID_RAZOR:
+            return draw_enemy_glyph_razor(ctx, e, x, y, rr, enemy_style);
         case ENEMY_VISUAL_EEL:
             return draw_enemy_glyph_eel(ctx, e, x, y, rr, enemy_style);
         case ENEMY_VISUAL_MANTA:

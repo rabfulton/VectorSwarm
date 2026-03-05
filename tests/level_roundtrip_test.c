@@ -314,6 +314,7 @@ static int compare_levels_semantic(const char* ctx, const leveldef_level* a, con
         if (!cmp_float(ctx, "curated.b", a->curated[i].b, b->curated[i].b)) return 0;
         if (!cmp_float(ctx, "curated.c", a->curated[i].c, b->curated[i].c)) return 0;
         if (!cmp_float(ctx, "curated.d", a->curated[i].d, b->curated[i].d)) return 0;
+        if (!cmp_float(ctx, "curated.e", a->curated[i].e, b->curated[i].e)) return 0;
     }
 
     CMP_INT_FIELD(ctx, a, b, searchlight_count);
@@ -489,17 +490,24 @@ static int verify_curated_property_adjustments(void) {
     }
 
     m->kind = LEVEL_EDITOR_MARKER_BOID_FISH;
-    if (count_selected_properties(&editor) != 15) {
+    if (count_selected_properties(&editor) != 16) {
         fprintf(stderr, "roundtrip: curated swarm property count mismatch\n");
         return 0;
     }
-    editor.selected_property = 8;
+    editor.selected_property = 7;
+    m->e = 1.0f;
+    level_editor_adjust_selected_property(&editor, 1.0f);
+    if (fabsf(m->e - 1.05f) > 1.0e-6f) {
+        fprintf(stderr, "roundtrip: swarm size-scale mapping failed\n");
+        return 0;
+    }
+    editor.selected_property = 9;
     level_editor_adjust_selected_property(&editor, 1.0f);
     if (fabsf(editor.level_curated_combat.swarm.fire_prob_mul - 1.05f) > 1.0e-6f) {
         fprintf(stderr, "roundtrip: swarm fire_prob multiplier mapping failed\n");
         return 0;
     }
-    editor.selected_property = 11;
+    editor.selected_property = 12;
     level_editor_adjust_selected_property(&editor, 1.0f);
     if (editor.level_curated_combat.swarm.shot_count != 1) {
         fprintf(stderr, "roundtrip: swarm shot_count mapping failed\n");
