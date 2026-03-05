@@ -419,6 +419,31 @@ void leveldef_init_defaults(leveldef_db* db) {
         db->levels[i].powerup_magnet_g = 0.76f;
         db->levels[i].powerup_magnet_b = 0.72f;
         db->levels[i].kamikaze.style = KAMIKAZE_STYLE_CLASSIC;
+        db->levels[i].curated_combat.formation.fire_prob_mul = 1.0f;
+        db->levels[i].curated_combat.formation.cooldown_mul = 1.0f;
+        db->levels[i].curated_combat.formation.shot_count = -1;
+        db->levels[i].curated_combat.formation.aim_error_mul = 1.0f;
+        db->levels[i].curated_combat.formation.projectile_speed_mul = 1.0f;
+        db->levels[i].curated_combat.formation.spread_mul = 1.0f;
+        db->levels[i].curated_combat.swarm.fire_prob_mul = 1.0f;
+        db->levels[i].curated_combat.swarm.spread_prob_mul = 1.0f;
+        db->levels[i].curated_combat.swarm.cooldown_mul = 1.0f;
+        db->levels[i].curated_combat.swarm.shot_count = -1;
+        db->levels[i].curated_combat.swarm.aim_error_mul = 1.0f;
+        db->levels[i].curated_combat.swarm.projectile_speed_mul = 1.0f;
+        db->levels[i].curated_combat.swarm.spread_mul = 1.0f;
+        db->levels[i].curated_combat.kamikaze.fire_prob_mul = 1.0f;
+        db->levels[i].curated_combat.kamikaze.speed_mul = 1.0f;
+        db->levels[i].curated_combat.kamikaze.accel_mul = 1.0f;
+        db->levels[i].curated_combat.manta.fire_prob_mul = 1.0f;
+        db->levels[i].curated_combat.manta.missile_count_bonus = 0;
+        db->levels[i].curated_combat.manta.missile_cooldown_mul = 1.0f;
+        db->levels[i].curated_combat.manta.missile_charge_mul = 1.0f;
+        db->levels[i].curated_combat.eel.fire_prob_mul = 1.0f;
+        db->levels[i].curated_combat.eel.arc_fire_rate_mul = 1.0f;
+        db->levels[i].curated_combat.eel.arc_duration_mul = 1.0f;
+        db->levels[i].curated_combat.eel.arc_range_mul = 1.0f;
+        db->levels[i].curated_combat.eel.arc_damage_interval_mul = 1.0f;
     }
     {
         leveldef_level* b = &db->levels[LEVEL_STYLE_BLANK];
@@ -1042,6 +1067,56 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_level->wave_cooldown_initial_s = strtof(v, NULL);
                     } else if (strcmp(k, "wave_cooldown_between_s") == 0) {
                         cur_level->wave_cooldown_between_s = strtof(v, NULL);
+                    } else if (strcmp(k, "curated.formation.fire_prob_mul") == 0) {
+                        cur_level->curated_combat.formation.fire_prob_mul = strtof(v, NULL);
+                    } else if (strcmp(k, "curated.formation.cooldown_mul") == 0) {
+                        cur_level->curated_combat.formation.cooldown_mul = strtof(v, NULL);
+                    } else if (strcmp(k, "curated.formation.shot_count") == 0) {
+                        cur_level->curated_combat.formation.shot_count = atoi(v);
+                    } else if (strcmp(k, "curated.formation.aim_error_mul") == 0) {
+                        cur_level->curated_combat.formation.aim_error_mul = strtof(v, NULL);
+                    } else if (strcmp(k, "curated.formation.projectile_speed_mul") == 0) {
+                        cur_level->curated_combat.formation.projectile_speed_mul = strtof(v, NULL);
+                    } else if (strcmp(k, "curated.formation.spread_mul") == 0) {
+                        cur_level->curated_combat.formation.spread_mul = strtof(v, NULL);
+                    } else if (strcmp(k, "curated.swarm.fire_prob_mul") == 0) {
+                        cur_level->curated_combat.swarm.fire_prob_mul = strtof(v, NULL);
+                    } else if (strcmp(k, "curated.swarm.spread_prob_mul") == 0) {
+                        cur_level->curated_combat.swarm.spread_prob_mul = strtof(v, NULL);
+                    } else if (strcmp(k, "curated.swarm.cooldown_mul") == 0) {
+                        cur_level->curated_combat.swarm.cooldown_mul = strtof(v, NULL);
+                    } else if (strcmp(k, "curated.swarm.shot_count") == 0) {
+                        cur_level->curated_combat.swarm.shot_count = atoi(v);
+                    } else if (strcmp(k, "curated.swarm.aim_error_mul") == 0) {
+                        cur_level->curated_combat.swarm.aim_error_mul = strtof(v, NULL);
+                    } else if (strcmp(k, "curated.swarm.projectile_speed_mul") == 0) {
+                        cur_level->curated_combat.swarm.projectile_speed_mul = strtof(v, NULL);
+                    } else if (strcmp(k, "curated.swarm.spread_mul") == 0) {
+                        cur_level->curated_combat.swarm.spread_mul = strtof(v, NULL);
+                    } else if (strcmp(k, "curated.kamikaze.fire_prob_mul") == 0) {
+                        cur_level->curated_combat.kamikaze.fire_prob_mul = strtof(v, NULL);
+                    } else if (strcmp(k, "curated.kamikaze.speed_mul") == 0) {
+                        cur_level->curated_combat.kamikaze.speed_mul = strtof(v, NULL);
+                    } else if (strcmp(k, "curated.kamikaze.accel_mul") == 0) {
+                        cur_level->curated_combat.kamikaze.accel_mul = strtof(v, NULL);
+                    } else if (strcmp(k, "curated.manta.fire_prob_mul") == 0) {
+                        cur_level->curated_combat.manta.fire_prob_mul = strtof(v, NULL);
+                    } else if (strcmp(k, "curated.manta.missile_count_bonus") == 0) {
+                        cur_level->curated_combat.manta.missile_count_bonus = atoi(v);
+                    } else if (strcmp(k, "curated.manta.missile_cooldown_mul") == 0) {
+                        cur_level->curated_combat.manta.missile_cooldown_mul = strtof(v, NULL);
+                    } else if (strcmp(k, "curated.manta.missile_charge_mul") == 0) {
+                        cur_level->curated_combat.manta.missile_charge_mul = strtof(v, NULL);
+                    } else if (strcmp(k, "curated.eel.fire_prob_mul") == 0) {
+                        cur_level->curated_combat.eel.fire_prob_mul = strtof(v, NULL);
+                    } else if (strcmp(k, "curated.eel.arc_fire_rate_mul") == 0) {
+                        cur_level->curated_combat.eel.arc_fire_rate_mul = strtof(v, NULL);
+                    } else if (strcmp(k, "curated.eel.arc_duration_mul") == 0) {
+                        cur_level->curated_combat.eel.arc_duration_mul = strtof(v, NULL);
+                    } else if (strcmp(k, "curated.eel.arc_range_mul") == 0) {
+                        cur_level->curated_combat.eel.arc_range_mul = strtof(v, NULL);
+                    } else if (strcmp(k, "curated.eel.arc_damage_interval_mul") == 0) {
+                        cur_level->curated_combat.eel.arc_damage_interval_mul = strtof(v, NULL);
                     } else if (strcmp(k, "bidirectional_spawns") == 0) {
                         cur_level->bidirectional_spawns = atoi(v) ? 1 : 0;
                     } else if (strcmp(k, "cylinder_double_swarm_chance") == 0) {
@@ -1598,6 +1673,56 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
         if (l->kamikaze.style < KAMIKAZE_STYLE_CLASSIC || l->kamikaze.style > KAMIKAZE_STYLE_PHOENIX) {
             if (log_out) {
                 fprintf(log_out, "leveldef: level %d has invalid kamikaze.style\n", i);
+            }
+            ok = 0;
+        }
+        if (l->curated_combat.formation.fire_prob_mul < 0.0f || l->curated_combat.formation.fire_prob_mul > 2.0f ||
+            l->curated_combat.formation.cooldown_mul <= 0.0f || l->curated_combat.formation.cooldown_mul > 10.0f ||
+            (l->curated_combat.formation.shot_count != -1 && (l->curated_combat.formation.shot_count < 1 || l->curated_combat.formation.shot_count > 12)) ||
+            l->curated_combat.formation.aim_error_mul <= 0.0f || l->curated_combat.formation.aim_error_mul > 10.0f ||
+            l->curated_combat.formation.projectile_speed_mul <= 0.0f || l->curated_combat.formation.projectile_speed_mul > 10.0f ||
+            l->curated_combat.formation.spread_mul <= 0.0f || l->curated_combat.formation.spread_mul > 10.0f) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d has invalid curated.formation tuning\n", i);
+            }
+            ok = 0;
+        }
+        if (l->curated_combat.swarm.fire_prob_mul < 0.0f || l->curated_combat.swarm.fire_prob_mul > 2.0f ||
+            l->curated_combat.swarm.spread_prob_mul < 0.0f || l->curated_combat.swarm.spread_prob_mul > 2.0f ||
+            l->curated_combat.swarm.cooldown_mul <= 0.0f || l->curated_combat.swarm.cooldown_mul > 10.0f ||
+            (l->curated_combat.swarm.shot_count != -1 && (l->curated_combat.swarm.shot_count < 1 || l->curated_combat.swarm.shot_count > 12)) ||
+            l->curated_combat.swarm.aim_error_mul <= 0.0f || l->curated_combat.swarm.aim_error_mul > 10.0f ||
+            l->curated_combat.swarm.projectile_speed_mul <= 0.0f || l->curated_combat.swarm.projectile_speed_mul > 10.0f ||
+            l->curated_combat.swarm.spread_mul <= 0.0f || l->curated_combat.swarm.spread_mul > 10.0f) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d has invalid curated.swarm tuning\n", i);
+            }
+            ok = 0;
+        }
+        if (l->curated_combat.kamikaze.fire_prob_mul < 0.0f || l->curated_combat.kamikaze.fire_prob_mul > 2.0f ||
+            l->curated_combat.kamikaze.speed_mul <= 0.0f || l->curated_combat.kamikaze.speed_mul > 10.0f ||
+            l->curated_combat.kamikaze.accel_mul <= 0.0f || l->curated_combat.kamikaze.accel_mul > 10.0f) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d has invalid curated.kamikaze tuning\n", i);
+            }
+            ok = 0;
+        }
+        if (l->curated_combat.manta.fire_prob_mul < 0.0f || l->curated_combat.manta.fire_prob_mul > 2.0f ||
+            l->curated_combat.manta.missile_count_bonus < -32 || l->curated_combat.manta.missile_count_bonus > 32 ||
+            l->curated_combat.manta.missile_cooldown_mul <= 0.0f || l->curated_combat.manta.missile_cooldown_mul > 10.0f ||
+            l->curated_combat.manta.missile_charge_mul <= 0.0f || l->curated_combat.manta.missile_charge_mul > 10.0f) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d has invalid curated.manta tuning\n", i);
+            }
+            ok = 0;
+        }
+        if (l->curated_combat.eel.fire_prob_mul < 0.0f || l->curated_combat.eel.fire_prob_mul > 2.0f ||
+            l->curated_combat.eel.arc_fire_rate_mul <= 0.0f || l->curated_combat.eel.arc_fire_rate_mul > 10.0f ||
+            l->curated_combat.eel.arc_duration_mul <= 0.0f || l->curated_combat.eel.arc_duration_mul > 10.0f ||
+            l->curated_combat.eel.arc_range_mul <= 0.0f || l->curated_combat.eel.arc_range_mul > 10.0f ||
+            l->curated_combat.eel.arc_damage_interval_mul <= 0.0f || l->curated_combat.eel.arc_damage_interval_mul > 10.0f) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d has invalid curated.eel tuning\n", i);
             }
             ok = 0;
         }

@@ -4706,6 +4706,17 @@ static const char* editor_background_mask_style_name(int style) {
     return "NONE";
 }
 
+static void editor_format_shot_count(int shot_count, char* out, size_t out_cap) {
+    if (!out || out_cap == 0) {
+        return;
+    }
+    if (shot_count < 0) {
+        snprintf(out, out_cap, "DEFAULT");
+    } else {
+        snprintf(out, out_cap, "%d", shot_count);
+    }
+}
+
 static int editor_marker_properties_text(
     int kind,
     const render_metrics* metrics,
@@ -4800,6 +4811,7 @@ static int editor_marker_properties_text(
         const int event_item = (metrics->level_editor_marker_track[sel] == 1);
         const int boid_item = (kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 15 || kind == 17);
         const int kamikaze_item = (kind == 4);
+        const int curated_mode = (metrics->level_editor_wave_mode == LEVELDEF_WAVES_CURATED);
         if (n < cap) { out_labels[n] = "TYPE"; snprintf(out_values[n], 32, "%s", editor_wave_type_name(kind)); n++; }
         if (event_item) {
             if (n < cap) { out_labels[n] = "ORDER"; snprintf(out_values[n], 32, "%d", metrics->level_editor_marker_order[sel]); n++; }
@@ -4849,6 +4861,133 @@ static int editor_marker_properties_text(
         if (kamikaze_item && n < cap) { out_labels[n] = "RADIUS MIN"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_kamikaze_radius_min); n++; }
         if (kamikaze_item && n < cap) { out_labels[n] = "RADIUS MAX"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_kamikaze_radius_max); n++; }
         if (!event_item && n < cap) { out_labels[n] = "DELAY S"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_delay_s[sel]); n++; }
+        if (curated_mode) {
+            if ((kind == 2 || kind == 3) && n < cap) {
+                out_labels[n] = "FIRE PROB MUL";
+                snprintf(out_values[n], 32, "%.2f", metrics->level_editor_curated_formation_fire_prob_mul);
+                n++;
+            }
+            if ((kind == 2 || kind == 3) && n < cap) {
+                out_labels[n] = "COOLDOWN MUL";
+                snprintf(out_values[n], 32, "%.2f", metrics->level_editor_curated_formation_cooldown_mul);
+                n++;
+            }
+            if ((kind == 2 || kind == 3) && n < cap) {
+                out_labels[n] = "SHOT COUNT";
+                editor_format_shot_count(metrics->level_editor_curated_formation_shot_count, out_values[n], 32);
+                n++;
+            }
+            if ((kind == 2 || kind == 3) && n < cap) {
+                out_labels[n] = "AIM ERROR MUL";
+                snprintf(out_values[n], 32, "%.2f", metrics->level_editor_curated_formation_aim_error_mul);
+                n++;
+            }
+            if ((kind == 2 || kind == 3) && n < cap) {
+                out_labels[n] = "PROJECTILE SPD MUL";
+                snprintf(out_values[n], 32, "%.2f", metrics->level_editor_curated_formation_projectile_speed_mul);
+                n++;
+            }
+            if ((kind == 2 || kind == 3) && n < cap) {
+                out_labels[n] = "SPREAD MUL";
+                snprintf(out_values[n], 32, "%.2f", metrics->level_editor_curated_formation_spread_mul);
+                n++;
+            }
+            if (kamikaze_item && n < cap) {
+                out_labels[n] = "FIRE PROB MUL";
+                snprintf(out_values[n], 32, "%.2f", metrics->level_editor_curated_kamikaze_fire_prob_mul);
+                n++;
+            }
+            if (kamikaze_item && n < cap) {
+                out_labels[n] = "SPEED MUL";
+                snprintf(out_values[n], 32, "%.2f", metrics->level_editor_curated_kamikaze_speed_mul);
+                n++;
+            }
+            if (kamikaze_item && n < cap) {
+                out_labels[n] = "ACCEL MUL";
+                snprintf(out_values[n], 32, "%.2f", metrics->level_editor_curated_kamikaze_accel_mul);
+                n++;
+            }
+            if (kind == 16 && n < cap) {
+                out_labels[n] = "FIRE PROB MUL";
+                snprintf(out_values[n], 32, "%.2f", metrics->level_editor_curated_manta_fire_prob_mul);
+                n++;
+            }
+            if (kind == 16 && n < cap) {
+                out_labels[n] = "MISSILE BONUS";
+                snprintf(out_values[n], 32, "%d", metrics->level_editor_curated_manta_missile_count_bonus);
+                n++;
+            }
+            if (kind == 16 && n < cap) {
+                out_labels[n] = "MISSILE CD MUL";
+                snprintf(out_values[n], 32, "%.2f", metrics->level_editor_curated_manta_missile_cooldown_mul);
+                n++;
+            }
+            if (kind == 16 && n < cap) {
+                out_labels[n] = "MISSILE CHARGE MUL";
+                snprintf(out_values[n], 32, "%.2f", metrics->level_editor_curated_manta_missile_charge_mul);
+                n++;
+            }
+            if (kind == 17 && n < cap) {
+                out_labels[n] = "FIRE PROB MUL";
+                snprintf(out_values[n], 32, "%.2f", metrics->level_editor_curated_eel_fire_prob_mul);
+                n++;
+            }
+            if (kind == 17 && n < cap) {
+                out_labels[n] = "ARC RATE MUL";
+                snprintf(out_values[n], 32, "%.2f", metrics->level_editor_curated_eel_arc_fire_rate_mul);
+                n++;
+            }
+            if (kind == 17 && n < cap) {
+                out_labels[n] = "ARC DURATION MUL";
+                snprintf(out_values[n], 32, "%.2f", metrics->level_editor_curated_eel_arc_duration_mul);
+                n++;
+            }
+            if (kind == 17 && n < cap) {
+                out_labels[n] = "ARC RANGE MUL";
+                snprintf(out_values[n], 32, "%.2f", metrics->level_editor_curated_eel_arc_range_mul);
+                n++;
+            }
+            if (kind == 17 && n < cap) {
+                out_labels[n] = "ARC DAMAGE INT MUL";
+                snprintf(out_values[n], 32, "%.2f", metrics->level_editor_curated_eel_arc_damage_interval_mul);
+                n++;
+            }
+            if (boid_item && kind != 17 && n < cap) {
+                out_labels[n] = "FIRE PROB MUL";
+                snprintf(out_values[n], 32, "%.2f", metrics->level_editor_curated_swarm_fire_prob_mul);
+                n++;
+            }
+            if (boid_item && kind != 17 && n < cap) {
+                out_labels[n] = "SPREAD PROB MUL";
+                snprintf(out_values[n], 32, "%.2f", metrics->level_editor_curated_swarm_spread_prob_mul);
+                n++;
+            }
+            if (boid_item && kind != 17 && n < cap) {
+                out_labels[n] = "COOLDOWN MUL";
+                snprintf(out_values[n], 32, "%.2f", metrics->level_editor_curated_swarm_cooldown_mul);
+                n++;
+            }
+            if (boid_item && kind != 17 && n < cap) {
+                out_labels[n] = "SHOT COUNT";
+                editor_format_shot_count(metrics->level_editor_curated_swarm_shot_count, out_values[n], 32);
+                n++;
+            }
+            if (boid_item && kind != 17 && n < cap) {
+                out_labels[n] = "AIM ERROR MUL";
+                snprintf(out_values[n], 32, "%.2f", metrics->level_editor_curated_swarm_aim_error_mul);
+                n++;
+            }
+            if (boid_item && kind != 17 && n < cap) {
+                out_labels[n] = "PROJECTILE SPD MUL";
+                snprintf(out_values[n], 32, "%.2f", metrics->level_editor_curated_swarm_projectile_speed_mul);
+                n++;
+            }
+            if (boid_item && kind != 17 && n < cap) {
+                out_labels[n] = "SPREAD MUL";
+                snprintf(out_values[n], 32, "%.2f", metrics->level_editor_curated_swarm_spread_mul);
+                n++;
+            }
+        }
         return n;
     }
 
@@ -5502,10 +5641,10 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             if (r != VG_OK) return r;
             ty -= 28.0f * ui;
             {
-                const char* labels[10] = {0};
-                char values[10][32];
+                const char* labels[20] = {0};
+                char values[20][32];
                 memset(values, 0, sizeof(values));
-                const int pn = editor_marker_properties_text(kind, metrics, sel, labels, values, 10);
+                const int pn = editor_marker_properties_text(kind, metrics, sel, labels, values, 20);
                 int selected_prop = metrics->level_editor_selected_property;
                 if (selected_prop < 0) selected_prop = 0;
                 if (selected_prop >= pn) selected_prop = pn - 1;

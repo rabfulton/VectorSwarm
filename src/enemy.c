@@ -919,6 +919,54 @@ static enemy_fire_tuning enemy_fire_tuning_for(const game_state* g, const leveld
     return t;
 }
 
+static const leveldef_curated_combat_tuning* curated_tuning_for_game(const game_state* g) {
+    const leveldef_level* lvl;
+    if (!g) {
+        return NULL;
+    }
+    lvl = game_current_leveldef(g);
+    if (!lvl || lvl->wave_mode != LEVELDEF_WAVES_CURATED) {
+        return NULL;
+    }
+    return &lvl->curated_combat;
+}
+
+static void enemy_apply_curated_projectile_tuning(
+    const game_state* g,
+    const enemy* e,
+    enemy_weapon_def* w,
+    enemy_fire_tuning* t
+) {
+    const leveldef_curated_combat_tuning* curated = curated_tuning_for_game(g);
+    if (!curated || !e || !w || !t) {
+        return;
+    }
+    if (e->visual_kind == ENEMY_VISUAL_MANTA || e->visual_kind == ENEMY_VISUAL_EEL || e->archetype == ENEMY_ARCH_KAMIKAZE) {
+        return;
+    }
+    if (e->archetype == ENEMY_ARCH_SWARM) {
+        w->cooldown_min_s *= curated->swarm.cooldown_mul;
+        w->cooldown_max_s *= curated->swarm.cooldown_mul;
+        if (curated->swarm.shot_count > 0) {
+            w->projectiles_per_shot = curated->swarm.shot_count;
+        }
+        t->aim_error_deg *= curated->swarm.aim_error_mul;
+        t->projectile_speed_scale *= curated->swarm.projectile_speed_mul;
+        t->spread_scale *= curated->swarm.spread_mul;
+        return;
+    }
+    if (e->archetype == ENEMY_ARCH_FORMATION) {
+        w->cooldown_min_s *= curated->formation.cooldown_mul;
+        w->cooldown_max_s *= curated->formation.cooldown_mul;
+        if (curated->formation.shot_count > 0) {
+            w->projectiles_per_shot = curated->formation.shot_count;
+        }
+        t->aim_error_deg *= curated->formation.aim_error_mul;
+        t->projectile_speed_scale *= curated->formation.projectile_speed_mul;
+        t->spread_scale *= curated->formation.spread_mul;
+    }
+}
+
 static enemy_bullet* spawn_enemy_bullet(
     game_state* g,
     const enemy* e,
@@ -956,7 +1004,8 @@ static void enemy_reset_fire_cooldown(const enemy_weapon_def* w, const enemy_fir
 }
 
 static void enemy_assign_combat_loadout(game_state* g, enemy* e, const leveldef_db* db) {
-    const enemy_fire_tuning t = enemy_fire_tuning_for(g, db);
+    enemy_fire_tuning t = enemy_fire_tuning_for(g, db);
+    const leveldef_curated_combat_tuning* curated = curated_tuning_for_game(g);
     const leveldef_combat_tuning* combat = &db->combat;
     int arch = e->archetype;
     if (arch < 0 || arch > 2) {
@@ -964,16 +1013,31 @@ static void enemy_assign_combat_loadout(game_state* g, enemy* e, const leveldef_
     }
     if (e->archetype == ENEMY_ARCH_SWARM) {
         const float progression = enemy_progression01(g, db);
-        const float armed_p = clampf(lerpf(combat->swarm_armed_prob_start, combat->swarm_armed_prob_end, progression), 0.0f, 1.0f);
-        const float spread_p = clampf(lerpf(combat->swarm_spread_prob_start, combat->swarm_spread_prob_end, progression), 0.0f, 1.0f);
+        float armed_p = lerpf(combat->swarm_armed_prob_start, combat->swarm_armed_prob_end, progression);
+        float spread_p = lerpf(combat->swarm_spread_prob_start, combat->swarm_spread_prob_end, progression);
+        if (curated) {
+            armed_p *= curated->swarm.fire_prob_mul;
+            spread_p *= curated->swarm.spread_prob_mul;
+        }
+        armed_p = clampf(armed_p, 0.0f, 1.0f);
+        spread_p = clampf(spread_p, 0.0f, 1.0f);
         e->armed = (frand01() < armed_p) ? 1 : 0;
         e->weapon_id = (frand01() < spread_p) ? ENEMY_WEAPON_SPREAD : ENEMY_WEAPON_PULSE;
     } else if (e->archetype == ENEMY_ARCH_KAMIKAZE) {
-        const float kamikaze_fire_p = clampf(t.armed_probability[arch] * 0.02f, 0.0f, 1.0f);
+        float kamikaze_fire_p = t.armed_probability[arch] * 0.02f;
+        if (curated) {
+            kamikaze_fire_p *= curated->kamikaze.fire_prob_mul;
+        }
+        kamikaze_fire_p = clampf(kamikaze_fire_p, 0.0f, 1.0f);
         e->armed = (frand01() < kamikaze_fire_p) ? 1 : 0;
         e->weapon_id = ENEMY_WEAPON_BURST;
     } else {
-        e->armed = (frand01() < t.armed_probability[arch]) ? 1 : 0;
+        float formation_fire_p = t.armed_probability[arch];
+        if (curated) {
+            formation_fire_p *= curated->formation.fire_prob_mul;
+        }
+        formation_fire_p = clampf(formation_fire_p, 0.0f, 1.0f);
+        e->armed = (frand01() < formation_fire_p) ? 1 : 0;
         e->weapon_id = ENEMY_WEAPON_PULSE;
     }
     e->burst_shots_left = 0;
@@ -991,6 +1055,7 @@ static void enemy_assign_combat_loadout(game_state* g, enemy* e, const leveldef_
             .projectile_radius = combat->weapon[e->weapon_id].projectile_radius,
             .aim_lead_s = combat->weapon[e->weapon_id].aim_lead_s
         };
+        enemy_apply_curated_projectile_tuning(g, e, &w, &t);
         enemy_reset_fire_cooldown(&w, &t, e);
     }
 }
@@ -1302,9 +1367,11 @@ void enemy_spawn_curated_enemy(
     float period
 ) {
     int count;
+    const leveldef_curated_combat_tuning* curated;
     if (!g || !db || !lvl || !ce) {
         return;
     }
+    curated = (lvl->wave_mode == LEVELDEF_WAVES_CURATED) ? &lvl->curated_combat : NULL;
     count = (int)lroundf(fmaxf(1.0f, ce->a));
     if (count > 24) {
         count = 24;
@@ -1397,6 +1464,13 @@ void enemy_spawn_curated_enemy(
                 e->eel_weapon_fire_rate = 1.25f + 1.10f * hash01_u32(seed ^ 0xCC1u);
                 e->eel_weapon_duration_s = 1.7f + 0.9f * hash01_u32(seed ^ 0x1B5u);
                 e->eel_weapon_damage_interval_s = 0.30f;
+                if (curated) {
+                    e->eel_weapon_fire_rate = fmaxf(e->eel_weapon_fire_rate * curated->eel.arc_fire_rate_mul, 0.01f);
+                    e->eel_weapon_duration_s = fmaxf(e->eel_weapon_duration_s * curated->eel.arc_duration_mul, 0.20f);
+                    e->eel_weapon_range = fmaxf(e->eel_weapon_range * curated->eel.arc_range_mul, 32.0f * su);
+                    e->eel_weapon_damage_interval_s =
+                        fmaxf(e->eel_weapon_damage_interval_s * curated->eel.arc_damage_interval_mul, 0.05f);
+                }
                 e->swarm_min_speed = e->eel_min_speed;
                 e->swarm_turn_rate_rad = e->eel_turn_rate_rad;
                 e->facing_x = lane_dir_toward_player_x(g, e->b.x, uses_cylinder, period);
@@ -1445,6 +1519,10 @@ void enemy_spawn_curated_enemy(
             e->b.y = base_y + jitter_y;
             e->max_speed = ((ce->b > 0.0f) ? ce->b : lvl->kamikaze.max_speed) * su;
             e->accel = (ce->c > 0.0f) ? ce->c : lvl->kamikaze.accel;
+            if (curated) {
+                e->max_speed *= curated->kamikaze.speed_mul;
+                e->accel *= curated->kamikaze.accel_mul;
+            }
             {
                 const float r_span = fmaxf(lvl->kamikaze.radius_max - lvl->kamikaze.radius_min, 0.0f);
                 const float r01 = (r_span > 1e-4f) ? frand01() : 0.5f;
@@ -1490,7 +1568,11 @@ void enemy_spawn_curated_enemy(
                 e->armed = 1;
                 e->weapon_id = ENEMY_WEAPON_PULSE;
                 e->hp = 3;
-                e->missile_ammo = (ce->c > 0.0f) ? clampi((int)lroundf(ce->c), 0, 12) : 2;
+                {
+                    const int base_ammo = (ce->c > 0.0f) ? clampi((int)lroundf(ce->c), 0, 12) : 2;
+                    const int bonus = curated ? curated->manta.missile_count_bonus : 0;
+                    e->missile_ammo = clampi(base_ammo + bonus, 0, 24);
+                }
                 e->radius *= size_scale;
                 {
                     const float spacing = fmaxf(78.0f * su, e->radius * 2.8f);
@@ -1507,6 +1589,9 @@ void enemy_spawn_curated_enemy(
                 e->accel = 1.9f;
                 e->fire_cooldown_s = 1.0f + frand01() * 0.8f;
                 e->missile_cooldown_s = 2.8f + frand01() * 2.0f;
+                if (curated) {
+                    e->missile_cooldown_s *= curated->manta.missile_cooldown_mul;
+                }
             }
             enemy_adjust_spawn_clear(g, e, su);
         }
@@ -2136,6 +2221,7 @@ static void update_eel_arc_effects(
 
 static void enemy_try_fire(game_state* g, enemy* e, float dt, float su, const leveldef_db* db, int uses_cylinder, float period) {
     const leveldef_combat_tuning* combat;
+    const leveldef_curated_combat_tuning* curated;
     enemy_weapon_def w_local;
     const enemy_weapon_def* w;
     enemy_fire_tuning t;
@@ -2162,6 +2248,8 @@ static void enemy_try_fire(game_state* g, enemy* e, float dt, float su, const le
     };
     w = &w_local;
     t = enemy_fire_tuning_for(g, db);
+    enemy_apply_curated_projectile_tuning(g, e, &w_local, &t);
+    curated = curated_tuning_for_game(g);
 
     if (e->burst_gap_timer_s > 0.0f) {
         e->burst_gap_timer_s -= dt;
@@ -2212,7 +2300,8 @@ static void enemy_try_fire(game_state* g, enemy* e, float dt, float su, const le
             const float dist01 = clampf(sqrtf(d2) / fmaxf(range, 1.0f), 0.0f, 1.0f);
             const float dist_weight = lerpf(1.12f, 0.52f, dist01);
             const float indiv_weight = 0.80f + 0.40f * hash01_u32(e->visual_seed ^ 0x73Bu);
-            const float p_try = clampf(p_try_base * dist_weight * indiv_weight, 0.02f, 0.92f);
+            const float p_mul = curated ? fmaxf(curated->eel.fire_prob_mul, 0.0f) : 1.0f;
+            const float p_try = clampf(p_try_base * dist_weight * indiv_weight * p_mul, 0.0f, 0.92f);
             if (frand01() < p_try) {
                 const int owner_index = (int)(e - g->enemies);
                 spawn_eel_arc_burst(g, e, owner_index);
@@ -2248,6 +2337,9 @@ static void enemy_try_fire(game_state* g, enemy* e, float dt, float su, const le
             e->missile_charge_s = 0.0f;
             e->missile_charge_duration_s = 0.0f;
             e->missile_cooldown_s = frand_range(4.8f, 8.2f);
+            if (curated) {
+                e->missile_cooldown_s *= curated->manta.missile_cooldown_mul;
+            }
         }
         return;
     }
@@ -2312,12 +2404,25 @@ static void enemy_try_fire(game_state* g, enemy* e, float dt, float su, const le
             const float start_r = g->world_w * 0.18f;
             const float end_r = g->world_w * 0.52f;
             if (d2 >= start_r * start_r && d2 <= end_r * end_r) {
-                e->missile_charge_duration_s = frand_range(0.55f, 0.95f);
-                e->missile_charge_s = 0.0f;
-                e->missile_cooldown_s = frand_range(4.8f, 8.2f);
-                e->fire_cooldown_s = fmaxf(e->fire_cooldown_s, 0.45f);
-                return;
+                const float p_fire = curated ? clampf(curated->manta.fire_prob_mul, 0.0f, 1.0f) : 1.0f;
+                if (frand01() <= p_fire) {
+                    const float charge_mul = curated ? curated->manta.missile_charge_mul : 1.0f;
+                    const float cooldown_mul = curated ? curated->manta.missile_cooldown_mul : 1.0f;
+                    e->missile_charge_duration_s = frand_range(0.55f, 0.95f) * charge_mul;
+                    e->missile_charge_s = 0.0f;
+                    e->missile_cooldown_s = frand_range(4.8f, 8.2f) * cooldown_mul;
+                    e->fire_cooldown_s = fmaxf(e->fire_cooldown_s, 0.45f);
+                    return;
+                }
             }
+        }
+    }
+
+    if (e->visual_kind == ENEMY_VISUAL_MANTA) {
+        const float p_fire = curated ? clampf(curated->manta.fire_prob_mul, 0.0f, 1.0f) : 1.0f;
+        if (frand01() > p_fire) {
+            enemy_reset_fire_cooldown(w, &t, e);
+            return;
         }
     }
 

@@ -19,6 +19,81 @@ static int clampi(int v, int lo, int hi) {
     return v;
 }
 
+static void level_editor_set_default_curated_tuning(leveldef_curated_combat_tuning* t) {
+    if (!t) {
+        return;
+    }
+    memset(t, 0, sizeof(*t));
+    t->formation.fire_prob_mul = 1.0f;
+    t->formation.cooldown_mul = 1.0f;
+    t->formation.shot_count = -1;
+    t->formation.aim_error_mul = 1.0f;
+    t->formation.projectile_speed_mul = 1.0f;
+    t->formation.spread_mul = 1.0f;
+
+    t->swarm.fire_prob_mul = 1.0f;
+    t->swarm.spread_prob_mul = 1.0f;
+    t->swarm.cooldown_mul = 1.0f;
+    t->swarm.shot_count = -1;
+    t->swarm.aim_error_mul = 1.0f;
+    t->swarm.projectile_speed_mul = 1.0f;
+    t->swarm.spread_mul = 1.0f;
+
+    t->kamikaze.fire_prob_mul = 1.0f;
+    t->kamikaze.speed_mul = 1.0f;
+    t->kamikaze.accel_mul = 1.0f;
+
+    t->manta.fire_prob_mul = 1.0f;
+    t->manta.missile_count_bonus = 0;
+    t->manta.missile_cooldown_mul = 1.0f;
+    t->manta.missile_charge_mul = 1.0f;
+
+    t->eel.fire_prob_mul = 1.0f;
+    t->eel.arc_fire_rate_mul = 1.0f;
+    t->eel.arc_duration_mul = 1.0f;
+    t->eel.arc_range_mul = 1.0f;
+    t->eel.arc_damage_interval_mul = 1.0f;
+}
+
+static void level_editor_clamp_curated_tuning(leveldef_curated_combat_tuning* t) {
+    if (!t) {
+        return;
+    }
+    t->formation.fire_prob_mul = clampf(t->formation.fire_prob_mul, 0.0f, 2.0f);
+    t->formation.cooldown_mul = clampf(t->formation.cooldown_mul, 0.01f, 10.0f);
+    if (t->formation.shot_count != -1) {
+        t->formation.shot_count = clampi(t->formation.shot_count, 1, 12);
+    }
+    t->formation.aim_error_mul = clampf(t->formation.aim_error_mul, 0.01f, 10.0f);
+    t->formation.projectile_speed_mul = clampf(t->formation.projectile_speed_mul, 0.01f, 10.0f);
+    t->formation.spread_mul = clampf(t->formation.spread_mul, 0.01f, 10.0f);
+
+    t->swarm.fire_prob_mul = clampf(t->swarm.fire_prob_mul, 0.0f, 2.0f);
+    t->swarm.spread_prob_mul = clampf(t->swarm.spread_prob_mul, 0.0f, 2.0f);
+    t->swarm.cooldown_mul = clampf(t->swarm.cooldown_mul, 0.01f, 10.0f);
+    if (t->swarm.shot_count != -1) {
+        t->swarm.shot_count = clampi(t->swarm.shot_count, 1, 12);
+    }
+    t->swarm.aim_error_mul = clampf(t->swarm.aim_error_mul, 0.01f, 10.0f);
+    t->swarm.projectile_speed_mul = clampf(t->swarm.projectile_speed_mul, 0.01f, 10.0f);
+    t->swarm.spread_mul = clampf(t->swarm.spread_mul, 0.01f, 10.0f);
+
+    t->kamikaze.fire_prob_mul = clampf(t->kamikaze.fire_prob_mul, 0.0f, 2.0f);
+    t->kamikaze.speed_mul = clampf(t->kamikaze.speed_mul, 0.01f, 10.0f);
+    t->kamikaze.accel_mul = clampf(t->kamikaze.accel_mul, 0.01f, 10.0f);
+
+    t->manta.fire_prob_mul = clampf(t->manta.fire_prob_mul, 0.0f, 2.0f);
+    t->manta.missile_count_bonus = clampi(t->manta.missile_count_bonus, -32, 32);
+    t->manta.missile_cooldown_mul = clampf(t->manta.missile_cooldown_mul, 0.01f, 10.0f);
+    t->manta.missile_charge_mul = clampf(t->manta.missile_charge_mul, 0.01f, 10.0f);
+
+    t->eel.fire_prob_mul = clampf(t->eel.fire_prob_mul, 0.0f, 2.0f);
+    t->eel.arc_fire_rate_mul = clampf(t->eel.arc_fire_rate_mul, 0.01f, 10.0f);
+    t->eel.arc_duration_mul = clampf(t->eel.arc_duration_mul, 0.01f, 10.0f);
+    t->eel.arc_range_mul = clampf(t->eel.arc_range_mul, 0.01f, 10.0f);
+    t->eel.arc_damage_interval_mul = clampf(t->eel.arc_damage_interval_mul, 0.01f, 10.0f);
+}
+
 static void push_marker(
     level_editor_state* s,
     int kind,
@@ -633,6 +708,7 @@ static void level_editor_save_snapshot(level_editor_state* s) {
     s->snapshot_level_kamikaze_radius_min = s->level_kamikaze_radius_min;
     s->snapshot_level_kamikaze_radius_max = s->level_kamikaze_radius_max;
     s->snapshot_level_kamikaze_style = s->level_kamikaze_style;
+    s->snapshot_level_curated_combat = s->level_curated_combat;
     snprintf(s->snapshot_level_name, sizeof(s->snapshot_level_name), "%s", s->level_name);
     s->snapshot_marker_count = s->marker_count;
     if (s->snapshot_marker_count > LEVEL_EDITOR_MAX_MARKERS) {
@@ -1388,6 +1464,8 @@ static int build_level_serialized_text(
             break;
         }
     }
+    lvl.curated_combat = s->level_curated_combat;
+    level_editor_clamp_curated_tuning(&lvl.curated_combat);
     lvl.event_count = 0;
     if (lvl.wave_mode != LEVELDEF_WAVES_CURATED) {
         for (i = 0; i < wave_n && lvl.event_count < LEVELDEF_MAX_EVENTS; ++i) {
@@ -1497,6 +1575,8 @@ static int build_level_serialized_text(
     if (!appendf(out, out_cap, &used, "# wave_cycle tokens: sine_snake,v_formation,swarm,swarm_fish,swarm_firefly,swarm_bird,kamikaze,asteroid_storm\n")) return 0;
     if (!appendf(out, out_cap, &used, "# event fields: kind,order,delay_s\n")) return 0;
     if (!appendf(out, out_cap, &used, "# curated_enemy CSV fields: kind,x01,y01,a,b,c[,d]\n")) return 0;
+    if (!appendf(out, out_cap, &used, "# curated tuning keys (curated wave_mode only):\n")) return 0;
+    if (!appendf(out, out_cap, &used, "# curated.<formation|swarm|kamikaze|manta|eel>.*\n")) return 0;
     if (!appendf(out, out_cap, &used, "# searchlight CSV fields:\n")) return 0;
     if (!appendf(out, out_cap, &used, "# anchor_x01,anchor_y01,length_h01,half_angle_deg,sweep_center_deg,sweep_amplitude_deg,\n")) return 0;
     if (!appendf(out, out_cap, &used, "# sweep_speed,sweep_phase_deg,sweep_motion,source_type,source_radius,clear_grace_s,\n")) return 0;
@@ -1552,6 +1632,61 @@ static int build_level_serialized_text(
     }
     if (!appendf(out, out_cap, &used, "wave_cooldown_initial_s=%.3f\n", lvl.wave_cooldown_initial_s)) return 0;
     if (!appendf(out, out_cap, &used, "wave_cooldown_between_s=%.3f\n", lvl.wave_cooldown_between_s)) return 0;
+    {
+        const int emit_curated_tuning =
+            fabsf(lvl.curated_combat.formation.fire_prob_mul - 1.0f) > 1.0e-6f ||
+            fabsf(lvl.curated_combat.formation.cooldown_mul - 1.0f) > 1.0e-6f ||
+            lvl.curated_combat.formation.shot_count != -1 ||
+            fabsf(lvl.curated_combat.formation.aim_error_mul - 1.0f) > 1.0e-6f ||
+            fabsf(lvl.curated_combat.formation.projectile_speed_mul - 1.0f) > 1.0e-6f ||
+            fabsf(lvl.curated_combat.formation.spread_mul - 1.0f) > 1.0e-6f ||
+            fabsf(lvl.curated_combat.swarm.fire_prob_mul - 1.0f) > 1.0e-6f ||
+            fabsf(lvl.curated_combat.swarm.spread_prob_mul - 1.0f) > 1.0e-6f ||
+            fabsf(lvl.curated_combat.swarm.cooldown_mul - 1.0f) > 1.0e-6f ||
+            lvl.curated_combat.swarm.shot_count != -1 ||
+            fabsf(lvl.curated_combat.swarm.aim_error_mul - 1.0f) > 1.0e-6f ||
+            fabsf(lvl.curated_combat.swarm.projectile_speed_mul - 1.0f) > 1.0e-6f ||
+            fabsf(lvl.curated_combat.swarm.spread_mul - 1.0f) > 1.0e-6f ||
+            fabsf(lvl.curated_combat.kamikaze.fire_prob_mul - 1.0f) > 1.0e-6f ||
+            fabsf(lvl.curated_combat.kamikaze.speed_mul - 1.0f) > 1.0e-6f ||
+            fabsf(lvl.curated_combat.kamikaze.accel_mul - 1.0f) > 1.0e-6f ||
+            fabsf(lvl.curated_combat.manta.fire_prob_mul - 1.0f) > 1.0e-6f ||
+            lvl.curated_combat.manta.missile_count_bonus != 0 ||
+            fabsf(lvl.curated_combat.manta.missile_cooldown_mul - 1.0f) > 1.0e-6f ||
+            fabsf(lvl.curated_combat.manta.missile_charge_mul - 1.0f) > 1.0e-6f ||
+            fabsf(lvl.curated_combat.eel.fire_prob_mul - 1.0f) > 1.0e-6f ||
+            fabsf(lvl.curated_combat.eel.arc_fire_rate_mul - 1.0f) > 1.0e-6f ||
+            fabsf(lvl.curated_combat.eel.arc_duration_mul - 1.0f) > 1.0e-6f ||
+            fabsf(lvl.curated_combat.eel.arc_range_mul - 1.0f) > 1.0e-6f ||
+            fabsf(lvl.curated_combat.eel.arc_damage_interval_mul - 1.0f) > 1.0e-6f;
+        if (emit_curated_tuning) {
+            if (!appendf(out, out_cap, &used, "curated.formation.fire_prob_mul=%.3f\n", lvl.curated_combat.formation.fire_prob_mul)) return 0;
+            if (!appendf(out, out_cap, &used, "curated.formation.cooldown_mul=%.3f\n", lvl.curated_combat.formation.cooldown_mul)) return 0;
+            if (!appendf(out, out_cap, &used, "curated.formation.shot_count=%d\n", lvl.curated_combat.formation.shot_count)) return 0;
+            if (!appendf(out, out_cap, &used, "curated.formation.aim_error_mul=%.3f\n", lvl.curated_combat.formation.aim_error_mul)) return 0;
+            if (!appendf(out, out_cap, &used, "curated.formation.projectile_speed_mul=%.3f\n", lvl.curated_combat.formation.projectile_speed_mul)) return 0;
+            if (!appendf(out, out_cap, &used, "curated.formation.spread_mul=%.3f\n", lvl.curated_combat.formation.spread_mul)) return 0;
+            if (!appendf(out, out_cap, &used, "curated.swarm.fire_prob_mul=%.3f\n", lvl.curated_combat.swarm.fire_prob_mul)) return 0;
+            if (!appendf(out, out_cap, &used, "curated.swarm.spread_prob_mul=%.3f\n", lvl.curated_combat.swarm.spread_prob_mul)) return 0;
+            if (!appendf(out, out_cap, &used, "curated.swarm.cooldown_mul=%.3f\n", lvl.curated_combat.swarm.cooldown_mul)) return 0;
+            if (!appendf(out, out_cap, &used, "curated.swarm.shot_count=%d\n", lvl.curated_combat.swarm.shot_count)) return 0;
+            if (!appendf(out, out_cap, &used, "curated.swarm.aim_error_mul=%.3f\n", lvl.curated_combat.swarm.aim_error_mul)) return 0;
+            if (!appendf(out, out_cap, &used, "curated.swarm.projectile_speed_mul=%.3f\n", lvl.curated_combat.swarm.projectile_speed_mul)) return 0;
+            if (!appendf(out, out_cap, &used, "curated.swarm.spread_mul=%.3f\n", lvl.curated_combat.swarm.spread_mul)) return 0;
+            if (!appendf(out, out_cap, &used, "curated.kamikaze.fire_prob_mul=%.3f\n", lvl.curated_combat.kamikaze.fire_prob_mul)) return 0;
+            if (!appendf(out, out_cap, &used, "curated.kamikaze.speed_mul=%.3f\n", lvl.curated_combat.kamikaze.speed_mul)) return 0;
+            if (!appendf(out, out_cap, &used, "curated.kamikaze.accel_mul=%.3f\n", lvl.curated_combat.kamikaze.accel_mul)) return 0;
+            if (!appendf(out, out_cap, &used, "curated.manta.fire_prob_mul=%.3f\n", lvl.curated_combat.manta.fire_prob_mul)) return 0;
+            if (!appendf(out, out_cap, &used, "curated.manta.missile_count_bonus=%d\n", lvl.curated_combat.manta.missile_count_bonus)) return 0;
+            if (!appendf(out, out_cap, &used, "curated.manta.missile_cooldown_mul=%.3f\n", lvl.curated_combat.manta.missile_cooldown_mul)) return 0;
+            if (!appendf(out, out_cap, &used, "curated.manta.missile_charge_mul=%.3f\n", lvl.curated_combat.manta.missile_charge_mul)) return 0;
+            if (!appendf(out, out_cap, &used, "curated.eel.fire_prob_mul=%.3f\n", lvl.curated_combat.eel.fire_prob_mul)) return 0;
+            if (!appendf(out, out_cap, &used, "curated.eel.arc_fire_rate_mul=%.3f\n", lvl.curated_combat.eel.arc_fire_rate_mul)) return 0;
+            if (!appendf(out, out_cap, &used, "curated.eel.arc_duration_mul=%.3f\n", lvl.curated_combat.eel.arc_duration_mul)) return 0;
+            if (!appendf(out, out_cap, &used, "curated.eel.arc_range_mul=%.3f\n", lvl.curated_combat.eel.arc_range_mul)) return 0;
+            if (!appendf(out, out_cap, &used, "curated.eel.arc_damage_interval_mul=%.3f\n", lvl.curated_combat.eel.arc_damage_interval_mul)) return 0;
+        }
+    }
     if (!appendf(out, out_cap, &used, "bidirectional_spawns=%d\n", lvl.bidirectional_spawns ? 1 : 0)) return 0;
     if (!appendf(out, out_cap, &used, "cylinder_double_swarm_chance=%.3f\n", lvl.cylinder_double_swarm_chance)) return 0;
     if (!appendf(out, out_cap, &used, "powerup_drop_chance=%.3f\n", lvl.powerup_drop_chance)) return 0;
@@ -1766,6 +1901,7 @@ static int build_level_serialized_text(
 }
 
 static int marker_property_count(const level_editor_state* s) {
+    int base_count = 0;
     if (!s) {
         return 0;
     }
@@ -1799,15 +1935,60 @@ static int marker_property_count(const level_editor_state* s) {
     }
     if (is_wave_kind(kind)) {
         const int ev_item = marker_is_event_item(s, &s->markers[s->selected_marker]);
+        int tuned_count = 0;
         if (is_boid_wave_kind(kind)) {
-            return ev_item ? 7 : 8; /* event: TYPE,ORDER,DELAY,COUNT,SPEED,ACCEL,TURN | spatial: TYPE,X,Y,COUNT,SPEED,ACCEL,TURN,DELAY */
+            base_count = ev_item ? 7 : 8; /* event: TYPE,ORDER,DELAY,COUNT,SPEED,ACCEL,TURN | spatial: TYPE,X,Y,COUNT,SPEED,ACCEL,TURN,DELAY */
+        } else if (kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
+            base_count = ev_item ? 9 : 10; /* event: TYPE,ORDER,DELAY,COUNT,SPEED,ACCEL,STYLE,R MIN,R MAX | spatial adds DELAY */
+        } else {
+            base_count = ev_item ? 6 : 7; /* event: TYPE,ORDER,DELAY,A,B,C | spatial: TYPE,X,Y,A,B,C,DELAY */
         }
-        if (kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
-            return ev_item ? 9 : 10; /* event: TYPE,ORDER,DELAY,COUNT,SPEED,ACCEL,STYLE,R MIN,R MAX | spatial adds DELAY */
+        if (s->level_wave_mode == LEVELDEF_WAVES_CURATED) {
+            if (kind == LEVEL_EDITOR_MARKER_WAVE_SINE || kind == LEVEL_EDITOR_MARKER_WAVE_V) {
+                tuned_count = 6;
+            } else if (kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
+                tuned_count = 3;
+            } else if (kind == LEVEL_EDITOR_MARKER_MANTA_WING) {
+                tuned_count = 4;
+            } else if (kind == LEVEL_EDITOR_MARKER_EEL_SWARM) {
+                tuned_count = 5;
+            } else if (is_boid_wave_kind(kind)) {
+                tuned_count = 7;
+            }
         }
-        return ev_item ? 6 : 7; /* event: TYPE,ORDER,DELAY,A,B,C | spatial: TYPE,X,Y,A,B,C,DELAY */
+        return base_count + tuned_count;
     }
     return 2;
+}
+
+static int wave_base_property_count_for_kind(int kind, int event_item) {
+    if (is_boid_wave_kind(kind)) {
+        return event_item ? 7 : 8;
+    }
+    if (kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
+        return event_item ? 9 : 10;
+    }
+    return event_item ? 6 : 7;
+}
+
+static int cycle_shot_count(int current, float delta) {
+    const int dir = (delta >= 0.0f) ? 1 : -1;
+    if (dir > 0) {
+        if (current == -1) {
+            return 1;
+        }
+        if (current >= 12) {
+            return -1;
+        }
+        return current + 1;
+    }
+    if (current == -1) {
+        return 12;
+    }
+    if (current <= 1) {
+        return -1;
+    }
+    return current - 1;
 }
 
 static int cycle_wave_kind(int kind, int step) {
@@ -2486,6 +2667,7 @@ void level_editor_init(level_editor_state* s) {
     s->level_kamikaze_radius_min = 11.0f;
     s->level_kamikaze_radius_max = 17.0f;
     s->level_kamikaze_style = KAMIKAZE_STYLE_CLASSIC;
+    level_editor_set_default_curated_tuning(&s->level_curated_combat);
     snprintf(s->level_name, sizeof(s->level_name), "%s", level_style_name(s->level_style));
     snprintf(s->status_text, sizeof(s->status_text), "ready");
     s->entry_active = 0;
@@ -2620,6 +2802,8 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
             s->level_kamikaze_radius_min = lvl->kamikaze.radius_min;
             s->level_kamikaze_radius_max = lvl->kamikaze.radius_max;
             s->level_kamikaze_style = clampi(lvl->kamikaze.style, KAMIKAZE_STYLE_CLASSIC, KAMIKAZE_STYLE_PHOENIX);
+            s->level_curated_combat = lvl->curated_combat;
+            level_editor_clamp_curated_tuning(&s->level_curated_combat);
         } else {
             s->level_background_style = (s->level_render_style == LEVEL_RENDER_BLANK)
                 ? LEVELDEF_BACKGROUND_NONE
@@ -2630,6 +2814,7 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
                 : LEVELDEF_BG_MASK_NONE;
             s->level_powerup_drop_chance = 0.12f;
             s->level_kamikaze_style = KAMIKAZE_STYLE_CLASSIC;
+            level_editor_set_default_curated_tuning(&s->level_curated_combat);
         }
     }
     build_markers(s, db, style, lvl);
@@ -3531,6 +3716,61 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
     if (is_wave_kind(m->kind)) {
         const int ev_item = marker_is_event_item(s, m);
         const int boid_item = is_boid_wave_kind(m->kind);
+        const int base_prop_count = wave_base_property_count_for_kind(m->kind, ev_item);
+        if (s->selected_property >= base_prop_count && s->level_wave_mode == LEVELDEF_WAVES_CURATED) {
+            const int tuned_prop = s->selected_property - base_prop_count;
+            if (m->kind == LEVEL_EDITOR_MARKER_WAVE_SINE || m->kind == LEVEL_EDITOR_MARKER_WAVE_V) {
+                switch (tuned_prop) {
+                    case 0: s->level_curated_combat.formation.fire_prob_mul += delta * 0.05f; break;
+                    case 1: s->level_curated_combat.formation.cooldown_mul += delta * 0.05f; break;
+                    case 2: s->level_curated_combat.formation.shot_count =
+                        cycle_shot_count(s->level_curated_combat.formation.shot_count, delta); break;
+                    case 3: s->level_curated_combat.formation.aim_error_mul += delta * 0.05f; break;
+                    case 4: s->level_curated_combat.formation.projectile_speed_mul += delta * 0.05f; break;
+                    case 5: s->level_curated_combat.formation.spread_mul += delta * 0.05f; break;
+                    default: break;
+                }
+            } else if (m->kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
+                switch (tuned_prop) {
+                    case 0: s->level_curated_combat.kamikaze.fire_prob_mul += delta * 0.05f; break;
+                    case 1: s->level_curated_combat.kamikaze.speed_mul += delta * 0.05f; break;
+                    case 2: s->level_curated_combat.kamikaze.accel_mul += delta * 0.05f; break;
+                    default: break;
+                }
+            } else if (m->kind == LEVEL_EDITOR_MARKER_MANTA_WING) {
+                switch (tuned_prop) {
+                    case 0: s->level_curated_combat.manta.fire_prob_mul += delta * 0.05f; break;
+                    case 1: s->level_curated_combat.manta.missile_count_bonus += (delta >= 0.0f) ? 1 : -1; break;
+                    case 2: s->level_curated_combat.manta.missile_cooldown_mul += delta * 0.05f; break;
+                    case 3: s->level_curated_combat.manta.missile_charge_mul += delta * 0.05f; break;
+                    default: break;
+                }
+            } else if (m->kind == LEVEL_EDITOR_MARKER_EEL_SWARM) {
+                switch (tuned_prop) {
+                    case 0: s->level_curated_combat.eel.fire_prob_mul += delta * 0.05f; break;
+                    case 1: s->level_curated_combat.eel.arc_fire_rate_mul += delta * 0.05f; break;
+                    case 2: s->level_curated_combat.eel.arc_duration_mul += delta * 0.05f; break;
+                    case 3: s->level_curated_combat.eel.arc_range_mul += delta * 0.05f; break;
+                    case 4: s->level_curated_combat.eel.arc_damage_interval_mul += delta * 0.05f; break;
+                    default: break;
+                }
+            } else if (boid_item) {
+                switch (tuned_prop) {
+                    case 0: s->level_curated_combat.swarm.fire_prob_mul += delta * 0.05f; break;
+                    case 1: s->level_curated_combat.swarm.spread_prob_mul += delta * 0.05f; break;
+                    case 2: s->level_curated_combat.swarm.cooldown_mul += delta * 0.05f; break;
+                    case 3: s->level_curated_combat.swarm.shot_count =
+                        cycle_shot_count(s->level_curated_combat.swarm.shot_count, delta); break;
+                    case 4: s->level_curated_combat.swarm.aim_error_mul += delta * 0.05f; break;
+                    case 5: s->level_curated_combat.swarm.projectile_speed_mul += delta * 0.05f; break;
+                    case 6: s->level_curated_combat.swarm.spread_mul += delta * 0.05f; break;
+                    default: break;
+                }
+            }
+            level_editor_clamp_curated_tuning(&s->level_curated_combat);
+            mark_editor_dirty(s);
+            return;
+        }
         switch (s->selected_property) {
             case 0:
             {
@@ -3764,6 +4004,7 @@ int level_editor_revert(level_editor_state* s) {
     s->level_kamikaze_radius_min = s->snapshot_level_kamikaze_radius_min;
     s->level_kamikaze_radius_max = s->snapshot_level_kamikaze_radius_max;
     s->level_kamikaze_style = s->snapshot_level_kamikaze_style;
+    s->level_curated_combat = s->snapshot_level_curated_combat;
     s->level_style = level_style_from_render_style(s->level_render_style);
     snprintf(s->level_name, sizeof(s->level_name), "%s", s->snapshot_level_name);
     s->marker_count = s->snapshot_marker_count;
@@ -3820,6 +4061,7 @@ void level_editor_new_blank(level_editor_state* s) {
     s->level_kamikaze_radius_min = 11.0f;
     s->level_kamikaze_radius_max = 17.0f;
     s->level_kamikaze_style = KAMIKAZE_STYLE_CLASSIC;
+    level_editor_set_default_curated_tuning(&s->level_curated_combat);
     snprintf(s->level_name, sizeof(s->level_name), "level_blank");
     snprintf(s->status_text, sizeof(s->status_text), "new level");
 }

@@ -265,6 +265,54 @@ typedef struct leveldef_curated_enemy {
     float d; /* optional extra parameter (jelly_swarm uses this as size scale) */
 } leveldef_curated_enemy;
 
+typedef struct leveldef_curated_formation_tuning {
+    float fire_prob_mul;
+    float cooldown_mul;
+    int shot_count;
+    float aim_error_mul;
+    float projectile_speed_mul;
+    float spread_mul;
+} leveldef_curated_formation_tuning;
+
+typedef struct leveldef_curated_swarm_tuning {
+    float fire_prob_mul;
+    float spread_prob_mul;
+    float cooldown_mul;
+    int shot_count;
+    float aim_error_mul;
+    float projectile_speed_mul;
+    float spread_mul;
+} leveldef_curated_swarm_tuning;
+
+typedef struct leveldef_curated_kamikaze_tuning {
+    float fire_prob_mul;
+    float speed_mul;
+    float accel_mul;
+} leveldef_curated_kamikaze_tuning;
+
+typedef struct leveldef_curated_manta_tuning {
+    float fire_prob_mul;
+    int missile_count_bonus;
+    float missile_cooldown_mul;
+    float missile_charge_mul;
+} leveldef_curated_manta_tuning;
+
+typedef struct leveldef_curated_eel_tuning {
+    float fire_prob_mul;
+    float arc_fire_rate_mul;
+    float arc_duration_mul;
+    float arc_range_mul;
+    float arc_damage_interval_mul;
+} leveldef_curated_eel_tuning;
+
+typedef struct leveldef_curated_combat_tuning {
+    leveldef_curated_formation_tuning formation;
+    leveldef_curated_swarm_tuning swarm;
+    leveldef_curated_kamikaze_tuning kamikaze;
+    leveldef_curated_manta_tuning manta;
+    leveldef_curated_eel_tuning eel;
+} leveldef_curated_combat_tuning;
+
 typedef struct leveldef_level {
     float editor_length_screens; /* editor/runtime normalization basis for x01-authored objects */
     int theme_palette; /* 0=green, 1=amber, 2=ice */
@@ -334,6 +382,7 @@ typedef struct leveldef_level {
     int wave_cycle[LEVELDEF_MAX_BOID_CYCLE];
     int event_count;
     leveldef_event_entry events[LEVELDEF_MAX_EVENTS];
+    leveldef_curated_combat_tuning curated_combat;
     leveldef_wave_sine_tuning sine;
     leveldef_wave_v_tuning v;
     leveldef_wave_kamikaze_tuning kamikaze;
