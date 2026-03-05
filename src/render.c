@@ -4683,11 +4683,14 @@ static int editor_boid_style_from_value(float value) {
     if (fabsf(value) > 32.0f) {
         return BOID_STYLE_CLASSIC;
     }
-    return clampi((int)lroundf(value), BOID_STYLE_CLASSIC, BOID_STYLE_RAZOR);
+    return clampi((int)lroundf(value), BOID_STYLE_CLASSIC, BOID_STYLE_LANTERN);
 }
 
 static const char* editor_boid_style_name(float value) {
     const int style = editor_boid_style_from_value(value);
+    if (style == BOID_STYLE_LANTERN) {
+        return "LANTERN";
+    }
     if (style == BOID_STYLE_RAZOR) {
         return "RAZOR";
     }
@@ -8558,6 +8561,144 @@ static vg_result draw_enemy_glyph_razor(vg_context* ctx, const enemy* e, float x
     return draw_enemy_tail(ctx, e, x, y, rr, enemy_style);
 }
 
+static vg_result draw_enemy_glyph_lantern(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
+    float fx = 0.0f;
+    float fy = 0.0f;
+    float nx = 0.0f;
+    float ny = 0.0f;
+    enemy_glyph_basis(e, &fx, &fy, &nx, &ny);
+    {
+        const float pulse_amp = clampf((e->visual_param_b > 0.01f) ? e->visual_param_b : 0.24f, 0.10f, 0.44f);
+        const float pulse_speed = 3.2f + 2.4f * clampf((e->visual_param_a > 0.01f) ? e->visual_param_a : 1.0f, 0.6f, 1.4f);
+        const float phase = e->ai_timer_s * pulse_speed + e->visual_phase;
+        const float cycle = phase * (1.0f / 6.2831853f);
+        const int pulse_idx = (int)floorf(cycle);
+        const float pulse_u = cycle - (float)pulse_idx;
+        const float emit_roll = hash01_u32(
+            e->visual_seed ^ ((uint32_t)pulse_idx * 0x9e3779b9u) ^ 0x6b43u
+        );
+        const float emit_p = 0.5f;
+        float burst01 = 0.0f;
+        if (emit_roll < emit_p) {
+            const float rise = clampf(pulse_u / 0.10f, 0.0f, 1.0f);
+            const float fall = clampf((0.28f - pulse_u) / 0.18f, 0.0f, 1.0f);
+            burst01 = powf(rise * fall, 1.8f);
+        }
+        {
+            const float shimmer = 0.08f + 0.10f * (0.5f + 0.5f * sinf(phase * 1.7f + 0.9f));
+            const float pulse01 = clampf(shimmer + burst01 * 1.10f, 0.0f, 1.0f);
+        const float bob = sinf(phase * 0.44f);
+        const float draw_y = y + rr * 0.08f * bob;
+        const float ring_rf = rr * (0.36f + 0.38f * pulse01);
+        const float ring_rn = rr * (0.44f + 0.44f * pulse01);
+        vg_stroke_style main = *enemy_style;
+        vg_stroke_style inner = *enemy_style;
+        vg_stroke_style glow = *enemy_style;
+        vg_stroke_style ring_main = *enemy_style;
+        main.intensity *= 0.96f + 0.34f * pulse01;
+        inner.width_px *= 0.78f;
+        inner.intensity *= 0.70f + 0.28f * pulse01;
+        inner.color.a *= 0.82f;
+        glow.width_px *= 1.65f;
+        glow.intensity *= 0.28f + 1.12f * pulse01;
+        glow.color.a *= 0.38f + 0.42f * pulse01;
+        glow.blend = VG_BLEND_ADDITIVE;
+        ring_main.width_px *= 1.05f;
+        ring_main.intensity *= 0.74f + 1.08f * pulse01;
+
+        {
+            const vg_vec2 body[] = {
+                {x + fx * (-0.76f * rr), draw_y + fy * (-0.76f * rr)},
+                {x + fx * (-0.04f * rr) + nx * (-0.40f * rr), draw_y + fy * (-0.04f * rr) + ny * (-0.40f * rr)},
+                {x + fx * (0.66f * rr), draw_y + fy * (0.66f * rr)},
+                {x + fx * (-0.04f * rr) + nx * (0.40f * rr), draw_y + fy * (-0.04f * rr) + ny * (0.40f * rr)},
+                {x + fx * (-0.76f * rr), draw_y + fy * (-0.76f * rr)}
+            };
+            vg_result r = vg_draw_polyline(ctx, body, 5, &glow, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_draw_polyline(ctx, body, 5, &main, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+
+        {
+            enum { RING_SEG_N = 18 };
+            vg_vec2 ring[RING_SEG_N + 1];
+            for (int i = 0; i <= RING_SEG_N; ++i) {
+                const float u = (float)i / (float)RING_SEG_N;
+                const float a = u * 6.2831853f;
+                const float wobble = sinf(a * 3.0f - phase * 1.8f) * rr * 0.11f * pulse_amp * (0.45f + 0.55f * pulse01);
+                const float local_f = cosf(a) * ring_rf + wobble * 0.32f;
+                const float local_n = sinf(a) * ring_rn + wobble;
+                ring[i].x = x + fx * local_f + nx * local_n;
+                ring[i].y = draw_y + fy * local_f + ny * local_n;
+            }
+            {
+                vg_result r = vg_draw_polyline(ctx, ring, RING_SEG_N + 1, &glow, 1);
+                if (r != VG_OK) {
+                    return r;
+                }
+                r = vg_draw_polyline(ctx, ring, RING_SEG_N + 1, &ring_main, 1);
+                if (r != VG_OK) {
+                    return r;
+                }
+            }
+        }
+
+        {
+            const float core_rf = rr * (0.14f + 0.10f * pulse01);
+            const float core_rn = rr * (0.14f + 0.12f * pulse01);
+            const vg_vec2 core[] = {
+                {x + fx * core_rf, draw_y + fy * core_rf},
+                {x + nx * core_rn, draw_y + ny * core_rn},
+                {x - fx * core_rf, draw_y - fy * core_rf},
+                {x - nx * core_rn, draw_y - ny * core_rn},
+                {x + fx * core_rf, draw_y + fy * core_rf}
+            };
+            vg_stroke_style core_glow = glow;
+            core_glow.width_px *= 0.86f;
+            core_glow.intensity *= 1.25f;
+            {
+                vg_result r = vg_draw_polyline(ctx, core, 5, &core_glow, 0);
+                if (r != VG_OK) {
+                    return r;
+                }
+                r = vg_draw_polyline(ctx, core, 5, &inner, 0);
+                if (r != VG_OK) {
+                    return r;
+                }
+            }
+        }
+
+        {
+            const vg_vec2 ant_l[] = {
+                {x + fx * (0.18f * rr) + nx * (-0.20f * rr), draw_y + fy * (0.18f * rr) + ny * (-0.20f * rr)},
+                {x + fx * (0.72f * rr) + nx * (-0.40f * rr), draw_y + fy * (0.72f * rr) + ny * (-0.40f * rr)}
+            };
+            const vg_vec2 ant_r[] = {
+                {x + fx * (0.18f * rr) + nx * (0.20f * rr), draw_y + fy * (0.18f * rr) + ny * (0.20f * rr)},
+                {x + fx * (0.72f * rr) + nx * (0.40f * rr), draw_y + fy * (0.72f * rr) + ny * (0.40f * rr)}
+            };
+            vg_result r = vg_draw_polyline(ctx, ant_l, 2, &inner, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_draw_polyline(ctx, ant_r, 2, &inner, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+        }
+    }
+    if (e->kamikaze_tail <= 0.02f) {
+        return VG_OK;
+    }
+    return draw_enemy_tail(ctx, e, x, y, rr, enemy_style);
+}
+
 static vg_result draw_enemy_glyph_phoenix(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
     float fx = 0.0f;
     float fy = 0.0f;
@@ -9350,6 +9491,8 @@ static vg_result draw_enemy_glyph(vg_context* ctx, const enemy* e, float x, floa
     switch (e->visual_kind) {
         case ENEMY_VISUAL_PHOENIX:
             return draw_enemy_glyph_phoenix(ctx, e, x, y, rr, enemy_style);
+        case ENEMY_VISUAL_BOID_LANTERN:
+            return draw_enemy_glyph_lantern(ctx, e, x, y, rr, enemy_style);
         case ENEMY_VISUAL_BOID_RAZOR:
             return draw_enemy_glyph_razor(ctx, e, x, y, rr, enemy_style);
         case ENEMY_VISUAL_EEL:

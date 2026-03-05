@@ -398,7 +398,7 @@ static int boid_style_from_marker_value(float value) {
     if (fabsf(value) > 32.0f) {
         return BOID_STYLE_CLASSIC;
     }
-    return clampi((int)lroundf(value), BOID_STYLE_CLASSIC, BOID_STYLE_RAZOR);
+    return clampi((int)lroundf(value), BOID_STYLE_CLASSIC, BOID_STYLE_LANTERN);
 }
 
 static float boid_size_scale_from_marker_value(float value) {
@@ -3855,7 +3855,7 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
                         m->d = clampf(m->d + delta * 0.05f, 0.20f, 4.00f);
                     } else {
                         const int dir = (delta >= 0.0f) ? 1 : -1;
-                        const int n = BOID_STYLE_RAZOR - BOID_STYLE_CLASSIC + 1;
+                        const int n = BOID_STYLE_LANTERN - BOID_STYLE_CLASSIC + 1;
                         int style = boid_style_from_marker_value(m->d);
                         style = BOID_STYLE_CLASSIC + ((style - BOID_STYLE_CLASSIC + dir + n) % n);
                         m->d = (float)style;
