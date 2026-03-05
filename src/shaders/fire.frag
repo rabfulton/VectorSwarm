@@ -55,6 +55,8 @@ vec3 lava_ramp(float t) {
 
 void main() {
     vec2 frag_px = vec2(gl_FragCoord.xy);
+    vec2 vp = vec2(max(pc.p0.x, 1.0), max(pc.p0.y, 1.0));
+    vec2 frag_uv = frag_px / vp; /* 0=top, 1=bottom */
     float t = pc.p0.z;
     float magma_scale = max(pc.p0.w, 0.05);
     float warp_amp = clamp(pc.p1.w, 0.0, 1.0);
@@ -125,6 +127,10 @@ void main() {
     col += pc.p5.rgb * pow(clamp(flame, 0.0, 1.0), 1.4) * 0.22;
     col = col / (vec3(1.0) + col * 0.42);
     col = clamp((col - 0.5) * 1.22 + 0.5, 0.0, 1.0);
+
+    /* Fade to black from the top edge through the top 20% of the screen. */
+    float top_fade = smoothstep(0.0, 0.20, frag_uv.y);
+    col *= top_fade;
 
     float alpha = clamp(0.70 + glow * 0.16 + smoke * 0.05, 0.0, 0.98);
     out_color = vec4(col, alpha);
