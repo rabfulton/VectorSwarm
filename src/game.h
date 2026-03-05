@@ -168,6 +168,7 @@ typedef struct enemy {
     int hp;
     int missile_ammo;
     int armed;
+    float fire_prob;
     int weapon_id;
     float fire_cooldown_s;
     int burst_shots_left;

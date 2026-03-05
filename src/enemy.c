@@ -1015,15 +1015,17 @@ static void enemy_assign_combat_loadout(game_state* g, enemy* e, const leveldef_
     }
     if (e->archetype == ENEMY_ARCH_SWARM) {
         const float progression = enemy_progression01(g, db);
-        float armed_p = lerpf(combat->swarm_armed_prob_start, combat->swarm_armed_prob_end, progression);
+        float fire_p = lerpf(combat->swarm_armed_prob_start, combat->swarm_armed_prob_end, progression);
         float spread_p = lerpf(combat->swarm_spread_prob_start, combat->swarm_spread_prob_end, progression);
         if (curated) {
-            armed_p *= curated->swarm.fire_prob_mul;
+            fire_p *= curated->swarm.fire_prob_mul;
             spread_p *= curated->swarm.spread_prob_mul;
         }
-        armed_p = clampf(armed_p, 0.0f, 1.0f);
+        fire_p = clampf(fire_p, 0.0f, 1.0f);
         spread_p = clampf(spread_p, 0.0f, 1.0f);
-        e->armed = (frand01() < armed_p) ? 1 : 0;
+        /* Swarm units are always armed; firing chance is evaluated per fire attempt. */
+        e->armed = 1;
+        e->fire_prob = fire_p;
         e->weapon_id = (frand01() < spread_p) ? ENEMY_WEAPON_SPREAD : ENEMY_WEAPON_PULSE;
     } else if (e->archetype == ENEMY_ARCH_KAMIKAZE) {
         float kamikaze_fire_p = t.armed_probability[arch] * 0.02f;
@@ -1032,6 +1034,7 @@ static void enemy_assign_combat_loadout(game_state* g, enemy* e, const leveldef_
         }
         kamikaze_fire_p = clampf(kamikaze_fire_p, 0.0f, 1.0f);
         e->armed = (frand01() < kamikaze_fire_p) ? 1 : 0;
+        e->fire_prob = 1.0f;
         e->weapon_id = ENEMY_WEAPON_BURST;
     } else {
         float formation_fire_p = t.armed_probability[arch];
@@ -1040,6 +1043,7 @@ static void enemy_assign_combat_loadout(game_state* g, enemy* e, const leveldef_
         }
         formation_fire_p = clampf(formation_fire_p, 0.0f, 1.0f);
         e->armed = (frand01() < formation_fire_p) ? 1 : 0;
+        e->fire_prob = 1.0f;
         e->weapon_id = ENEMY_WEAPON_PULSE;
     }
     e->burst_shots_left = 0;
@@ -1089,6 +1093,7 @@ static enemy* spawn_enemy_common(game_state* g, float su) {
         e->visual_phase = 0.0f;
         e->visual_param_a = 0.0f;
         e->visual_param_b = 0.0f;
+        e->fire_prob = 1.0f;
         e->hp = 1;
         e->missile_ammo = 0;
         e->missile_cooldown_s = 0.0f;
@@ -2491,6 +2496,14 @@ static void enemy_try_fire(game_state* g, enemy* e, float dt, float su, const le
                     return;
                 }
             }
+        }
+    }
+
+    if (e->archetype == ENEMY_ARCH_SWARM) {
+        const float p_fire = clampf(e->fire_prob, 0.0f, 1.0f);
+        if (frand01() > p_fire) {
+            enemy_reset_fire_cooldown(w, &t, e);
+            return;
         }
     }
 
