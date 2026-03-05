@@ -722,6 +722,7 @@ static void level_editor_save_snapshot(level_editor_state* s) {
     s->snapshot_level_render_style = s->level_render_style;
     s->snapshot_level_wave_mode = s->level_wave_mode;
     s->snapshot_level_theme_palette = s->level_theme_palette;
+    s->snapshot_level_enemy_palette = s->level_enemy_palette;
     s->snapshot_level_background_style = s->level_background_style;
     s->snapshot_level_background_mask_style = s->level_background_mask_style;
     s->snapshot_level_asteroid_storm_enabled = s->level_asteroid_storm_enabled;
@@ -1066,6 +1067,17 @@ static const char* background_style_name(int style) {
     }
 }
 
+static const char* enemy_palette_name(int palette) {
+    switch (clampi(palette, LEVELDEF_ENEMY_PALETTE_DEFAULT, LEVELDEF_ENEMY_PALETTE_TOXIC)) {
+        case LEVELDEF_ENEMY_PALETTE_ANEMONE: return "anemone";
+        case LEVELDEF_ENEMY_PALETTE_AMBER: return "amber";
+        case LEVELDEF_ENEMY_PALETTE_ICE: return "ice";
+        case LEVELDEF_ENEMY_PALETTE_TOXIC: return "toxic";
+        case LEVELDEF_ENEMY_PALETTE_DEFAULT:
+        default: return "default";
+    }
+}
+
 static const char* background_mask_style_name(int style) {
     switch (style) {
         case LEVELDEF_BG_MASK_TERRAIN: return "terrain";
@@ -1274,6 +1286,7 @@ static int build_level_serialized_text(
     lvl.render_style = s->level_render_style;
     lvl.wave_mode = s->level_wave_mode;
     lvl.theme_palette = s->level_theme_palette;
+    lvl.enemy_palette = clampi(s->level_enemy_palette, LEVELDEF_ENEMY_PALETTE_DEFAULT, LEVELDEF_ENEMY_PALETTE_TOXIC);
     lvl.background_style = s->level_background_style;
     lvl.background_mask_style = s->level_background_mask_style;
     lvl.powerup_drop_chance = clampf(s->level_powerup_drop_chance, 0.0f, 1.0f);
@@ -1623,6 +1636,7 @@ static int build_level_serialized_text(
     if (!appendf(out, out_cap, &used, "render_style=%s\n", render_style_name(lvl.render_style))) return 0;
     if (!appendf(out, out_cap, &used, "wave_mode=%s\n", wave_mode_name(lvl.wave_mode))) return 0;
     if (!appendf(out, out_cap, &used, "theme_palette=%d\n", clampi(lvl.theme_palette, 0, 2))) return 0;
+    if (!appendf(out, out_cap, &used, "enemy_palette=%s\n", enemy_palette_name(lvl.enemy_palette))) return 0;
     if (!appendf(out, out_cap, &used, "background=%s\n", background_style_name(clampi(lvl.background_style, LEVELDEF_BACKGROUND_STARS, LEVELDEF_BACKGROUND_ICE)))) return 0;
     if (lvl.background_style == LEVELDEF_BACKGROUND_UNDERWATER) {
         if (!appendf(out, out_cap, &used, "underwater.density=%.3f\n", lvl.underwater_density)) return 0;
@@ -1944,7 +1958,7 @@ static int marker_property_count(const level_editor_state* s) {
         return 0;
     }
     if (s->selected_marker < 0 || s->selected_marker >= s->marker_count) {
-        return 7; /* WAVE MODE, RENDER STYLE, THEME, BACKGROUND, MASK, LENGTH, POWERUP DROP */
+        return 8; /* WAVE MODE, RENDER STYLE, THEME, ENEMY PALETTE, BACKGROUND, MASK, LENGTH, POWERUP DROP */
     }
     const int kind = s->markers[s->selected_marker].kind;
     if (kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
@@ -2703,6 +2717,7 @@ void level_editor_init(level_editor_state* s) {
     s->level_render_style = LEVEL_RENDER_BLANK;
     s->level_wave_mode = LEVELDEF_WAVES_NORMAL;
     s->level_theme_palette = 0;
+    s->level_enemy_palette = LEVELDEF_ENEMY_PALETTE_DEFAULT;
     s->level_background_style = LEVELDEF_BACKGROUND_NONE;
     s->level_background_mask_style = LEVELDEF_BG_MASK_NONE;
     s->level_asteroid_storm_enabled = 0;
@@ -2838,6 +2853,7 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
             s->level_render_style = lvl->render_style;
             s->level_wave_mode = lvl->wave_mode;
             s->level_theme_palette = clampi(lvl->theme_palette, 0, 2);
+            s->level_enemy_palette = clampi(lvl->enemy_palette, LEVELDEF_ENEMY_PALETTE_DEFAULT, LEVELDEF_ENEMY_PALETTE_TOXIC);
             s->level_background_style = clampi(lvl->background_style, LEVELDEF_BACKGROUND_STARS, LEVELDEF_BACKGROUND_ICE);
             s->level_background_mask_style = clampi(lvl->background_mask_style, LEVELDEF_BG_MASK_NONE, LEVELDEF_BG_MASK_WINDOWS);
             s->level_asteroid_storm_enabled = lvl->asteroid_storm_enabled ? 1 : 0;
@@ -2852,6 +2868,7 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
             s->level_curated_combat = lvl->curated_combat;
             level_editor_clamp_curated_tuning(&s->level_curated_combat);
         } else {
+            s->level_enemy_palette = LEVELDEF_ENEMY_PALETTE_DEFAULT;
             s->level_background_style = (s->level_render_style == LEVEL_RENDER_BLANK)
                 ? LEVELDEF_BACKGROUND_NONE
                 : LEVELDEF_BACKGROUND_STARS;
@@ -3562,12 +3579,20 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             case 3:
             {
                 const int dir = (delta >= 0.0f) ? 1 : -1;
+                const int n = LEVELDEF_ENEMY_PALETTE_TOXIC - LEVELDEF_ENEMY_PALETTE_DEFAULT + 1;
+                int ep = clampi(s->level_enemy_palette, LEVELDEF_ENEMY_PALETTE_DEFAULT, LEVELDEF_ENEMY_PALETTE_TOXIC);
+                ep = LEVELDEF_ENEMY_PALETTE_DEFAULT + ((ep - LEVELDEF_ENEMY_PALETTE_DEFAULT + dir + n) % n);
+                s->level_enemy_palette = ep;
+            } break;
+            case 4:
+            {
+                const int dir = (delta >= 0.0f) ? 1 : -1;
                 const int n = LEVELDEF_BACKGROUND_ICE - LEVELDEF_BACKGROUND_STARS + 1;
                 int bg = clampi(s->level_background_style, LEVELDEF_BACKGROUND_STARS, LEVELDEF_BACKGROUND_ICE);
                 bg = LEVELDEF_BACKGROUND_STARS + ((bg - LEVELDEF_BACKGROUND_STARS + dir + n) % n);
                 s->level_background_style = bg;
             } break;
-            case 4:
+            case 5:
             {
                 const int dir = (delta >= 0.0f) ? 1 : -1;
                 const int n = LEVELDEF_BG_MASK_WINDOWS - LEVELDEF_BG_MASK_NONE + 1;
@@ -3575,14 +3600,14 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
                 mask = LEVELDEF_BG_MASK_NONE + ((mask - LEVELDEF_BG_MASK_NONE + dir + n) % n);
                 s->level_background_mask_style = mask;
             } break;
-            case 5:
+            case 6:
                 s->level_length_screens = clampf(
                     s->level_length_screens + delta * 1.0f,
                     1.0f,
                     400.0f
                 );
                 break;
-            case 6:
+            case 7:
                 s->level_powerup_drop_chance = clampf(
                     s->level_powerup_drop_chance + delta * 0.01f,
                     0.0f,
@@ -4049,6 +4074,7 @@ int level_editor_revert(level_editor_state* s) {
     s->level_render_style = s->snapshot_level_render_style;
     s->level_wave_mode = s->snapshot_level_wave_mode;
     s->level_theme_palette = s->snapshot_level_theme_palette;
+    s->level_enemy_palette = s->snapshot_level_enemy_palette;
     s->level_background_style = s->snapshot_level_background_style;
     s->level_background_mask_style = s->snapshot_level_background_mask_style;
     s->level_asteroid_storm_enabled = s->snapshot_level_asteroid_storm_enabled;
@@ -4106,6 +4132,7 @@ void level_editor_new_blank(level_editor_state* s) {
     s->level_render_style = LEVEL_RENDER_BLANK;
     s->level_style = LEVEL_STYLE_BLANK;
     s->level_theme_palette = 0;
+    s->level_enemy_palette = LEVELDEF_ENEMY_PALETTE_DEFAULT;
     s->level_background_style = LEVELDEF_BACKGROUND_NONE;
     s->level_background_mask_style = LEVELDEF_BG_MASK_NONE;
     s->level_asteroid_storm_enabled = 0;

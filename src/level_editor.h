@@ -92,6 +92,7 @@ typedef struct level_editor_state {
     int level_render_style;
     int level_wave_mode;
     int level_theme_palette;
+    int level_enemy_palette;
     int level_background_style;
     int level_background_mask_style;
     int level_asteroid_storm_enabled;
@@ -133,6 +134,7 @@ typedef struct level_editor_state {
     int snapshot_level_render_style;
     int snapshot_level_wave_mode;
     int snapshot_level_theme_palette;
+    int snapshot_level_enemy_palette;
     int snapshot_level_background_style;
     int snapshot_level_background_mask_style;
     int snapshot_level_asteroid_storm_enabled;

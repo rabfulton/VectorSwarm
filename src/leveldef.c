@@ -190,6 +190,18 @@ static int background_mask_style_from_name(const char* name) {
     return -1;
 }
 
+static int enemy_palette_from_name(const char* name) {
+    if (!name) {
+        return -1;
+    }
+    if (strcmp(name, "default") == 0 || strcmp(name, "red") == 0) return LEVELDEF_ENEMY_PALETTE_DEFAULT;
+    if (strcmp(name, "anemone") == 0) return LEVELDEF_ENEMY_PALETTE_ANEMONE;
+    if (strcmp(name, "amber") == 0) return LEVELDEF_ENEMY_PALETTE_AMBER;
+    if (strcmp(name, "ice") == 0 || strcmp(name, "cyan") == 0) return LEVELDEF_ENEMY_PALETTE_ICE;
+    if (strcmp(name, "toxic") == 0 || strcmp(name, "lime") == 0) return LEVELDEF_ENEMY_PALETTE_TOXIC;
+    return -1;
+}
+
 static int has_prefix(const char* s, const char* prefix) {
     if (!s || !prefix) return 0;
     while (*prefix) {
@@ -377,6 +389,7 @@ void leveldef_init_defaults(leveldef_db* db) {
         db->level_present[i] = 0;
         db->levels[i].editor_length_screens = 12.0f;
         db->levels[i].theme_palette = 0;
+        db->levels[i].enemy_palette = LEVELDEF_ENEMY_PALETTE_DEFAULT;
         db->levels[i].background_style = LEVELDEF_BACKGROUND_STARS;
         db->levels[i].background_mask_style = LEVELDEF_BG_MASK_NONE;
         db->levels[i].underwater_density = 1.0f;
@@ -1018,6 +1031,8 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_level->editor_length_screens = strtof(v, NULL);
                     } else if (strcmp(k, "theme_palette") == 0) {
                         cur_level->theme_palette = atoi(v);
+                    } else if (strcmp(k, "enemy_palette") == 0) {
+                        cur_level->enemy_palette = enemy_palette_from_name(v);
                     } else if (strcmp(k, "background") == 0) {
                         cur_level->background_style = background_style_from_name(v);
                     } else if (strcmp(k, "background_mask") == 0) {
@@ -1564,6 +1579,12 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
         if (l->theme_palette < 0 || l->theme_palette > 2) {
             if (log_out) {
                 fprintf(log_out, "leveldef: level %d invalid theme_palette (expected 0..2)\n", i);
+            }
+            ok = 0;
+        }
+        if (l->enemy_palette < LEVELDEF_ENEMY_PALETTE_DEFAULT || l->enemy_palette > LEVELDEF_ENEMY_PALETTE_TOXIC) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid enemy_palette (expected default|anemone|amber|ice|toxic)\n", i);
             }
             ok = 0;
         }

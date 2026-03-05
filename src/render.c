@@ -1214,6 +1214,12 @@ typedef struct palette_theme {
     vg_color thruster;
 } palette_theme;
 
+typedef struct enemy_palette_theme {
+    vg_color enemy;
+    vg_color enemy_bullet;
+    vg_color enemy_bullet_halo;
+} enemy_palette_theme;
+
 static palette_theme get_palette_theme(int mode) {
     palette_theme p;
     switch (mode) {
@@ -1243,6 +1249,45 @@ static palette_theme get_palette_theme(int mode) {
             p.star = (vg_color){0.11f, 0.60f, 0.20f, 1.0f};
             p.ship = (vg_color){0.09f, 0.66f, 0.17f, 1.0f};
             p.thruster = (vg_color){0.18f, 0.66f, 0.30f, 0.92f};
+            break;
+    }
+    return p;
+}
+
+static enemy_palette_theme get_enemy_palette_theme(int mode, float t_s) {
+    enemy_palette_theme p;
+    const float pulse = 0.5f + 0.5f * sinf(t_s * 2.8f);
+    switch (clampi(mode, LEVELDEF_ENEMY_PALETTE_DEFAULT, LEVELDEF_ENEMY_PALETTE_TOXIC)) {
+        case LEVELDEF_ENEMY_PALETTE_ANEMONE:
+            p.enemy = (vg_color){
+                lerpf(0.22f, 0.40f, pulse),
+                lerpf(0.80f, 0.98f, pulse),
+                lerpf(0.72f, 0.92f, pulse),
+                1.0f
+            };
+            p.enemy_bullet = (vg_color){0.72f, 0.99f, 0.90f, 1.0f};
+            p.enemy_bullet_halo = (vg_color){0.66f, 0.96f, 0.88f, 0.30f};
+            break;
+        case LEVELDEF_ENEMY_PALETTE_AMBER:
+            p.enemy = (vg_color){1.0f, 0.74f, 0.32f, 1.0f};
+            p.enemy_bullet = (vg_color){1.0f, 0.84f, 0.50f, 1.0f};
+            p.enemy_bullet_halo = (vg_color){1.0f, 0.82f, 0.52f, 0.30f};
+            break;
+        case LEVELDEF_ENEMY_PALETTE_ICE:
+            p.enemy = (vg_color){0.56f, 0.93f, 1.0f, 1.0f};
+            p.enemy_bullet = (vg_color){0.78f, 0.98f, 1.0f, 1.0f};
+            p.enemy_bullet_halo = (vg_color){0.68f, 0.96f, 1.0f, 0.28f};
+            break;
+        case LEVELDEF_ENEMY_PALETTE_TOXIC:
+            p.enemy = (vg_color){0.72f, 1.0f, 0.28f, 1.0f};
+            p.enemy_bullet = (vg_color){0.84f, 1.0f, 0.50f, 1.0f};
+            p.enemy_bullet_halo = (vg_color){0.80f, 1.0f, 0.40f, 0.30f};
+            break;
+        case LEVELDEF_ENEMY_PALETTE_DEFAULT:
+        default:
+            p.enemy = (vg_color){1.0f, 0.3f, 0.3f, 1.0f};
+            p.enemy_bullet = (vg_color){1.0f, 0.36f, 0.36f, 1.0f};
+            p.enemy_bullet_halo = (vg_color){1.0f, 0.38f, 0.38f, 0.28f};
             break;
     }
     return p;
@@ -4725,6 +4770,18 @@ static const char* editor_theme_palette_name(int palette) {
     return "GREEN";
 }
 
+static const char* editor_enemy_palette_name(int palette) {
+    switch (clampi(palette, LEVELDEF_ENEMY_PALETTE_DEFAULT, LEVELDEF_ENEMY_PALETTE_TOXIC)) {
+        case LEVELDEF_ENEMY_PALETTE_ANEMONE: return "ANEMONE";
+        case LEVELDEF_ENEMY_PALETTE_AMBER: return "AMBER";
+        case LEVELDEF_ENEMY_PALETTE_ICE: return "ICE";
+        case LEVELDEF_ENEMY_PALETTE_TOXIC: return "TOXIC";
+        case LEVELDEF_ENEMY_PALETTE_DEFAULT:
+        default:
+            return "DEFAULT";
+    }
+}
+
 static const char* editor_background_style_name(int style) {
     if (style == LEVELDEF_BACKGROUND_NONE) return "NONE";
     if (style == LEVELDEF_BACKGROUND_NEBULA) return "NEBULA";
@@ -5730,7 +5787,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             {
                 int selected_prop = metrics->level_editor_selected_property;
                 if (selected_prop < 0) selected_prop = 0;
-                if (selected_prop > 6) selected_prop = 6;
+                if (selected_prop > 7) selected_prop = 7;
                 char row[96];
                 const vg_rect rb0 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
                 snprintf(row, sizeof(row), "WAVE MODE      %s", editor_wave_mode_name(metrics->level_editor_wave_mode));
@@ -5748,23 +5805,28 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb3 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
-                snprintf(row, sizeof(row), "BACKGROUND     %s", editor_background_style_name(metrics->level_editor_background_style));
+                snprintf(row, sizeof(row), "ENEMY PALETTE  %s", editor_enemy_palette_name(metrics->level_editor_enemy_palette));
                 r = draw_ui_button_shaded(ctx, rb3, row, 10.4f * ui, &frame, &text, (selected_prop == 3) ? 1 : 0);
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb4 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
-                snprintf(row, sizeof(row), "BG MASK        %s", editor_background_mask_style_name(metrics->level_editor_background_mask_style));
+                snprintf(row, sizeof(row), "BACKGROUND     %s", editor_background_style_name(metrics->level_editor_background_style));
                 r = draw_ui_button_shaded(ctx, rb4, row, 10.4f * ui, &frame, &text, (selected_prop == 4) ? 1 : 0);
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb5 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
-                snprintf(row, sizeof(row), "LENGTH         %.1f", metrics->level_editor_level_length_screens);
+                snprintf(row, sizeof(row), "BG MASK        %s", editor_background_mask_style_name(metrics->level_editor_background_mask_style));
                 r = draw_ui_button_shaded(ctx, rb5, row, 10.4f * ui, &frame, &text, (selected_prop == 5) ? 1 : 0);
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb6 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
-                snprintf(row, sizeof(row), "POWERUP DROP   %.2f", metrics->level_editor_powerup_drop_chance);
+                snprintf(row, sizeof(row), "LENGTH         %.1f", metrics->level_editor_level_length_screens);
                 r = draw_ui_button_shaded(ctx, rb6, row, 10.4f * ui, &frame, &text, (selected_prop == 6) ? 1 : 0);
+                if (r != VG_OK) return r;
+                ty -= 32.0f * ui;
+                const vg_rect rb7 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
+                snprintf(row, sizeof(row), "POWERUP DROP   %.2f", metrics->level_editor_powerup_drop_chance);
+                r = draw_ui_button_shaded(ctx, rb7, row, 10.4f * ui, &frame, &text, (selected_prop == 7) ? 1 : 0);
                 if (r != VG_OK) return r;
             }
             ty -= 34.0f * ui;
@@ -9923,6 +9985,14 @@ static vg_result draw_enemy_glyph(vg_context* ctx, const enemy* e, float x, floa
 
 vg_result render_frame(vg_context* ctx, const game_state* g, const render_metrics* metrics) {
     const palette_theme pal = get_palette_theme(metrics->palette_mode);
+    int enemy_palette_mode = LEVELDEF_ENEMY_PALETTE_DEFAULT;
+    {
+        const leveldef_level* lvl = game_current_leveldef(g);
+        if (lvl) {
+            enemy_palette_mode = clampi(lvl->enemy_palette, LEVELDEF_ENEMY_PALETTE_DEFAULT, LEVELDEF_ENEMY_PALETTE_TOXIC);
+        }
+    }
+    const enemy_palette_theme enemy_pal = get_enemy_palette_theme(enemy_palette_mode, g ? g->t : 0.0f);
     vg_crt_profile crt;
     vg_get_crt_profile(ctx, &crt);
     float persistence = crt.persistence_decay;
@@ -9960,12 +10030,12 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
         (vg_color){1.0f, 0.92f, 0.62f, 0.30f},
         VG_BLEND_ADDITIVE
     );
-    const vg_stroke_style enemy_style = make_stroke(2.5f, 1.0f * intensity_scale, (vg_color){1.0f, 0.3f, 0.3f, 1.0f}, VG_BLEND_ALPHA);
-    const vg_stroke_style enemy_bullet_style = make_stroke(0.82f, 0.88f * intensity_scale, (vg_color){1.0f, 0.36f, 0.36f, 1.0f}, VG_BLEND_ALPHA);
+    const vg_stroke_style enemy_style = make_stroke(2.5f, 1.0f * intensity_scale, enemy_pal.enemy, VG_BLEND_ALPHA);
+    const vg_stroke_style enemy_bullet_style = make_stroke(0.82f, 0.88f * intensity_scale, enemy_pal.enemy_bullet, VG_BLEND_ALPHA);
     const vg_stroke_style enemy_bullet_halo_style = make_stroke(
         4.0f,
         0.21f * intensity_scale,
-        (vg_color){1.0f, 0.38f, 0.38f, 0.28f},
+        enemy_pal.enemy_bullet_halo,
         VG_BLEND_ADDITIVE
     );
     const vg_stroke_style eel_arc_style = make_stroke(

@@ -48,6 +48,14 @@ enum leveldef_background_mask_style {
     LEVELDEF_BG_MASK_WINDOWS = 2
 };
 
+enum leveldef_enemy_palette {
+    LEVELDEF_ENEMY_PALETTE_DEFAULT = 0,
+    LEVELDEF_ENEMY_PALETTE_ANEMONE = 1,
+    LEVELDEF_ENEMY_PALETTE_AMBER = 2,
+    LEVELDEF_ENEMY_PALETTE_ICE = 3,
+    LEVELDEF_ENEMY_PALETTE_TOXIC = 4
+};
+
 enum leveldef_wave_pattern_id {
     LEVELDEF_WAVE_SINE_SNAKE = 0,
     LEVELDEF_WAVE_V_FORMATION = 1,
@@ -318,6 +326,7 @@ typedef struct leveldef_curated_combat_tuning {
 typedef struct leveldef_level {
     float editor_length_screens; /* editor/runtime normalization basis for x01-authored objects */
     int theme_palette; /* 0=green, 1=amber, 2=ice */
+    int enemy_palette; /* enum leveldef_enemy_palette */
     int background_style; /* enum leveldef_background_style */
     int background_mask_style; /* enum leveldef_background_mask_style */
     float underwater_density;
