@@ -4683,11 +4683,14 @@ static int editor_boid_style_from_value(float value) {
     if (fabsf(value) > 32.0f) {
         return BOID_STYLE_CLASSIC;
     }
-    return clampi((int)lroundf(value), BOID_STYLE_CLASSIC, BOID_STYLE_LANTERN);
+    return clampi((int)lroundf(value), BOID_STYLE_CLASSIC, BOID_STYLE_SHARD);
 }
 
 static const char* editor_boid_style_name(float value) {
     const int style = editor_boid_style_from_value(value);
+    if (style == BOID_STYLE_SHARD) {
+        return "SHARD";
+    }
     if (style == BOID_STYLE_LANTERN) {
         return "LANTERN";
     }
@@ -8561,6 +8564,214 @@ static vg_result draw_enemy_glyph_razor(vg_context* ctx, const enemy* e, float x
     return draw_enemy_tail(ctx, e, x, y, rr, enemy_style);
 }
 
+static vg_result draw_enemy_glyph_shard(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
+    float fx = 0.0f;
+    float fy = 0.0f;
+    float nx = 0.0f;
+    float ny = 0.0f;
+    enemy_glyph_basis(e, &fx, &fy, &nx, &ny);
+    {
+        typedef struct shard_vtx {
+            float f;
+            float n;
+            float z;
+        } shard_vtx;
+        static const int k_facets[8][3] = {
+            {0, 1, 6}, {1, 2, 6}, {2, 7, 6}, {2, 3, 7},
+            {3, 4, 7}, {4, 6, 7}, {4, 5, 6}, {5, 0, 6}
+        };
+        const uint32_t seed = (e->visual_seed != 0u) ? e->visual_seed : 0x5ad18b43u;
+        const int facet_topology = (hash01_u32(seed ^ 0x111u) < 0.52f) ? 2 : 3;
+        const float pace = 2.2f + 1.4f * clampf((e->visual_param_a > 0.01f) ? e->visual_param_a : 1.0f, 0.6f, 1.5f);
+        const float phase = e->ai_timer_s * pace + e->visual_phase;
+        const float asym = lerpf(-0.32f, 0.32f, hash01_u32(seed ^ 0x3a7u));
+        const float skew = lerpf(-0.20f, 0.20f, hash01_u32(seed ^ 0x8f5u));
+        const float shard_warp = clampf((e->visual_param_b > 0.01f) ? e->visual_param_b : 0.22f, 0.10f, 0.42f);
+        const float draw_y = y + rr * 0.02f * sinf(phase * 0.72f + asym * 0.8f);
+        const float cycle = phase * (1.0f / 6.2831853f);
+        const int flick_idx = (int)floorf(cycle);
+        const float flick_u = cycle - (float)flick_idx;
+        const float emit_roll = hash01_u32(seed ^ ((uint32_t)flick_idx * 0x9e3779b9u) ^ 0x6a31u);
+        const float emit_p = 0.22f;
+        float edge_flash = 0.0f;
+        shard_vtx v[8] = {
+            {1.26f, 0.02f, 0.18f},
+            {0.42f, 0.54f, 0.34f},
+            {-0.24f, 0.34f, 0.26f},
+            {-1.32f, -0.02f, -0.04f},
+            {-0.34f, -0.30f, -0.24f},
+            {0.30f, -0.52f, -0.22f},
+            {0.28f, 0.02f, 0.58f},
+            {-0.66f, 0.00f, 0.42f}
+        };
+        vg_stroke_style edge;
+        vg_stroke_style hull_style;
+        vg_stroke_style flash_style;
+        vg_fill_style facet_fill;
+        vg_fill_style facet_glow;
+        vg_vec2 hull[7];
+        const int hull_idx[7] = {0, 1, 2, 3, 4, 5, 0};
+        v3 light_a;
+        v3 light_b;
+        float switch01;
+        vg_result r = VG_OK;
+
+        if (emit_roll < emit_p) {
+            const float rise = clampf(flick_u / 0.10f, 0.0f, 1.0f);
+            const float fall = clampf((0.25f - flick_u) / 0.15f, 0.0f, 1.0f);
+            edge_flash = powf(rise * fall, 2.0f);
+        }
+
+        /* Reduce middle-kink strength for the 2-facet variant so silhouette stays chunkier. */
+        if (facet_topology == 2) {
+            v[2].n *= 0.42f;
+            v[4].n *= 0.42f;
+            v[2].z *= 0.72f;
+            v[4].z *= 0.72f;
+        }
+
+        for (int i = 0; i < 8; ++i) {
+            const float jf = hash01_u32(seed ^ (uint32_t)(0x1100u + i * 0x83u)) - 0.5f;
+            const float jn = hash01_u32(seed ^ (uint32_t)(0x1a00u + i * 0xc7u)) - 0.5f;
+            const float jz = hash01_u32(seed ^ (uint32_t)(0x2300u + i * 0x5bu)) - 0.5f;
+            const float local_warp = (i >= 6) ? (0.45f * shard_warp) : shard_warp;
+            v[i].f += (jf * 0.18f + skew * 0.10f) * local_warp;
+            v[i].n += (jn * 0.22f + asym * 0.18f) * local_warp;
+            v[i].z += (jz * 0.28f) * local_warp;
+        }
+
+        edge = *enemy_style;
+        hull_style = *enemy_style;
+        flash_style = *enemy_style;
+        edge.width_px *= 0.78f;
+        edge.intensity *= 0.78f + 1.00f * edge_flash;
+        edge.color.a *= 0.70f + 0.30f * edge_flash;
+        hull_style.width_px *= 1.06f;
+        hull_style.intensity *= 0.90f;
+        flash_style.width_px *= 1.42f;
+        flash_style.intensity *= 0.22f + 2.10f * edge_flash;
+        flash_style.color.a *= 0.24f + 0.58f * edge_flash;
+        flash_style.blend = VG_BLEND_ADDITIVE;
+
+        facet_fill = make_fill(0.65f, enemy_style->color, VG_BLEND_ALPHA);
+        facet_glow = make_fill(0.30f, enemy_style->color, VG_BLEND_ADDITIVE);
+
+        light_a = v3_norm((v3){cosf(phase * 0.58f), sinf(phase * 0.37f + 0.8f), 0.92f});
+        light_b = v3_norm((v3){-sinf(phase * 0.44f + 1.4f), cosf(phase * 0.52f - 0.3f), 0.80f});
+        switch01 = 0.5f + 0.5f * sinf(phase * 0.84f + hash01_u32(seed ^ 0x2badu) * 6.2831853f);
+        switch01 = clampf((switch01 - 0.34f) / 0.32f, 0.0f, 1.0f);
+
+        for (int fi = 0; fi < 8; ++fi) {
+            const int ia = k_facets[fi][0];
+            const int ib = k_facets[fi][1];
+            const int ic = k_facets[fi][2];
+            const shard_vtx a = v[ia];
+            const shard_vtx b = v[ib];
+            const shard_vtx c = v[ic];
+            const v3 e0 = {b.f - a.f, b.n - a.n, b.z - a.z};
+            const v3 e1 = {c.f - a.f, c.n - a.n, c.z - a.z};
+            v3 normal = {
+                e0.y * e1.z - e0.z * e1.y,
+                e0.z * e1.x - e0.x * e1.z,
+                e0.x * e1.y - e0.y * e1.x
+            };
+            vg_vec2 tri[3];
+            vg_vec2 tri_outline[4];
+            float catch_a;
+            float catch_b;
+            float catch_light;
+            float facing;
+            float shade;
+            float alpha;
+            vg_fill_style fill_i;
+            vg_fill_style glow_i;
+            vg_stroke_style edge_i;
+
+            normal = v3_norm(normal);
+            if (normal.z < 0.0f) {
+                normal.x = -normal.x;
+                normal.y = -normal.y;
+                normal.z = -normal.z;
+            }
+            catch_a = fmaxf(0.0f, v3_dot(normal, light_a));
+            catch_b = fmaxf(0.0f, v3_dot(normal, light_b));
+            catch_light = fmaxf(catch_a * (0.58f + 0.88f * switch01), catch_b * (0.58f + 0.88f * (1.0f - switch01)));
+            facing = clampf(normal.z * 0.86f + 0.14f, 0.0f, 1.0f);
+            shade = clampf(0.12f + 0.56f * facing + 0.95f * catch_light, 0.06f, 1.55f);
+            alpha = clampf(0.14f + 0.42f * facing + 0.30f * catch_light, 0.10f, 0.96f);
+            fill_i = facet_fill;
+            fill_i.intensity *= shade;
+            fill_i.color.a *= alpha;
+            glow_i = facet_glow;
+            glow_i.intensity *= clampf((shade - 0.70f) * 1.10f, 0.0f, 1.2f);
+            glow_i.color.a *= clampf((shade - 0.55f), 0.0f, 0.8f);
+            edge_i = edge;
+            edge_i.intensity *= 0.78f + 0.46f * catch_light;
+            edge_i.color.a *= 0.72f + 0.20f * facing;
+
+            tri[0] = (vg_vec2){x + fx * (a.f * rr) + nx * (a.n * rr), draw_y + fy * (a.f * rr) + ny * (a.n * rr)};
+            tri[1] = (vg_vec2){x + fx * (b.f * rr) + nx * (b.n * rr), draw_y + fy * (b.f * rr) + ny * (b.n * rr)};
+            tri[2] = (vg_vec2){x + fx * (c.f * rr) + nx * (c.n * rr), draw_y + fy * (c.f * rr) + ny * (c.n * rr)};
+            tri_outline[0] = tri[0];
+            tri_outline[1] = tri[1];
+            tri_outline[2] = tri[2];
+            tri_outline[3] = tri[0];
+
+            r = vg_fill_convex(ctx, tri, 3, &fill_i);
+            if (r != VG_OK) {
+                return r;
+            }
+            if (glow_i.intensity > 0.01f) {
+                r = vg_fill_convex(ctx, tri, 3, &glow_i);
+                if (r != VG_OK) {
+                    return r;
+                }
+            }
+            r = vg_draw_polyline(ctx, tri_outline, 4, &edge_i, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+
+        for (int i = 0; i < 7; ++i) {
+            const shard_vtx p = v[hull_idx[i]];
+            hull[i] = (vg_vec2){x + fx * (p.f * rr) + nx * (p.n * rr), draw_y + fy * (p.f * rr) + ny * (p.n * rr)};
+        }
+        r = vg_draw_polyline(ctx, hull, 7, &hull_style, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+
+        {
+            const vg_vec2 ridge[] = {
+                {x + fx * (v[6].f * rr) + nx * (v[6].n * rr), draw_y + fy * (v[6].f * rr) + ny * (v[6].n * rr)},
+                {x + fx * (v[7].f * rr) + nx * (v[7].n * rr), draw_y + fy * (v[7].f * rr) + ny * (v[7].n * rr)}
+            };
+            r = vg_draw_polyline(ctx, ridge, 2, &edge, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+
+        if (edge_flash > 0.01f) {
+            for (int i = 0; i < 6; ++i) {
+                const float seg_roll = hash01_u32(seed ^ ((uint32_t)flick_idx * 0x7f4a7c15u) ^ (uint32_t)(i * 0x9e37u));
+                if (seg_roll < 0.55f) {
+                    const vg_vec2 seg[] = {hull[i], hull[i + 1]};
+                    r = vg_draw_polyline(ctx, seg, 2, &flash_style, 0);
+                    if (r != VG_OK) {
+                        return r;
+                    }
+                }
+            }
+        }
+    }
+    if (e->kamikaze_tail <= 0.02f) {
+        return VG_OK;
+    }
+    return draw_enemy_tail(ctx, e, x, y, rr, enemy_style);
+}
+
 static vg_result draw_enemy_glyph_lantern(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
     float fx = 0.0f;
     float fy = 0.0f;
@@ -9491,6 +9702,8 @@ static vg_result draw_enemy_glyph(vg_context* ctx, const enemy* e, float x, floa
     switch (e->visual_kind) {
         case ENEMY_VISUAL_PHOENIX:
             return draw_enemy_glyph_phoenix(ctx, e, x, y, rr, enemy_style);
+        case ENEMY_VISUAL_BOID_SHARD:
+            return draw_enemy_glyph_shard(ctx, e, x, y, rr, enemy_style);
         case ENEMY_VISUAL_BOID_LANTERN:
             return draw_enemy_glyph_lantern(ctx, e, x, y, rr, enemy_style);
         case ENEMY_VISUAL_BOID_RAZOR:

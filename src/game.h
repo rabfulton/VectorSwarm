@@ -59,7 +59,8 @@ enum enemy_visual_kind {
     ENEMY_VISUAL_EEL = 3,
     ENEMY_VISUAL_PHOENIX = 4,
     ENEMY_VISUAL_BOID_RAZOR = 5,
-    ENEMY_VISUAL_BOID_LANTERN = 6
+    ENEMY_VISUAL_BOID_LANTERN = 6,
+    ENEMY_VISUAL_BOID_SHARD = 7
 };
 
 typedef enum kamikaze_style_id {
@@ -70,7 +71,8 @@ typedef enum kamikaze_style_id {
 typedef enum boid_style_id {
     BOID_STYLE_CLASSIC = 0,
     BOID_STYLE_RAZOR = 1,
-    BOID_STYLE_LANTERN = 2
+    BOID_STYLE_LANTERN = 2,
+    BOID_STYLE_SHARD = 3
 } boid_style_id;
 
 typedef struct star {

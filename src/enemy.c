@@ -1313,7 +1313,7 @@ static int boid_style_from_value(float value) {
     if (fabsf(value) > 32.0f) {
         return BOID_STYLE_CLASSIC;
     }
-    return clampi((int)lroundf(value), BOID_STYLE_CLASSIC, BOID_STYLE_LANTERN);
+    return clampi((int)lroundf(value), BOID_STYLE_CLASSIC, BOID_STYLE_SHARD);
 }
 
 static float boid_size_scale_from_value(float value) {
@@ -1370,6 +1370,15 @@ static void apply_boid_visual_style(enemy* e, int style, int wave_id, int slot_i
         e->visual_phase = hash01_u32(seed ^ 0x5e7u) * 6.2831853f;
         e->visual_param_a = lerpf(0.86f, 1.22f, hash01_u32(seed ^ 0x2a1u));
         e->visual_param_b = lerpf(0.18f, 0.34f, hash01_u32(seed ^ 0x8d5u));
+        return;
+    }
+    if (style == BOID_STYLE_SHARD) {
+        const uint32_t seed = enemy_visual_seed_from_ids(wave_id, slot_index);
+        e->visual_kind = ENEMY_VISUAL_BOID_SHARD;
+        e->visual_seed = seed;
+        e->visual_phase = hash01_u32(seed ^ 0x44bu) * 6.2831853f;
+        e->visual_param_a = lerpf(0.92f, 1.42f, hash01_u32(seed ^ 0x729u));
+        e->visual_param_b = lerpf(0.14f, 0.32f, hash01_u32(seed ^ 0x3f1u));
         return;
     }
     clear_enemy_visual_style(e);
