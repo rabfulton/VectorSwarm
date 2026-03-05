@@ -72,6 +72,7 @@
 #include "underwater_frag_spv.h"
 #include "underwater_kelp_frag_spv.h"
 #include "fire_frag_spv.h"
+#include "ice_frag_spv.h"
 #include "grid_vert_spv.h"
 #include "grid_frag_spv.h"
 #include "grid_sim_frag_spv.h"
@@ -349,6 +350,7 @@ typedef struct app {
     VkPipeline underwater_pipeline;
     VkPipeline underwater_kelp_pipeline;
     VkPipeline fire_pipeline;
+    VkPipeline ice_pipeline;
     VkDescriptorSetLayout underwater_desc_layout;
     VkDescriptorPool underwater_desc_pool;
     VkDescriptorSet underwater_desc_set;
@@ -1296,7 +1298,7 @@ static float perlin2(float x, float y) {
     return lerpf(ix0, ix1, sy);
 }
 
-/* Tileable value noise helpers for the shared underwater/fire noise texture. */
+/* Tileable value noise helpers for the shared underwater/fire/ice noise texture. */
 static uint8_t g_shared_noise_tex[UNDERWATER_NOISE_TEX_SIZE * UNDERWATER_NOISE_TEX_SIZE * 4];
 static int g_shared_noise_tex_ready = 0;
 
@@ -2443,6 +2445,7 @@ static void record_gpu_radar(app* a, VkCommandBuffer cmd);
 static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t);
 static void record_gpu_underwater_kelp(app* a, VkCommandBuffer cmd, float t);
 static void record_gpu_underwater(app* a, VkCommandBuffer cmd, float t);
+static void record_gpu_ice(app* a, VkCommandBuffer cmd, float t);
 static void record_gpu_grid_sim(app* a, VkCommandBuffer cmd, float dt);
 static void record_gpu_grid(app* a, VkCommandBuffer cmd);
 static void record_gpu_arc_beam(app* a, VkCommandBuffer cmd, float t);
@@ -4802,6 +4805,7 @@ static void cleanup(app* a) {
     if (a->underwater_pipeline) vkDestroyPipeline(a->device, a->underwater_pipeline, NULL);
     if (a->underwater_kelp_pipeline) vkDestroyPipeline(a->device, a->underwater_kelp_pipeline, NULL);
     if (a->fire_pipeline) vkDestroyPipeline(a->device, a->fire_pipeline, NULL);
+    if (a->ice_pipeline) vkDestroyPipeline(a->device, a->ice_pipeline, NULL);
     if (a->grid_pipeline) vkDestroyPipeline(a->device, a->grid_pipeline, NULL);
     if (a->grid_sim_pipeline) vkDestroyPipeline(a->device, a->grid_sim_pipeline, NULL);
     if (a->arc_beam_pipeline) vkDestroyPipeline(a->device, a->arc_beam_pipeline, NULL);
@@ -5035,6 +5039,10 @@ static void destroy_render_runtime(app* a) {
     if (a->fire_pipeline) {
         vkDestroyPipeline(a->device, a->fire_pipeline, NULL);
         a->fire_pipeline = VK_NULL_HANDLE;
+    }
+    if (a->ice_pipeline) {
+        vkDestroyPipeline(a->device, a->ice_pipeline, NULL);
+        a->ice_pipeline = VK_NULL_HANDLE;
     }
     if (a->grid_pipeline) {
         vkDestroyPipeline(a->device, a->grid_pipeline, NULL);
@@ -7317,10 +7325,16 @@ static int create_underwater_resources(app* a) {
         .codeSize = v_type_fire_frag_spv_len,
         .pCode = (const uint32_t*)v_type_fire_frag_spv
     };
+    VkShaderModuleCreateInfo fs_ice_ci = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = v_type_ice_frag_spv_len,
+        .pCode = (const uint32_t*)v_type_ice_frag_spv
+    };
     VkShaderModule vs = VK_NULL_HANDLE;
     VkShaderModule fs = VK_NULL_HANDLE;
     VkShaderModule fs_kelp = VK_NULL_HANDLE;
     VkShaderModule fs_fire = VK_NULL_HANDLE;
+    VkShaderModule fs_ice = VK_NULL_HANDLE;
     if (!check_vk(vkCreateShaderModule(a->device, &vs_ci, NULL, &vs), "vkCreateShaderModule(underwater vs)")) {
         return 0;
     }
@@ -7334,6 +7348,13 @@ static int create_underwater_resources(app* a) {
         return 0;
     }
     if (!check_vk(vkCreateShaderModule(a->device, &fs_fire_ci, NULL, &fs_fire), "vkCreateShaderModule(fire fs)")) {
+        vkDestroyShaderModule(a->device, fs_kelp, NULL);
+        vkDestroyShaderModule(a->device, fs, NULL);
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+    if (!check_vk(vkCreateShaderModule(a->device, &fs_ice_ci, NULL, &fs_ice), "vkCreateShaderModule(ice fs)")) {
+        vkDestroyShaderModule(a->device, fs_fire, NULL);
         vkDestroyShaderModule(a->device, fs_kelp, NULL);
         vkDestroyShaderModule(a->device, fs, NULL);
         vkDestroyShaderModule(a->device, vs, NULL);
@@ -7396,6 +7417,7 @@ static int create_underwater_resources(app* a) {
         .subpass = 0
     };
     if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->underwater_pipeline), "vkCreateGraphicsPipelines(underwater)")) {
+        vkDestroyShaderModule(a->device, fs_ice, NULL);
         vkDestroyShaderModule(a->device, fs_fire, NULL);
         vkDestroyShaderModule(a->device, fs_kelp, NULL);
         vkDestroyShaderModule(a->device, fs, NULL);
@@ -7406,6 +7428,22 @@ static int create_underwater_resources(app* a) {
     gp.renderPass = a->scene_render_pass;
     gp.pMultisampleState = &ms;
     if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->fire_pipeline), "vkCreateGraphicsPipelines(fire)")) {
+        vkDestroyShaderModule(a->device, fs_ice, NULL);
+        vkDestroyShaderModule(a->device, fs_fire, NULL);
+        vkDestroyShaderModule(a->device, fs_kelp, NULL);
+        vkDestroyShaderModule(a->device, fs, NULL);
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+    stages[1].module = fs_ice;
+    gp.renderPass = a->scene_render_pass;
+    gp.pMultisampleState = &ms;
+    if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->ice_pipeline), "vkCreateGraphicsPipelines(ice)")) {
+        if (a->fire_pipeline) {
+            vkDestroyPipeline(a->device, a->fire_pipeline, NULL);
+            a->fire_pipeline = VK_NULL_HANDLE;
+        }
+        vkDestroyShaderModule(a->device, fs_ice, NULL);
         vkDestroyShaderModule(a->device, fs_fire, NULL);
         vkDestroyShaderModule(a->device, fs_kelp, NULL);
         vkDestroyShaderModule(a->device, fs, NULL);
@@ -7416,10 +7454,15 @@ static int create_underwater_resources(app* a) {
     gp.renderPass = a->bloom_render_pass;
     gp.pMultisampleState = &ms_single;
     if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->underwater_kelp_pipeline), "vkCreateGraphicsPipelines(underwater kelp)")) {
+        if (a->ice_pipeline) {
+            vkDestroyPipeline(a->device, a->ice_pipeline, NULL);
+            a->ice_pipeline = VK_NULL_HANDLE;
+        }
         if (a->fire_pipeline) {
             vkDestroyPipeline(a->device, a->fire_pipeline, NULL);
             a->fire_pipeline = VK_NULL_HANDLE;
         }
+        vkDestroyShaderModule(a->device, fs_ice, NULL);
         vkDestroyShaderModule(a->device, fs_fire, NULL);
         vkDestroyShaderModule(a->device, fs_kelp, NULL);
         vkDestroyShaderModule(a->device, fs, NULL);
@@ -7427,6 +7470,7 @@ static int create_underwater_resources(app* a) {
         return 0;
     }
 
+    vkDestroyShaderModule(a->device, fs_ice, NULL);
     vkDestroyShaderModule(a->device, fs_fire, NULL);
     vkDestroyShaderModule(a->device, fs_kelp, NULL);
     vkDestroyShaderModule(a->device, fs, NULL);
@@ -8752,6 +8796,132 @@ static void append_gpu_fire_embers_and_ash(
     *inout_n = n;
 }
 
+static void append_gpu_ice_snow(
+    const app* a,
+    const game_state* g,
+    const leveldef_level* lvl,
+    particle_instance* out,
+    uint32_t* inout_n,
+    int use_cyl_projection,
+    float* io_r_sum,
+    float* io_r_min,
+    float* io_r_max
+) {
+    if (!a || !g || !lvl || !out || !inout_n) {
+        return;
+    }
+
+    uint32_t n = *inout_n;
+    const float quality = a->video_menu_high_quality ? 1.0f : 0.62f;
+    const float density = clampf(lvl->ice_snow_density, 0.0f, 4.0f);
+    int flake_count = (int)lroundf((100.0f + density * 220.0f) * quality);
+    if (flake_count < 28) flake_count = 28;
+    if (flake_count > 520) flake_count = 520;
+
+    const float snow_speed = fmaxf(lvl->ice_snow_speed, 0.0f);
+    const float ang = lvl->ice_snow_angle_deg * (3.14159265358979323846f / 180.0f);
+    const float wind_x = sinf(ang);
+    const float wind_y = -cosf(ang);
+    const float base_speed = 72.0f + snow_speed * 96.0f;
+
+    const float x_span = g->world_w * 1.8f;
+    const float y_span = g->world_h * 1.6f;
+    const float y_top = g->camera_y + g->world_h * 0.80f;
+
+    for (int i = 0; i < flake_count && n < GPU_PARTICLE_MAX_INSTANCES; ++i) {
+        const uint32_t h0 = hash_u32((uint32_t)(i + 1) * 0x9e3779b9u ^ 0x51f2d6b3u);
+        const uint32_t h1 = hash_u32(h0 ^ 0x7f4a7c15u);
+        const uint32_t h2 = hash_u32(h1 ^ 0x94d049bbu);
+        const float u0 = (float)(h0 & 0x00ffffffu) / 16777215.0f;
+        const float u1 = (float)(h1 & 0x00ffffffu) / 16777215.0f;
+        const float u2 = (float)(h2 & 0x00ffffffu) / 16777215.0f;
+
+        const float fall_rate = (0.07f + 0.12f * u1) * (0.55f + 0.75f * snow_speed);
+        const float phase = repeatf(u0 + g->t * fall_rate, 1.0f);
+        const float drop_len = y_span * (0.82f + 0.62f * u2);
+        const float drift = phase * base_speed * wind_x * 2.5f;
+        const float wobble = sinf(g->t * (0.9f + 1.7f * u2) + u0 * 6.2831853f) * (8.0f + 28.0f * u1);
+
+        /* World-anchored horizontal field:
+           wrap seeded world positions around camera instead of adding camera directly. */
+        const float x_seed = u1 * x_span + drift + wobble;
+        float wx = g->camera_x + repeatf(x_seed - g->camera_x, x_span) - x_span * 0.5f;
+        float wy = y_top + u2 * g->world_h * 0.16f + wind_y * phase * drop_len;
+
+        float flow_x = 0.0f;
+        float flow_y = 0.0f;
+        sample_shared_noise_flow(
+            wx / fmaxf(g->world_w, 1.0f) * 0.53f + g->t * 0.021f,
+            wy / fmaxf(g->world_h, 1.0f) * 0.47f - g->t * 0.017f,
+            &flow_x,
+            &flow_y
+        );
+        wx += flow_x * (7.0f + 12.0f * u2);
+        wy += flow_y * (4.0f + 9.0f * u1);
+
+        float sx = 0.0f;
+        float sy = 0.0f;
+        float depth = 1.0f;
+        if (use_cyl_projection) {
+            project_cylinder_point_gpu(g, wx, wy, &sx, &sy, &depth);
+        } else {
+            sx = wx + g->world_w * 0.5f - g->camera_x;
+            sy = wy + g->world_h * 0.5f - g->camera_y;
+        }
+        if (sx < -20.0f || sx > g->world_w + 20.0f || sy < -20.0f || sy > g->world_h + 20.0f) {
+            continue;
+        }
+
+        float radius;
+        {
+            const float size01 = 1.0f - u2;
+            if (u0 < 0.18f) {
+                /* Tiny sparkle dust */
+                radius = 0.45f + size01 * 1.25f;
+            } else if (u0 > 0.86f) {
+                /* Occasional larger foreground flakes */
+                radius = 2.20f + size01 * 3.40f;
+            } else {
+                /* Main body of flakes */
+                radius = 0.85f + size01 * 2.90f;
+            }
+        }
+        if (use_cyl_projection) {
+            radius *= (0.45f + depth * 0.9f);
+        }
+        const float vel_x = base_speed * wind_x + flow_x * 20.0f;
+        const float vel_y = base_speed * wind_y + flow_y * 16.0f;
+        const float vel_mag = sqrtf(vel_x * vel_x + vel_y * vel_y);
+        float dir_x = wind_x;
+        float dir_y = wind_y;
+        if (vel_mag > 1.0e-4f) {
+            dir_x = vel_x / vel_mag;
+            dir_y = vel_y / vel_mag;
+        }
+
+        out[n].x = sx;
+        out[n].y = sy;
+        out[n].radius_px = radius;
+        out[n].kind = (u1 > 0.62f) ? 1.0f : 3.0f;
+        out[n].r = clampf(0.84f + 0.16f * u0, 0.0f, 1.0f);
+        out[n].g = clampf(0.92f + 0.10f * u1, 0.0f, 1.0f);
+        out[n].b = clampf(0.97f + 0.06f * u2, 0.0f, 1.0f);
+        out[n].a = clampf(0.14f + 0.36f * (1.0f - u2), 0.0f, 0.58f);
+        out[n].dir_x = dir_x;
+        out[n].dir_y = dir_y;
+        out[n].trail = clampf(0.06f + vel_mag / 950.0f, 0.0f, 0.36f);
+        /* Keep snow from inheriting warm tint in particle shader. */
+        out[n].heat = 1.0f;
+
+        if (io_r_min && radius < *io_r_min) *io_r_min = radius;
+        if (io_r_max && radius > *io_r_max) *io_r_max = radius;
+        if (io_r_sum) *io_r_sum += radius;
+        ++n;
+    }
+
+    *inout_n = n;
+}
+
 static void update_gpu_particle_instances(app* a, int emit_runtime_particles, int emit_level_smoke) {
     if (!a || !a->particle_instance_map) {
         return;
@@ -8874,6 +9044,11 @@ static void update_gpu_particle_instances(app* a, int emit_runtime_particles, in
         }
         if (lvl && lvl->background_style == LEVELDEF_BACKGROUND_FIRE && n < GPU_PARTICLE_MAX_INSTANCES) {
             append_gpu_fire_embers_and_ash(
+                a, g, lvl, out, &n, use_cyl,
+                &r_sum, &r_min, &r_max
+            );
+        } else if (lvl && lvl->background_style == LEVELDEF_BACKGROUND_ICE && n < GPU_PARTICLE_MAX_INSTANCES) {
+            append_gpu_ice_snow(
                 a, g, lvl, out, &n, use_cyl,
                 &r_sum, &r_min, &r_max
             );
@@ -9379,6 +9554,68 @@ static void record_gpu_fire(app* a, VkCommandBuffer cmd, float t) {
 
     set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->fire_pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_layout, 0, 1, &a->underwater_desc_set, 0, NULL);
+    vkCmdPushConstants(cmd, a->underwater_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+#endif
+}
+
+static void record_gpu_ice(app* a, VkCommandBuffer cmd, float t) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    (void)cmd;
+    (void)t;
+#else
+    if (!a || !cmd || !a->ice_pipeline || !a->underwater_layout || !a->underwater_desc_set) {
+        return;
+    }
+    const leveldef_level* lvl = game_current_leveldef(&a->game);
+    if (!lvl || lvl->background_style != LEVELDEF_BACKGROUND_ICE) {
+        return;
+    }
+
+    underwater_pc pc;
+    memset(&pc, 0, sizeof(pc));
+    const float world_w = a->game.world_w;
+    const float world_h = a->game.world_h;
+    const float cx = a->game.camera_x;
+    const float cy = a->game.camera_y;
+    const int palette_mode = gameplay_palette_mode(a);
+    const float snow_angle_rad = lvl->ice_snow_angle_deg * (3.14159265358979323846f / 180.0f);
+
+    pc.p0[0] = (float)a->swapchain_extent.width;
+    pc.p0[1] = (float)a->swapchain_extent.height;
+    pc.p0[2] = t;
+    pc.p0[3] = fmaxf(lvl->ice_voronoi_scale, 0.1f);
+
+    if (palette_mode == 1) {
+        pc.p1[0] = 0.03f; pc.p1[1] = 0.07f; pc.p1[2] = 0.11f;
+        pc.p2[0] = 0.42f; pc.p2[1] = 0.58f; pc.p2[2] = 0.66f;
+    } else if (palette_mode == 2) {
+        pc.p1[0] = 0.02f; pc.p1[1] = 0.07f; pc.p1[2] = 0.14f;
+        pc.p2[0] = 0.46f; pc.p2[1] = 0.67f; pc.p2[2] = 0.82f;
+    } else {
+        pc.p1[0] = 0.03f; pc.p1[1] = 0.08f; pc.p1[2] = 0.10f;
+        pc.p2[0] = 0.38f; pc.p2[1] = 0.52f; pc.p2[2] = 0.58f;
+    }
+    pc.p1[3] = clampf(lvl->ice_crack_width, 0.01f, 0.95f);
+    pc.p2[3] = 0.94f;
+
+    pc.p3[0] = cx - world_w * 0.5f;
+    pc.p3[1] = cy - world_h * 0.5f;
+    pc.p3[2] = fmaxf(lvl->ice_distort_amp, 0.0f);
+    pc.p3[3] = fmaxf(lvl->ice_parallax, 0.0f);
+
+    pc.p4[0] = fmaxf(lvl->ice_snow_density, 0.0f);
+    pc.p4[1] = fmaxf(lvl->ice_shimmer, 0.0f);
+    pc.p4[2] = world_w;
+    pc.p4[3] = world_h;
+
+    pc.p5[0] = snow_angle_rad;
+    pc.p5[1] = fmaxf(lvl->ice_snow_speed, 0.0f);
+
+    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->ice_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_layout, 0, 1, &a->underwater_desc_set, 0, NULL);
     vkCmdPushConstants(cmd, a->underwater_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -10305,13 +10542,14 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         const int use_gpu_fog = (a->game.render_style == LEVEL_RENDER_FOG) ? 1 : 0;
         const int use_gpu_underwater = (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_UNDERWATER) ? 1 : 0;
         const int use_gpu_fire = (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_FIRE) ? 1 : 0;
+        const int use_gpu_ice = (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_ICE) ? 1 : 0;
         const int use_gpu_grid = (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_GRID) ? 1 : 0;
         const int use_gpu_industry = a->use_gpu_industry && (a->game.render_style == LEVEL_RENDER_DEFENDER);
         const int use_gpu_revolver = a->use_gpu_revolver && (a->game.level_style == LEVEL_STYLE_REVOLVER);
         const int need_mid_scene_gpu = (use_gpu_terrain || use_gpu_wormhole || use_gpu_radar || use_gpu_revolver || use_gpu_arc || use_gpu_grid);
         const int split_scene =
             in_gameplay_scene &&
-            (need_mid_scene_gpu || use_gpu_fog || use_gpu_underwater || use_gpu_fire || (use_gpu_particles && !a->disable_scene_split));
+            (need_mid_scene_gpu || use_gpu_fog || use_gpu_underwater || use_gpu_fire || use_gpu_ice || (use_gpu_particles && !a->disable_scene_split));
         if (in_gameplay_scene && use_gpu_terrain) {
             /* IMPORTANT: high-plains terrain flickers with split scene phases
                (background-only + foreground-only). Keep this known-stable order:
@@ -10444,6 +10682,9 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             }
             if (use_gpu_fire) {
                 record_gpu_fire(a, cmd, t);
+            }
+            if (use_gpu_ice) {
+                record_gpu_ice(a, cmd, t);
             }
 
             /* Keep foreground pass depth ordering deterministic after split background/GPU passes. */

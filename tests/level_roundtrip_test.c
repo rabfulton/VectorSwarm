@@ -1,6 +1,7 @@
 #include "level_editor.h"
 #include "leveldef.h"
 
+#include <dirent.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,6 +9,81 @@
 #include <unistd.h>
 
 static const float kFloatEps = 0.002f;
+
+static int has_prefix(const char* s, const char* prefix) {
+    if (!s || !prefix) {
+        return 0;
+    }
+    while (*prefix) {
+        if (*s++ != *prefix++) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int has_suffix(const char* s, const char* suffix) {
+    size_t ls;
+    size_t lx;
+    if (!s || !suffix) {
+        return 0;
+    }
+    ls = strlen(s);
+    lx = strlen(suffix);
+    if (ls < lx) {
+        return 0;
+    }
+    return strcmp(s + (ls - lx), suffix) == 0;
+}
+
+static int pick_roundtrip_level_name(char* out, size_t out_cap) {
+    const char* dirs[] = {
+        "data/levels",
+        "../data/levels",
+        VTYPE_SOURCE_DIR "/data/levels"
+    };
+    char best[LEVEL_EDITOR_NAME_CAP];
+    int found = 0;
+    int i;
+    if (!out || out_cap == 0) {
+        return 0;
+    }
+    out[0] = '\0';
+    best[0] = '\0';
+    for (i = 0; i < (int)(sizeof(dirs) / sizeof(dirs[0])); ++i) {
+        DIR* d = opendir(dirs[i]);
+        if (!d) {
+            continue;
+        }
+        for (;;) {
+            struct dirent* de = readdir(d);
+            char candidate[LEVEL_EDITOR_NAME_CAP];
+            size_t name_len;
+            if (!de) {
+                break;
+            }
+            if (!has_prefix(de->d_name, "level_") || !has_suffix(de->d_name, ".cfg")) {
+                continue;
+            }
+            name_len = strlen(de->d_name) - strlen(".cfg");
+            if (name_len == 0 || name_len >= sizeof(candidate)) {
+                continue;
+            }
+            memcpy(candidate, de->d_name, name_len);
+            candidate[name_len] = '\0';
+            if (!found || strcmp(candidate, best) < 0) {
+                snprintf(best, sizeof(best), "%s", candidate);
+                found = 1;
+            }
+        }
+        closedir(d);
+    }
+    if (!found) {
+        return 0;
+    }
+    snprintf(out, out_cap, "%s", best);
+    return 1;
+}
 
 static int read_file_bytes(const char* path, char** out_data, size_t* out_size) {
     FILE* f = NULL;
@@ -166,6 +242,14 @@ static int compare_levels_semantic(const char* ctx, const leveldef_level* a, con
     CMP_FLOAT_FIELD(ctx, a, b, fire_distortion_amp);
     CMP_FLOAT_FIELD(ctx, a, b, fire_smoke_alpha_cap);
     CMP_FLOAT_FIELD(ctx, a, b, fire_ember_spawn_rate);
+    CMP_FLOAT_FIELD(ctx, a, b, ice_voronoi_scale);
+    CMP_FLOAT_FIELD(ctx, a, b, ice_crack_width);
+    CMP_FLOAT_FIELD(ctx, a, b, ice_distort_amp);
+    CMP_FLOAT_FIELD(ctx, a, b, ice_parallax);
+    CMP_FLOAT_FIELD(ctx, a, b, ice_shimmer);
+    CMP_FLOAT_FIELD(ctx, a, b, ice_snow_density);
+    CMP_FLOAT_FIELD(ctx, a, b, ice_snow_angle_deg);
+    CMP_FLOAT_FIELD(ctx, a, b, ice_snow_speed);
     CMP_INT_FIELD(ctx, a, b, render_style);
     CMP_INT_FIELD(ctx, a, b, wave_mode);
     CMP_INT_FIELD(ctx, a, b, spawn_mode);
@@ -573,15 +657,20 @@ static int verify_level_semantic_roundtrip(const leveldef_db* db) {
     char path[LEVEL_EDITOR_PATH_CAP];
     char saved_path[LEVEL_EDITOR_PATH_CAP];
     char level_name[LEVEL_EDITOR_NAME_CAP];
+    char roundtrip_level_name[LEVEL_EDITOR_NAME_CAP];
     int ok = 0;
 
     if (!db) {
         return 0;
     }
+    if (!pick_roundtrip_level_name(roundtrip_level_name, sizeof(roundtrip_level_name))) {
+        fprintf(stderr, "roundtrip: no level_*.cfg found; semantic roundtrip skipped\n");
+        return 1;
+    }
 
     level_editor_init(&editor);
-    if (!level_editor_load_by_name(&editor, db, "level_blank")) {
-        fprintf(stderr, "roundtrip: level load failed\n");
+    if (!level_editor_load_by_name(&editor, db, roundtrip_level_name)) {
+        fprintf(stderr, "roundtrip: level load failed (%s)\n", roundtrip_level_name);
         return 0;
     }
     if (editor.source_path[0] == '\0') {

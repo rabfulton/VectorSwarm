@@ -172,6 +172,7 @@ static int background_style_from_name(const char* name) {
     if (strcmp(name, "solid") == 0) return LEVELDEF_BACKGROUND_SOLID;
     if (strcmp(name, "underwater") == 0) return LEVELDEF_BACKGROUND_UNDERWATER;
     if (strcmp(name, "fire") == 0) return LEVELDEF_BACKGROUND_FIRE;
+    if (strcmp(name, "ice") == 0) return LEVELDEF_BACKGROUND_ICE;
     return -1;
 }
 
@@ -398,6 +399,14 @@ void leveldef_init_defaults(leveldef_db* db) {
         db->levels[i].fire_distortion_amp = 0.003f;
         db->levels[i].fire_smoke_alpha_cap = 0.34f;
         db->levels[i].fire_ember_spawn_rate = 90.0f;
+        db->levels[i].ice_voronoi_scale = 1.10f;
+        db->levels[i].ice_crack_width = 0.14f;
+        db->levels[i].ice_distort_amp = 0.12f;
+        db->levels[i].ice_parallax = 1.00f;
+        db->levels[i].ice_shimmer = 0.45f;
+        db->levels[i].ice_snow_density = 1.00f;
+        db->levels[i].ice_snow_angle_deg = -24.0f;
+        db->levels[i].ice_snow_speed = 1.00f;
         db->levels[i].wave_mode = -1;
         db->levels[i].render_style = -1;
         db->levels[i].spawn_mode = -1;
@@ -1053,6 +1062,22 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_level->fire_smoke_alpha_cap = strtof(v, NULL);
                     } else if (strcmp(k, "fire.ember_spawn_rate") == 0) {
                         cur_level->fire_ember_spawn_rate = strtof(v, NULL);
+                    } else if (strcmp(k, "ice.voronoi_scale") == 0) {
+                        cur_level->ice_voronoi_scale = strtof(v, NULL);
+                    } else if (strcmp(k, "ice.crack_width") == 0) {
+                        cur_level->ice_crack_width = strtof(v, NULL);
+                    } else if (strcmp(k, "ice.distort_amp") == 0) {
+                        cur_level->ice_distort_amp = strtof(v, NULL);
+                    } else if (strcmp(k, "ice.parallax") == 0) {
+                        cur_level->ice_parallax = strtof(v, NULL);
+                    } else if (strcmp(k, "ice.shimmer") == 0) {
+                        cur_level->ice_shimmer = strtof(v, NULL);
+                    } else if (strcmp(k, "ice.snow_density") == 0) {
+                        cur_level->ice_snow_density = strtof(v, NULL);
+                    } else if (strcmp(k, "ice.snow_angle_deg") == 0) {
+                        cur_level->ice_snow_angle_deg = strtof(v, NULL);
+                    } else if (strcmp(k, "ice.snow_speed") == 0) {
+                        cur_level->ice_snow_speed = strtof(v, NULL);
                     } else if (strcmp(k, "render_style") == 0) {
                         cur_level->render_style = render_style_from_name(v);
                     } else if (strcmp(k, "wave_mode") == 0) {
@@ -1534,9 +1559,9 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
             }
             ok = 0;
         }
-        if (l->background_style < LEVELDEF_BACKGROUND_STARS || l->background_style > LEVELDEF_BACKGROUND_FIRE) {
+        if (l->background_style < LEVELDEF_BACKGROUND_STARS || l->background_style > LEVELDEF_BACKGROUND_ICE) {
             if (log_out) {
-                fprintf(log_out, "leveldef: level %d invalid background (expected stars|none|nebula|grid|solid|underwater|fire)\n", i);
+                fprintf(log_out, "leveldef: level %d invalid background (expected stars|none|nebula|grid|solid|underwater|fire|ice)\n", i);
             }
             ok = 0;
         }
@@ -1571,6 +1596,19 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
             l->fire_ember_spawn_rate < 0.0f || l->fire_ember_spawn_rate > 2000.0f || !isfinite(l->fire_ember_spawn_rate)) {
             if (log_out) {
                 fprintf(log_out, "leveldef: level %d invalid fire tuning values\n", i);
+            }
+            ok = 0;
+        }
+        if (l->ice_voronoi_scale <= 0.0f || l->ice_voronoi_scale > 8.0f || !isfinite(l->ice_voronoi_scale) ||
+            l->ice_crack_width <= 0.0f || l->ice_crack_width > 1.0f || !isfinite(l->ice_crack_width) ||
+            l->ice_distort_amp < 0.0f || l->ice_distort_amp > 2.0f || !isfinite(l->ice_distort_amp) ||
+            l->ice_parallax < 0.0f || l->ice_parallax > 4.0f || !isfinite(l->ice_parallax) ||
+            l->ice_shimmer < 0.0f || l->ice_shimmer > 2.0f || !isfinite(l->ice_shimmer) ||
+            l->ice_snow_density < 0.0f || l->ice_snow_density > 4.0f || !isfinite(l->ice_snow_density) ||
+            l->ice_snow_angle_deg < -89.0f || l->ice_snow_angle_deg > 89.0f || !isfinite(l->ice_snow_angle_deg) ||
+            l->ice_snow_speed < 0.0f || l->ice_snow_speed > 6.0f || !isfinite(l->ice_snow_speed)) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid ice tuning values\n", i);
             }
             ok = 0;
         }
