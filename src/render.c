@@ -4683,11 +4683,14 @@ static int editor_boid_style_from_value(float value) {
     if (fabsf(value) > 32.0f) {
         return BOID_STYLE_CLASSIC;
     }
-    return clampi((int)lroundf(value), BOID_STYLE_CLASSIC, BOID_STYLE_SHARD);
+    return clampi((int)lroundf(value), BOID_STYLE_CLASSIC, BOID_STYLE_WRAITH);
 }
 
 static const char* editor_boid_style_name(float value) {
     const int style = editor_boid_style_from_value(value);
+    if (style == BOID_STYLE_WRAITH) {
+        return "WRAITH";
+    }
     if (style == BOID_STYLE_SHARD) {
         return "SHARD";
     }
@@ -8772,6 +8775,202 @@ static vg_result draw_enemy_glyph_shard(vg_context* ctx, const enemy* e, float x
     return draw_enemy_tail(ctx, e, x, y, rr, enemy_style);
 }
 
+static vg_result draw_enemy_glyph_wraith(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
+    float fx = 0.0f;
+    float fy = 0.0f;
+    float nx = 0.0f;
+    float ny = 0.0f;
+    enemy_glyph_basis(e, &fx, &fy, &nx, &ny);
+    {
+        const uint32_t seed = (e->visual_seed != 0u) ? e->visual_seed : 0x73c1ad9bu;
+        const float pace = 2.8f + 1.7f * clampf((e->visual_param_a > 0.01f) ? e->visual_param_a : 1.0f, 0.6f, 1.5f);
+        const float ghost_amp = clampf((e->visual_param_b > 0.01f) ? e->visual_param_b : 0.20f, 0.08f, 0.40f);
+        const float phase = e->ai_timer_s * pace + e->visual_phase;
+        const float asym = lerpf(-0.30f, 0.30f, hash01_u32(seed ^ 0x4b1u));
+        const float skew = lerpf(-0.20f, 0.20f, hash01_u32(seed ^ 0x8f9u));
+        const float drift_f = rr * 0.03f * sinf(phase * 0.62f + 0.7f * asym);
+        const float drift_n = rr * 0.05f * sinf(phase * 0.84f + 1.2f);
+        const float cx = x + fx * drift_f + nx * drift_n;
+        const float cy = y + fy * drift_f + ny * drift_n;
+        const float jaw_pulse = 0.5f + 0.5f * sinf(phase * 1.15f + 0.4f);
+        const float fang_snap = powf(0.5f + 0.5f * sinf(phase * 2.30f + 0.9f), 1.8f);
+        const float claw_open = 0.5f + 0.5f * sinf(phase * 1.85f + 0.6f + asym * 1.2f);
+        const float claw_reach = lerpf(0.16f, 0.46f, claw_open);
+        const float claw_sweep = lerpf(0.08f, 0.34f, claw_open);
+        const float echo_seed_phase = hash01_u32(seed ^ 0x6157u) * 6.2831853f;
+
+        vg_stroke_style main = *enemy_style;
+        vg_stroke_style inner = *enemy_style;
+        vg_stroke_style claw = *enemy_style;
+        vg_stroke_style echo = *enemy_style;
+
+        main.width_px *= 1.02f;
+        main.intensity *= 0.88f + 0.16f * (0.5f + 0.5f * sinf(phase * 0.72f));
+        inner.width_px *= 0.68f;
+        inner.intensity *= 0.74f;
+        inner.color.a *= 0.78f;
+        claw.width_px *= 0.74f;
+        claw.intensity *= 0.92f + 0.42f * claw_open;
+        claw.color.a *= 0.82f;
+        echo.width_px *= 1.22f;
+        echo.intensity *= 0.18f;
+        echo.color.a *= 0.20f;
+        echo.blend = VG_BLEND_ADDITIVE;
+
+        {
+            float top_lf[4] = {-0.94f, -0.24f, 0.54f, 0.96f};
+            float top_ln[4] = {0.46f, 0.56f, 0.44f, 0.16f};
+            float bottom_lf[4] = {0.84f, 0.52f, -0.20f, -0.92f};
+            float bottom_ln[4] = {-0.18f, -0.58f, -0.64f, -0.46f};
+            float rear_lf[3] = {-1.12f, -1.22f, -1.04f};
+            float rear_ln[3] = {0.24f, -0.02f, -0.28f};
+            float slit_lf[2] = {0.18f, 0.08f};
+            float slit_ln[2] = {0.22f, -0.20f};
+            float fang_l_lf[2] = {0.70f, 1.02f};
+            float fang_l_ln[2] = {-0.04f, -0.18f};
+            float fang_r_lf[2] = {0.74f, 1.06f};
+            float fang_r_ln[2] = {0.08f, 0.24f};
+            float claw_l_lf[3] = {0.34f, 0.68f, 0.50f};
+            float claw_l_ln[3] = {-0.28f, -0.48f, -0.62f};
+            float claw_r_lf[3] = {0.36f, 0.70f, 0.54f};
+            float claw_r_ln[3] = {0.30f, 0.50f, 0.64f};
+            vg_vec2 top[4];
+            vg_vec2 bottom[4];
+            vg_vec2 rear[3];
+            vg_vec2 slit[2];
+            vg_vec2 fang_l[2];
+            vg_vec2 fang_r[2];
+            vg_vec2 claw_l[3];
+            vg_vec2 claw_r[3];
+            vg_result r = VG_OK;
+
+            top_ln[1] += asym * 0.18f;
+            top_ln[2] += asym * 0.10f;
+            bottom_ln[1] -= asym * 0.14f;
+            bottom_ln[2] -= asym * 0.10f;
+            top_lf[2] += skew * 0.12f;
+            bottom_lf[1] += skew * 0.12f;
+            bottom_ln[0] -= (jaw_pulse - 0.5f) * 0.16f;
+            bottom_ln[1] -= (jaw_pulse - 0.5f) * 0.22f;
+            fang_l_lf[1] += 0.14f + 0.26f * fang_snap;
+            fang_r_lf[1] += 0.14f + 0.26f * fang_snap;
+            fang_l_ln[1] -= 0.06f + 0.10f * fang_snap;
+            fang_r_ln[1] += 0.06f + 0.10f * fang_snap;
+            claw_l_lf[1] += claw_reach;
+            claw_l_lf[2] += claw_reach * 0.64f;
+            claw_r_lf[1] += claw_reach;
+            claw_r_lf[2] += claw_reach * 0.64f;
+            claw_l_ln[1] -= claw_sweep;
+            claw_l_ln[2] -= claw_sweep * 0.76f;
+            claw_r_ln[1] += claw_sweep;
+            claw_r_ln[2] += claw_sweep * 0.76f;
+            claw_l_ln[0] += asym * 0.06f;
+            claw_r_ln[0] += asym * 0.06f;
+
+            for (int t = 1; t <= 2; ++t) {
+                const float tf = (float)t;
+                const float echo_back = tf * (0.22f + 0.16f * ghost_amp);
+                const float echo_side = (0.05f + 0.05f * ghost_amp) * sinf(phase * 0.78f + tf * 1.4f + asym);
+                const float echo_pulse = 0.5f + 0.5f * sinf(phase * 1.33f + tf * 1.6f + echo_seed_phase);
+                const float echo_pulse2 = echo_pulse * echo_pulse;
+                vg_stroke_style est = echo;
+                est.intensity *= (0.20f + 1.12f * echo_pulse2) * (1.0f - 0.25f * (tf - 1.0f));
+                est.color.a *= (0.26f + 0.90f * echo_pulse2) * (1.0f - 0.20f * (tf - 1.0f));
+
+                for (int i = 0; i < 4; ++i) {
+                    const float f0 = top_lf[i] - echo_back;
+                    const float n0 = top_ln[i] + echo_side;
+                    top[i] = (vg_vec2){cx + fx * (f0 * rr) + nx * (n0 * rr), cy + fy * (f0 * rr) + ny * (n0 * rr)};
+                }
+                for (int i = 0; i < 4; ++i) {
+                    const float f0 = bottom_lf[i] - echo_back;
+                    const float n0 = bottom_ln[i] + echo_side;
+                    bottom[i] = (vg_vec2){cx + fx * (f0 * rr) + nx * (n0 * rr), cy + fy * (f0 * rr) + ny * (n0 * rr)};
+                }
+                for (int i = 0; i < 3; ++i) {
+                    const float f0 = rear_lf[i] - echo_back;
+                    const float n0 = rear_ln[i] + echo_side;
+                    rear[i] = (vg_vec2){cx + fx * (f0 * rr) + nx * (n0 * rr), cy + fy * (f0 * rr) + ny * (n0 * rr)};
+                }
+                for (int i = 0; i < 2; ++i) {
+                    float f0 = slit_lf[i] - echo_back;
+                    float n0 = slit_ln[i] + echo_side;
+                    slit[i] = (vg_vec2){cx + fx * (f0 * rr) + nx * (n0 * rr), cy + fy * (f0 * rr) + ny * (n0 * rr)};
+                    f0 = fang_l_lf[i] - echo_back;
+                    n0 = fang_l_ln[i] + echo_side;
+                    fang_l[i] = (vg_vec2){cx + fx * (f0 * rr) + nx * (n0 * rr), cy + fy * (f0 * rr) + ny * (n0 * rr)};
+                    f0 = fang_r_lf[i] - echo_back;
+                    n0 = fang_r_ln[i] + echo_side;
+                    fang_r[i] = (vg_vec2){cx + fx * (f0 * rr) + nx * (n0 * rr), cy + fy * (f0 * rr) + ny * (n0 * rr)};
+                }
+                for (int i = 0; i < 3; ++i) {
+                    const float fl = claw_l_lf[i] - echo_back;
+                    const float nl = claw_l_ln[i] + echo_side;
+                    const float fr = claw_r_lf[i] - echo_back;
+                    const float nr = claw_r_ln[i] + echo_side;
+                    claw_l[i] = (vg_vec2){cx + fx * (fl * rr) + nx * (nl * rr), cy + fy * (fl * rr) + ny * (nl * rr)};
+                    claw_r[i] = (vg_vec2){cx + fx * (fr * rr) + nx * (nr * rr), cy + fy * (fr * rr) + ny * (nr * rr)};
+                }
+
+                r = vg_draw_polyline(ctx, top, 4, &est, 0);
+                if (r != VG_OK) return r;
+                r = vg_draw_polyline(ctx, bottom, 4, &est, 0);
+                if (r != VG_OK) return r;
+                r = vg_draw_polyline(ctx, rear, 3, &est, 0);
+                if (r != VG_OK) return r;
+                r = vg_draw_polyline(ctx, slit, 2, &est, 0);
+                if (r != VG_OK) return r;
+                r = vg_draw_polyline(ctx, fang_l, 2, &est, 0);
+                if (r != VG_OK) return r;
+                r = vg_draw_polyline(ctx, fang_r, 2, &est, 0);
+                if (r != VG_OK) return r;
+                r = vg_draw_polyline(ctx, claw_l, 3, &est, 0);
+                if (r != VG_OK) return r;
+                r = vg_draw_polyline(ctx, claw_r, 3, &est, 0);
+                if (r != VG_OK) return r;
+            }
+
+            for (int i = 0; i < 4; ++i) {
+                top[i] = (vg_vec2){cx + fx * (top_lf[i] * rr) + nx * (top_ln[i] * rr), cy + fy * (top_lf[i] * rr) + ny * (top_ln[i] * rr)};
+                bottom[i] = (vg_vec2){cx + fx * (bottom_lf[i] * rr) + nx * (bottom_ln[i] * rr), cy + fy * (bottom_lf[i] * rr) + ny * (bottom_ln[i] * rr)};
+            }
+            for (int i = 0; i < 3; ++i) {
+                rear[i] = (vg_vec2){cx + fx * (rear_lf[i] * rr) + nx * (rear_ln[i] * rr), cy + fy * (rear_lf[i] * rr) + ny * (rear_ln[i] * rr)};
+            }
+            for (int i = 0; i < 2; ++i) {
+                slit[i] = (vg_vec2){cx + fx * (slit_lf[i] * rr) + nx * (slit_ln[i] * rr), cy + fy * (slit_lf[i] * rr) + ny * (slit_ln[i] * rr)};
+                fang_l[i] = (vg_vec2){cx + fx * (fang_l_lf[i] * rr) + nx * (fang_l_ln[i] * rr), cy + fy * (fang_l_lf[i] * rr) + ny * (fang_l_ln[i] * rr)};
+                fang_r[i] = (vg_vec2){cx + fx * (fang_r_lf[i] * rr) + nx * (fang_r_ln[i] * rr), cy + fy * (fang_r_lf[i] * rr) + ny * (fang_r_ln[i] * rr)};
+            }
+            for (int i = 0; i < 3; ++i) {
+                claw_l[i] = (vg_vec2){cx + fx * (claw_l_lf[i] * rr) + nx * (claw_l_ln[i] * rr), cy + fy * (claw_l_lf[i] * rr) + ny * (claw_l_ln[i] * rr)};
+                claw_r[i] = (vg_vec2){cx + fx * (claw_r_lf[i] * rr) + nx * (claw_r_ln[i] * rr), cy + fy * (claw_r_lf[i] * rr) + ny * (claw_r_ln[i] * rr)};
+            }
+
+            r = vg_draw_polyline(ctx, top, 4, &main, 0);
+            if (r != VG_OK) return r;
+            r = vg_draw_polyline(ctx, bottom, 4, &main, 0);
+            if (r != VG_OK) return r;
+            r = vg_draw_polyline(ctx, rear, 3, &main, 0);
+            if (r != VG_OK) return r;
+            r = vg_draw_polyline(ctx, slit, 2, &inner, 0);
+            if (r != VG_OK) return r;
+            r = vg_draw_polyline(ctx, fang_l, 2, &inner, 0);
+            if (r != VG_OK) return r;
+            r = vg_draw_polyline(ctx, fang_r, 2, &inner, 0);
+            if (r != VG_OK) return r;
+            r = vg_draw_polyline(ctx, claw_l, 3, &claw, 0);
+            if (r != VG_OK) return r;
+            r = vg_draw_polyline(ctx, claw_r, 3, &claw, 0);
+            if (r != VG_OK) return r;
+        }
+    }
+    if (e->kamikaze_tail <= 0.02f) {
+        return VG_OK;
+    }
+    return draw_enemy_tail(ctx, e, x, y, rr, enemy_style);
+}
+
 static vg_result draw_enemy_glyph_lantern(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
     float fx = 0.0f;
     float fy = 0.0f;
@@ -9702,6 +9901,8 @@ static vg_result draw_enemy_glyph(vg_context* ctx, const enemy* e, float x, floa
     switch (e->visual_kind) {
         case ENEMY_VISUAL_PHOENIX:
             return draw_enemy_glyph_phoenix(ctx, e, x, y, rr, enemy_style);
+        case ENEMY_VISUAL_BOID_WRAITH:
+            return draw_enemy_glyph_wraith(ctx, e, x, y, rr, enemy_style);
         case ENEMY_VISUAL_BOID_SHARD:
             return draw_enemy_glyph_shard(ctx, e, x, y, rr, enemy_style);
         case ENEMY_VISUAL_BOID_LANTERN:
