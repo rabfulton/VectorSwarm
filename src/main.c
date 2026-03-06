@@ -10020,9 +10020,9 @@ static void record_gpu_forest_flora(app* a, VkCommandBuffer cmd, float t) {
     pc.p1[2] = 0.108f;
     pc.p1[3] = clampf(lvl->forest_canopy_density, 0.0f, 4.0f);
 
-    pc.p2[0] = 0.780f;
-    pc.p2[1] = 0.900f;
-    pc.p2[2] = 0.980f;
+    pc.p2[0] = 0.54f;
+    pc.p2[1] = 0.76f;
+    pc.p2[2] = 0.80f;
     pc.p2[3] = clampf(lvl->forest_membrane_glow, 0.0f, 2.0f);
 
     pc.p3[0] = cx - world_w * 0.5f;
@@ -10040,11 +10040,13 @@ static void record_gpu_forest_flora(app* a, VkCommandBuffer cmd, float t) {
     pc.p5[2] = a->video_menu_high_quality ? 1.0f : 0.0f;
 
     if (palette_mode == 1) {
-        pc.p2[0] += 0.060f;
-        pc.p2[1] += 0.020f;
+        pc.p2[0] += 0.10f;
+        pc.p2[1] += 0.02f;
+        pc.p2[2] -= 0.02f;
     } else if (palette_mode == 2) {
-        pc.p2[1] += 0.030f;
-        pc.p2[2] += 0.120f;
+        pc.p2[0] -= 0.02f;
+        pc.p2[1] += 0.03f;
+        pc.p2[2] += 0.10f;
     }
 
     set_viewport_scissor(cmd, a->underwater_kelp_w, a->underwater_kelp_h);
@@ -10102,9 +10104,9 @@ static void record_gpu_forest(app* a, VkCommandBuffer cmd, float t) {
     pc.p4[2] = clampf(lvl->forest_parallax_strength, 0.0f, 4.0f);
     pc.p4[3] = clampf(lvl->forest_flora_density, 0.0f, 4.0f);
 
-    pc.p5[0] = 0.900f;
-    pc.p5[1] = 0.880f;
-    pc.p5[2] = 0.980f;
+    pc.p5[0] = 0.62f;
+    pc.p5[1] = 0.84f;
+    pc.p5[2] = 0.80f;
     pc.p5[3] = clampf(lvl->forest_membrane_glow, 0.0f, 2.0f);
 
     pc.p6[0] = clampf(lvl->forest_root_arch_density, 0.0f, 4.0f);
@@ -10118,14 +10120,16 @@ static void record_gpu_forest(app* a, VkCommandBuffer cmd, float t) {
     pc.p7[3] = clampf(lvl->forest_foreground_occluder_alpha, 0.0f, 1.0f);
 
     if (palette_mode == 1) {
-        pc.p2[0] += 0.020f;
-        pc.p2[1] += 0.015f;
-        pc.p5[0] += 0.060f;
-        pc.p5[1] += 0.020f;
+        pc.p2[0] += 0.03f;
+        pc.p2[1] += 0.02f;
+        pc.p5[0] += 0.10f;
+        pc.p5[1] += 0.02f;
+        pc.p5[2] -= 0.02f;
     } else if (palette_mode == 2) {
         pc.p2[2] += 0.060f;
-        pc.p5[1] += 0.030f;
-        pc.p5[2] += 0.120f;
+        pc.p5[0] -= 0.03f;
+        pc.p5[1] += 0.04f;
+        pc.p5[2] += 0.12f;
         pc.p2[1] += 0.020f;
     }
 

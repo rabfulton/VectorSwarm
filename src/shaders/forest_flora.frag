@@ -32,6 +32,13 @@ float hash11(float p) {
     return fract(p);
 }
 
+vec4 composite_over(vec4 dst, vec3 src_col, float src_a) {
+    float a = sat(src_a);
+    dst.rgb += src_col * a * (1.0 - dst.a);
+    dst.a += a * (1.0 - dst.a);
+    return dst;
+}
+
 vec2 trunk_layer(vec2 uv, float camera_x, float layer_parallax, float density, float wobble_amp, float wobble_speed, float t) {
     float lane_count = mix(6.0, 15.0, sat(density * 0.35));
     float x = (uv.x + camera_x * layer_parallax) * lane_count;
@@ -46,10 +53,11 @@ vec2 trunk_layer(vec2 uv, float camera_x, float layer_parallax, float density, f
         float seed = hash11(id * 17.13 + layer_parallax * 41.7 + 0.3);
         float seed_b = hash11(id * 29.71 + layer_parallax * 13.2 + 7.1);
         float seed_c = hash11(id * 41.17 + layer_parallax * 7.9 + 3.2);
+        float size_bias = mix(seed, seed_b, 0.45);
         float sway = sin(t * (0.24 + wobble_speed * 0.26) + id * 0.73 + uv.y * 3.8);
         float center = fi + (seed - 0.5) * 0.72 + sway * wobble_amp * (0.08 + 0.07 * seed_b);
-        float width = mix(0.08, 0.24, seed_b) * mix(0.78, 1.28, density * 0.18);
-        float height = mix(0.26, 0.72, seed) * mix(0.78, 1.18, density * 0.20);
+        float width = mix(0.06, 0.30, seed_b) * mix(0.70, 1.38, density * 0.18) * mix(0.78, 1.22, size_bias);
+        float height = mix(0.18, 0.88, seed) * mix(0.72, 1.24, density * 0.20) * mix(0.74, 1.26, seed_c);
         float y_base = 1.02;
         float y_top = y_base - height;
 
@@ -66,13 +74,13 @@ vec2 trunk_layer(vec2 uv, float camera_x, float layer_parallax, float density, f
         float cap_mode = step(0.52, seed_c);
         float edge_noise = noise01(vec2(id * 0.19 + fx * 2.4, uv.y * 4.8 + seed * 6.1));
         float cap_y = y_top + height * mix(0.07, 0.18, seed_b);
-        float pod_dx = (fx - center) / max(width * mix(1.1, 1.7, seed_b), 1.0e-4);
-        float pod_dy = (uv.y - (cap_y + height * 0.05)) / max(height * mix(0.17, 0.33, seed), 1.0e-4);
+        float pod_dx = (fx - center) / max(width * mix(0.95, 2.05, seed_b), 1.0e-4);
+        float pod_dy = (uv.y - (cap_y + height * 0.05)) / max(height * mix(0.15, 0.40, seed), 1.0e-4);
         float pod_r2 = pod_dx * pod_dx + pod_dy * pod_dy * mix(0.8, 1.25, edge_noise);
         float pod = 1.0 - smoothstep(0.74, 1.0, pod_r2);
 
-        float umb_dx = (fx - center) / max(width * mix(2.3, 3.9, seed), 1.0e-4);
-        float umb_dy = (uv.y - cap_y) / max(height * mix(0.08, 0.15, seed_b), 1.0e-4);
+        float umb_dx = (fx - center) / max(width * mix(2.0, 4.9, seed), 1.0e-4);
+        float umb_dy = (uv.y - cap_y) / max(height * mix(0.06, 0.18, seed_b), 1.0e-4);
         float umb_r2 = umb_dx * umb_dx + umb_dy * umb_dy * mix(1.6, 2.8, 1.0 - seed_b);
         float umbrella = 1.0 - smoothstep(0.74, 1.0, umb_r2 + (edge_noise - 0.5) * 0.14);
         float underside = smoothstep(cap_y - height * 0.01, cap_y + height * 0.08, uv.y) *
@@ -81,6 +89,9 @@ vec2 trunk_layer(vec2 uv, float camera_x, float layer_parallax, float density, f
         float ribs = 1.0 - smoothstep(0.0, 0.22, abs(fract((fx - center) / max(width * 0.55, 1.0e-4) + seed * 3.0) - 0.5));
         umbrella = max(umbrella, underside * (0.42 + 0.32 * ribs));
 
+        float tendril = 0.0;
+        float tendril_glow = 0.0;
+
         float cap = mix(pod, umbrella, cap_mode);
         float cap_rim = smoothstep(0.12, 0.74, cap) * (1.0 - smoothstep(0.78, 0.98, cap));
 
@@ -88,8 +99,8 @@ vec2 trunk_layer(vec2 uv, float camera_x, float layer_parallax, float density, f
         float veil = smoothstep(0.54, 0.78, veil_noise) * umbrella * smoothstep(cap_y, cap_y + height * 0.20, uv.y);
         veil *= 1.0 - smoothstep(width * 0.4, width * 2.5, abs(fx - center));
 
-        alpha = max(alpha, max(body * 0.86, cap * 0.74 + veil * 0.18));
-        glow = max(glow, cap_rim * (0.42 + 0.40 * seed_b) * mix(0.65, 1.0, umbrella));
+        alpha = max(alpha, max(body * 0.86, cap * 0.74 + veil * 0.18 + tendril * 1.00));
+        glow = max(glow, max(cap_rim * (0.42 + 0.40 * seed_b) * mix(0.65, 1.0, umbrella), tendril_glow));
     }
 
     return vec2(sat(alpha), sat(glow));
@@ -169,21 +180,34 @@ void main() {
     float roots = root_arch_band(uv, cam_uv.x, 0.36 + 0.18 * parallax, root_arch_density);
     float pulse = 0.55 + 0.45 * sin(t * (0.35 + pulse_freq * 0.55) + uv.x * 9.0);
 
-    float alpha = max(far.x * 0.52, mid.x * 0.84);
-    alpha = max(alpha, roots * (0.50 + 0.18 * foreground_alpha));
-    alpha = max(alpha, near.x * 0.98);
-    alpha = sat(alpha);
+    float far_a = far.x * 0.46;
+    float mid_a = mid.x * 0.70;
+    float root_a = roots * (0.34 + 0.12 * foreground_alpha);
+    float near_a = near.x * 0.98;
 
-    float glow = max(far.y * 0.26, mid.y * 0.84);
-    glow = max(glow, near.y * 0.92);
-    glow *= pc.p2.w * (0.72 + 0.38 * pulse);
+    float far_glow = far.y * pc.p2.w * (0.22 + 0.10 * pulse);
+    float mid_glow = mid.y * pc.p2.w * (0.46 + 0.18 * pulse);
+    float near_glow = near.y * pc.p2.w * (0.34 + 0.12 * pulse);
 
-    vec3 col = mix(bark_col * 0.40, stem_col, 0.82) * (0.18 + 0.16 * far.x);
-    col = mix(col, stem_col * 0.72 + cap_col * 0.22, mid.x * 0.88);
-    col = mix(col, stem_col * 0.22 + cap_col * 0.72, near.x * 0.94);
-    col += cap_col * glow * 0.54;
-    col += glow_col * glow * 0.04;
-    col += cap_col * glow * 0.06;
+    vec3 far_col = mix(bark_col * 0.24, stem_col * 0.48, 0.64) * (0.18 + 0.10 * far.x);
+    vec3 root_col = bark_col * 0.26 + stem_col * 0.06;
+    vec3 mid_col = stem_col * 0.56 + cap_col * 0.08;
+    vec3 near_col = stem_col * 0.10 + cap_col * 0.98 + glow_col * 0.02;
+
+    vec4 layers = vec4(0.0);
+    layers = composite_over(layers, far_col, far_a);
+    layers = composite_over(layers, root_col, root_a);
+    layers = composite_over(layers, mid_col, mid_a);
+    if (high_quality > 0.5) {
+        layers = composite_over(layers, near_col, near_a);
+    }
+
+    float alpha = sat(layers.a);
+    vec3 col = layers.rgb;
+    col += stem_col * far_glow * 0.16;
+    col += cap_col * mid_glow * 0.30;
+    col += cap_col * near_glow * 0.18;
+    col += glow_col * (mid_glow * 0.03 + near_glow * 0.02);
     col *= 0.86 + 0.08 * noise01(vec2(uv.x * 6.0, uv.y * 9.0) + vec2(1.7, -3.9));
 
     out_color = vec4(col, alpha);

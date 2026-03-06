@@ -319,6 +319,78 @@ vec4 foreground_vines(vec2 uv, vec2 cam_uv, float t, float parallax, float densi
     return vec4(sat(vine0), sat(vine1), sat(vine2), sat(thorn));
 }
 
+vec4 hero_fauna_overlay(vec2 uv, vec2 cam_uv, float t, float parallax, float density, vec3 bark_col, vec3 haze_col, vec3 glow_col) {
+    float lane_count = mix(2.8, 4.4, sat(density * 0.26));
+    float x = (uv.x + cam_uv.x * (0.30 + 0.12 * parallax)) * lane_count;
+    float cell = floor(x);
+    float fx = fract(x) - 0.5;
+    vec3 accum_col = vec3(0.0);
+    float accum_a = 0.0;
+
+    for (int i = -1; i <= 1; ++i) {
+        float fi = float(i);
+        float id = cell + fi;
+        float seed = hash11(id * 13.17 + 0.37);
+        float seed_b = hash11(id * 29.41 + 1.19);
+        float seed_c = hash11(id * 41.73 + 2.81);
+        float species = hash11(id * 7.31 + 5.17);
+        float sway = sin(t * (0.10 + 0.07 * seed_b) + id * 0.61) * (0.035 + 0.020 * seed);
+        float center = fi + (seed - 0.5) * 0.42 + sway;
+        float cap_w = mix(0.10, 0.24, seed_b) * mix(0.86, 1.28, seed);
+        float cap_h = cap_w * mix(0.20, 0.34, seed_c);
+        float cap_y = mix(0.38, 0.70, seed);
+        float stem_w = cap_w * mix(0.08, 0.16, seed_c);
+        float y_base = 1.02;
+
+        float dx = fx - center;
+        float stem = 1.0 - smoothstep(stem_w * 0.65, stem_w, abs(dx));
+        stem *= smoothstep(cap_y, cap_y + 0.03, uv.y) * (1.0 - smoothstep(y_base - 0.02, y_base + 0.02, uv.y));
+
+        float cap_dx = dx / max(cap_w, 1.0e-4);
+        float cap_dy = (uv.y - cap_y) / max(cap_h, 1.0e-4);
+        float cap = 1.0 - smoothstep(0.84, 1.0, cap_dx * cap_dx + cap_dy * cap_dy);
+
+        vec3 stem_col = mix(bark_col * 0.62 + haze_col * 0.18, bark_col * 0.42 + glow_col * 0.12, species);
+        vec3 cap_col = mix(vec3(0.58, 0.82, 0.72), vec3(0.84, 0.60, 0.76), species);
+        cap_col = mix(cap_col, vec3(0.70, 0.66, 0.94), seed_b * 0.55);
+        cap_col = mix(cap_col, vec3(0.88, 0.78, 0.56), seed_c * 0.28);
+
+        float curtain_top = cap_y + cap_h * 0.10;
+        float curtain_len = mix(0.14, 0.34, seed) * mix(0.85, 1.35, seed_b);
+        float local_y = uv.y - curtain_top;
+        float curtain_v = sat(local_y / max(curtain_len, 1.0e-4));
+        float attach = 1.0 - smoothstep(cap_w * 0.18, cap_w * 0.96, abs(dx));
+        float strand_space = max(cap_w * mix(0.08, 0.14, seed_c), 1.0e-4);
+        float strand_coord = dx / strand_space;
+        float strand_idx = floor(strand_coord + 0.5);
+        float strand_seed = hash11(id * 19.1 + strand_idx * 0.91 + seed_c * 5.3);
+        float strand_center = center + strand_idx * strand_space;
+        float strand_live = step(abs(strand_idx), mix(3.0, 8.0, seed_b));
+        float bend = sin(t * (0.55 + 0.25 * strand_seed) + id * 0.43 + strand_idx * 0.82) * cap_w * (0.03 + 0.04 * strand_seed);
+        bend += sin(t * (1.10 + 0.25 * seed_c) + curtain_v * 2.6 + strand_idx * 1.17) * cap_w * (0.05 + 0.10 * strand_seed) * curtain_v * curtain_v;
+        bend += cos(t * (0.74 + 0.18 * seed) + curtain_v * 4.0 + strand_idx * 0.49) * cap_w * 0.03 * curtain_v;
+        float strand_x = strand_center + bend;
+        float strand_w = cap_w * mix(0.018, 0.034, strand_seed) * mix(1.0, 0.42, curtain_v);
+        float vertical = smoothstep(-0.004, 0.02, local_y) * (1.0 - smoothstep(curtain_len * 0.96, curtain_len, local_y));
+        float strand = 1.0 - smoothstep(strand_w * 0.45, strand_w, abs(fx - strand_x));
+        float tendril = strand * vertical * attach * strand_live * 0.82;
+        float tendril_glow = strand * vertical * attach * strand_live * 0.08;
+
+        float cap_rim = smoothstep(0.18, 0.74, cap) * (1.0 - smoothstep(0.80, 0.98, cap));
+        float cap_fill = cap * 0.24;
+        float obj_a = max(stem * 0.72, max(cap_fill, tendril));
+        vec3 obj_col = mix(stem_col, cap_col, smoothstep(0.26, 0.76, cap_rim + tendril * 0.24));
+        obj_col += cap_col * cap_rim * 0.26;
+        obj_col += cap_col * tendril_glow * 0.85;
+        obj_col += glow_col * tendril_glow * 0.22;
+
+        accum_col += obj_col * obj_a * (1.0 - accum_a);
+        accum_a += obj_a * (1.0 - accum_a);
+    }
+
+    return vec4(accum_col, sat(accum_a));
+}
+
 void main() {
     vec2 frag_px = gl_FragCoord.xy;
     vec2 vp = vec2(max(pc.p0.x, 1.0), max(pc.p0.y, 1.0));
@@ -362,13 +434,19 @@ void main() {
     vec3 bg_trunks = background_megatrunks(uv, cam_uv, canopy_density, parallax, t);
     float canopy_far = canopy_mask(uv, cam_uv, drift_speed, canopy_density, parallax * 0.35, t);
     vec4 flora_tex = texture(u_kelp, uv);
+    vec4 hero_fauna = hero_fauna_overlay(uv, cam_uv, t, parallax, flora_density, bark_col, haze_col, glow_col);
     float flora_pre = clamp(flora_tex.a, 0.0, 1.0);
-    float flora_far = max(canopy_far * 0.88, flora_pre * 0.16);
+    float flora_far = max(canopy_far * 0.88, flora_pre * 0.12);
     float flora_mid = flora_pre;
     vec3 flora_rgb = flora_tex.rgb;
     float flora_lum = dot(flora_rgb, vec3(0.2126, 0.7152, 0.0722));
-    flora_rgb = mix(vec3(flora_lum), flora_rgb, 1.24);
-    flora_rgb *= 0.90;
+    float flora_species_a = noise01(vec2((uv.x + cam_uv.x * 0.24) * 3.4 + 0.7, uv.y * 0.9 + 1.2));
+    float flora_species_b = noise01(vec2((uv.x + cam_uv.x * 0.31) * 5.6 - 1.4, uv.y * 1.6 + 3.1));
+    vec3 flora_tint = mix(vec3(0.82, 1.04, 0.96), vec3(1.08, 0.86, 1.02), flora_species_a);
+    flora_tint = mix(flora_tint, vec3(0.96, 0.90, 1.12), flora_species_b * 0.58);
+    flora_rgb *= flora_tint;
+    flora_rgb = mix(vec3(flora_lum), flora_rgb, 1.72);
+    flora_rgb *= 0.76;
     float flora_glow = sat((max(max(flora_rgb.r, flora_rgb.g), flora_rgb.b) - flora_pre * 0.24) * 1.6);
 
     float pulse = 0.55 + 0.45 * sin(t * (0.35 + pulse_freq * 0.55) + haze1 * 9.0);
@@ -388,11 +466,13 @@ void main() {
     col = mix(col, trunk_shadow, bg_trunks.x * 0.82);
     col += trunk_rim * bg_trunks.y * 0.84;
     col += mix(glow_col, vec3(0.78, 0.90, 0.86), 0.40) * bg_trunks.z * 0.40;
-    col = mix(col, flora_rgb, flora_pre * 0.86);
+    col = mix(col, flora_rgb, flora_pre * 0.70);
     col *= (1.0 - flora_pre * 0.010);
-    col += flora_rgb * flora_glow * 0.24;
-    col += glow_col * translucency * 0.52;
-    col += mix(glow_col, flora_rgb, 0.46) * hot_rim * 0.20;
+    col += flora_rgb * flora_glow * 0.16;
+    col += glow_col * translucency * 0.30;
+    col += mix(glow_col, flora_rgb, 0.46) * hot_rim * 0.10;
+    float hero_mask = hero_fauna.a * (1.0 - flora_pre * 0.82);
+    col = mix(col, hero_fauna.rgb, hero_mask * 0.82);
 
     float ray = 0.0;
     vec2 ray_dir = normalize(vec2(-0.48, 0.88));
@@ -412,34 +492,21 @@ void main() {
     float dust = smoothstep(0.44, 0.92, haze0 * 0.64 + haze1 * 0.36);
     col = mix(col, mix(bark_col * 0.72, haze_col, 0.65), dust * pc.p2.w * 0.32);
 
-    vec4 vines = foreground_vines(uv, cam_uv, t, parallax, root_arch_density + flora_density * 0.5);
-    float near_occ = flora_pre * (0.18 + 0.14 * smoothstep(0.28, 1.0, uv.y));
+    float near_occ = hero_fauna.a * 0.08;
     if (high_quality > 0.5) {
-        near_occ = max(near_occ, trunk_band(uv, cam_uv.x, 0.60 + 0.24 * parallax, flora_density * 1.2, wobble_amp * 0.70, wobble_speed * 1.10, t + 7.9) * 0.65);
+        near_occ = max(near_occ, trunk_band(uv, cam_uv.x, 0.60 + 0.24 * parallax, flora_density * 0.95, wobble_amp * 0.70, wobble_speed * 1.10, t + 7.9) * 0.26);
     }
     float occ_alpha = near_occ * foreground_alpha * smoothstep(0.12, 1.0, uv.y);
     col *= (1.0 - occ_alpha * 0.58);
-    float vine_mask0 = sat(vines.x * foreground_alpha * 1.18);
-    float vine_mask1 = sat(vines.y * foreground_alpha * 1.18);
-    float vine_mask2 = sat(vines.z * foreground_alpha * 1.18);
-    float thorn_mask = sat(vines.w * foreground_alpha * 1.18);
-    vec3 vine_col0 = bark_col * 0.32 + haze_col * 0.20 + vec3(0.05, 0.02, 0.06);
-    vec3 vine_col1 = bark_col * 0.28 + glow_col * 0.10 + vec3(0.03, 0.05, 0.02);
-    vec3 vine_col2 = bark_col * 0.24 + haze_col * 0.12 + glow_col * 0.08 + vec3(0.04, 0.02, 0.00);
-    vec3 thorn_col = bark_col * 0.18 + haze_col * 0.06 + vec3(0.03, 0.01, 0.03);
-    col = mix(col, vine_col0, smoothstep(0.06, 0.20, vine_mask0));
-    col = mix(col, vine_col1, smoothstep(0.06, 0.20, vine_mask1));
-    col = mix(col, vine_col2, smoothstep(0.06, 0.20, vine_mask2));
-    col = mix(col, thorn_col, smoothstep(0.04, 0.12, thorn_mask));
 
     float luminance = dot(col, vec3(0.2126, 0.7152, 0.0722));
-    col = mix(vec3(luminance), col, 1.20);
+    col = mix(vec3(luminance), col, 1.04);
     col = col / (vec3(1.0) + col * 0.28);
     col = clamp((col - 0.5) * 1.14 + 0.5, 0.0, 1.0);
 
     float alpha = clamp(pc.p2.w * (0.52 + haze * 0.18 + flora_far * 0.16 + flora_mid * 0.40 + bg_trunks.x * 0.34), 0.0, 0.98);
     alpha = max(alpha, 0.72 + bg_trunks.x * 0.12);
     alpha = max(alpha, occ_alpha * 0.88);
-    alpha = max(alpha, max(max(vine_mask0, vine_mask1), vine_mask2) * 0.92);
+    alpha = max(alpha, hero_mask * 0.70);
     out_color = vec4(col, alpha);
 }
