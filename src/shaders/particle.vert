@@ -31,6 +31,9 @@ void main() {
     if (in_p0.w > 2.5) {
         size_mul = 2.65;
     }
+    if (in_p0.w > 3.5) {
+        size_mul = 2.00;
+    }
     vec2 dir = in_aux.xy;
     float dir_len = length(dir);
     if (dir_len > 1e-5) {

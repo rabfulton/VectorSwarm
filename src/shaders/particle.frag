@@ -15,7 +15,17 @@ layout(push_constant) uniform Push {
 void main() {
     float alpha = 0.0;
     float intensity = 0.0;
-    if (v_kind > 2.5) {
+    if (v_kind > 3.5) {
+        float r = length(v_uv);
+        if (r > 1.0) {
+            discard;
+        }
+        float inner = 1.0 - smoothstep(0.00, 0.24, r);
+        float mid = 1.0 - smoothstep(0.10, 0.58, r);
+        float outer = 1.0 - smoothstep(0.22, 1.00, r);
+        intensity = inner * 2.10 + mid * 0.90 + outer * 0.36;
+        alpha = inner * 0.82 + mid * 0.22 + outer * 0.10;
+    } else if (v_kind > 2.5) {
         float r = length(v_uv);
         if (r > 1.0) {
             discard;
@@ -71,6 +81,9 @@ void main() {
     vec3 hot = vec3(1.00, 0.96, 0.78);
     vec3 cool = vec3(1.00, 0.62, 0.25);
     vec3 heat_tint = mix(cool, hot, clamp(v_heat, 0.0, 1.0));
+    if (v_kind > 3.5) {
+        heat_tint = vec3(1.0);
+    }
     alpha = clamp(alpha, 0.0, 1.0) * v_col.a;
     out_color = vec4(v_col.rgb * heat_tint * intensity, alpha);
 }

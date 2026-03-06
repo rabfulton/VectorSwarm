@@ -74,6 +74,7 @@
 #include "fire_frag_spv.h"
 #include "ice_frag_spv.h"
 #include "forest_frag_spv.h"
+#include "forest_flora_frag_spv.h"
 #include "grid_vert_spv.h"
 #include "grid_frag_spv.h"
 #include "grid_sim_frag_spv.h"
@@ -89,6 +90,7 @@
 #define ACOUSTICS_SCOPE_HISTORY_SAMPLES 8192
 #define GPU_PARTICLE_MAX_INSTANCES (MAX_PARTICLES + 2048u)
 #define FIRE_BG_PARTICLE_CAP 224
+#define FOREST_BG_SPORE_CLUSTER_CAP 28
 #define UNDERWATER_NOISE_TEX_SIZE 256
 #define TERRAIN_ROWS 24
 #define TERRAIN_COLS 98
@@ -185,6 +187,21 @@ typedef struct fire_bg_particle {
     float heat;
     float seed;
 } fire_bg_particle;
+
+typedef struct forest_bg_spore_cluster {
+    int active;
+    float x;
+    float y;
+    float vx;
+    float vy;
+    float age_s;
+    float life_s;
+    float spread_x;
+    float spread_y;
+    float hue;
+    float seed;
+    int particle_count;
+} forest_bg_spore_cluster;
 
 typedef struct particle_pc {
     float params[4]; /* x=viewport_width, y=viewport_height, z=core_gain, w=trail_gain */
@@ -353,6 +370,7 @@ typedef struct app {
     VkPipeline fire_pipeline;
     VkPipeline ice_pipeline;
     VkPipeline forest_pipeline;
+    VkPipeline forest_flora_pipeline;
     VkDescriptorSetLayout underwater_desc_layout;
     VkDescriptorPool underwater_desc_pool;
     VkDescriptorSet underwater_desc_set;
@@ -433,6 +451,10 @@ typedef struct app {
     int fire_bg_initialized;
     float fire_bg_last_t;
     uint32_t fire_bg_rng;
+    forest_bg_spore_cluster forest_spore_clusters[FOREST_BG_SPORE_CLUSTER_CAP];
+    int forest_spore_initialized;
+    float forest_spore_last_t;
+    uint32_t forest_spore_rng;
     VkBuffer terrain_vertex_buffer;
     VkDeviceMemory terrain_vertex_memory;
     void* terrain_vertex_map;
@@ -2448,6 +2470,8 @@ static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t);
 static void record_gpu_underwater_kelp(app* a, VkCommandBuffer cmd, float t);
 static void record_gpu_underwater(app* a, VkCommandBuffer cmd, float t);
 static void record_gpu_ice(app* a, VkCommandBuffer cmd, float t);
+static void record_gpu_forest_flora(app* a, VkCommandBuffer cmd, float t);
+static void record_gpu_forest(app* a, VkCommandBuffer cmd, float t);
 static void record_gpu_grid_sim(app* a, VkCommandBuffer cmd, float dt);
 static void record_gpu_grid(app* a, VkCommandBuffer cmd);
 static void record_gpu_arc_beam(app* a, VkCommandBuffer cmd, float t);
@@ -4809,6 +4833,7 @@ static void cleanup(app* a) {
     if (a->fire_pipeline) vkDestroyPipeline(a->device, a->fire_pipeline, NULL);
     if (a->ice_pipeline) vkDestroyPipeline(a->device, a->ice_pipeline, NULL);
     if (a->forest_pipeline) vkDestroyPipeline(a->device, a->forest_pipeline, NULL);
+    if (a->forest_flora_pipeline) vkDestroyPipeline(a->device, a->forest_flora_pipeline, NULL);
     if (a->grid_pipeline) vkDestroyPipeline(a->device, a->grid_pipeline, NULL);
     if (a->grid_sim_pipeline) vkDestroyPipeline(a->device, a->grid_sim_pipeline, NULL);
     if (a->arc_beam_pipeline) vkDestroyPipeline(a->device, a->arc_beam_pipeline, NULL);
@@ -5050,6 +5075,10 @@ static void destroy_render_runtime(app* a) {
     if (a->forest_pipeline) {
         vkDestroyPipeline(a->device, a->forest_pipeline, NULL);
         a->forest_pipeline = VK_NULL_HANDLE;
+    }
+    if (a->forest_flora_pipeline) {
+        vkDestroyPipeline(a->device, a->forest_flora_pipeline, NULL);
+        a->forest_flora_pipeline = VK_NULL_HANDLE;
     }
     if (a->grid_pipeline) {
         vkDestroyPipeline(a->device, a->grid_pipeline, NULL);
@@ -7342,12 +7371,18 @@ static int create_underwater_resources(app* a) {
         .codeSize = v_type_forest_frag_spv_len,
         .pCode = (const uint32_t*)v_type_forest_frag_spv
     };
+    VkShaderModuleCreateInfo fs_forest_flora_ci = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = v_type_forest_flora_frag_spv_len,
+        .pCode = (const uint32_t*)v_type_forest_flora_frag_spv
+    };
     VkShaderModule vs = VK_NULL_HANDLE;
     VkShaderModule fs = VK_NULL_HANDLE;
     VkShaderModule fs_kelp = VK_NULL_HANDLE;
     VkShaderModule fs_fire = VK_NULL_HANDLE;
     VkShaderModule fs_ice = VK_NULL_HANDLE;
     VkShaderModule fs_forest = VK_NULL_HANDLE;
+    VkShaderModule fs_forest_flora = VK_NULL_HANDLE;
     if (!check_vk(vkCreateShaderModule(a->device, &vs_ci, NULL, &vs), "vkCreateShaderModule(underwater vs)")) {
         return 0;
     }
@@ -7374,6 +7409,15 @@ static int create_underwater_resources(app* a) {
         return 0;
     }
     if (!check_vk(vkCreateShaderModule(a->device, &fs_forest_ci, NULL, &fs_forest), "vkCreateShaderModule(forest fs)")) {
+        vkDestroyShaderModule(a->device, fs_ice, NULL);
+        vkDestroyShaderModule(a->device, fs_fire, NULL);
+        vkDestroyShaderModule(a->device, fs_kelp, NULL);
+        vkDestroyShaderModule(a->device, fs, NULL);
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+    if (!check_vk(vkCreateShaderModule(a->device, &fs_forest_flora_ci, NULL, &fs_forest_flora), "vkCreateShaderModule(forest flora fs)")) {
+        vkDestroyShaderModule(a->device, fs_forest, NULL);
         vkDestroyShaderModule(a->device, fs_ice, NULL);
         vkDestroyShaderModule(a->device, fs_fire, NULL);
         vkDestroyShaderModule(a->device, fs_kelp, NULL);
@@ -7438,6 +7482,7 @@ static int create_underwater_resources(app* a) {
         .subpass = 0
     };
     if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->underwater_pipeline), "vkCreateGraphicsPipelines(underwater)")) {
+        vkDestroyShaderModule(a->device, fs_forest_flora, NULL);
         vkDestroyShaderModule(a->device, fs_forest, NULL);
         vkDestroyShaderModule(a->device, fs_ice, NULL);
         vkDestroyShaderModule(a->device, fs_fire, NULL);
@@ -7450,6 +7495,7 @@ static int create_underwater_resources(app* a) {
     gp.renderPass = a->scene_render_pass;
     gp.pMultisampleState = &ms;
     if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->fire_pipeline), "vkCreateGraphicsPipelines(fire)")) {
+        vkDestroyShaderModule(a->device, fs_forest_flora, NULL);
         vkDestroyShaderModule(a->device, fs_forest, NULL);
         vkDestroyShaderModule(a->device, fs_ice, NULL);
         vkDestroyShaderModule(a->device, fs_fire, NULL);
@@ -7466,6 +7512,7 @@ static int create_underwater_resources(app* a) {
             vkDestroyPipeline(a->device, a->fire_pipeline, NULL);
             a->fire_pipeline = VK_NULL_HANDLE;
         }
+        vkDestroyShaderModule(a->device, fs_forest_flora, NULL);
         vkDestroyShaderModule(a->device, fs_forest, NULL);
         vkDestroyShaderModule(a->device, fs_ice, NULL);
         vkDestroyShaderModule(a->device, fs_fire, NULL);
@@ -7486,6 +7533,7 @@ static int create_underwater_resources(app* a) {
             vkDestroyPipeline(a->device, a->fire_pipeline, NULL);
             a->fire_pipeline = VK_NULL_HANDLE;
         }
+        vkDestroyShaderModule(a->device, fs_forest_flora, NULL);
         vkDestroyShaderModule(a->device, fs_forest, NULL);
         vkDestroyShaderModule(a->device, fs_ice, NULL);
         vkDestroyShaderModule(a->device, fs_fire, NULL);
@@ -7510,6 +7558,36 @@ static int create_underwater_resources(app* a) {
             vkDestroyPipeline(a->device, a->fire_pipeline, NULL);
             a->fire_pipeline = VK_NULL_HANDLE;
         }
+        vkDestroyShaderModule(a->device, fs_forest_flora, NULL);
+        vkDestroyShaderModule(a->device, fs_forest, NULL);
+        vkDestroyShaderModule(a->device, fs_ice, NULL);
+        vkDestroyShaderModule(a->device, fs_fire, NULL);
+        vkDestroyShaderModule(a->device, fs_kelp, NULL);
+        vkDestroyShaderModule(a->device, fs, NULL);
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+    stages[1].module = fs_forest_flora;
+    gp.renderPass = a->bloom_render_pass;
+    gp.pMultisampleState = &ms_single;
+    if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->forest_flora_pipeline), "vkCreateGraphicsPipelines(forest flora)")) {
+        if (a->underwater_kelp_pipeline) {
+            vkDestroyPipeline(a->device, a->underwater_kelp_pipeline, NULL);
+            a->underwater_kelp_pipeline = VK_NULL_HANDLE;
+        }
+        if (a->forest_pipeline) {
+            vkDestroyPipeline(a->device, a->forest_pipeline, NULL);
+            a->forest_pipeline = VK_NULL_HANDLE;
+        }
+        if (a->ice_pipeline) {
+            vkDestroyPipeline(a->device, a->ice_pipeline, NULL);
+            a->ice_pipeline = VK_NULL_HANDLE;
+        }
+        if (a->fire_pipeline) {
+            vkDestroyPipeline(a->device, a->fire_pipeline, NULL);
+            a->fire_pipeline = VK_NULL_HANDLE;
+        }
+        vkDestroyShaderModule(a->device, fs_forest_flora, NULL);
         vkDestroyShaderModule(a->device, fs_forest, NULL);
         vkDestroyShaderModule(a->device, fs_ice, NULL);
         vkDestroyShaderModule(a->device, fs_fire, NULL);
@@ -7519,6 +7597,7 @@ static int create_underwater_resources(app* a) {
         return 0;
     }
 
+    vkDestroyShaderModule(a->device, fs_forest_flora, NULL);
     vkDestroyShaderModule(a->device, fs_forest, NULL);
     vkDestroyShaderModule(a->device, fs_ice, NULL);
     vkDestroyShaderModule(a->device, fs_fire, NULL);
@@ -8592,6 +8671,19 @@ static float fire_bg_rand01(app* a) {
     return (float)(r & 0x00ffffffu) / 16777215.0f;
 }
 
+static uint32_t forest_spore_rand_u32(app* a) {
+    if (!a) {
+        return 0u;
+    }
+    a->forest_spore_rng = hash_u32(a->forest_spore_rng + 0x9e3779b9u + 0x6d2b79f5u);
+    return a->forest_spore_rng;
+}
+
+static float forest_spore_rand01(app* a) {
+    const uint32_t r = forest_spore_rand_u32(a);
+    return (float)(r & 0x00ffffffu) / 16777215.0f;
+}
+
 static void fire_bg_sample_flow(const fire_bg_particle* p, const game_state* g, float* out_x, float* out_y) {
     if (!p || !g) {
         if (out_x) *out_x = 0.0f;
@@ -8846,6 +8938,200 @@ static void append_gpu_fire_embers_and_ash(
     *inout_n = n;
 }
 
+static void forest_spore_respawn_cluster(app* a, const game_state* g, const leveldef_level* lvl, forest_bg_spore_cluster* c) {
+    if (!a || !g || !lvl || !c) {
+        return;
+    }
+    const float density = clampf(lvl->forest_spore_density, 0.0f, 4.0f);
+    const float drift = fmaxf(lvl->forest_spore_drift_speed, 0.0f);
+    const float x_span = g->world_w * 1.9f;
+    const float x_left = g->camera_x - x_span * 0.55f;
+    const float y_top = g->camera_y + g->world_h * 0.18f;
+    const float y_span = g->world_h * 0.48f;
+    const float rx = forest_spore_rand01(a);
+    const float ry = forest_spore_rand01(a);
+    const float rz = forest_spore_rand01(a);
+    const float rw = forest_spore_rand01(a);
+
+    c->active = 1;
+    c->seed = forest_spore_rand01(a) * 4096.0f;
+    c->hue = forest_spore_rand01(a);
+    c->x = x_left + rx * x_span;
+    c->y = y_top + ry * y_span;
+    c->vx = 24.0f + drift * 26.0f + (rz - 0.5f) * 16.0f;
+    c->vy = (rw - 0.5f) * 10.0f;
+    c->age_s = forest_spore_rand01(a) * 1.4f;
+    c->life_s = 6.5f + forest_spore_rand01(a) * 7.0f;
+    c->spread_x = g->world_w * (0.030f + 0.050f * forest_spore_rand01(a) + density * 0.006f);
+    c->spread_y = g->world_h * (0.016f + 0.030f * forest_spore_rand01(a) + density * 0.004f);
+    c->particle_count = 8 + (int)lroundf(forest_spore_rand01(a) * 8.0f + density * 2.0f);
+    if (c->particle_count < 8) c->particle_count = 8;
+    if (c->particle_count > 18) c->particle_count = 18;
+}
+
+static void append_gpu_forest_spores(
+    app* a,
+    const game_state* g,
+    const leveldef_level* lvl,
+    particle_instance* out,
+    uint32_t* inout_n,
+    int use_cyl_projection,
+    float* io_r_sum,
+    float* io_r_min,
+    float* io_r_max
+) {
+    if (!a || !g || !lvl || !out || !inout_n) {
+        return;
+    }
+
+    uint32_t n = *inout_n;
+    const float density = clampf(lvl->forest_spore_density, 0.0f, 4.0f);
+    const float drift = fmaxf(lvl->forest_spore_drift_speed, 0.0f);
+    const float quality = a->video_menu_high_quality ? 1.0f : 0.68f;
+    int target_clusters = (int)lroundf((10.0f + density * 4.0f) * quality);
+    if (target_clusters < 8) target_clusters = 8;
+    if (target_clusters > FOREST_BG_SPORE_CLUSTER_CAP) target_clusters = FOREST_BG_SPORE_CLUSTER_CAP;
+
+    if (!a->forest_spore_initialized || g->t < a->forest_spore_last_t) {
+        memset(a->forest_spore_clusters, 0, sizeof(a->forest_spore_clusters));
+        if (a->forest_spore_rng == 0u) {
+            a->forest_spore_rng = 0x7f4a7c15u ^ ((uint32_t)fabsf(g->camera_x) * 2246822519u);
+        }
+        a->forest_spore_last_t = g->t;
+        a->forest_spore_initialized = 1;
+    }
+
+    float dt = g->t - a->forest_spore_last_t;
+    if (!isfinite(dt) || dt <= 0.0f) {
+        dt = 1.0f / 60.0f;
+    }
+    if (dt > 0.05f) {
+        dt = 0.05f;
+    }
+    a->forest_spore_last_t = g->t;
+
+    int active_clusters = 0;
+    for (int i = 0; i < FOREST_BG_SPORE_CLUSTER_CAP; ++i) {
+        if (a->forest_spore_clusters[i].active) {
+            active_clusters += 1;
+        }
+    }
+    for (int i = 0; i < FOREST_BG_SPORE_CLUSTER_CAP && active_clusters < target_clusters; ++i) {
+        if (a->forest_spore_clusters[i].active) {
+            continue;
+        }
+        forest_spore_respawn_cluster(a, g, lvl, &a->forest_spore_clusters[i]);
+        active_clusters += 1;
+    }
+
+    const float x_min = g->camera_x - g->world_w * 1.05f;
+    const float x_max = g->camera_x + g->world_w * 1.05f;
+    const float y_min = g->camera_y - g->world_h * 0.70f;
+    const float y_max = g->camera_y + g->world_h * 0.42f;
+
+    for (int i = 0; i < FOREST_BG_SPORE_CLUSTER_CAP && n < GPU_PARTICLE_MAX_INSTANCES; ++i) {
+        forest_bg_spore_cluster* c = &a->forest_spore_clusters[i];
+        if (!c->active) {
+            continue;
+        }
+
+        c->age_s += dt;
+        if (c->age_s >= c->life_s) {
+            forest_spore_respawn_cluster(a, g, lvl, c);
+        }
+
+        float flow_x = 0.0f;
+        float flow_y = 0.0f;
+        sample_shared_noise_flow(
+            c->x / fmaxf(g->world_w, 1.0f) * 0.47f + c->seed * 0.00027f + g->t * 0.020f,
+            c->y / fmaxf(g->world_h, 1.0f) * 0.39f + c->seed * 0.00019f - g->t * 0.026f,
+            &flow_x,
+            &flow_y
+        );
+        const float gust = sample_shared_noise_channel(
+            c->seed * 0.00013f + g->t * 0.058f + c->x * 0.0011f,
+            c->seed * 0.00023f - g->t * 0.051f + c->y * 0.0013f,
+            2
+        ) - 0.5f;
+        const float wind_x = 18.0f + drift * 34.0f;
+        const float wind_y = -3.0f + flow_y * 8.0f;
+        c->vx += (wind_x + flow_x * 32.0f + gust * 18.0f - c->vx * 0.32f) * dt;
+        c->vy += (wind_y + flow_y * 24.0f + gust * 8.0f - c->vy * 0.45f) * dt;
+        c->x += c->vx * dt;
+        c->y += c->vy * dt;
+
+        if (!isfinite(c->x) || !isfinite(c->y) ||
+            c->x < x_min || c->x > x_max || c->y < y_min || c->y > y_max) {
+            forest_spore_respawn_cluster(a, g, lvl, c);
+        }
+
+        float cluster_speed = sqrtf(c->vx * c->vx + c->vy * c->vy);
+        if (cluster_speed < 1.0e-4f) {
+            cluster_speed = 1.0e-4f;
+        }
+        const float dir_x = c->vx / cluster_speed;
+        const float dir_y = c->vy / cluster_speed;
+        const float perp_x = -dir_y;
+        const float perp_y = dir_x;
+        const float life01 = clampf(c->age_s / fmaxf(c->life_s, 1.0e-4f), 0.0f, 1.0f);
+        const float cluster_fade = clampf(life01 / 0.14f, 0.0f, 1.0f) * clampf((1.0f - life01) / 0.20f, 0.0f, 1.0f);
+
+        for (int j = 0; j < c->particle_count && n < GPU_PARTICLE_MAX_INSTANCES; ++j) {
+            const uint32_t h0 = hash_u32((uint32_t)(i + 1) * 0x9e3779b9u ^ (uint32_t)(j + 3) * 0x85ebca6bu);
+            const uint32_t h1 = hash_u32(h0 ^ 0x7f4a7c15u);
+            const uint32_t h2 = hash_u32(h1 ^ 0x94d049bbu);
+            const float u0 = (float)(h0 & 0x00ffffffu) / 16777215.0f;
+            const float u1 = (float)(h1 & 0x00ffffffu) / 16777215.0f;
+            const float u2 = (float)(h2 & 0x00ffffffu) / 16777215.0f;
+            const float orbit_phase = g->t * (0.32f + 0.28f * u1 + drift * 0.10f) + c->seed * 0.013f + (float)j * 1.37f;
+            const float along = (u0 - 0.5f) * c->spread_x * (0.55f + 0.55f * u2);
+            const float across = sinf(orbit_phase + u2 * 6.2831853f) * c->spread_y * (0.22f + 0.68f * u1);
+            const float swirl = cosf(orbit_phase * 0.63f + u0 * 7.0f) * c->spread_x * 0.08f;
+            const float wx = c->x + dir_x * (along + swirl) + perp_x * across;
+            const float wy = c->y + dir_y * (along * 0.10f) + perp_y * across;
+
+            float sx = 0.0f;
+            float sy = 0.0f;
+            float depth = 1.0f;
+            if (use_cyl_projection) {
+                project_cylinder_point_gpu(g, wx, wy, &sx, &sy, &depth);
+            } else {
+                sx = wx + g->world_w * 0.5f - g->camera_x;
+                sy = wy + g->world_h * 0.5f - g->camera_y;
+            }
+            if (sx < -24.0f || sx > g->world_w + 24.0f || sy < -24.0f || sy > g->world_h + 24.0f) {
+                continue;
+            }
+
+            float radius = 1.2f + (1.0f - u2) * 2.1f;
+            if (use_cyl_projection) {
+                radius *= (0.40f + 0.85f * depth);
+            }
+
+            const float color_mix = c->hue;
+            out[n].x = sx;
+            out[n].y = sy;
+            out[n].radius_px = radius;
+            out[n].kind = 4.0f;
+            out[n].r = clampf(0.72f + 0.22f * (1.0f - color_mix) + (u0 - 0.5f) * 0.08f, 0.0f, 1.0f);
+            out[n].g = clampf(0.80f + 0.14f * color_mix + (u1 - 0.5f) * 0.10f, 0.0f, 1.0f);
+            out[n].b = clampf(0.86f + 0.12f * u2 + color_mix * 0.06f, 0.0f, 1.0f);
+            out[n].a = clampf((0.16f + 0.28f * (1.0f - u2)) * cluster_fade, 0.0f, 0.56f);
+            out[n].dir_x = dir_x;
+            out[n].dir_y = dir_y;
+            out[n].trail = clampf(0.02f + cluster_speed / 520.0f, 0.0f, 0.14f);
+            out[n].heat = 0.22f + 0.78f * u1;
+
+            if (io_r_min && radius < *io_r_min) *io_r_min = radius;
+            if (io_r_max && radius > *io_r_max) *io_r_max = radius;
+            if (io_r_sum) *io_r_sum += radius;
+            ++n;
+        }
+    }
+
+    *inout_n = n;
+}
+
 static void append_gpu_ice_snow(
     const app* a,
     const game_state* g,
@@ -8981,8 +9267,14 @@ static void update_gpu_particle_instances(app* a, int emit_runtime_particles, in
     particle_instance* out = (particle_instance*)a->particle_instance_map;
     uint32_t n = 0;
     const game_state* g = &a->game;
+    const leveldef_level* lvl = game_current_leveldef(g);
     const int palette_mode = gameplay_palette_mode(a);
     const int use_cyl = level_uses_cylinder_gpu(g);
+    const int forest_background_only =
+        emit_level_smoke &&
+        !emit_runtime_particles &&
+        lvl &&
+        lvl->background_style == LEVELDEF_BACKGROUND_FOREST;
     float r_sum = 0.0f;
     float r_min = 1e9f;
     float r_max = 0.0f;
@@ -9069,8 +9361,8 @@ static void update_gpu_particle_instances(app* a, int emit_runtime_particles, in
         }
     }
     if (emit_level_smoke) {
-        const leveldef_level* lvl = game_current_leveldef(g);
         if (lvl && lvl->structure_count > 0 && g->render_style != LEVEL_RENDER_CYLINDER) {
+            if (!forest_background_only) {
             const float unit_w = g->world_w * (float)LEVELDEF_STRUCTURE_GRID_SCALE / (float)(LEVELDEF_STRUCTURE_GRID_W - 1);
             const float unit_h = g->world_h / (float)((LEVELDEF_STRUCTURE_GRID_H - 1) / LEVELDEF_STRUCTURE_GRID_SCALE);
             for (int i = 0; i < lvl->structure_count && i < LEVELDEF_MAX_STRUCTURES; ++i) {
@@ -9091,6 +9383,7 @@ static void update_gpu_particle_instances(app* a, int emit_runtime_particles, in
                     seed_base, &r_sum, &r_min, &r_max
                 );
             }
+            }
         }
         if (lvl && lvl->background_style == LEVELDEF_BACKGROUND_FIRE && n < GPU_PARTICLE_MAX_INSTANCES) {
             append_gpu_fire_embers_and_ash(
@@ -9099,6 +9392,11 @@ static void update_gpu_particle_instances(app* a, int emit_runtime_particles, in
             );
         } else if (lvl && lvl->background_style == LEVELDEF_BACKGROUND_ICE && n < GPU_PARTICLE_MAX_INSTANCES) {
             append_gpu_ice_snow(
+                a, g, lvl, out, &n, use_cyl,
+                &r_sum, &r_min, &r_max
+            );
+        } else if (forest_background_only && n < GPU_PARTICLE_MAX_INSTANCES) {
+            append_gpu_forest_spores(
                 a, g, lvl, out, &n, use_cyl,
                 &r_sum, &r_min, &r_max
             );
@@ -9672,6 +9970,73 @@ static void record_gpu_ice(app* a, VkCommandBuffer cmd, float t) {
 #endif
 }
 
+static void record_gpu_forest_flora(app* a, VkCommandBuffer cmd, float t) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    (void)cmd;
+    (void)t;
+#else
+    if (!a || !cmd || !a->forest_flora_pipeline || !a->underwater_layout || !a->underwater_desc_set) {
+        return;
+    }
+    const leveldef_level* lvl = game_current_leveldef(&a->game);
+    if (!lvl || lvl->background_style != LEVELDEF_BACKGROUND_FOREST) {
+        return;
+    }
+
+    underwater_pc pc;
+    memset(&pc, 0, sizeof(pc));
+    const float world_w = a->game.world_w;
+    const float world_h = a->game.world_h;
+    const float cx = a->game.camera_x;
+    const float cy = a->game.camera_y;
+    const int palette_mode = gameplay_palette_mode(a);
+
+    pc.p0[0] = (float)a->underwater_kelp_w;
+    pc.p0[1] = (float)a->underwater_kelp_h;
+    pc.p0[2] = t;
+    pc.p0[3] = clampf(lvl->forest_flora_density, 0.0f, 4.0f);
+
+    pc.p1[0] = 0.120f;
+    pc.p1[1] = 0.092f;
+    pc.p1[2] = 0.108f;
+    pc.p1[3] = clampf(lvl->forest_canopy_density, 0.0f, 4.0f);
+
+    pc.p2[0] = 0.780f;
+    pc.p2[1] = 0.900f;
+    pc.p2[2] = 0.980f;
+    pc.p2[3] = clampf(lvl->forest_membrane_glow, 0.0f, 2.0f);
+
+    pc.p3[0] = cx - world_w * 0.5f;
+    pc.p3[1] = cy - world_h * 0.5f;
+    pc.p3[2] = clampf(lvl->forest_branch_wobble_amp, 0.0f, 4.0f);
+    pc.p3[3] = clampf(lvl->forest_branch_wobble_speed, 0.0f, 6.0f);
+
+    pc.p4[0] = world_w;
+    pc.p4[1] = world_h;
+    pc.p4[2] = clampf(lvl->forest_parallax_strength, 0.0f, 4.0f);
+    pc.p4[3] = clampf(lvl->forest_root_arch_density, 0.0f, 4.0f);
+
+    pc.p5[0] = clampf(lvl->forest_biolume_pulse_freq, 0.0f, 6.0f);
+    pc.p5[1] = clampf(lvl->forest_foreground_occluder_alpha, 0.0f, 1.0f);
+    pc.p5[2] = a->video_menu_high_quality ? 1.0f : 0.0f;
+
+    if (palette_mode == 1) {
+        pc.p2[0] += 0.060f;
+        pc.p2[1] += 0.020f;
+    } else if (palette_mode == 2) {
+        pc.p2[1] += 0.030f;
+        pc.p2[2] += 0.120f;
+    }
+
+    set_viewport_scissor(cmd, a->underwater_kelp_w, a->underwater_kelp_h);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->forest_flora_pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_layout, 0, 1, &a->underwater_desc_set, 0, NULL);
+    vkCmdPushConstants(cmd, a->underwater_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+#endif
+}
+
 static void record_gpu_forest(app* a, VkCommandBuffer cmd, float t) {
 #if !V_TYPE_HAS_TERRAIN_SHADERS
     (void)a;
@@ -9699,14 +10064,14 @@ static void record_gpu_forest(app* a, VkCommandBuffer cmd, float t) {
     pc.p0[2] = t;
     pc.p0[3] = clampf(lvl->forest_spore_density, 0.0f, 4.0f);
 
-    pc.p1[0] = 0.070f;
-    pc.p1[1] = 0.058f;
-    pc.p1[2] = 0.045f;
+    pc.p1[0] = 0.115f;
+    pc.p1[1] = 0.085f;
+    pc.p1[2] = 0.128f;
     pc.p1[3] = fmaxf(lvl->forest_spore_scale, 0.05f);
 
-    pc.p2[0] = 0.220f;
-    pc.p2[1] = 0.290f;
-    pc.p2[2] = 0.200f;
+    pc.p2[0] = 0.145f;
+    pc.p2[1] = 0.220f;
+    pc.p2[2] = 0.185f;
     pc.p2[3] = clampf(lvl->forest_haze_alpha, 0.0f, 1.0f);
 
     pc.p3[0] = cx - world_w * 0.5f;
@@ -9719,9 +10084,9 @@ static void record_gpu_forest(app* a, VkCommandBuffer cmd, float t) {
     pc.p4[2] = clampf(lvl->forest_parallax_strength, 0.0f, 4.0f);
     pc.p4[3] = clampf(lvl->forest_flora_density, 0.0f, 4.0f);
 
-    pc.p5[0] = 0.560f;
-    pc.p5[1] = 0.900f;
-    pc.p5[2] = 0.720f;
+    pc.p5[0] = 0.900f;
+    pc.p5[1] = 0.880f;
+    pc.p5[2] = 0.980f;
     pc.p5[3] = clampf(lvl->forest_membrane_glow, 0.0f, 2.0f);
 
     pc.p6[0] = clampf(lvl->forest_root_arch_density, 0.0f, 4.0f);
@@ -10342,7 +10707,9 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         const int in_gameplay_scene = menu_is_gameplay(&a->menu);
         const leveldef_level* lvl_bg = game_current_leveldef(&a->game);
         const int use_gpu_underwater = (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_UNDERWATER) ? 1 : 0;
-        if (in_gameplay_scene && use_gpu_underwater && !a->video_menu_high_quality && a->underwater_kelp_fb) {
+        const int use_gpu_forest = (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_FOREST) ? 1 : 0;
+        if (in_gameplay_scene && a->underwater_kelp_fb &&
+            ((use_gpu_underwater && !a->video_menu_high_quality) || use_gpu_forest)) {
             VkClearValue kelp_clear = {.color = {{0.0f, 0.0f, 0.0f, 0.0f}}};
             VkRenderPassBeginInfo kelp_rp = {
                 .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
@@ -10353,7 +10720,11 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
                 .pClearValues = &kelp_clear
             };
             vkCmdBeginRenderPass(cmd, &kelp_rp, VK_SUBPASS_CONTENTS_INLINE);
-            record_gpu_underwater_kelp(a, cmd, t);
+            if (use_gpu_forest) {
+                record_gpu_forest_flora(a, cmd, t);
+            } else {
+                record_gpu_underwater_kelp(a, cmd, t);
+            }
             vkCmdEndRenderPass(cmd);
         }
     }
@@ -10822,6 +11193,9 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             }
             if (use_gpu_forest) {
                 record_gpu_forest(a, cmd, t);
+                if (use_gpu_particles) {
+                    record_gpu_particles(a, cmd, 0, 1, NULL);
+                }
             }
 
             /* Keep foreground pass depth ordering deterministic after split background/GPU passes. */
@@ -10905,6 +11279,10 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
     vkCmdPushConstants(cmd, a->post_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(bloom_pc), &bloom_pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     if (a->particle_bloom_enabled && menu_is_gameplay(&a->menu)) {
+        const leveldef_level* bloom_lvl = game_current_leveldef(&a->game);
+        if (bloom_lvl && bloom_lvl->background_style == LEVELDEF_BACKGROUND_FOREST) {
+            record_gpu_particles_bloom(a, cmd, 0, 1);
+        }
         record_gpu_particles_bloom(a, cmd, 1, (a->game.level_style == LEVEL_STYLE_REVOLVER) ? 0 : 1);
     }
     vkCmdEndRenderPass(cmd);

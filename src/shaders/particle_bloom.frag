@@ -20,6 +20,14 @@ void main() {
     float bloom = exp(-2.1 * r);
     float core = 1.0 - smoothstep(0.0, 0.32, r);
     float streak = exp(-8.0 * abs(v_uv.y)) * tx * tx * (0.20 + 0.80 * v_trail);
+    if (v_kind > 3.5) {
+        float halo = 1.0 - smoothstep(0.06, 1.0, r);
+        float inner = 1.0 - smoothstep(0.0, 0.22, r);
+        float intensity = (halo * 0.30 + inner * 0.22) * (0.40 + 0.18 * pc.params.w);
+        float alpha = (halo * 0.08 + inner * 0.05) * v_col.a;
+        out_color = vec4(v_col.rgb * intensity, alpha);
+        return;
+    }
     if (v_kind > 2.5) {
         /* Smoke gets only a faint bloom contribution. */
         float soft = 1.0 - smoothstep(0.0, 1.0, r);
