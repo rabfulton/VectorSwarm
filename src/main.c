@@ -74,6 +74,7 @@
 #include "fire_frag_spv.h"
 #include "ice_frag_spv.h"
 #include "forest_frag_spv.h"
+#include "forest_cache_frag_spv.h"
 #include "forest_flora_frag_spv.h"
 #include "grid_vert_spv.h"
 #include "grid_frag_spv.h"
@@ -332,6 +333,10 @@ typedef struct app {
     VkDeviceMemory underwater_kelp_memory;
     VkImageView underwater_kelp_view;
     VkFramebuffer underwater_kelp_fb;
+    VkImage forest_cache_image;
+    VkDeviceMemory forest_cache_memory;
+    VkImageView forest_cache_view;
+    VkFramebuffer forest_cache_fb;
     VkImage underwater_noise_image;
     VkDeviceMemory underwater_noise_memory;
     VkImageView underwater_noise_view;
@@ -370,6 +375,7 @@ typedef struct app {
     VkPipeline fire_pipeline;
     VkPipeline ice_pipeline;
     VkPipeline forest_pipeline;
+    VkPipeline forest_cache_pipeline;
     VkPipeline forest_flora_pipeline;
     VkDescriptorSetLayout underwater_desc_layout;
     VkDescriptorPool underwater_desc_pool;
@@ -2471,6 +2477,7 @@ static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t);
 static void record_gpu_underwater_kelp(app* a, VkCommandBuffer cmd, float t);
 static void record_gpu_underwater(app* a, VkCommandBuffer cmd, float t);
 static void record_gpu_ice(app* a, VkCommandBuffer cmd, float t);
+static void record_gpu_forest_cache(app* a, VkCommandBuffer cmd, float t);
 static void record_gpu_forest_flora(app* a, VkCommandBuffer cmd, float t);
 static void record_gpu_forest(app* a, VkCommandBuffer cmd, float t);
 static void record_gpu_grid_sim(app* a, VkCommandBuffer cmd, float dt);
@@ -4834,6 +4841,7 @@ static void cleanup(app* a) {
     if (a->fire_pipeline) vkDestroyPipeline(a->device, a->fire_pipeline, NULL);
     if (a->ice_pipeline) vkDestroyPipeline(a->device, a->ice_pipeline, NULL);
     if (a->forest_pipeline) vkDestroyPipeline(a->device, a->forest_pipeline, NULL);
+    if (a->forest_cache_pipeline) vkDestroyPipeline(a->device, a->forest_cache_pipeline, NULL);
     if (a->forest_flora_pipeline) vkDestroyPipeline(a->device, a->forest_flora_pipeline, NULL);
     if (a->grid_pipeline) vkDestroyPipeline(a->device, a->grid_pipeline, NULL);
     if (a->grid_sim_pipeline) vkDestroyPipeline(a->device, a->grid_sim_pipeline, NULL);
@@ -4869,6 +4877,7 @@ static void cleanup(app* a) {
     if (a->scene_fb) vkDestroyFramebuffer(a->device, a->scene_fb, NULL);
     if (a->bloom_fb) vkDestroyFramebuffer(a->device, a->bloom_fb, NULL);
     if (a->underwater_kelp_fb) vkDestroyFramebuffer(a->device, a->underwater_kelp_fb, NULL);
+    if (a->forest_cache_fb) vkDestroyFramebuffer(a->device, a->forest_cache_fb, NULL);
     if (a->grid_state_fb[0]) vkDestroyFramebuffer(a->device, a->grid_state_fb[0], NULL);
     if (a->grid_state_fb[1]) vkDestroyFramebuffer(a->device, a->grid_state_fb[1], NULL);
     if (a->scene_view) vkDestroyImageView(a->device, a->scene_view, NULL);
@@ -4876,6 +4885,7 @@ static void cleanup(app* a) {
     if (a->scene_msaa_view) vkDestroyImageView(a->device, a->scene_msaa_view, NULL);
     if (a->bloom_view) vkDestroyImageView(a->device, a->bloom_view, NULL);
     if (a->underwater_kelp_view) vkDestroyImageView(a->device, a->underwater_kelp_view, NULL);
+    if (a->forest_cache_view) vkDestroyImageView(a->device, a->forest_cache_view, NULL);
     if (a->underwater_noise_view) vkDestroyImageView(a->device, a->underwater_noise_view, NULL);
     if (a->grid_state_view[0]) vkDestroyImageView(a->device, a->grid_state_view[0], NULL);
     if (a->grid_state_view[1]) vkDestroyImageView(a->device, a->grid_state_view[1], NULL);
@@ -4885,6 +4895,7 @@ static void cleanup(app* a) {
     if (a->scene_msaa_image) vkDestroyImage(a->device, a->scene_msaa_image, NULL);
     if (a->bloom_image) vkDestroyImage(a->device, a->bloom_image, NULL);
     if (a->underwater_kelp_image) vkDestroyImage(a->device, a->underwater_kelp_image, NULL);
+    if (a->forest_cache_image) vkDestroyImage(a->device, a->forest_cache_image, NULL);
     if (a->underwater_noise_image) vkDestroyImage(a->device, a->underwater_noise_image, NULL);
     if (a->grid_state_image[0]) vkDestroyImage(a->device, a->grid_state_image[0], NULL);
     if (a->grid_state_image[1]) vkDestroyImage(a->device, a->grid_state_image[1], NULL);
@@ -4894,6 +4905,7 @@ static void cleanup(app* a) {
     if (a->scene_msaa_memory) vkFreeMemory(a->device, a->scene_msaa_memory, NULL);
     if (a->bloom_memory) vkFreeMemory(a->device, a->bloom_memory, NULL);
     if (a->underwater_kelp_memory) vkFreeMemory(a->device, a->underwater_kelp_memory, NULL);
+    if (a->forest_cache_memory) vkFreeMemory(a->device, a->forest_cache_memory, NULL);
     if (a->underwater_noise_memory) vkFreeMemory(a->device, a->underwater_noise_memory, NULL);
     if (a->grid_state_memory[0]) vkFreeMemory(a->device, a->grid_state_memory[0], NULL);
     if (a->grid_state_memory[1]) vkFreeMemory(a->device, a->grid_state_memory[1], NULL);
@@ -5077,6 +5089,10 @@ static void destroy_render_runtime(app* a) {
         vkDestroyPipeline(a->device, a->forest_pipeline, NULL);
         a->forest_pipeline = VK_NULL_HANDLE;
     }
+    if (a->forest_cache_pipeline) {
+        vkDestroyPipeline(a->device, a->forest_cache_pipeline, NULL);
+        a->forest_cache_pipeline = VK_NULL_HANDLE;
+    }
     if (a->forest_flora_pipeline) {
         vkDestroyPipeline(a->device, a->forest_flora_pipeline, NULL);
         a->forest_flora_pipeline = VK_NULL_HANDLE;
@@ -5209,6 +5225,10 @@ static void destroy_render_runtime(app* a) {
         vkDestroyFramebuffer(a->device, a->underwater_kelp_fb, NULL);
         a->underwater_kelp_fb = VK_NULL_HANDLE;
     }
+    if (a->forest_cache_fb) {
+        vkDestroyFramebuffer(a->device, a->forest_cache_fb, NULL);
+        a->forest_cache_fb = VK_NULL_HANDLE;
+    }
     if (a->grid_state_fb[0]) {
         vkDestroyFramebuffer(a->device, a->grid_state_fb[0], NULL);
         a->grid_state_fb[0] = VK_NULL_HANDLE;
@@ -5236,6 +5256,10 @@ static void destroy_render_runtime(app* a) {
     if (a->underwater_kelp_view) {
         vkDestroyImageView(a->device, a->underwater_kelp_view, NULL);
         a->underwater_kelp_view = VK_NULL_HANDLE;
+    }
+    if (a->forest_cache_view) {
+        vkDestroyImageView(a->device, a->forest_cache_view, NULL);
+        a->forest_cache_view = VK_NULL_HANDLE;
     }
     if (a->grid_state_view[0]) {
         vkDestroyImageView(a->device, a->grid_state_view[0], NULL);
@@ -5268,6 +5292,10 @@ static void destroy_render_runtime(app* a) {
     if (a->underwater_kelp_image) {
         vkDestroyImage(a->device, a->underwater_kelp_image, NULL);
         a->underwater_kelp_image = VK_NULL_HANDLE;
+    }
+    if (a->forest_cache_image) {
+        vkDestroyImage(a->device, a->forest_cache_image, NULL);
+        a->forest_cache_image = VK_NULL_HANDLE;
     }
     if (a->grid_state_image[0]) {
         vkDestroyImage(a->device, a->grid_state_image[0], NULL);
@@ -5304,6 +5332,10 @@ static void destroy_render_runtime(app* a) {
     if (a->underwater_kelp_memory) {
         vkFreeMemory(a->device, a->underwater_kelp_memory, NULL);
         a->underwater_kelp_memory = VK_NULL_HANDLE;
+    }
+    if (a->forest_cache_memory) {
+        vkFreeMemory(a->device, a->forest_cache_memory, NULL);
+        a->forest_cache_memory = VK_NULL_HANDLE;
     }
     if (a->grid_state_memory[0]) {
         vkFreeMemory(a->device, a->grid_state_memory[0], NULL);
@@ -5954,6 +5986,9 @@ static int create_offscreen_targets(app* a) {
             a, a->underwater_kelp_w, a->underwater_kelp_h, a->swapchain_format, usage, VK_SAMPLE_COUNT_1_BIT,
             &a->underwater_kelp_image, &a->underwater_kelp_memory, &a->underwater_kelp_view)) return 0;
     if (!create_image_2d(
+            a, a->underwater_kelp_w, a->underwater_kelp_h, a->swapchain_format, usage, VK_SAMPLE_COUNT_1_BIT,
+            &a->forest_cache_image, &a->forest_cache_memory, &a->forest_cache_view)) return 0;
+    if (!create_image_2d(
             a, GRID_STATE_W, GRID_STATE_H, VK_FORMAT_R16G16B16A16_SFLOAT,
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
             VK_SAMPLE_COUNT_1_BIT,
@@ -6004,6 +6039,17 @@ static int create_offscreen_targets(app* a) {
         .layers = 1
     };
     if (!check_vk(vkCreateFramebuffer(a->device, &underwater_kelp_fb, NULL, &a->underwater_kelp_fb), "vkCreateFramebuffer(underwater kelp)")) return 0;
+    VkImageView forest_cache_att[] = {a->forest_cache_view};
+    VkFramebufferCreateInfo forest_cache_fb = {
+        .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+        .renderPass = a->bloom_render_pass,
+        .attachmentCount = 1,
+        .pAttachments = forest_cache_att,
+        .width = a->underwater_kelp_w,
+        .height = a->underwater_kelp_h,
+        .layers = 1
+    };
+    if (!check_vk(vkCreateFramebuffer(a->device, &forest_cache_fb, NULL, &a->forest_cache_fb), "vkCreateFramebuffer(forest cache)")) return 0;
 
     VkImageView grid_att0[] = {a->grid_state_view[0]};
     VkImageView grid_att1[] = {a->grid_state_view[1]};
@@ -7136,7 +7182,7 @@ static int create_underwater_resources(app* a) {
     }
     g_shared_noise_tex_ready = 0;
 
-    VkDescriptorSetLayoutBinding bindings[3] = {
+    VkDescriptorSetLayoutBinding bindings[4] = {
         {
             .binding = 0,
             .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
@@ -7154,11 +7200,17 @@ static int create_underwater_resources(app* a) {
             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
             .descriptorCount = 1,
             .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT
+        },
+        {
+            .binding = 3,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT
         }
     };
     VkDescriptorSetLayoutCreateInfo dsl = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .bindingCount = 3,
+        .bindingCount = 4,
         .pBindings = bindings
     };
     if (!check_vk(vkCreateDescriptorSetLayout(a->device, &dsl, NULL, &a->underwater_desc_layout), "vkCreateDescriptorSetLayout(underwater)")) {
@@ -7166,7 +7218,7 @@ static int create_underwater_resources(app* a) {
     }
     VkDescriptorPoolSize dps[2] = {
         {.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 1},
-        {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 2}
+        {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 3}
     };
     VkDescriptorPoolCreateInfo dp = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -7297,7 +7349,12 @@ static int create_underwater_resources(app* a) {
         .imageView = a->underwater_noise_view,
         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
     };
-    VkWriteDescriptorSet dw[3] = {
+    VkDescriptorImageInfo dii_forest_cache = {
+        .sampler = a->post_sampler,
+        .imageView = a->forest_cache_view,
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    };
+    VkWriteDescriptorSet dw[4] = {
         {
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .dstSet = a->underwater_desc_set,
@@ -7321,9 +7378,17 @@ static int create_underwater_resources(app* a) {
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
             .pImageInfo = &dii_noise
+        },
+        {
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = a->underwater_desc_set,
+            .dstBinding = 3,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .pImageInfo = &dii_forest_cache
         }
     };
-    vkUpdateDescriptorSets(a->device, 3, dw, 0, NULL);
+    vkUpdateDescriptorSets(a->device, 4, dw, 0, NULL);
 
     VkPushConstantRange pc = {
         .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -7372,6 +7437,11 @@ static int create_underwater_resources(app* a) {
         .codeSize = v_type_forest_frag_spv_len,
         .pCode = (const uint32_t*)v_type_forest_frag_spv
     };
+    VkShaderModuleCreateInfo fs_forest_cache_ci = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = v_type_forest_cache_frag_spv_len,
+        .pCode = (const uint32_t*)v_type_forest_cache_frag_spv
+    };
     VkShaderModuleCreateInfo fs_forest_flora_ci = {
         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
         .codeSize = v_type_forest_flora_frag_spv_len,
@@ -7383,6 +7453,7 @@ static int create_underwater_resources(app* a) {
     VkShaderModule fs_fire = VK_NULL_HANDLE;
     VkShaderModule fs_ice = VK_NULL_HANDLE;
     VkShaderModule fs_forest = VK_NULL_HANDLE;
+    VkShaderModule fs_forest_cache = VK_NULL_HANDLE;
     VkShaderModule fs_forest_flora = VK_NULL_HANDLE;
     if (!check_vk(vkCreateShaderModule(a->device, &vs_ci, NULL, &vs), "vkCreateShaderModule(underwater vs)")) {
         return 0;
@@ -7417,7 +7488,17 @@ static int create_underwater_resources(app* a) {
         vkDestroyShaderModule(a->device, vs, NULL);
         return 0;
     }
+    if (!check_vk(vkCreateShaderModule(a->device, &fs_forest_cache_ci, NULL, &fs_forest_cache), "vkCreateShaderModule(forest cache fs)")) {
+        vkDestroyShaderModule(a->device, fs_forest, NULL);
+        vkDestroyShaderModule(a->device, fs_ice, NULL);
+        vkDestroyShaderModule(a->device, fs_fire, NULL);
+        vkDestroyShaderModule(a->device, fs_kelp, NULL);
+        vkDestroyShaderModule(a->device, fs, NULL);
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
     if (!check_vk(vkCreateShaderModule(a->device, &fs_forest_flora_ci, NULL, &fs_forest_flora), "vkCreateShaderModule(forest flora fs)")) {
+        vkDestroyShaderModule(a->device, fs_forest_cache, NULL);
         vkDestroyShaderModule(a->device, fs_forest, NULL);
         vkDestroyShaderModule(a->device, fs_ice, NULL);
         vkDestroyShaderModule(a->device, fs_fire, NULL);
@@ -7535,6 +7616,7 @@ static int create_underwater_resources(app* a) {
             a->fire_pipeline = VK_NULL_HANDLE;
         }
         vkDestroyShaderModule(a->device, fs_forest_flora, NULL);
+        vkDestroyShaderModule(a->device, fs_forest_cache, NULL);
         vkDestroyShaderModule(a->device, fs_forest, NULL);
         vkDestroyShaderModule(a->device, fs_ice, NULL);
         vkDestroyShaderModule(a->device, fs_fire, NULL);
@@ -7543,10 +7625,10 @@ static int create_underwater_resources(app* a) {
         vkDestroyShaderModule(a->device, vs, NULL);
         return 0;
     }
-    stages[1].module = fs_kelp;
+    stages[1].module = fs_forest_cache;
     gp.renderPass = a->bloom_render_pass;
     gp.pMultisampleState = &ms_single;
-    if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->underwater_kelp_pipeline), "vkCreateGraphicsPipelines(underwater kelp)")) {
+    if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->forest_cache_pipeline), "vkCreateGraphicsPipelines(forest cache)")) {
         if (a->forest_pipeline) {
             vkDestroyPipeline(a->device, a->forest_pipeline, NULL);
             a->forest_pipeline = VK_NULL_HANDLE;
@@ -7560,6 +7642,37 @@ static int create_underwater_resources(app* a) {
             a->fire_pipeline = VK_NULL_HANDLE;
         }
         vkDestroyShaderModule(a->device, fs_forest_flora, NULL);
+        vkDestroyShaderModule(a->device, fs_forest_cache, NULL);
+        vkDestroyShaderModule(a->device, fs_forest, NULL);
+        vkDestroyShaderModule(a->device, fs_ice, NULL);
+        vkDestroyShaderModule(a->device, fs_fire, NULL);
+        vkDestroyShaderModule(a->device, fs_kelp, NULL);
+        vkDestroyShaderModule(a->device, fs, NULL);
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+    stages[1].module = fs_kelp;
+    gp.renderPass = a->bloom_render_pass;
+    gp.pMultisampleState = &ms_single;
+    if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->underwater_kelp_pipeline), "vkCreateGraphicsPipelines(underwater kelp)")) {
+        if (a->forest_cache_pipeline) {
+            vkDestroyPipeline(a->device, a->forest_cache_pipeline, NULL);
+            a->forest_cache_pipeline = VK_NULL_HANDLE;
+        }
+        if (a->forest_pipeline) {
+            vkDestroyPipeline(a->device, a->forest_pipeline, NULL);
+            a->forest_pipeline = VK_NULL_HANDLE;
+        }
+        if (a->ice_pipeline) {
+            vkDestroyPipeline(a->device, a->ice_pipeline, NULL);
+            a->ice_pipeline = VK_NULL_HANDLE;
+        }
+        if (a->fire_pipeline) {
+            vkDestroyPipeline(a->device, a->fire_pipeline, NULL);
+            a->fire_pipeline = VK_NULL_HANDLE;
+        }
+        vkDestroyShaderModule(a->device, fs_forest_flora, NULL);
+        vkDestroyShaderModule(a->device, fs_forest_cache, NULL);
         vkDestroyShaderModule(a->device, fs_forest, NULL);
         vkDestroyShaderModule(a->device, fs_ice, NULL);
         vkDestroyShaderModule(a->device, fs_fire, NULL);
@@ -7576,6 +7689,10 @@ static int create_underwater_resources(app* a) {
             vkDestroyPipeline(a->device, a->underwater_kelp_pipeline, NULL);
             a->underwater_kelp_pipeline = VK_NULL_HANDLE;
         }
+        if (a->forest_cache_pipeline) {
+            vkDestroyPipeline(a->device, a->forest_cache_pipeline, NULL);
+            a->forest_cache_pipeline = VK_NULL_HANDLE;
+        }
         if (a->forest_pipeline) {
             vkDestroyPipeline(a->device, a->forest_pipeline, NULL);
             a->forest_pipeline = VK_NULL_HANDLE;
@@ -7589,6 +7706,7 @@ static int create_underwater_resources(app* a) {
             a->fire_pipeline = VK_NULL_HANDLE;
         }
         vkDestroyShaderModule(a->device, fs_forest_flora, NULL);
+        vkDestroyShaderModule(a->device, fs_forest_cache, NULL);
         vkDestroyShaderModule(a->device, fs_forest, NULL);
         vkDestroyShaderModule(a->device, fs_ice, NULL);
         vkDestroyShaderModule(a->device, fs_fire, NULL);
@@ -7599,6 +7717,7 @@ static int create_underwater_resources(app* a) {
     }
 
     vkDestroyShaderModule(a->device, fs_forest_flora, NULL);
+    vkDestroyShaderModule(a->device, fs_forest_cache, NULL);
     vkDestroyShaderModule(a->device, fs_forest, NULL);
     vkDestroyShaderModule(a->device, fs_ice, NULL);
     vkDestroyShaderModule(a->device, fs_fire, NULL);
@@ -10057,6 +10176,60 @@ static void record_gpu_forest_flora(app* a, VkCommandBuffer cmd, float t) {
 #endif
 }
 
+static void record_gpu_forest_cache(app* a, VkCommandBuffer cmd, float t) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    (void)cmd;
+    (void)t;
+#else
+    if (!a || !cmd || !a->forest_cache_pipeline || !a->underwater_layout || !a->underwater_desc_set) {
+        return;
+    }
+    const leveldef_level* lvl = game_current_leveldef(&a->game);
+    if (!lvl || lvl->background_style != LEVELDEF_BACKGROUND_FOREST) {
+        return;
+    }
+
+    underwater_pc pc;
+    memset(&pc, 0, sizeof(pc));
+    const float world_w = a->game.world_w;
+    const float world_h = a->game.world_h;
+    const float cx = a->game.camera_x;
+    const float cy = a->game.camera_y;
+
+    pc.p0[0] = (float)a->underwater_kelp_w;
+    pc.p0[1] = (float)a->underwater_kelp_h;
+    pc.p0[2] = t;
+    pc.p0[3] = clampf(lvl->forest_spore_density, 0.0f, 4.0f);
+
+    pc.p1[0] = 0.115f;
+    pc.p1[1] = 0.085f;
+    pc.p1[2] = 0.128f;
+    pc.p1[3] = fmaxf(lvl->forest_spore_scale, 0.05f);
+
+    pc.p2[0] = 0.145f;
+    pc.p2[1] = 0.220f;
+    pc.p2[2] = 0.185f;
+    pc.p2[3] = clampf(lvl->forest_haze_alpha, 0.0f, 1.0f);
+
+    pc.p3[0] = cx - world_w * 0.5f;
+    pc.p3[1] = cy - world_h * 0.5f;
+    pc.p3[2] = clampf(lvl->forest_spore_drift_speed, 0.0f, 6.0f);
+    pc.p3[3] = clampf(lvl->forest_canopy_density, 0.0f, 4.0f);
+
+    pc.p4[0] = world_w;
+    pc.p4[1] = world_h;
+    pc.p4[2] = clampf(lvl->forest_parallax_strength, 0.0f, 4.0f);
+    pc.p4[3] = clampf(lvl->forest_flora_density, 0.0f, 4.0f);
+
+    set_viewport_scissor(cmd, a->underwater_kelp_w, a->underwater_kelp_h);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->forest_cache_pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_layout, 0, 1, &a->underwater_desc_set, 0, NULL);
+    vkCmdPushConstants(cmd, a->underwater_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+#endif
+}
+
 static void record_gpu_forest(app* a, VkCommandBuffer cmd, float t) {
 #if !V_TYPE_HAS_TERRAIN_SHADERS
     (void)a;
@@ -10732,6 +10905,20 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         const int use_gpu_forest = (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_FOREST) ? 1 : 0;
         if (in_gameplay_scene && a->underwater_kelp_fb &&
             ((use_gpu_underwater && !a->video_menu_high_quality) || use_gpu_forest)) {
+            if (use_gpu_forest && a->forest_cache_fb) {
+                VkClearValue forest_cache_clear = {.color = {{0.0f, 0.0f, 0.0f, 0.0f}}};
+                VkRenderPassBeginInfo forest_cache_rp = {
+                    .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+                    .renderPass = a->bloom_render_pass,
+                    .framebuffer = a->forest_cache_fb,
+                    .renderArea = {.offset = {0, 0}, .extent = {a->underwater_kelp_w, a->underwater_kelp_h}},
+                    .clearValueCount = 1,
+                    .pClearValues = &forest_cache_clear
+                };
+                vkCmdBeginRenderPass(cmd, &forest_cache_rp, VK_SUBPASS_CONTENTS_INLINE);
+                record_gpu_forest_cache(a, cmd, t);
+                vkCmdEndRenderPass(cmd);
+            }
             VkClearValue kelp_clear = {.color = {{0.0f, 0.0f, 0.0f, 0.0f}}};
             VkRenderPassBeginInfo kelp_rp = {
                 .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,

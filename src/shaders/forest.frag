@@ -5,6 +5,7 @@ layout(location = 0) out vec4 out_color;
 
 layout(set = 0, binding = 1) uniform sampler2D u_kelp;
 layout(set = 0, binding = 2) uniform sampler2D u_noise;
+layout(set = 0, binding = 3) uniform sampler2D u_forest_cache;
 
 layout(push_constant) uniform UnderwaterPC {
     vec4 p0; /* x=viewport_w, y=viewport_h, z=time_s, w=spore_density */
@@ -431,8 +432,9 @@ void main() {
     float haze1 = fbm(haze_uv * vec2(2.1, 2.4) + vec2(1.7, -3.2));
     float haze = smoothstep(0.30, 0.92, haze0 * 0.68 + haze1 * 0.32);
 
-    vec3 bg_trunks = background_megatrunks(uv, cam_uv, canopy_density, parallax, t);
-    float canopy_far = canopy_mask(uv, cam_uv, drift_speed, canopy_density, parallax * 0.35, t);
+    vec4 forest_cache = texture(u_forest_cache, uv);
+    vec3 bg_trunks = forest_cache.rgb;
+    float canopy_far = forest_cache.a;
     vec4 flora_tex = texture(u_kelp, uv);
     vec4 hero_fauna = hero_fauna_overlay(uv, cam_uv, t, parallax, flora_density, bark_col, haze_col, glow_col);
     float flora_pre = clamp(flora_tex.a, 0.0, 1.0);
@@ -480,7 +482,7 @@ void main() {
         float fi = float(i);
         vec2 suv = uv + ray_dir * fi * 0.042;
         float weight = (high_quality > 0.5 || i < 3) ? 1.0 : 0.0;
-        float openness = canopy_openness_fast(suv, cam_uv, drift_speed, canopy_density, parallax * 0.25, t);
+        float openness = 1.0 - texture(u_forest_cache, suv).a;
         ray += openness * weight;
     }
     ray /= (high_quality > 0.5) ? 4.0 : 3.0;
