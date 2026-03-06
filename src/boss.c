@@ -557,6 +557,26 @@ static void boss_mark_telegraph(game_state* g, int owner_index, int part_index, 
     }
 }
 
+static void boss_mark_whole_boss(game_state* g, int owner_index, float owner_strength, float child_strength) {
+    if (!g || owner_index < 0 || owner_index >= MAX_ENEMIES) {
+        return;
+    }
+    if (g->enemies[owner_index].active) {
+        g->enemies[owner_index].boss_telegraph =
+            fmaxf(g->enemies[owner_index].boss_telegraph, owner_strength);
+    }
+    for (int i = 0; i < MAX_ENEMIES; ++i) {
+        if (!g->boss_attachments[i].active || !g->enemies[i].active) {
+            continue;
+        }
+        if (g->boss_attachments[i].owner_index != owner_index) {
+            continue;
+        }
+        g->enemies[i].boss_telegraph =
+            fmaxf(g->enemies[i].boss_telegraph, child_strength);
+    }
+}
+
 static int boss_telegraph_role(int telegraph_kind) {
     switch (telegraph_kind) {
         case BOSS_TELEGRAPH_TURRET_BURST:
@@ -655,6 +675,7 @@ static int boss_begin_telegraph(game_state* g, int owner_index, int telegraph_ki
         ctrl->telegraph_emitter_index = -1;
         ctrl->telegraph_total_s = boss_telegraph_duration_s(telegraph_kind);
         ctrl->telegraph_time_s = ctrl->telegraph_total_s;
+        boss_mark_whole_boss(g, owner_index, 0.60f, 0.24f);
         boss_mark_telegraph(g, owner_index, owner_index, 0.55f);
         return 1;
     }
@@ -667,6 +688,7 @@ static int boss_begin_telegraph(game_state* g, int owner_index, int telegraph_ki
     ctrl->telegraph_emitter_index = emitter.emitter_index;
     ctrl->telegraph_total_s = boss_telegraph_duration_s(telegraph_kind);
     ctrl->telegraph_time_s = ctrl->telegraph_total_s;
+    boss_mark_whole_boss(g, owner_index, 0.46f, 0.16f);
     boss_mark_telegraph(g, owner_index, emitter.part_index, 0.45f);
     return 1;
 }
@@ -710,6 +732,7 @@ static void boss_emit_phase_cue(game_state* g, int owner_index, int phase) {
     if (g->enemies[owner_index].active) {
         g->enemies[owner_index].boss_telegraph = 1.0f;
     }
+    boss_mark_whole_boss(g, owner_index, 1.0f, 0.30f);
     for (int i = 0; i < MAX_ENEMIES; ++i) {
         boss_enemy_attachment* attachment = &g->boss_attachments[i];
         enemy* part = &g->enemies[i];
@@ -1684,6 +1707,7 @@ void boss_on_enemy_damaged(game_state* g, int enemy_index, int damage_applied, i
     }
     attachment = &g->boss_attachments[enemy_index];
     hit = &g->enemies[enemy_index];
+    boss_mark_whole_boss(g, attachment->owner_index >= 0 ? attachment->owner_index : enemy_index, destroyed ? 0.92f : 0.58f, destroyed ? 0.34f : 0.16f);
     g->enemies[enemy_index].boss_telegraph =
         fmaxf(g->enemies[enemy_index].boss_telegraph, destroyed ? 1.0f : 0.88f);
     if (attachment->owner_index >= 0 && attachment->owner_index < MAX_ENEMIES && g->enemies[attachment->owner_index].active) {
