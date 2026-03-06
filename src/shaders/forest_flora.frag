@@ -39,8 +39,8 @@ vec4 composite_over(vec4 dst, vec3 src_col, float src_a) {
     return dst;
 }
 
-vec2 trunk_layer(vec2 uv, float camera_x, float layer_parallax, float density, float wobble_amp, float wobble_speed, float t) {
-    if (uv.y < 0.06 || uv.y > 1.04) {
+vec2 trunk_layer(vec2 uv, float camera_x, float layer_parallax, float density, float wobble_amp, float wobble_speed, float t, float size_scale) {
+    if (uv.y > 1.04) {
         return vec2(0.0);
     }
     float lane_count = mix(6.0, 15.0, sat(density * 0.35));
@@ -61,8 +61,22 @@ vec2 trunk_layer(vec2 uv, float camera_x, float layer_parallax, float density, f
         float center = fi + (seed - 0.5) * 0.72 + sway * wobble_amp * (0.08 + 0.07 * seed_b);
         float width = mix(0.06, 0.30, seed_b) * mix(0.70, 1.38, density * 0.18) * mix(0.78, 1.22, size_bias);
         float height = mix(0.18, 0.88, seed) * mix(0.72, 1.24, density * 0.20) * mix(0.74, 1.26, seed_c);
+        width *= size_scale;
+        height *= size_scale;
         float y_base = 1.02;
         float y_top = y_base - height;
+        float cap_mode = step(0.52, seed_c);
+        float cap_y = y_top + height * mix(0.07, 0.18, seed_b);
+        float pod_ry = height * mix(0.15, 0.40, seed);
+        float umb_ry = height * mix(0.06, 0.18, seed_b);
+        float top_extent = min(y_top, min(cap_y + height * 0.05 - pod_ry, cap_y - umb_ry));
+        float top_margin = 0.18;
+        if (top_extent < top_margin) {
+            float push_down = top_margin - top_extent;
+            y_top += push_down;
+            y_base += push_down;
+            cap_y += push_down;
+        }
         float shape_y_min = y_top - height * 0.12;
         float shape_y_max = y_base + 0.03;
         float shape_x_max = width * 5.0;
@@ -81,16 +95,14 @@ vec2 trunk_layer(vec2 uv, float camera_x, float layer_parallax, float density, f
             ((uv.y - (y_base - 0.04 - 0.03 * seed_b)) * (uv.y - (y_base - 0.04 - 0.03 * seed_b))) / max(height * height * 0.008, 1.0e-4));
         body = max(body, base_bulb * 0.65);
 
-        float cap_mode = step(0.52, seed_c);
         float edge_noise = noise01(vec2(id * 0.19 + fx * 2.4, uv.y * 4.8 + seed * 6.1));
-        float cap_y = y_top + height * mix(0.07, 0.18, seed_b);
         float pod_dx = (fx - center) / max(width * mix(0.95, 2.05, seed_b), 1.0e-4);
-        float pod_dy = (uv.y - (cap_y + height * 0.05)) / max(height * mix(0.15, 0.40, seed), 1.0e-4);
+        float pod_dy = (uv.y - (cap_y + height * 0.05)) / max(pod_ry, 1.0e-4);
         float pod_r2 = pod_dx * pod_dx + pod_dy * pod_dy * mix(0.8, 1.25, edge_noise);
         float pod = 1.0 - smoothstep(0.74, 1.0, pod_r2);
 
         float umb_dx = (fx - center) / max(width * mix(2.0, 4.9, seed), 1.0e-4);
-        float umb_dy = (uv.y - cap_y) / max(height * mix(0.06, 0.18, seed_b), 1.0e-4);
+        float umb_dy = (uv.y - cap_y) / max(umb_ry, 1.0e-4);
         float umb_r2 = umb_dx * umb_dx + umb_dy * umb_dy * mix(1.6, 2.8, 1.0 - seed_b);
         float umbrella = 1.0 - smoothstep(0.74, 1.0, umb_r2 + (edge_noise - 0.5) * 0.14);
         float underside = smoothstep(cap_y - height * 0.01, cap_y + height * 0.08, uv.y) *
@@ -190,18 +202,23 @@ void main() {
     stem_col *= mix(vec3(0.92, 1.02, 0.96), vec3(1.06, 0.92, 1.02), species_c * 0.75);
     cap_col *= mix(vec3(0.94, 1.04, 0.94), vec3(1.08, 0.92, 1.08), species_b * 0.72);
 
-    vec2 far = trunk_layer(uv, cam_uv.x, 0.12 + 0.08 * parallax, flora_density * 0.72, wobble_amp * 0.28, wobble_speed * 0.65, t);
-    vec2 mid = trunk_layer(uv, cam_uv.x, 0.28 + 0.14 * parallax, flora_density, wobble_amp * 0.46, wobble_speed * 0.88, t + 3.7);
+    vec2 far = trunk_layer(uv, cam_uv.x, 0.12 + 0.08 * parallax, flora_density * 0.72, wobble_amp * 0.28, wobble_speed * 0.65, t, 0.94);
+    vec2 mid = trunk_layer(uv, cam_uv.x, 0.28 + 0.14 * parallax, flora_density, wobble_amp * 0.46, wobble_speed * 0.88, t + 3.7, 0.88);
     vec2 near = vec2(0.0);
     if (high_quality > 0.5) {
-        near = trunk_layer(uv, cam_uv.x, 0.56 + 0.18 * parallax, flora_density * 1.12, wobble_amp * 0.70, wobble_speed * 1.08, t + 7.9);
+        near = trunk_layer(uv, cam_uv.x, 0.56 + 0.18 * parallax, flora_density * 1.12, wobble_amp * 0.70, wobble_speed * 1.08, t + 7.9, 0.72);
     }
     float roots = root_arch_band(uv, cam_uv.x, 0.36 + 0.18 * parallax, root_arch_density);
     float pulse = 0.55 + 0.45 * sin(t * (0.35 + pulse_freq * 0.55) + uv.x * 9.0);
 
-    float far_a = far.x * 0.46;
-    float mid_a = mid.x * 0.70;
-    float root_a = roots * (0.34 + 0.12 * foreground_alpha);
+    float far_cover = sat(smoothstep(0.10, 0.48, far.x));
+    float mid_cover = sat(smoothstep(0.12, 0.54, mid.x));
+    float near_cover = sat(smoothstep(0.14, 0.58, near.x));
+    float root_cover = sat(smoothstep(0.18, 0.52, roots));
+
+    float far_a = far.x * 0.46 * (1.0 - root_cover) * (1.0 - mid_cover) * (1.0 - near_cover);
+    float mid_a = mid.x * 0.70 * (1.0 - near_cover);
+    float root_a = roots * (0.34 + 0.12 * foreground_alpha) * (1.0 - mid_cover) * (1.0 - near_cover);
     float near_a = near.x * 0.98;
 
     float far_glow = far.y * pc.p2.w * (0.22 + 0.10 * pulse);
