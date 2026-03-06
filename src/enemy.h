@@ -43,4 +43,31 @@ void enemy_apply_emp(
     float cylinder_period
 );
 
+void enemy_emit_generic_destruction_fx(
+    game_state* g,
+    float x,
+    float y,
+    float vx,
+    float vy,
+    float radius,
+    float ui_scale,
+    int explosion_count
+);
+
+void enemy_spawn_eel_arc_burst(
+    game_state* g,
+    const enemy* e,
+    int owner_index,
+    int omnidirectional,
+    int ray_count,
+    float angle_offset
+);
+
+void enemy_spawn_boss_support_wave(
+    game_state* g,
+    int owner_index,
+    int phase,
+    uint32_t seed
+);
+
 #endif

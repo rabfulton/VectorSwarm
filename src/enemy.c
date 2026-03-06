@@ -1,4 +1,5 @@
 #include "enemy.h"
+#include "boss.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -8,7 +9,9 @@
 enum enemy_archetype {
     ENEMY_ARCH_FORMATION = 0,
     ENEMY_ARCH_SWARM = 1,
-    ENEMY_ARCH_KAMIKAZE = 2
+    ENEMY_ARCH_KAMIKAZE = 2,
+    ENEMY_ARCH_BOSS_CONTROLLER = 3,
+    ENEMY_ARCH_BOSS_PART = 4
 };
 
 enum enemy_state {
@@ -57,6 +60,14 @@ typedef struct enemy_fire_tuning {
 } enemy_fire_tuning;
 
 static void apply_boid_visual_style(enemy* e, int style, int wave_id, int slot_index);
+static void announce_wave(game_state* g, const char* wave_name);
+static int enemy_free_slot_count(const game_state* g);
+static void spawn_curated_boss_controller(
+    game_state* g,
+    int wave_id,
+    const leveldef_curated_enemy* ce,
+    float su
+);
 
 static float frand01(void) {
     return (float)rand() / (float)RAND_MAX;
@@ -1073,6 +1084,7 @@ static enemy* spawn_enemy_common(game_state* g, float su) {
         }
         enemy* e = &g->enemies[i];
         memset(e, 0, sizeof(*e));
+        boss_reset_enemy_runtime(g, (int)i);
         e->active = 1;
         e->radius = (12.0f + frand01() * 8.0f) * su;
         e->max_speed = 270.0f * su;
@@ -1093,6 +1105,7 @@ static enemy* spawn_enemy_common(game_state* g, float su) {
         e->visual_phase = 0.0f;
         e->visual_param_a = 0.0f;
         e->visual_param_b = 0.0f;
+        e->boss_telegraph = 0.0f;
         e->fire_prob = 1.0f;
         e->hp = 1;
         e->missile_ammo = 0;
@@ -1113,6 +1126,121 @@ static enemy* spawn_enemy_common(game_state* g, float su) {
         return e;
     }
     return NULL;
+}
+
+static int enemy_free_slot_count(const game_state* g) {
+    int free_count = 0;
+    if (!g) {
+        return 0;
+    }
+    for (size_t i = 0; i < MAX_ENEMIES; ++i) {
+        if (!g->enemies[i].active) {
+            free_count += 1;
+        }
+    }
+    return free_count;
+}
+
+static void spawn_curated_boss_controller(
+    game_state* g,
+    int wave_id,
+    const leveldef_curated_enemy* ce,
+    float su
+) {
+    const boss_blueprint* blueprint;
+    boss_part_blueprint built_parts[16];
+    int built_count;
+    enemy* controller;
+    int boss_id;
+    int gates_exit;
+    uint32_t seed;
+    float difficulty_scale;
+    int variant_id;
+    float anchor_x;
+    float anchor_y;
+    float intro_offset;
+    if (!g || !ce) {
+        return;
+    }
+    boss_id = (int)lroundf(ce->a);
+    gates_exit = (ce->e > 0.5f) ? 1 : 0;
+    seed = (uint32_t)lroundf(ce->b);
+    difficulty_scale = clampf((ce->c > 0.0f) ? ce->c : 1.0f, 0.25f, 4.0f);
+    variant_id = (int)lroundf(ce->d);
+    anchor_x = g->world_w * ce->x01;
+    anchor_y = clampf(g->world_h * ce->y01, g->world_h * 0.12f, g->world_h * 0.88f);
+    blueprint = boss_lookup_blueprint(boss_id);
+    if (!blueprint) {
+        return;
+    }
+    intro_offset = fmaxf(g->world_w * 0.72f, blueprint->bounds_radius * 1.15f);
+    built_count = boss_build_parts(blueprint, seed, variant_id, built_parts, (int)(sizeof(built_parts) / sizeof(built_parts[0])));
+    if (built_count <= 0) {
+        return;
+    }
+    if (enemy_free_slot_count(g) < 1 + built_count) {
+        return;
+    }
+
+    controller = spawn_enemy_common(g, su);
+    if (!controller) {
+        return;
+    }
+    controller->archetype = ENEMY_ARCH_BOSS_CONTROLLER;
+    controller->state = 0;
+    controller->wave_id = wave_id;
+    controller->slot_index = 0;
+    controller->b.x = anchor_x + intro_offset;
+    controller->b.y = anchor_y;
+    controller->radius = fmaxf(blueprint->controller_radius * su, 8.0f * su);
+    controller->hp = 1;
+    controller->visual_kind = blueprint->controller_visual_kind;
+    controller->visual_seed = seed;
+    controller->visual_phase = hash01_u32(seed ^ 0xBB5u) * 6.2831853f;
+    controller->visual_param_a = difficulty_scale;
+    controller->visual_param_b = (float)variant_id;
+    controller->facing_x = -1.0f;
+    controller->facing_y = 0.0f;
+    controller->max_speed = 0.0f;
+    controller->accel = 0.0f;
+    boss_configure_controller(
+        g,
+        (int)(controller - g->enemies),
+        blueprint,
+        seed,
+        anchor_x,
+        anchor_y,
+        difficulty_scale,
+        gates_exit
+    );
+
+    for (int i = 0; i < built_count; ++i) {
+        const boss_part_blueprint* part_def = &built_parts[i];
+        enemy* part = spawn_enemy_common(g, su);
+        int hp_max;
+        if (!part) {
+            continue;
+        }
+        hp_max = clampi((int)lroundf((float)part_def->hp * difficulty_scale), 1, 99);
+        part->archetype = ENEMY_ARCH_BOSS_PART;
+        part->state = 0;
+        part->wave_id = wave_id;
+        part->slot_index = i + 1;
+        part->radius = fmaxf(part_def->radius * su, 6.0f * su);
+        part->hp = hp_max;
+        part->visual_kind = part_def->visual_kind;
+        part->visual_seed = seed ^ (uint32_t)(0x9e37u * (unsigned)(i + 1));
+        part->visual_phase = hash01_u32(part->visual_seed ^ 0x1F5u) * 6.2831853f;
+        part->visual_param_a = difficulty_scale;
+        part->visual_param_b = (float)part_def->role;
+        part->facing_x = -1.0f;
+        part->facing_y = 0.0f;
+        boss_configure_part(g, (int)(part - g->enemies), (int)(controller - g->enemies), part_def, hp_max);
+        (void)boss_update_enemy(g, (int)(part - g->enemies), 0.0f);
+    }
+    (void)boss_update_enemy(g, (int)(controller - g->enemies), 0.0f);
+
+    announce_wave(g, blueprint->name);
 }
 
 static void enforce_auto_spawn_side(game_state* g, enemy* e, int bidirectional_spawns) {
@@ -1442,6 +1570,122 @@ static void spawn_wave_kamikaze(game_state* g, const leveldef_db* db, const leve
     }
 }
 
+static float enemy_runtime_ui_scale(const game_state* g) {
+    if (!g) {
+        return 1.0f;
+    }
+    return fmaxf(0.5f, fminf(g->world_w / 1920.0f, g->world_h / 1080.0f));
+}
+
+void enemy_spawn_boss_support_wave(game_state* g, int owner_index, int phase, uint32_t seed) {
+    const leveldef_db* db;
+    const leveldef_level* lvl;
+    enemy* owner;
+    float su;
+    int wave_id;
+    int boid_count;
+    int kamikaze_count;
+    int boid_kind;
+    int boid_style;
+    if (!g || owner_index < 0 || owner_index >= MAX_ENEMIES) {
+        return;
+    }
+    owner = &g->enemies[owner_index];
+    if (!owner->active) {
+        return;
+    }
+    db = game_leveldef_get();
+    lvl = game_current_leveldef(g);
+    if (!db || !lvl) {
+        return;
+    }
+    su = enemy_runtime_ui_scale(g);
+    wave_id = ++g->wave_id_alloc;
+    boid_count = (phase >= 2) ? 6 : 4;
+    kamikaze_count = (phase >= 2) ? 3 : 2;
+    boid_kind = ((seed ^ (uint32_t)phase) & 1u) ? 11 : 10;
+    boid_style = (phase >= 2) ? BOID_STYLE_RAZOR : BOID_STYLE_SHARD;
+
+    {
+        const int profile_id = resolve_boid_profile_by_variant(db, lvl, boid_kind);
+        const leveldef_boid_profile* p = leveldef_get_boid_profile(db, profile_id);
+        if (p) {
+            for (int i = 0; i < boid_count; ++i) {
+                enemy* e = spawn_enemy_common(g, su);
+                if (!e) {
+                    break;
+                }
+                e->archetype = ENEMY_ARCH_SWARM;
+                e->state = ENEMY_STATE_SWARM;
+                enemy_assign_combat_loadout(g, e, db);
+                e->wave_id = wave_id;
+                e->slot_index = i;
+                e->b.x = owner->b.x + owner->radius * 0.16f + frands1() * owner->radius * 0.24f;
+                e->b.y = owner->b.y + frands1() * owner->radius * 0.34f;
+                e->home_y = e->b.y;
+                e->max_speed = p->max_speed * su * 1.08f;
+                e->accel = p->accel * 1.10f;
+                e->radius = (p->radius_min + frand01() * fmaxf(p->radius_max - p->radius_min, 0.0f)) * su * 0.92f;
+                e->swarm_sep_r = p->sep_r * su;
+                e->swarm_ali_r = p->ali_r * su;
+                e->swarm_coh_r = p->coh_r * su;
+                e->swarm_sep_w = p->sep_w;
+                e->swarm_ali_w = p->ali_w;
+                e->swarm_coh_w = p->coh_w;
+                e->swarm_avoid_w = p->avoid_w;
+                e->swarm_goal_w = p->goal_w;
+                e->swarm_goal_amp = p->goal_amp * su;
+                e->swarm_goal_freq = p->goal_freq;
+                e->swarm_goal_dir = lane_dir_toward_player_x(g, e->b.x, 0, 0.0f);
+                e->swarm_wander_w = p->wander_w;
+                e->swarm_wander_freq = p->wander_freq;
+                e->swarm_drag = p->steer_drag;
+                e->swarm_min_speed = p->min_speed * su;
+                e->swarm_turn_rate_rad = p->max_turn_rate_deg * (3.14159265359f / 180.0f);
+                apply_boid_visual_style(e, boid_style, wave_id, i);
+                enemy_adjust_spawn_clear(g, e, su);
+            }
+        }
+    }
+
+    for (int i = 0; i < kamikaze_count; ++i) {
+        enemy* e = spawn_enemy_common(g, su);
+        const float slot = (float)i - 0.5f * (float)(kamikaze_count - 1);
+        if (!e) {
+            break;
+        }
+        e->archetype = ENEMY_ARCH_KAMIKAZE;
+        e->state = ENEMY_STATE_KAMIKAZE_COIL;
+        enemy_assign_combat_loadout(g, e, db);
+        e->wave_id = wave_id;
+        e->slot_index = boid_count + i;
+        apply_kamikaze_visual_style(e, (phase >= 2) ? KAMIKAZE_STYLE_PHOENIX : KAMIKAZE_STYLE_CLASSIC, wave_id, i);
+        e->b.x = owner->b.x + owner->radius * 0.26f + slot * fmaxf(72.0f * su, owner->radius * 0.12f);
+        e->b.y = owner->b.y + frands1() * owner->radius * 0.28f;
+        e->max_speed = lvl->kamikaze.max_speed * su * 1.18f;
+        e->accel = lvl->kamikaze.accel * 1.12f;
+        {
+            const float r_span = fmaxf(lvl->kamikaze.radius_max - lvl->kamikaze.radius_min, 0.0f);
+            const float r01 = (r_span > 1.0e-4f) ? frand01() : 0.5f;
+            e->radius = (lvl->kamikaze.radius_min + r01 * r_span) * su * 0.92f;
+            e->kamikaze_thrust_scale = lerpf(1.00f, 1.50f, r01);
+            e->kamikaze_glide_scale = lerpf(1.00f, 1.70f, r01);
+        }
+        e->ai_timer_s = 0.0f;
+        e->break_delay_s = 0.32f + frand01() * 0.24f;
+        e->facing_x = lane_dir_toward_player_x(g, e->b.x, 0, 0.0f);
+        e->facing_y = frands1() * 0.08f;
+        normalize2(&e->facing_x, &e->facing_y);
+        e->kamikaze_tail = 0.18f;
+        e->kamikaze_thrust = 0.0f;
+        e->kamikaze_tail_start = e->kamikaze_tail;
+        e->kamikaze_strike_x = e->b.x;
+        e->kamikaze_strike_y = e->b.y;
+        e->kamikaze_is_turning = 0;
+        enemy_adjust_spawn_clear(g, e, su);
+    }
+}
+
 void enemy_spawn_curated_enemy(
     game_state* g,
     const leveldef_db* db,
@@ -1458,6 +1702,10 @@ void enemy_spawn_curated_enemy(
         return;
     }
     curated = (lvl->wave_mode == LEVELDEF_WAVES_CURATED) ? &lvl->curated_combat : NULL;
+    if (ce->kind == 20) {
+        spawn_curated_boss_controller(g, wave_id, ce, su);
+        return;
+    }
     count = (int)lroundf(fmaxf(1.0f, ce->a));
     if (count > 24) {
         count = 24;
@@ -1757,6 +2005,11 @@ void enemy_spawn_next_wave(
                 announce_wave(g, "curated manta ray");
             } else if (ce->kind == 17) {
                 announce_wave(g, "curated electric eels");
+            } else if (ce->kind == 20) {
+                const char* boss_name = boss_name_for_id((int)lroundf(ce->a));
+                if (boss_name) {
+                    announce_wave(g, boss_name);
+                }
             } else if (ce->kind == 4) {
                 announce_wave(g, "curated kamikaze contact");
             } else if (ce->kind == 3) {
@@ -1874,6 +2127,18 @@ static void eel_arc_source_and_dir(
     float dir_x = 1.0f;
     float dir_y = 0.0f;
     if (!e || !out_sx || !out_sy || !out_dir_x || !out_dir_y) {
+        return;
+    }
+    if (arc && arc->omnidirectional) {
+        dir_x = cosf(arc->base_angle);
+        dir_y = sinf(arc->base_angle);
+        normalize2(&dir_x, &dir_y);
+        sx = e->b.x + dir_x * (e->radius * 0.46f);
+        sy = e->b.y + dir_y * (e->radius * 0.46f);
+        *out_sx = sx;
+        *out_sy = sy;
+        *out_dir_x = dir_x;
+        *out_dir_y = dir_y;
         return;
     }
     if (arc && arc->start_u <= 0.001f) {
@@ -2117,13 +2382,20 @@ static int eel_arc_pulse_is_on(const eel_arc_effect* arc) {
     return (phase <= EEL_ARC_PULSE_ON_S) ? 1 : 0;
 }
 
-static void spawn_eel_arc_burst(game_state* g, const enemy* e, int owner_index) {
-    const int ray_count = 3;
+void enemy_spawn_eel_arc_burst(
+    game_state* g,
+    const enemy* e,
+    int owner_index,
+    int omnidirectional,
+    int ray_count,
+    float angle_offset
+) {
     const float range = (e->eel_weapon_range > 1.0f) ? e->eel_weapon_range : fmaxf(96.0f, e->radius * 8.4f);
     const float life = (e->eel_weapon_duration_s > 0.2f) ? e->eel_weapon_duration_s : 2.2f;
     if (!g || !e || !e->active) {
         return;
     }
+    ray_count = clampi(ray_count, 1, 8);
     for (int i = 0; i < ray_count; ++i) {
         const int slot = alloc_eel_arc_slot(g);
         const uint32_t seed = e->visual_seed ^ (uint32_t)(i * 0x517cu) ^ (uint32_t)(rand() & 0xffff);
@@ -2137,9 +2409,12 @@ static void spawn_eel_arc_burst(game_state* g, const enemy* e, int owner_index) 
         arc->owner_index = owner_index;
         arc->owner_wave_id = e->wave_id;
         arc->owner_slot_index = e->slot_index;
+        arc->omnidirectional = omnidirectional ? 1 : 0;
         arc->seed = seed;
         arc->start_u = 0.0f;
-        arc->base_angle = 0.0f;
+        arc->base_angle = omnidirectional
+            ? (angle_offset + ((float)i / (float)ray_count) * 6.2831853f)
+            : 0.0f;
         arc->range = range * (0.97f + 0.06f * hash01_u32(seed ^ 0x84du));
         arc->age_s = 0.0f;
         arc->life_s = life * (0.92f + 0.18f * hash01_u32(seed ^ 0x1fd3u));
@@ -2173,7 +2448,8 @@ static void update_eel_arc_effects(
         if (arc->owner_index >= 0 && arc->owner_index < MAX_ENEMIES) {
             owner = &g->enemies[arc->owner_index];
         }
-        if (!owner || !owner->active || owner->visual_kind != ENEMY_VISUAL_EEL ||
+        if (!owner || !owner->active ||
+            (!arc->omnidirectional && owner->visual_kind != ENEMY_VISUAL_EEL) ||
             owner->wave_id != arc->owner_wave_id || owner->slot_index != arc->owner_slot_index) {
             arc->active = 0;
             continue;
@@ -2222,7 +2498,7 @@ static void update_eel_arc_effects(
                     normalize2(&to_x, &to_y);
                     dot = fwd_x * to_x + fwd_y * to_y;
                 }
-                arc->pulse_emit_on = (dot >= 0.0f) ? 1 : 0;
+                arc->pulse_emit_on = arc->omnidirectional ? 1 : ((dot >= 0.0f) ? 1 : 0);
                 if (arc->pulse_emit_on) {
                     const int slot = clampi(arc->strike_slot, 0, 2);
                     const uint32_t pulse_i = (uint32_t)floorf(arc->age_s / EEL_ARC_PULSE_PERIOD_S);
@@ -2232,29 +2508,35 @@ static void update_eel_arc_effects(
                     float side_y;
                     float spread = ((float)slot - 1.0f) * 0.08f;
                     float jitter = (hash01_u32(arc->seed ^ (pulse_i * 0x9e37u)) - 0.5f) * 0.05f;
-                    if (length2(aim_x, aim_y) < 1.0e-4f) {
-                        aim_x = dir_x;
-                        aim_y = dir_y;
+                    if (arc->omnidirectional) {
+                        arc->focus_dir_x = cosf(arc->base_angle);
+                        arc->focus_dir_y = sinf(arc->base_angle);
+                        arc->focus_range = arc->range;
                     } else {
-                        normalize2(&aim_x, &aim_y);
-                    }
-                    arc->focus_dir_x = aim_x;
-                    arc->focus_dir_y = aim_y;
-                    {
-                        const float dist_to_player = length2(-dx, -dy);
-                        float max_focus = arc->range * 0.96f;
-                        const float min_focus = owner->radius * 2.0f;
-                        if (max_focus < min_focus) {
-                            max_focus = min_focus;
+                        if (length2(aim_x, aim_y) < 1.0e-4f) {
+                            aim_x = dir_x;
+                            aim_y = dir_y;
+                        } else {
+                            normalize2(&aim_x, &aim_y);
                         }
-                        arc->focus_range = clampf(dist_to_player, min_focus, max_focus);
-                    }
-                    side_x = -dir_y;
-                    side_y = dir_x;
-                    {
-                        const float ca = dir_x * aim_x + dir_y * aim_y;
-                        const float sa = side_x * aim_x + side_y * aim_y;
-                        arc->base_angle = atan2f(sa, ca) + spread + jitter;
+                        arc->focus_dir_x = aim_x;
+                        arc->focus_dir_y = aim_y;
+                        {
+                            const float dist_to_player = length2(-dx, -dy);
+                            float max_focus = arc->range * 0.96f;
+                            const float min_focus = owner->radius * 2.0f;
+                            if (max_focus < min_focus) {
+                                max_focus = min_focus;
+                            }
+                            arc->focus_range = clampf(dist_to_player, min_focus, max_focus);
+                        }
+                        side_x = -dir_y;
+                        side_y = dir_x;
+                        {
+                            const float ca = dir_x * aim_x + dir_y * aim_y;
+                            const float sa = side_x * aim_x + side_y * aim_y;
+                            arc->base_angle = atan2f(sa, ca) + spread + jitter;
+                        }
                     }
                     if (arc->pulse_sound_anchor) {
                         game_push_audio_event(g, GAME_AUDIO_EVENT_LIGHTNING, sx, sy);
@@ -2403,7 +2685,7 @@ static void enemy_try_fire(game_state* g, enemy* e, float dt, float su, const le
             const float p_try = clampf(p_try_base * dist_weight * indiv_weight * p_mul, 0.0f, 0.92f);
             if (frand01() < p_try) {
                 const int owner_index = (int)(e - g->enemies);
-                spawn_eel_arc_burst(g, e, owner_index);
+                enemy_spawn_eel_arc_burst(g, e, owner_index, 0, 3, 0.0f);
                 e->fire_cooldown_s = 0.42f + frand01() * 0.68f;
             } else {
                 e->fire_cooldown_s = 0.08f + frand01() * 0.22f;
@@ -3601,10 +3883,16 @@ void enemy_update_system(
 
     for (size_t i = 0; i < MAX_ENEMIES; ++i) {
         enemy* e = &g->enemies[i];
+        const int boss_managed = boss_enemy_is_managed(g, (int)i);
         if (!e->active) {
             continue;
         }
-        if (e->visual_kind == ENEMY_VISUAL_EEL) {
+        if (boss_managed) {
+            (void)boss_update_enemy(g, (int)i, dt);
+            if (e->archetype == ENEMY_ARCH_BOSS_PART) {
+                e->ai_timer_s += dt;
+            }
+        } else if (e->visual_kind == ENEMY_VISUAL_EEL) {
             update_enemy_eel(g, e, dt, uses_cylinder, period, su);
         } else if (e->archetype == ENEMY_ARCH_SWARM) {
             update_enemy_swarm(g, e, dt, uses_cylinder, period, su);
@@ -3624,13 +3912,15 @@ void enemy_update_system(
                 e->emp_push_ay = 0.0f;
             }
         }
-        integrate_body(&e->b, dt);
-        if (e->visual_kind == ENEMY_VISUAL_MANTA) {
+        if (!boss_managed) {
+            integrate_body(&e->b, dt);
+        }
+        if (!boss_managed && e->visual_kind == ENEMY_VISUAL_MANTA) {
             e->b.y = e->home_y;
             e->b.vy = 0.0f;
             e->b.ay = 0.0f;
         }
-        if (!uses_cylinder) {
+        if (!boss_managed && !uses_cylinder) {
             if (e->archetype != ENEMY_ARCH_SWARM) {
                 float avoid_x = 0.0f;
                 float avoid_y = 0.0f;
@@ -3696,7 +3986,7 @@ void enemy_update_system(
                 }
             }
         }
-        {
+        if (!boss_managed) {
             float v = length2(e->b.vx, e->b.vy);
             float speed_cap = e->max_speed;
             if (e->archetype == ENEMY_ARCH_KAMIKAZE &&
@@ -3742,18 +4032,18 @@ void enemy_update_system(
             }
         }
 
-        if (e->visual_kind == ENEMY_VISUAL_MANTA) {
+        if (!boss_managed && e->visual_kind == ENEMY_VISUAL_MANTA) {
             emit_manta_turbulence(g, e, dt, su, uses_cylinder, period);
         }
 
-        if (!uses_cylinder && e->b.x < g->camera_x - g->world_w * 0.72f) {
+        if (!boss_managed && !uses_cylinder && e->b.x < g->camera_x - g->world_w * 0.72f) {
             if (e->archetype == ENEMY_ARCH_FORMATION && e->visual_kind != ENEMY_VISUAL_MANTA) {
                 e->state = ENEMY_STATE_BREAK_ATTACK;
                 e->ai_timer_s = 0.0f;
                 e->break_delay_s = 1.0f + frand01() * 1.3f;
             }
         }
-        if (e->b.y < 26.0f * su) {
+        if (!boss_managed && e->b.y < 26.0f * su) {
             const float edge = 26.0f * su;
             e->b.y = edge;
             if (e->archetype == ENEMY_ARCH_KAMIKAZE) {
@@ -3771,7 +4061,7 @@ void enemy_update_system(
                 e->b.vy = 0.0f;
             }
         }
-        if (e->b.y > g->world_h - 26.0f * su) {
+        if (!boss_managed && e->b.y > g->world_h - 26.0f * su) {
             const float edge = g->world_h - 26.0f * su;
             e->b.y = edge;
             if (e->archetype == ENEMY_ARCH_KAMIKAZE) {
@@ -3795,9 +4085,11 @@ void enemy_update_system(
             }
             const float hit_r = e->radius + 14.0f * su;
             if (!g->shield_active &&
+                boss_enemy_has_contact_damage(g, (int)i) &&
                 !player_hit_this_frame &&
                 dist_sq_level(uses_cylinder, period, e->b.x, e->b.y, g->player.b.x, g->player.b.y) <= hit_r * hit_r) {
                 emit_enemy_debris(g, e, g->player.b.vx, g->player.b.vy);
+                boss_on_enemy_destroyed(g, (int)i);
                 e->active = 0;
                 apply_player_hit(g, g->player.b.x, g->player.b.y, g->player.b.vx, g->player.b.vy, su);
                 player_hit_this_frame = 1;
@@ -3806,7 +4098,9 @@ void enemy_update_system(
         if (e->active && e->visual_kind == ENEMY_VISUAL_EEL) {
             eel_update_spine(e, dt, uses_cylinder, period);
         }
-        enemy_try_fire(g, e, dt, su, db, uses_cylinder, period);
+        if (!boss_managed) {
+            enemy_try_fire(g, e, dt, su, db, uses_cylinder, period);
+        }
     }
 
     if (g->eel_arc_count > 0 || g->lives > 0) {
@@ -3863,15 +4157,21 @@ void enemy_update_system(
             if (!g->enemies[ei].active) {
                 continue;
             }
+            if (!boss_enemy_is_damageable(g, (int)ei)) {
+                continue;
+            }
             if (dist_sq_level(uses_cylinder, period, g->bullets[bi].b.x, g->bullets[bi].b.y, g->enemies[ei].b.x, g->enemies[ei].b.y) <=
                 g->enemies[ei].radius * g->enemies[ei].radius) {
                 g->bullets[bi].active = 0;
                 {
                     enemy* hit = &g->enemies[ei];
+                    const int damage = boss_enemy_damage_per_hit(g, (int)ei);
                     const int hp_max = (hit->hp > 0) ? hit->hp : 1;
-                    hit->hp = hp_max - 1;
+                    hit->hp = hp_max - damage;
+                    boss_on_enemy_damaged(g, (int)ei, damage, hit->hp <= 0);
                     if (hit->hp <= 0) {
                         emit_enemy_debris(g, hit, g->bullets[bi].b.vx, g->bullets[bi].b.vy);
+                        boss_on_enemy_destroyed(g, (int)ei);
                         hit->active = 0;
                         emit_explosion(g, hit->b.x, hit->b.y, hit->b.vx, hit->b.vy, 26, su);
                         game_on_enemy_destroyed(g, hit->b.x, hit->b.y, hit->b.vx, hit->b.vy, 100);
@@ -3938,11 +4238,16 @@ void enemy_apply_emp(
         if (!e->active) {
             continue;
         }
+        if (!boss_enemy_is_damageable(g, (int)i)) {
+            continue;
+        }
         const float dx = uses_cylinder ? wrap_delta(e->b.x, px, period) : (e->b.x - px);
         const float dy = e->b.y - py;
         const float d2 = dx * dx + dy * dy;
         if (d2 <= primary_sq) {
+            boss_on_enemy_damaged(g, (int)i, boss_enemy_damage_per_hit(g, (int)i), 1);
             emit_enemy_debris(g, e, e->b.vx, e->b.vy);
+            boss_on_enemy_destroyed(g, (int)i);
             emit_explosion(g, e->b.x, e->b.y, e->b.vx, e->b.vy, 26, su);
             e->active = 0;
             game_on_enemy_destroyed(g, e->b.x, e->b.y, e->b.vx, e->b.vy, 100);
@@ -4000,4 +4305,28 @@ void enemy_apply_emp(
             }
         }
     }
+}
+
+void enemy_emit_generic_destruction_fx(
+    game_state* g,
+    float x,
+    float y,
+    float vx,
+    float vy,
+    float radius,
+    float su,
+    int explosion_count
+) {
+    enemy temp;
+    if (!g || radius <= 0.0f || su <= 0.0f) {
+        return;
+    }
+    memset(&temp, 0, sizeof(temp));
+    temp.b.x = x;
+    temp.b.y = y;
+    temp.b.vx = vx;
+    temp.b.vy = vy;
+    temp.radius = radius;
+    emit_enemy_debris(g, &temp, vx, vy);
+    emit_explosion(g, x, y, vx, vy, clampi(explosion_count, 8, 96), su);
 }

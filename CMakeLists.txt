@@ -17,6 +17,7 @@ find_package(Vulkan REQUIRED)
 add_executable(v_type
     src/acoustics_ui_layout.c
     src/audio.c
+    src/boss.c
     src/enemy.c
     src/game.c
     src/level_editor.c
@@ -269,6 +270,7 @@ endif()
 
 add_executable(level_roundtrip_test
     tests/level_roundtrip_test.c
+    src/boss.c
     src/level_editor.c
     src/leveldef.c
 )
@@ -278,5 +280,6 @@ target_include_directories(level_roundtrip_test PRIVATE
 )
 target_compile_definitions(level_roundtrip_test PRIVATE VTYPE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(level_roundtrip_test PRIVATE _POSIX_C_SOURCE=200809L)
+target_compile_definitions(level_roundtrip_test PRIVATE V_TYPE_BOSS_NO_RUNTIME_WEAPONS=1)
 target_link_libraries(level_roundtrip_test PRIVATE m)
 add_test(NAME level_roundtrip_test COMMAND $<TARGET_FILE:level_roundtrip_test>)

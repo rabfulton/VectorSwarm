@@ -1,4 +1,5 @@
 #include "level_editor.h"
+#include "boss.h"
 
 #include <ctype.h>
 #include <math.h>
@@ -371,7 +372,8 @@ static int is_wave_kind(int kind) {
             kind == LEVEL_EDITOR_MARKER_BOID_BIRD ||
             kind == LEVEL_EDITOR_MARKER_JELLY_SWARM ||
             kind == LEVEL_EDITOR_MARKER_MANTA_WING ||
-            kind == LEVEL_EDITOR_MARKER_EEL_SWARM);
+            kind == LEVEL_EDITOR_MARKER_EEL_SWARM ||
+            kind == LEVEL_EDITOR_MARKER_BOSS);
 }
 
 static int is_boid_wave_kind(int kind) {
@@ -449,6 +451,9 @@ static int wave_kind_has_accel_param_c(int kind) {
 }
 
 static float wave_default_count_for_kind(int kind) {
+    if (kind == LEVEL_EDITOR_MARKER_BOSS) {
+        return 1.0f;
+    }
     if (kind == LEVEL_EDITOR_MARKER_WAVE_SINE) {
         return 10.0f;
     }
@@ -468,6 +473,9 @@ static float wave_default_count_for_kind(int kind) {
 }
 
 static float wave_default_param_b_for_kind(int kind) {
+    if (kind == LEVEL_EDITOR_MARKER_BOSS) {
+        return 1234.0f;
+    }
     if (kind == LEVEL_EDITOR_MARKER_WAVE_SINE) {
         return 92.0f;
     }
@@ -487,6 +495,9 @@ static float wave_default_param_b_for_kind(int kind) {
 }
 
 static float wave_default_param_c_for_kind(int kind) {
+    if (kind == LEVEL_EDITOR_MARKER_BOSS) {
+        return 1.0f;
+    }
     if (kind == LEVEL_EDITOR_MARKER_WAVE_SINE) {
         return 285.0f;
     }
@@ -506,6 +517,9 @@ static float wave_default_param_c_for_kind(int kind) {
 }
 
 static float wave_default_param_d_for_kind(int kind) {
+    if (kind == LEVEL_EDITOR_MARKER_BOSS) {
+        return 0.0f;
+    }
     if (kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
         return (float)KAMIKAZE_STYLE_CLASSIC;
     }
@@ -522,10 +536,35 @@ static float wave_default_param_d_for_kind(int kind) {
 }
 
 static float wave_default_param_e_for_kind(int kind) {
+    if (kind == LEVEL_EDITOR_MARKER_BOSS) {
+        return 0.0f;
+    }
     if (is_regular_boid_wave_kind(kind)) {
         return 1.0f;
     }
     return 0.0f;
+}
+
+static int cycle_boss_blueprint_id(int current, int step) {
+    int id = current;
+    if (!boss_is_valid_blueprint_id(id)) {
+        id = 1;
+    }
+    if (step == 0) {
+        return id;
+    }
+    for (int i = 0; i < 64; ++i) {
+        id += (step > 0) ? 1 : -1;
+        if (id < 1) {
+            id = 64;
+        } else if (id > 64) {
+            id = 1;
+        }
+        if (boss_is_valid_blueprint_id(id)) {
+            return id;
+        }
+    }
+    return current;
 }
 
 static void remap_wave_marker_fields_for_kind(level_editor_marker* m, int old_kind, int new_kind) {
@@ -578,6 +617,15 @@ static void remap_wave_marker_fields_for_kind(level_editor_marker* m, int old_ki
             : wave_default_param_c_for_kind(new_kind);
         m->d = 0.0f;
         m->e = 0.0f;
+        return;
+    }
+
+    if (new_kind == LEVEL_EDITOR_MARKER_BOSS) {
+        m->a = (old_kind == LEVEL_EDITOR_MARKER_BOSS && old_a > 0.0f) ? old_a : wave_default_count_for_kind(new_kind);
+        m->b = (old_kind == LEVEL_EDITOR_MARKER_BOSS && old_b > 0.0f) ? old_b : wave_default_param_b_for_kind(new_kind);
+        m->c = (old_kind == LEVEL_EDITOR_MARKER_BOSS && old_c > 0.0f) ? old_c : wave_default_param_c_for_kind(new_kind);
+        m->d = (old_kind == LEVEL_EDITOR_MARKER_BOSS) ? old_d : wave_default_param_d_for_kind(new_kind);
+        m->e = (old_kind == LEVEL_EDITOR_MARKER_BOSS) ? old_e : wave_default_param_e_for_kind(new_kind);
         return;
     }
 
@@ -638,6 +686,9 @@ static int push_default_wave_marker(
         wave_default_param_c_for_kind(kind),
         wave_default_param_d_for_kind(kind)
     );
+    if (s->marker_count > 0) {
+        s->markers[s->marker_count - 1].e = wave_default_param_e_for_kind(kind);
+    }
     return 1;
 }
 
@@ -1154,6 +1205,7 @@ static const char* curated_kind_name(int kind) {
     if (kind == LEVEL_EDITOR_MARKER_JELLY_SWARM) return "jelly_swarm";
     if (kind == LEVEL_EDITOR_MARKER_MANTA_WING) return "manta_wing";
     if (kind == LEVEL_EDITOR_MARKER_EEL_SWARM) return "eel_swarm";
+    if (kind == LEVEL_EDITOR_MARKER_BOSS) return "boss_controller";
     return "sine";
 }
 
@@ -1172,6 +1224,7 @@ static const char* marker_kind_name(int kind) {
     if (kind == LEVEL_EDITOR_MARKER_JELLY_SWARM) return "jelly_swarm";
     if (kind == LEVEL_EDITOR_MARKER_MANTA_WING) return "manta_wing";
     if (kind == LEVEL_EDITOR_MARKER_EEL_SWARM) return "eel_swarm";
+    if (kind == LEVEL_EDITOR_MARKER_BOSS) return "boss";
     return "marker";
 }
 
@@ -1760,6 +1813,7 @@ static int build_level_serialized_text(
     if (!appendf(out, out_cap, &used, "exit_enabled=%d\n", lvl.exit_enabled ? 1 : 0)) return 0;
     if (!appendf(out, out_cap, &used, "exit_x01=%.3f\n", lvl.exit_x01)) return 0;
     if (!appendf(out, out_cap, &used, "exit_y01=%.3f\n", lvl.exit_y01)) return 0;
+    if (!appendf(out, out_cap, &used, "exit_requires_boss_defeated=%d\n", lvl.exit_requires_boss_defeated ? 1 : 0)) return 0;
     if (!appendf(out, out_cap, &used, "asteroid_storm_enabled=%d\n", lvl.asteroid_storm_enabled ? 1 : 0)) return 0;
     if (!appendf(out, out_cap, &used, "asteroid_storm_start_x01=%.3f\n", lvl.asteroid_storm_start_x01)) return 0;
     if (!appendf(out, out_cap, &used, "asteroid_storm_angle_deg=%.3f\n", lvl.asteroid_storm_angle_deg)) return 0;
@@ -1988,7 +2042,9 @@ static int marker_property_count(const level_editor_state* s) {
     if (is_wave_kind(kind)) {
         const int ev_item = marker_is_event_item(s, &s->markers[s->selected_marker]);
         int tuned_count = 0;
-        if (is_regular_boid_wave_kind(kind)) {
+        if (kind == LEVEL_EDITOR_MARKER_BOSS) {
+            base_count = ev_item ? 7 : 8; /* event: TYPE,ORDER,DELAY,BOSS_ID,SEED,DIFFICULTY,VARIANT | spatial adds GATES_EXIT */
+        } else if (is_regular_boid_wave_kind(kind)) {
             base_count = ev_item ? 8 : 9; /* event: TYPE,ORDER,DELAY,COUNT,SPEED,ACCEL,STYLE,SIZE | spatial adds DELAY */
         } else if (is_boid_wave_kind(kind)) {
             base_count = ev_item ? 7 : 8; /* event: TYPE,ORDER,DELAY,COUNT,SPEED,ACCEL,STYLE_OR_SIZE | spatial adds DELAY */
@@ -2016,6 +2072,9 @@ static int marker_property_count(const level_editor_state* s) {
 }
 
 static int wave_base_property_count_for_kind(int kind, int event_item) {
+    if (kind == LEVEL_EDITOR_MARKER_BOSS) {
+        return event_item ? 7 : 8;
+    }
     if (is_regular_boid_wave_kind(kind)) {
         return event_item ? 8 : 9;
     }
@@ -2361,45 +2420,51 @@ void level_editor_compute_layout(float w, float h, level_editor_layout* out) {
         out->entities.w - 16.0f * ui,
         42.0f * ui
     };
-    out->watcher_button = (vg_rect){
+    out->boss_button = (vg_rect){
         out->entities.x + 8.0f * ui,
         out->entities.y + out->entities.h - 106.0f * ui,
         out->entities.w - 16.0f * ui,
         42.0f * ui
     };
-    out->asteroid_button = (vg_rect){
+    out->watcher_button = (vg_rect){
         out->entities.x + 8.0f * ui,
         out->entities.y + out->entities.h - 158.0f * ui,
         out->entities.w - 16.0f * ui,
         42.0f * ui
     };
-    out->mine_button = (vg_rect){
+    out->asteroid_button = (vg_rect){
         out->entities.x + 8.0f * ui,
         out->entities.y + out->entities.h - 210.0f * ui,
         out->entities.w - 16.0f * ui,
         42.0f * ui
     };
-    out->missile_button = (vg_rect){
+    out->mine_button = (vg_rect){
         out->entities.x + 8.0f * ui,
         out->entities.y + out->entities.h - 262.0f * ui,
         out->entities.w - 16.0f * ui,
         42.0f * ui
     };
-    out->arc_button = (vg_rect){
+    out->missile_button = (vg_rect){
         out->entities.x + 8.0f * ui,
         out->entities.y + out->entities.h - 314.0f * ui,
         out->entities.w - 16.0f * ui,
         42.0f * ui
     };
-    out->window_button = (vg_rect){
+    out->arc_button = (vg_rect){
         out->entities.x + 8.0f * ui,
         out->entities.y + out->entities.h - 366.0f * ui,
         out->entities.w - 16.0f * ui,
         42.0f * ui
     };
-    out->exit_button = (vg_rect){
+    out->window_button = (vg_rect){
         out->entities.x + 8.0f * ui,
         out->entities.y + out->entities.h - 418.0f * ui,
+        out->entities.w - 16.0f * ui,
+        42.0f * ui
+    };
+    out->exit_button = (vg_rect){
+        out->entities.x + 8.0f * ui,
+        out->entities.y + out->entities.h - 470.0f * ui,
         out->entities.w - 16.0f * ui,
         42.0f * ui
     };
@@ -2626,14 +2691,20 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
                 (is_boid_wave_kind(ce->kind) && ce->c <= 0.0f) ? boid_accel_default_for_kind(ce->kind) : ce->c,
                 (ce->kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE)
                     ? (float)clampi((int)lroundf(ce->d), KAMIKAZE_STYLE_CLASSIC, KAMIKAZE_STYLE_PHOENIX)
+                    : (ce->kind == LEVEL_EDITOR_MARKER_BOSS)
+                        ? ce->d
                     : (is_boid_wave_kind(ce->kind)
                         ? ((ce->kind == LEVEL_EDITOR_MARKER_JELLY_SWARM || ce->kind == LEVEL_EDITOR_MARKER_EEL_SWARM)
                             ? ((ce->d > 0.0f) ? ce->d : 1.0f)
                             : (float)boid_style_from_marker_value(ce->d))
                         : 0.0f)
             );
-            if (s->marker_count > before && is_regular_boid_wave_kind(ce->kind)) {
-                s->markers[before].e = boid_size_scale_from_marker_value(ce->e);
+            if (s->marker_count > before) {
+                if (is_regular_boid_wave_kind(ce->kind)) {
+                    s->markers[before].e = boid_size_scale_from_marker_value(ce->e);
+                } else if (ce->kind == LEVEL_EDITOR_MARKER_BOSS) {
+                    s->markers[before].e = ce->e;
+                }
             }
         }
     } else if (lvl->event_count > 0) {
@@ -3287,6 +3358,18 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
             s->entity_drag_y = mouse_y;
             return 1;
         }
+        if (point_in_rect(mouse_x, mouse_y, l.boss_button)) {
+            if (s->level_wave_mode != LEVELDEF_WAVES_CURATED) {
+                s->level_wave_mode = LEVELDEF_WAVES_CURATED;
+                mark_editor_dirty(s);
+            }
+            s->entity_tool_selected = LEVEL_EDITOR_MARKER_BOSS;
+            s->entity_drag_active = 1;
+            s->entity_drag_kind = LEVEL_EDITOR_MARKER_BOSS;
+            s->entity_drag_x = mouse_x;
+            s->entity_drag_y = mouse_y;
+            return 1;
+        }
         if (point_in_rect(mouse_x, mouse_y, l.watcher_button)) {
             s->entity_tool_selected = LEVEL_EDITOR_MARKER_SEARCHLIGHT;
             s->entity_drag_active = 1;
@@ -3527,8 +3610,20 @@ void level_editor_select_property(level_editor_state* s, int delta) {
 
 const char* level_editor_selected_property_name(const level_editor_state* s) {
     static const char* names[10] = {"X", "Y", "A", "B", "C", "D", "E", "F", "G", "H"};
+    static const char* boss_spatial[8] = {"TYPE", "X", "Y", "BOSS ID", "SEED", "DIFFICULTY", "VARIANT", "GATES EXIT"};
+    static const char* boss_event[7] = {"TYPE", "ORDER", "DELAY", "BOSS ID", "SEED", "DIFFICULTY", "VARIANT"};
     if (!s) {
         return "X";
+    }
+    if (s->selected_marker >= 0 && s->selected_marker < s->marker_count) {
+        const level_editor_marker* m = &s->markers[s->selected_marker];
+        if (m->kind == LEVEL_EDITOR_MARKER_BOSS) {
+            const int ev_item = marker_is_event_item(s, m);
+            const int idx = (s->selected_property >= 0)
+                ? clampi(s->selected_property, 0, ev_item ? 6 : 7)
+                : 0;
+            return ev_item ? boss_event[idx] : boss_spatial[idx];
+        }
     }
     const int idx = (s->selected_property >= 0 && s->selected_property < 10) ? s->selected_property : 0;
     return names[idx];
@@ -3789,6 +3884,37 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
         const int ev_item = marker_is_event_item(s, m);
         const int boid_item = is_boid_wave_kind(m->kind);
         const int base_prop_count = wave_base_property_count_for_kind(m->kind, ev_item);
+        if (m->kind == LEVEL_EDITOR_MARKER_BOSS) {
+            switch (s->selected_property) {
+                case 0:
+                    break;
+                case 1:
+                    move_marker_x(s, s->selected_marker, pos_delta);
+                    break;
+                case 2:
+                    m->y01 = clampf(m->y01 + pos_delta, 0.0f, 1.0f);
+                    break;
+                case 3:
+                    m->a = (float)cycle_boss_blueprint_id((int)lroundf(m->a), (delta >= 0.0f) ? 1 : -1);
+                    break;
+                case 4:
+                    m->b = (float)lroundf(m->b + ((delta >= 0.0f) ? 1.0f : -1.0f));
+                    break;
+                case 5:
+                    m->c = clampf(m->c + delta * 0.05f, 0.25f, 4.0f);
+                    break;
+                case 6:
+                    m->d = (float)lroundf(m->d + ((delta >= 0.0f) ? 1.0f : -1.0f));
+                    break;
+                case 7:
+                    m->e = (m->e > 0.5f) ? 0.0f : 1.0f;
+                    break;
+                default:
+                    break;
+            }
+            mark_editor_dirty(s);
+            return;
+        }
         if (s->selected_property >= base_prop_count && s->level_wave_mode == LEVELDEF_WAVES_CURATED) {
             const int tuned_prop = s->selected_property - base_prop_count;
             if (m->kind == LEVEL_EDITOR_MARKER_WAVE_SINE || m->kind == LEVEL_EDITOR_MARKER_WAVE_V) {
@@ -3875,7 +4001,9 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
                 }
                 break;
             case 6:
-                if (boid_item) {
+                if (m->kind == LEVEL_EDITOR_MARKER_BOSS) {
+                    m->d = (float)lroundf(m->d + ((delta >= 0.0f) ? 1.0f : -1.0f));
+                } else if (boid_item) {
                     if (m->kind == LEVEL_EDITOR_MARKER_JELLY_SWARM || m->kind == LEVEL_EDITOR_MARKER_EEL_SWARM) {
                         m->d = clampf(m->d + delta * 0.05f, 0.20f, 4.00f);
                     } else {
@@ -3896,7 +4024,9 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
                 }
                 break;
             case 7:
-                if (m->kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
+                if (m->kind == LEVEL_EDITOR_MARKER_BOSS) {
+                    m->e = (m->e > 0.5f) ? 0.0f : 1.0f;
+                } else if (m->kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
                     s->level_kamikaze_radius_min = clampf(s->level_kamikaze_radius_min + delta * 1.0f, 1.0f, 200.0f);
                     if (s->level_kamikaze_radius_max < s->level_kamikaze_radius_min) {
                         s->level_kamikaze_radius_max = s->level_kamikaze_radius_min;

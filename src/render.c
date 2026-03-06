@@ -1,6 +1,7 @@
 #include "render.h"
 
 #include "acoustics_ui_layout.h"
+#include "boss.h"
 #include "leveldef.h"
 #include "menu.h"
 #include "planetarium/commander_nick_dialogues.h"
@@ -4327,6 +4328,7 @@ static const char* level_editor_marker_name(int kind) {
         case 15: return "JELLY SWARM";
         case 16: return "MANTA WING";
         case 17: return "EEL SWARM";
+        case 20: return "BOSS";
         case 6: return "ASTEROID STORM";
         case 7: return "MINEFIELD";
         case 8: return "MISSILE LAUNCHER";
@@ -4361,6 +4363,9 @@ static vg_color level_editor_marker_color(const palette_theme* pal, int kind) {
     }
     if (kind == 9) {
         return (vg_color){0.48f, 0.90f, 1.0f, 1.0f};
+    }
+    if (kind == 20) {
+        return (vg_color){1.0f, 0.56f, 0.18f, 1.0f};
     }
     if (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 15 || kind == 16 || kind == 17) {
         return (vg_color){1.0f, 0.26f, 0.26f, 1.0f};
@@ -4689,6 +4694,11 @@ static const char* editor_wave_type_name(int kind) {
     }
 }
 
+static const char* editor_boss_name(float value) {
+    const char* name = boss_name_for_id((int)lroundf(value));
+    return (name && name[0]) ? name : "UNKNOWN";
+}
+
 static const char* editor_wave_mode_name(int mode) {
     if (mode == LEVELDEF_WAVES_BOID_ONLY) return "BOID ONLY";
     if (mode == LEVELDEF_WAVES_CURATED) return "CURATED";
@@ -4898,6 +4908,17 @@ static int editor_marker_properties_text(
         if (n < cap) { out_labels[n] = "VENT DENSITY"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_e[sel]); n++; }
         if (n < cap) { out_labels[n] = "VENT OPACITY"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_f[sel]); n++; }
         if (n < cap) { out_labels[n] = "VENT HEIGHT"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_g[sel]); n++; }
+        return n;
+    }
+    if (kind == 20) {
+        if (n < cap) { out_labels[n] = "TYPE"; snprintf(out_values[n], 32, "BOSS"); n++; }
+        if (n < cap) { out_labels[n] = "POS X"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "POS Y"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
+        if (n < cap) { out_labels[n] = "BOSS ID"; snprintf(out_values[n], 32, "%d %s", (int)lroundf(metrics->level_editor_marker_a[sel]), editor_boss_name(metrics->level_editor_marker_a[sel])); n++; }
+        if (n < cap) { out_labels[n] = "SEED"; snprintf(out_values[n], 32, "%d", (int)lroundf(metrics->level_editor_marker_b[sel])); n++; }
+        if (n < cap) { out_labels[n] = "DIFFICULTY"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_c[sel]); n++; }
+        if (n < cap) { out_labels[n] = "VARIANT"; snprintf(out_values[n], 32, "%d", (int)lroundf(metrics->level_editor_marker_d[sel])); n++; }
+        if (n < cap) { out_labels[n] = "GATES EXIT"; snprintf(out_values[n], 32, "%s", (metrics->level_editor_marker_e[sel] > 0.5f) ? "YES" : "NO"); n++; }
         return n;
     }
     if (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 15 || kind == 16 || kind == 17) {
@@ -5145,13 +5166,14 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     const vg_rect save_new_btn = {controls_x + controls_w * 0.52f, m + row_h + 8.0f * ui, controls_w * 0.48f, row_h};
     const vg_rect save_btn = {controls_x + controls_w * 0.52f, m, controls_w * 0.48f, row_h};
     const vg_rect swarm_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 54.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
-    const vg_rect watcher_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 106.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
-    const vg_rect asteroid_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 158.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
-    const vg_rect mine_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 210.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
-    const vg_rect missile_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 262.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
-    const vg_rect arc_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 314.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
-    const vg_rect window_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 366.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
-    const vg_rect exit_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 418.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
+    const vg_rect boss_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 106.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
+    const vg_rect watcher_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 158.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
+    const vg_rect asteroid_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 210.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
+    const vg_rect mine_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 262.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
+    const vg_rect missile_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 314.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
+    const vg_rect arc_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 366.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
+    const vg_rect window_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 418.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
+    const vg_rect exit_btn = {entities.x + 8.0f * ui, entities.y + entities.h - 470.0f * ui, entities.w - 16.0f * ui, 42.0f * ui};
     const float ctb_x = construction_toolbar.x + 8.0f * ui;
     const float ctb_y = construction_toolbar.y + 3.0f * ui;
     const float ctb_w = construction_toolbar.w - 16.0f * ui;
@@ -5257,6 +5279,8 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     r = draw_ui_button_shaded(ctx, ctb_btn7, "VENT", 9.8f * ui, &layer2_frame, &layer2_text, metrics->level_editor_structure_tool_selected == 8 ? 1 : 0);
     if (r != VG_OK) return r;
     r = draw_ui_button_shaded(ctx, swarm_btn, "SWARM", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 5 ? 1 : 0);
+    if (r != VG_OK) return r;
+    r = draw_ui_button_shaded(ctx, boss_btn, "BOSS", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 20 ? 1 : 0);
     if (r != VG_OK) return r;
     r = draw_ui_button_shaded(ctx, watcher_btn, "WATCHER", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 1 ? 1 : 0);
     if (r != VG_OK) return r;
@@ -5440,7 +5464,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 const int track_i = metrics->level_editor_marker_track[i];
                 const int is_enemy_i =
                     (kind_i == 2 || kind_i == 3 || kind_i == 4 || kind_i == 5 || kind_i == 6 ||
-                     kind_i == 10 || kind_i == 11 || kind_i == 12 || kind_i == 15 || kind_i == 17);
+                     kind_i == 10 || kind_i == 11 || kind_i == 12 || kind_i == 15 || kind_i == 17 || kind_i == 20);
                 const int event_item_i = is_enemy_i && (track_i == 1);
                 if (event_item_i) {
                     event_n += 1;
@@ -5452,7 +5476,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             const float my01 = clampf(metrics->level_editor_marker_y01[i], 0.0f, 1.0f);
             const int kind = metrics->level_editor_marker_kind[i];
             const int track = metrics->level_editor_marker_track[i];
-            const int is_enemy = (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 6 || kind == 10 || kind == 11 || kind == 12 || kind == 15 || kind == 17);
+            const int is_enemy = (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 6 || kind == 10 || kind == 11 || kind == 12 || kind == 15 || kind == 17 || kind == 20);
             const int event_item = is_enemy && (track == 1);
             const vg_color c = level_editor_marker_color(&pal, kind);
 
@@ -5476,7 +5500,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                     const int track_j = metrics->level_editor_marker_track[j];
                     const int is_enemy_j =
                         (kind_j == 2 || kind_j == 3 || kind_j == 4 || kind_j == 5 || kind_j == 6 ||
-                         kind_j == 10 || kind_j == 11 || kind_j == 12 || kind_j == 15 || kind_j == 17);
+                         kind_j == 10 || kind_j == 11 || kind_j == 12 || kind_j == 15 || kind_j == 17 || kind_j == 20);
                     const int event_item_j = is_enemy_j && (track_j == 1);
                     if (!event_item_j) {
                         continue;
@@ -5698,6 +5722,40 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                         &fill
                     );
                 }
+            } else if (kind == 20) {
+                const float rr = 25.0f * ui * glyph_scale;
+                const vg_vec2 hull[7] = {
+                    {vx - rr * 1.20f, vy},
+                    {vx - rr * 0.38f, vy + rr * 0.84f},
+                    {vx + rr * 0.76f, vy + rr * 0.72f},
+                    {vx + rr * 1.18f, vy},
+                    {vx + rr * 0.76f, vy - rr * 0.72f},
+                    {vx - rr * 0.38f, vy - rr * 0.84f},
+                    {vx - rr * 1.20f, vy}
+                };
+                const vg_vec2 spine[2] = {
+                    {vx - rr * 0.86f, vy},
+                    {vx + rr * 0.72f, vy}
+                };
+                const vg_vec2 crown[3] = {
+                    {vx - rr * 0.16f, vy + rr * 0.92f},
+                    {vx + rr * 0.14f, vy + rr * 1.18f},
+                    {vx + rr * 0.44f, vy + rr * 0.92f}
+                };
+                r = vg_draw_polyline(ctx, hull, 7, &mk, 0);
+                if (r != VG_OK) return r;
+                r = vg_draw_polyline(ctx, spine, 2, &mk, 0);
+                if (r != VG_OK) return r;
+                r = vg_draw_polyline(ctx, crown, 3, &mk, 0);
+                if (r != VG_OK) return r;
+                {
+                    vg_stroke_style mk2 = mk;
+                    const char* boss_label = editor_boss_name(metrics->level_editor_marker_a[i]);
+                    mk2.width_px *= 0.82f;
+                    mk2.intensity *= 0.84f;
+                    r = draw_text_vector_glow(ctx, boss_label, (vg_vec2){vx - rr * 1.22f, vy + rr * 1.42f}, 7.2f * ui, 0.44f * ui, &frame, &mk2);
+                    if (r != VG_OK) return r;
+                }
             } else {
                 r = draw_editor_diamond(ctx, (vg_vec2){vx, vy}, 19.5f * ui * glyph_scale, &mk);
             }
@@ -5732,7 +5790,11 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
         char line0[96];
         if (sel >= 0 && sel < metrics->level_editor_marker_count && sel < LEVEL_EDITOR_MAX_MARKERS) {
             const int kind = metrics->level_editor_marker_kind[sel];
-            snprintf(line0, sizeof(line0), "SELECTED %s", level_editor_marker_name(kind));
+            if (kind == 20) {
+                snprintf(line0, sizeof(line0), "SELECTED BOSS - %s", editor_boss_name(metrics->level_editor_marker_a[sel]));
+            } else {
+                snprintf(line0, sizeof(line0), "SELECTED %s", level_editor_marker_name(kind));
+            }
             const float tx = props.x + 12.0f * ui;
             float ty = props.y + props.h - 42.0f * ui;
             r = draw_text_vector_glow(ctx, line0, (vg_vec2){tx, ty}, 11.2f * ui, 0.72f * ui, &frame, &text);
@@ -9959,8 +10021,517 @@ static vg_result draw_enemy_glyph_eel(vg_context* ctx, const enemy* e, float x, 
     return VG_OK;
 }
 
+static vg_result draw_enemy_glyph_boss_core(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
+    float fx = 0.0f;
+    float fy = 0.0f;
+    float nx = 0.0f;
+    float ny = 0.0f;
+    const float pulse = 0.5f + 0.5f * sinf(e->ai_timer_s * (1.6f + 0.25f * e->visual_param_a) + e->visual_phase);
+    const float telegraph = clampf(e->boss_telegraph, 0.0f, 1.0f);
+    const float iris = 0.24f + 0.14f * pulse;
+    vg_stroke_style halo = *enemy_style;
+    vg_stroke_style main = *enemy_style;
+    vg_stroke_style detail = *enemy_style;
+    enemy_glyph_basis(e, &fx, &fy, &nx, &ny);
+    halo.width_px *= 1.85f;
+    halo.intensity *= 0.36f + 0.84f * pulse + 1.00f * telegraph;
+    halo.color.a *= 0.42f + 0.48f * pulse + 0.40f * telegraph;
+    halo.blend = VG_BLEND_ADDITIVE;
+    main.intensity *= 0.92f + 0.34f * pulse + 0.32f * telegraph;
+    detail.width_px *= 0.76f;
+    detail.intensity *= 0.82f + 0.52f * pulse + 0.72f * telegraph;
+    {
+        vg_stroke_style aura = halo;
+        const float aura_breath = 1.0f + 0.05f * sinf(e->ai_timer_s * 1.2f + e->visual_phase * 0.7f);
+        const vg_vec2 aura_hull[5] = {
+            {x + fx * (1.42f * rr * aura_breath), y + fy * (1.42f * rr * aura_breath)},
+            {x + nx * (1.22f * rr * aura_breath), y + ny * (1.22f * rr * aura_breath)},
+            {x - fx * (1.42f * rr * aura_breath), y - fy * (1.42f * rr * aura_breath)},
+            {x - nx * (1.22f * rr * aura_breath), y - ny * (1.22f * rr * aura_breath)},
+            {x + fx * (1.42f * rr * aura_breath), y + fy * (1.42f * rr * aura_breath)}
+        };
+        aura.width_px *= 2.45f;
+        aura.intensity *= 0.58f + 0.46f * telegraph;
+        aura.color.a *= 0.34f + 0.22f * pulse;
+        {
+            vg_result r = vg_draw_polyline(ctx, aura_hull, 5, &aura, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+    }
+
+    {
+        const vg_vec2 hull[5] = {
+            {x + fx * (1.12f * rr), y + fy * (1.12f * rr)},
+            {x + nx * (0.94f * rr), y + ny * (0.94f * rr)},
+            {x - fx * (1.12f * rr), y - fy * (1.12f * rr)},
+            {x - nx * (0.94f * rr), y - ny * (0.94f * rr)},
+            {x + fx * (1.12f * rr), y + fy * (1.12f * rr)}
+        };
+        vg_result r = vg_draw_polyline(ctx, hull, 5, &halo, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_draw_polyline(ctx, hull, 5, &main, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+    }
+
+    {
+        const float spin = e->ai_timer_s * 1.35f + e->visual_phase;
+        const float scan = 0.5f + 0.5f * sinf(e->ai_timer_s * 2.1f + e->visual_phase * 0.8f);
+        const float c = cosf(spin);
+        const float s = sinf(spin);
+        const vg_vec2 iris_line[2] = {
+            {x + (fx * c + nx * s) * (rr * iris), y + (fy * c + ny * s) * (rr * iris)},
+            {x - (fx * c + nx * s) * (rr * iris), y - (fy * c + ny * s) * (rr * iris)}
+        };
+        const vg_vec2 cross_line[2] = {
+            {x + (fx * (-s) + nx * c) * (rr * iris * 0.82f), y + (fy * (-s) + ny * c) * (rr * iris * 0.82f)},
+            {x - (fx * (-s) + nx * c) * (rr * iris * 0.82f), y - (fy * (-s) + ny * c) * (rr * iris * 0.82f)}
+        };
+        vg_result r = vg_draw_polyline(ctx, iris_line, 2, &detail, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_draw_polyline(ctx, cross_line, 2, &detail, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        {
+            const float panel_off = lerpf(-0.54f, 0.54f, scan);
+            const vg_vec2 panel_l[2] = {
+                {x - fx * (0.82f * rr) + nx * (panel_off * rr), y - fy * (0.82f * rr) + ny * (panel_off * rr)},
+                {x + fx * (0.82f * rr) + nx * ((panel_off - 0.14f) * rr), y + fy * (0.82f * rr) + ny * ((panel_off - 0.14f) * rr)}
+            };
+            const vg_vec2 panel_r[2] = {
+                {x - fx * (0.82f * rr) - nx * (panel_off * rr), y - fy * (0.82f * rr) - ny * (panel_off * rr)},
+                {x + fx * (0.82f * rr) - nx * ((panel_off - 0.14f) * rr), y + fy * (0.82f * rr) - ny * ((panel_off - 0.14f) * rr)}
+            };
+            const vg_vec2 brace_l[3] = {
+                {x - fx * (0.22f * rr) + nx * (0.66f * rr), y - fy * (0.22f * rr) + ny * (0.66f * rr)},
+                {x + nx * (0.36f * rr), y + ny * (0.36f * rr)},
+                {x + fx * (0.22f * rr) + nx * (0.66f * rr), y + fy * (0.22f * rr) + ny * (0.66f * rr)}
+            };
+            const vg_vec2 brace_r[3] = {
+                {x - fx * (0.22f * rr) - nx * (0.66f * rr), y - fy * (0.22f * rr) - ny * (0.66f * rr)},
+                {x - nx * (0.36f * rr), y - ny * (0.36f * rr)},
+                {x + fx * (0.22f * rr) - nx * (0.66f * rr), y + fy * (0.22f * rr) - ny * (0.66f * rr)}
+            };
+            r = vg_draw_polyline(ctx, brace_l, 3, &detail, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_draw_polyline(ctx, panel_l, 2, &detail, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_draw_polyline(ctx, panel_r, 2, &detail, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_draw_polyline(ctx, brace_r, 3, &detail, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+    }
+
+    {
+        const vg_vec2 spine[3] = {
+            {x - fx * (0.54f * rr), y - fy * (0.54f * rr)},
+            {x, y},
+            {x + fx * (0.54f * rr), y + fy * (0.54f * rr)}
+        };
+        vg_result r = vg_draw_polyline(ctx, spine, 3, &detail, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        if (telegraph > 0.05f) {
+            const float flare = telegraph * telegraph;
+            const vg_vec2 charge[2] = {
+                {x + fx * (0.12f * rr), y + fy * (0.12f * rr)},
+                {x + fx * ((1.30f + 0.18f * flare) * rr), y + fy * ((1.30f + 0.18f * flare) * rr)}
+            };
+            return vg_draw_polyline(ctx, charge, 2, &halo, 0);
+        }
+        return VG_OK;
+    }
+}
+
+static vg_result draw_enemy_glyph_boss_plate(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
+    float fx = 0.0f;
+    float fy = 0.0f;
+    float nx = 0.0f;
+    float ny = 0.0f;
+    const float charge = 0.5f + 0.5f * sinf(e->ai_timer_s * 0.9f + e->visual_phase);
+    vg_stroke_style halo = *enemy_style;
+    vg_stroke_style main = *enemy_style;
+    vg_stroke_style crack = *enemy_style;
+    enemy_glyph_basis(e, &fx, &fy, &nx, &ny);
+    halo.width_px *= 1.45f;
+    halo.intensity *= 0.24f + 0.20f * charge;
+    halo.color.a *= 0.42f;
+    halo.blend = VG_BLEND_ADDITIVE;
+    crack.width_px *= 0.72f;
+    crack.intensity *= 0.70f + 0.34f * charge;
+    {
+        vg_stroke_style aura = halo;
+        const float scan = 0.5f + 0.5f * sinf(e->ai_timer_s * 1.1f + e->visual_phase);
+        const vg_vec2 aura_plate[6] = {
+            {x + fx * (1.34f * rr), y + fy * (1.34f * rr)},
+            {x + fx * (0.22f * rr) + nx * (1.08f * rr), y + fy * (0.22f * rr) + ny * (1.08f * rr)},
+            {x - fx * (1.10f * rr) + nx * (0.64f * rr), y - fy * (1.10f * rr) + ny * (0.64f * rr)},
+            {x - fx * (1.22f * rr) - nx * (0.64f * rr), y - fy * (1.22f * rr) - ny * (0.64f * rr)},
+            {x + fx * (0.22f * rr) - nx * (1.08f * rr), y + fy * (0.22f * rr) - ny * (1.08f * rr)},
+            {x + fx * (1.34f * rr), y + fy * (1.34f * rr)}
+        };
+        aura.width_px *= 2.0f;
+        aura.intensity *= 0.42f + 0.20f * scan;
+        aura.color.a *= 0.20f + 0.10f * scan;
+        {
+            vg_result r = vg_draw_polyline(ctx, aura_plate, 6, &aura, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+    }
+
+    {
+        const vg_vec2 plate[6] = {
+            {x + fx * (1.10f * rr), y + fy * (1.10f * rr)},
+            {x + fx * (0.18f * rr) + nx * (0.88f * rr), y + fy * (0.18f * rr) + ny * (0.88f * rr)},
+            {x - fx * (0.94f * rr) + nx * (0.52f * rr), y - fy * (0.94f * rr) + ny * (0.52f * rr)},
+            {x - fx * (1.06f * rr) - nx * (0.52f * rr), y - fy * (1.06f * rr) - ny * (0.52f * rr)},
+            {x + fx * (0.18f * rr) - nx * (0.88f * rr), y + fy * (0.18f * rr) - ny * (0.88f * rr)},
+            {x + fx * (1.10f * rr), y + fy * (1.10f * rr)}
+        };
+        vg_result r = vg_draw_polyline(ctx, plate, 6, &halo, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_draw_polyline(ctx, plate, 6, &main, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+    }
+
+    {
+        const float scan = 0.5f + 0.5f * sinf(e->ai_timer_s * 1.8f + e->visual_phase * 1.3f);
+        const vg_vec2 chevron[3] = {
+            {x + fx * (0.56f * rr) + nx * (0.28f * rr), y + fy * (0.56f * rr) + ny * (0.28f * rr)},
+            {x + fx * (0.10f * rr), y + fy * (0.10f * rr)},
+            {x + fx * (0.56f * rr) - nx * (0.28f * rr), y + fy * (0.56f * rr) - ny * (0.28f * rr)}
+        };
+        const vg_vec2 crack_line[3] = {
+            {x - fx * (0.12f * rr) + nx * (0.34f * rr), y - fy * (0.12f * rr) + ny * (0.34f * rr)},
+            {x - fx * (0.42f * rr), y - fy * (0.42f * rr)},
+            {x - fx * (0.76f * rr) - nx * (0.22f * rr), y - fy * (0.76f * rr) - ny * (0.22f * rr)}
+        };
+        vg_result r = vg_draw_polyline(ctx, chevron, 3, &crack, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_draw_polyline(ctx, crack_line, 3, &crack, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        {
+            const float seam_off = lerpf(-0.26f, 0.26f, scan);
+            const vg_vec2 seam[2] = {
+                {x - fx * (0.74f * rr) + nx * (seam_off * rr), y - fy * (0.74f * rr) + ny * (seam_off * rr)},
+                {x + fx * (0.78f * rr) + nx * ((seam_off + 0.08f) * rr), y + fy * (0.78f * rr) + ny * ((seam_off + 0.08f) * rr)}
+            };
+            const vg_vec2 rim[2] = {
+                {x - fx * (0.08f * rr) + nx * (0.64f * rr), y - fy * (0.08f * rr) + ny * (0.64f * rr)},
+                {x - fx * (0.08f * rr) - nx * (0.64f * rr), y - fy * (0.08f * rr) - ny * (0.64f * rr)}
+            };
+            r = vg_draw_polyline(ctx, seam, 2, &crack, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            return vg_draw_polyline(ctx, rim, 2, &crack, 0);
+        }
+    }
+}
+
+static vg_result draw_enemy_glyph_boss_joint(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
+    float fx = 0.0f;
+    float fy = 0.0f;
+    float nx = 0.0f;
+    float ny = 0.0f;
+    const float pulse = 0.5f + 0.5f * sinf(e->ai_timer_s * 2.4f + e->visual_phase);
+    const float telegraph = clampf(e->boss_telegraph, 0.0f, 1.0f);
+    vg_stroke_style halo = *enemy_style;
+    vg_stroke_style main = *enemy_style;
+    vg_stroke_style detail = *enemy_style;
+    enemy_glyph_basis(e, &fx, &fy, &nx, &ny);
+    halo.width_px *= 1.52f;
+    halo.intensity *= 0.28f + 0.46f * pulse + 0.88f * telegraph;
+    halo.color.a *= 0.34f + 0.44f * pulse + 0.34f * telegraph;
+    halo.blend = VG_BLEND_ADDITIVE;
+    detail.width_px *= 0.72f;
+    detail.intensity *= 0.74f + 0.30f * pulse + 0.58f * telegraph;
+    {
+        vg_stroke_style aura = halo;
+        const vg_vec2 outer_ring[9] = {
+            {x + fx * (1.04f * rr), y + fy * (1.04f * rr)},
+            {x + fx * (0.74f * rr) + nx * (0.74f * rr), y + fy * (0.74f * rr) + ny * (0.74f * rr)},
+            {x + nx * (1.04f * rr), y + ny * (1.04f * rr)},
+            {x - fx * (0.74f * rr) + nx * (0.74f * rr), y - fy * (0.74f * rr) + ny * (0.74f * rr)},
+            {x - fx * (1.04f * rr), y - fy * (1.04f * rr)},
+            {x - fx * (0.74f * rr) - nx * (0.74f * rr), y - fy * (0.74f * rr) - ny * (0.74f * rr)},
+            {x - nx * (1.04f * rr), y - ny * (1.04f * rr)},
+            {x + fx * (0.74f * rr) - nx * (0.74f * rr), y + fy * (0.74f * rr) - ny * (0.74f * rr)},
+            {x + fx * (1.04f * rr), y + fy * (1.04f * rr)}
+        };
+        aura.width_px *= 1.9f;
+        aura.intensity *= 0.40f;
+        aura.color.a *= 0.18f;
+        {
+            vg_result r = vg_draw_polyline(ctx, outer_ring, 9, &aura, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+    }
+
+    {
+        const vg_vec2 ring[9] = {
+            {x + fx * (0.82f * rr), y + fy * (0.82f * rr)},
+            {x + fx * (0.58f * rr) + nx * (0.58f * rr), y + fy * (0.58f * rr) + ny * (0.58f * rr)},
+            {x + nx * (0.82f * rr), y + ny * (0.82f * rr)},
+            {x - fx * (0.58f * rr) + nx * (0.58f * rr), y - fy * (0.58f * rr) + ny * (0.58f * rr)},
+            {x - fx * (0.82f * rr), y - fy * (0.82f * rr)},
+            {x - fx * (0.58f * rr) - nx * (0.58f * rr), y - fy * (0.58f * rr) - ny * (0.58f * rr)},
+            {x - nx * (0.82f * rr), y - ny * (0.82f * rr)},
+            {x + fx * (0.58f * rr) - nx * (0.58f * rr), y + fy * (0.58f * rr) - ny * (0.58f * rr)},
+            {x + fx * (0.82f * rr), y + fy * (0.82f * rr)}
+        };
+        vg_result r = vg_draw_polyline(ctx, ring, 9, &halo, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_draw_polyline(ctx, ring, 9, &main, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+    }
+
+    {
+        const vg_vec2 axis0[2] = {
+            {x - fx * (0.48f * rr), y - fy * (0.48f * rr)},
+            {x + fx * (0.48f * rr), y + fy * (0.48f * rr)}
+        };
+        const vg_vec2 axis1[2] = {
+            {x - nx * (0.48f * rr), y - ny * (0.48f * rr)},
+            {x + nx * (0.48f * rr), y + ny * (0.48f * rr)}
+        };
+        vg_result r = vg_draw_polyline(ctx, axis0, 2, &detail, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_draw_polyline(ctx, axis1, 2, &detail, 0);
+        if (r != VG_OK) {
+            return r;
+        }
+        if (telegraph > 0.05f) {
+            const float flare = 0.36f + 0.30f * telegraph;
+            const vg_vec2 charge[2] = {
+                {x - nx * (flare * rr), y - ny * (flare * rr)},
+                {x + nx * (flare * rr), y + ny * (flare * rr)}
+            };
+            return vg_draw_polyline(ctx, charge, 2, &halo, 0);
+        }
+        return VG_OK;
+    }
+}
+
+static vg_result draw_enemy_glyph_boss_turret(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
+    float fx = 0.0f;
+    float fy = 0.0f;
+    float nx = 0.0f;
+    float ny = 0.0f;
+    const float pulse = 0.5f + 0.5f * sinf(e->ai_timer_s * 3.2f + e->visual_phase);
+    const float telegraph = clampf(e->boss_telegraph, 0.0f, 1.0f);
+    vg_stroke_style halo = *enemy_style;
+    vg_stroke_style main = *enemy_style;
+    vg_stroke_style detail = *enemy_style;
+    enemy_glyph_basis(e, &fx, &fy, &nx, &ny);
+    halo.width_px *= 1.55f;
+    halo.intensity *= 0.28f + 0.52f * pulse + 1.10f * telegraph;
+    halo.color.a *= 0.38f + 0.40f * pulse + 0.42f * telegraph;
+    halo.blend = VG_BLEND_ADDITIVE;
+    detail.width_px *= 0.72f;
+    detail.intensity *= 0.80f + 0.36f * pulse + 0.66f * telegraph;
+    {
+        vg_stroke_style aura = halo;
+        const float aura_breath = 1.0f + 0.04f * sinf(e->ai_timer_s * 1.7f + e->visual_phase);
+        const vg_vec2 aura_body[6] = {
+            {x + fx * (1.16f * rr * aura_breath), y + fy * (1.16f * rr * aura_breath)},
+            {x + fx * (0.22f * rr) + nx * (0.90f * rr * aura_breath), y + fy * (0.22f * rr) + ny * (0.90f * rr * aura_breath)},
+            {x - fx * (0.84f * rr) + nx * (0.62f * rr), y - fy * (0.84f * rr) + ny * (0.62f * rr)},
+            {x - fx * (0.84f * rr) - nx * (0.62f * rr), y - fy * (0.84f * rr) - ny * (0.62f * rr)},
+            {x + fx * (0.22f * rr) - nx * (0.90f * rr * aura_breath), y + fy * (0.22f * rr) - ny * (0.90f * rr * aura_breath)},
+            {x + fx * (1.16f * rr * aura_breath), y + fy * (1.16f * rr * aura_breath)}
+        };
+        aura.width_px *= 2.1f;
+        aura.intensity *= 0.46f;
+        aura.color.a *= 0.24f;
+        {
+            vg_result r = vg_draw_polyline(ctx, aura_body, 6, &aura, 0);
+            if (r != VG_OK) return r;
+        }
+    }
+
+    {
+        const float scan = 0.5f + 0.5f * sinf(e->ai_timer_s * 2.6f + e->visual_phase);
+        const vg_vec2 body[6] = {
+            {x + fx * (0.96f * rr), y + fy * (0.96f * rr)},
+            {x + fx * (0.18f * rr) + nx * (0.68f * rr), y + fy * (0.18f * rr) + ny * (0.68f * rr)},
+            {x - fx * (0.66f * rr) + nx * (0.46f * rr), y - fy * (0.66f * rr) + ny * (0.46f * rr)},
+            {x - fx * (0.66f * rr) - nx * (0.46f * rr), y - fy * (0.66f * rr) - ny * (0.46f * rr)},
+            {x + fx * (0.18f * rr) - nx * (0.68f * rr), y + fy * (0.18f * rr) - ny * (0.68f * rr)},
+            {x + fx * (0.96f * rr), y + fy * (0.96f * rr)}
+        };
+        const vg_vec2 barrel[2] = {
+            {x + fx * (0.26f * rr), y + fy * (0.26f * rr)},
+            {x + fx * (1.46f * rr), y + fy * (1.46f * rr)}
+        };
+        const vg_vec2 panel[2] = {
+            {x - fx * (0.40f * rr) + nx * (lerpf(-0.18f, 0.18f, scan) * rr), y - fy * (0.40f * rr) + ny * (lerpf(-0.18f, 0.18f, scan) * rr)},
+            {x + fx * (0.52f * rr) + nx * (lerpf(-0.06f, 0.24f, scan) * rr), y + fy * (0.52f * rr) + ny * (lerpf(-0.06f, 0.24f, scan) * rr)}
+        };
+        vg_result r = vg_draw_polyline(ctx, body, 6, &halo, 0);
+        if (r != VG_OK) return r;
+        r = vg_draw_polyline(ctx, body, 6, &main, 0);
+        if (r != VG_OK) return r;
+        r = vg_draw_polyline(ctx, barrel, 2, &detail, 0);
+        if (r != VG_OK) return r;
+        r = vg_draw_polyline(ctx, barrel, 2, &halo, 0);
+        if (r != VG_OK) return r;
+        r = vg_draw_polyline(ctx, panel, 2, &detail, 0);
+        if (r != VG_OK) return r;
+        {
+            const vg_vec2 shoulder_l[2] = {
+                {x - fx * (0.08f * rr) + nx * (0.54f * rr), y - fy * (0.08f * rr) + ny * (0.54f * rr)},
+                {x + fx * (0.34f * rr) + nx * (0.28f * rr), y + fy * (0.34f * rr) + ny * (0.28f * rr)}
+            };
+            const vg_vec2 shoulder_r[2] = {
+                {x - fx * (0.08f * rr) - nx * (0.54f * rr), y - fy * (0.08f * rr) - ny * (0.54f * rr)},
+                {x + fx * (0.34f * rr) - nx * (0.28f * rr), y + fy * (0.34f * rr) - ny * (0.28f * rr)}
+            };
+            r = vg_draw_polyline(ctx, shoulder_l, 2, &detail, 0);
+            if (r != VG_OK) return r;
+            r = vg_draw_polyline(ctx, shoulder_r, 2, &detail, 0);
+            if (r != VG_OK) return r;
+        }
+        if (telegraph > 0.05f) {
+            const float flare = telegraph * telegraph;
+            const vg_vec2 muzzle[3] = {
+                {x + fx * ((1.24f + 0.10f * flare) * rr) + nx * (0.18f * rr), y + fy * ((1.24f + 0.10f * flare) * rr) + ny * (0.18f * rr)},
+                {x + fx * ((1.56f + 0.24f * flare) * rr), y + fy * ((1.56f + 0.24f * flare) * rr)},
+                {x + fx * ((1.24f + 0.10f * flare) * rr) - nx * (0.18f * rr), y + fy * ((1.24f + 0.10f * flare) * rr) - ny * (0.18f * rr)}
+            };
+            return vg_draw_polyline(ctx, muzzle, 3, &halo, 0);
+        }
+        return VG_OK;
+    }
+}
+
+static vg_result draw_enemy_glyph_boss_vent(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
+    float fx = 0.0f;
+    float fy = 0.0f;
+    float nx = 0.0f;
+    float ny = 0.0f;
+    const float pulse = 0.5f + 0.5f * sinf(e->ai_timer_s * 4.0f + e->visual_phase);
+    const float telegraph = clampf(e->boss_telegraph, 0.0f, 1.0f);
+    vg_stroke_style halo = *enemy_style;
+    vg_stroke_style main = *enemy_style;
+    vg_stroke_style detail = *enemy_style;
+    enemy_glyph_basis(e, &fx, &fy, &nx, &ny);
+    halo.width_px *= 1.70f;
+    halo.intensity *= 0.20f + 0.64f * pulse + 1.05f * telegraph;
+    halo.color.a *= 0.30f + 0.44f * pulse + 0.44f * telegraph;
+    halo.blend = VG_BLEND_ADDITIVE;
+    detail.width_px *= 0.66f;
+    detail.intensity *= 0.76f + 0.46f * pulse + 0.54f * telegraph;
+    {
+        vg_stroke_style aura = halo;
+        const vg_vec2 aura_shell[5] = {
+            {x + fx * (1.08f * rr), y + fy * (1.08f * rr)},
+            {x + nx * (1.04f * rr), y + ny * (1.04f * rr)},
+            {x - fx * (1.08f * rr), y - fy * (1.08f * rr)},
+            {x - nx * (1.04f * rr), y - ny * (1.04f * rr)},
+            {x + fx * (1.08f * rr), y + fy * (1.08f * rr)}
+        };
+        aura.width_px *= 2.0f;
+        aura.intensity *= 0.42f;
+        aura.color.a *= 0.24f;
+        {
+            vg_result r = vg_draw_polyline(ctx, aura_shell, 5, &aura, 0);
+            if (r != VG_OK) return r;
+        }
+    }
+
+    {
+        const float scan = 0.5f + 0.5f * sinf(e->ai_timer_s * 3.1f + e->visual_phase * 0.9f);
+        const vg_vec2 shell[5] = {
+            {x + fx * (0.88f * rr), y + fy * (0.88f * rr)},
+            {x + nx * (0.82f * rr), y + ny * (0.82f * rr)},
+            {x - fx * (0.88f * rr), y - fy * (0.88f * rr)},
+            {x - nx * (0.82f * rr), y - ny * (0.82f * rr)},
+            {x + fx * (0.88f * rr), y + fy * (0.88f * rr)}
+        };
+        vg_vec2 fins[3][2];
+        vg_polyline_view views[3];
+        vg_result r = vg_draw_polyline(ctx, shell, 5, &halo, 0);
+        if (r != VG_OK) return r;
+        r = vg_draw_polyline(ctx, shell, 5, &main, 0);
+        if (r != VG_OK) return r;
+        for (int i = 0; i < 3; ++i) {
+            const float off = ((float)i - 1.0f) * 0.30f * rr;
+            fins[i][0] = (vg_vec2){x - fx * (0.44f * rr) + nx * off, y - fy * (0.44f * rr) + ny * off};
+            fins[i][1] = (vg_vec2){x + fx * (0.44f * rr) + nx * off, y + fy * (0.44f * rr) + ny * off};
+            views[i] = (vg_polyline_view){.points = fins[i], .count = 2u, .closed = 0};
+        }
+        r = vg_draw_polylines(ctx, views, 3u, &detail);
+        if (r != VG_OK) return r;
+        {
+            const vg_vec2 scan_line[2] = {
+                {x - fx * (0.34f * rr) + nx * (lerpf(-0.26f, 0.26f, scan) * rr), y - fy * (0.34f * rr) + ny * (lerpf(-0.26f, 0.26f, scan) * rr)},
+                {x + fx * (0.34f * rr) + nx * (lerpf(-0.18f, 0.34f, scan) * rr), y + fy * (0.34f * rr) + ny * (lerpf(-0.18f, 0.34f, scan) * rr)}
+            };
+            r = vg_draw_polyline(ctx, scan_line, 2, &detail, 0);
+            if (r != VG_OK) return r;
+        }
+        if (telegraph > 0.05f) {
+            const float flare = telegraph * telegraph;
+            const vg_vec2 vent_arc[3] = {
+                {x - nx * (0.34f * rr), y - ny * (0.34f * rr)},
+                {x + fx * ((0.84f + 0.20f * flare) * rr), y + fy * ((0.84f + 0.20f * flare) * rr)},
+                {x + nx * (0.34f * rr), y + ny * (0.34f * rr)}
+            };
+            return vg_draw_polyline(ctx, vent_arc, 3, &halo, 0);
+        }
+        return VG_OK;
+    }
+}
+
 static vg_result draw_enemy_glyph(vg_context* ctx, const enemy* e, float x, float y, float rr, const vg_stroke_style* enemy_style) {
     switch (e->visual_kind) {
+        case ENEMY_VISUAL_BOSS_CORE:
+            return draw_enemy_glyph_boss_core(ctx, e, x, y, rr, enemy_style);
+        case ENEMY_VISUAL_BOSS_PLATE:
+            return draw_enemy_glyph_boss_plate(ctx, e, x, y, rr, enemy_style);
+        case ENEMY_VISUAL_BOSS_JOINT:
+            return draw_enemy_glyph_boss_joint(ctx, e, x, y, rr, enemy_style);
+        case ENEMY_VISUAL_BOSS_TURRET:
+            return draw_enemy_glyph_boss_turret(ctx, e, x, y, rr, enemy_style);
+        case ENEMY_VISUAL_BOSS_VENT:
+            return draw_enemy_glyph_boss_vent(ctx, e, x, y, rr, enemy_style);
         case ENEMY_VISUAL_PHOENIX:
             return draw_enemy_glyph_phoenix(ctx, e, x, y, rr, enemy_style);
         case ENEMY_VISUAL_BOID_WRAITH:
@@ -9981,6 +10552,115 @@ static vg_result draw_enemy_glyph(vg_context* ctx, const enemy* e, float x, floa
         default:
             return draw_enemy_glyph_default(ctx, e, x, y, rr, enemy_style);
     }
+}
+
+static vg_result draw_boss_connector_struts(
+    vg_context* ctx,
+    const game_state* g,
+    float world_cull_min_x,
+    float world_cull_min_y,
+    float world_cull_max_x,
+    float world_cull_max_y,
+    const vg_stroke_style* enemy_style
+) {
+    vg_stroke_style halo;
+    vg_stroke_style main;
+    if (!ctx || !g || !enemy_style) {
+        return VG_OK;
+    }
+    halo = *enemy_style;
+    main = *enemy_style;
+    halo.width_px *= 1.18f;
+    halo.intensity *= 0.18f;
+    halo.color.a *= 0.18f;
+    halo.blend = VG_BLEND_ADDITIVE;
+    main.width_px *= 0.78f;
+    main.intensity *= 0.40f;
+    main.color.a *= 0.28f;
+
+    for (size_t i = 0; i < MAX_ENEMIES; ++i) {
+        const boss_enemy_attachment* attachment = &g->boss_attachments[i];
+        const enemy* child;
+        const enemy* owner;
+        float dx;
+        float dy;
+        float d;
+        float dir_x;
+        float dir_y;
+        float perp_x;
+        float perp_y;
+        float sign;
+        float bend;
+        vg_vec2 strut[3];
+        vg_result r;
+        if (!attachment->active || attachment->owner_index < 0 || attachment->owner_index >= MAX_ENEMIES) {
+            continue;
+        }
+        if ((int)i == attachment->owner_index) {
+            continue;
+        }
+        child = &g->enemies[i];
+        owner = &g->enemies[attachment->owner_index];
+        if (!child->active || !owner->active) {
+            continue;
+        }
+        dx = child->b.x - owner->b.x;
+        dy = child->b.y - owner->b.y;
+        d = sqrtf(dx * dx + dy * dy);
+        if (d <= 1.0f) {
+            continue;
+        }
+        dir_x = dx / d;
+        dir_y = dy / d;
+        perp_x = -dir_y;
+        perp_y = dir_x;
+        sign = (attachment->local_y >= 0.0f) ? 1.0f : -1.0f;
+        if (fabsf(attachment->local_y) < 4.0f) {
+            sign = (attachment->local_x >= 0.0f) ? 1.0f : -1.0f;
+        }
+        bend = clampf(fabsf(attachment->local_y) * 0.10f, owner->radius * 0.10f, owner->radius * 0.32f);
+        strut[0] = (vg_vec2){
+            owner->b.x + dir_x * (owner->radius * 0.58f),
+            owner->b.y + dir_y * (owner->radius * 0.58f)
+        };
+        strut[2] = (vg_vec2){
+            child->b.x - dir_x * (child->radius * 0.62f),
+            child->b.y - dir_y * (child->radius * 0.62f)
+        };
+        strut[1] = (vg_vec2){
+            lerpf(strut[0].x, strut[2].x, 0.46f) + perp_x * bend * sign,
+            lerpf(strut[0].y, strut[2].y, 0.46f) + perp_y * bend * sign
+        };
+        if (!rects_intersect(
+                fminf(fminf(strut[0].x, strut[1].x), strut[2].x),
+                fminf(fminf(strut[0].y, strut[1].y), strut[2].y),
+                fmaxf(fmaxf(strut[0].x, strut[1].x), strut[2].x),
+                fmaxf(fmaxf(strut[0].y, strut[1].y), strut[2].y),
+                world_cull_min_x,
+                world_cull_min_y,
+                world_cull_max_x,
+                world_cull_max_y)) {
+            continue;
+        }
+        {
+            const float flash = fmaxf(child->boss_telegraph, owner->boss_telegraph);
+            vg_stroke_style halo_local = halo;
+            vg_stroke_style main_local = main;
+            halo_local.intensity *= 1.0f + flash * 1.20f;
+            halo_local.color.a *= 1.0f + flash * 0.80f;
+            main_local.intensity *= 1.0f + flash * 0.55f;
+            main_local.color.a *= 1.0f + flash * 0.30f;
+            r = vg_draw_polyline(ctx, strut, 3, &halo_local, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_draw_polyline(ctx, strut, 3, &main_local, 0);
+            if (r != VG_OK) {
+                return r;
+            }
+        }
+    }
+    return VG_OK;
 }
 
 vg_result render_frame(vg_context* ctx, const game_state* g, const render_metrics* metrics) {
@@ -11401,6 +12081,20 @@ skip_legacy_landscape:
             (void)vg_transform_pop(ctx);
             return r;
         }
+    }
+
+    r = draw_boss_connector_struts(
+        ctx,
+        g,
+        world_cull_min_x,
+        world_cull_min_y,
+        world_cull_max_x,
+        world_cull_max_y,
+        &enemy_style
+    );
+    if (r != VG_OK) {
+        (void)vg_transform_pop(ctx);
+        return r;
     }
 
     for (size_t i = 0; i < MAX_ENEMIES; ++i) {

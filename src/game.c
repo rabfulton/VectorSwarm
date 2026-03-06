@@ -1,4 +1,5 @@
 #include "game.h"
+#include "boss.h"
 #include "enemy.h"
 #include "leveldef.h"
 #include "death_teletype_messages.h"
@@ -2037,6 +2038,20 @@ static int level_uses_cylinder(const game_state* g) {
     return g && g->render_style == LEVEL_RENDER_CYLINDER;
 }
 
+static int level_count_gating_boss_markers(const leveldef_level* lvl) {
+    int count = 0;
+    if (!lvl) {
+        return 0;
+    }
+    for (int i = 0; i < lvl->curated_count; ++i) {
+        const leveldef_curated_enemy* ce = &lvl->curated[i];
+        if (ce->kind == 20 && ce->e > 0.5f) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
 static void configure_exit_portal_for_level(game_state* g) {
     const leveldef_level* lvl;
     const float su = gameplay_ui_scale(g);
@@ -2047,6 +2062,8 @@ static void configure_exit_portal_for_level(game_state* g) {
     g->exit_portal_x = 0.0f;
     g->exit_portal_y = 0.0f;
     g->exit_portal_radius = 26.0f * su;
+    g->exit_requires_boss_defeated = 0;
+    g->gating_bosses_remaining = 0;
     if (level_uses_cylinder(g)) {
         return;
     }
@@ -2059,6 +2076,8 @@ static void configure_exit_portal_for_level(game_state* g) {
     g->exit_portal_x = g->world_w * lvl->exit_x01;
     g->exit_portal_y = g->world_h * lvl->exit_y01;
     g->exit_portal_radius = 28.0f * su;
+    g->exit_requires_boss_defeated = lvl->exit_requires_boss_defeated ? 1 : 0;
+    g->gating_bosses_remaining = g->exit_requires_boss_defeated ? level_count_gating_boss_markers(lvl) : 0;
 }
 
 static void apply_level_runtime_config(game_state* g) {
@@ -2551,6 +2570,34 @@ static enemy_bullet* spawn_enemy_bullet_at(
     return NULL;
 }
 
+int game_spawn_enemy_bullet(
+    game_state* g,
+    float x,
+    float y,
+    float dir_x,
+    float dir_y,
+    float speed,
+    float ttl_s,
+    float radius
+) {
+    enemy_bullet* b;
+    const float d2 = dir_x * dir_x + dir_y * dir_y;
+    if (!g || d2 <= 1.0e-6f || speed <= 0.0f || ttl_s <= 0.0f || radius <= 0.0f) {
+        return 0;
+    }
+    {
+        const float inv_d = 1.0f / sqrtf(d2);
+        dir_x *= inv_d;
+        dir_y *= inv_d;
+    }
+    b = spawn_enemy_bullet_at(g, x, y, dir_x, dir_y, speed, ttl_s, radius);
+    if (!b) {
+        return 0;
+    }
+    g->fire_sfx_pending += 1;
+    return 1;
+}
+
 void game_init(game_state* g, float world_w, float world_h) {
     memset(g, 0, sizeof(*g));
     g->world_w = world_w;
@@ -2732,6 +2779,9 @@ static int game_update_player(game_state* g, float dt, const game_input* in, flo
     if (g->exit_portal_active &&
         dist_sq(g->player.b.x, g->player.b.y, g->exit_portal_x, g->exit_portal_y) <=
             g->exit_portal_radius * g->exit_portal_radius) {
+        if (g->exit_requires_boss_defeated && g->gating_bosses_remaining > 0) {
+            return 0;
+        }
         game_cycle_level(g);
         return 1;
     }
@@ -2881,6 +2931,9 @@ static void game_update_wave_spawning(game_state* g, float dt) {
         return;
     }
     if (lvl->wave_mode == LEVELDEF_WAVES_CURATED) {
+        if (boss_any_controller_alive(g)) {
+            return;
+        }
         const float activate_min_x = g->camera_x + g->world_w * 0.05f;
         const float activate_x = g->camera_x + g->world_w * 1.18f;
         for (int i = 0; i < lvl->curated_count && i < MAX_CURATED_RUNTIME; ++i) {
@@ -2905,6 +2958,9 @@ static void game_update_wave_spawning(game_state* g, float dt) {
                 g->curated_spawned_count += 1;
             }
         }
+        return;
+    }
+    if (boss_any_controller_alive(g)) {
         return;
     }
     if (g->auto_event_mode && lvl->event_count > 0) {

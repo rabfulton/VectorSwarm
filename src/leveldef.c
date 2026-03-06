@@ -1,4 +1,5 @@
 #include "leveldef.h"
+#include "boss.h"
 
 #include <dirent.h>
 #include <ctype.h>
@@ -135,6 +136,7 @@ static int curated_kind_from_name(const char* name) {
     if (strcmp(name, "jelly_swarm") == 0 || strcmp(name, "jelly") == 0) return 15;
     if (strcmp(name, "manta_wing") == 0 || strcmp(name, "manta") == 0 || strcmp(name, "manta_ray") == 0) return 16;
     if (strcmp(name, "eel_swarm") == 0 || strcmp(name, "eel") == 0 || strcmp(name, "electric_eel") == 0) return 17;
+    if (strcmp(name, "boss_controller") == 0 || strcmp(name, "boss") == 0 || strcmp(name, "midboss") == 0) return 20;
     return -1;
 }
 
@@ -488,6 +490,7 @@ void leveldef_init_defaults(leveldef_db* db) {
         b->exit_enabled = 0;
         b->exit_x01 = 2.0f;
         b->exit_y01 = 0.5f;
+        b->exit_requires_boss_defeated = 0;
         b->asteroid_storm_enabled = 0;
         b->asteroid_storm_start_x01 = 0.0f;
         b->asteroid_storm_angle_deg = 30.0f;
@@ -1207,6 +1210,8 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_level->exit_x01 = strtof(v, NULL);
                     } else if (strcmp(k, "exit_y01") == 0) {
                         cur_level->exit_y01 = strtof(v, NULL);
+                    } else if (strcmp(k, "exit_requires_boss_defeated") == 0) {
+                        cur_level->exit_requires_boss_defeated = atoi(v) ? 1 : 0;
                     } else if (strcmp(k, "asteroid_storm_enabled") == 0) {
                         cur_level->asteroid_storm_enabled = atoi(v) ? 1 : 0;
                     } else if (strcmp(k, "asteroid_storm_start_x01") == 0) {
@@ -1723,6 +1728,45 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
                     ok = 0;
                     break;
                 }
+            }
+        }
+        for (int j = 0; j < l->curated_count; ++j) {
+            const leveldef_curated_enemy* ce = &l->curated[j];
+            if (ce->kind == 20) {
+                const int boss_id = (int)lroundf(ce->a);
+                if (!boss_is_valid_blueprint_id(boss_id)) {
+                    if (log_out) {
+                        fprintf(log_out, "leveldef: level %d has unknown curated boss id %d\n", i, boss_id);
+                    }
+                    ok = 0;
+                }
+                if (!isfinite(ce->b)) {
+                    if (log_out) {
+                        fprintf(log_out, "leveldef: level %d has invalid curated boss seed\n", i);
+                    }
+                    ok = 0;
+                }
+                if (!isfinite(ce->c) || ce->c < 0.25f || ce->c > 4.0f) {
+                    if (log_out) {
+                        fprintf(log_out, "leveldef: level %d has invalid curated boss difficulty scale\n", i);
+                    }
+                    ok = 0;
+                }
+            }
+        }
+        if (l->exit_requires_boss_defeated) {
+            int gating_boss_count = 0;
+            for (int j = 0; j < l->curated_count; ++j) {
+                const leveldef_curated_enemy* ce = &l->curated[j];
+                if (ce->kind == 20 && ce->e > 0.5f) {
+                    gating_boss_count += 1;
+                }
+            }
+            if (gating_boss_count <= 0) {
+                if (log_out) {
+                    fprintf(log_out, "leveldef: level %d requires boss-defeated exit but defines no gating boss markers\n", i);
+                }
+                ok = 0;
             }
         }
         if (l->event_count > 0) {

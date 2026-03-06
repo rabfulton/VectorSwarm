@@ -265,14 +265,14 @@ typedef struct leveldef_wave_kamikaze_tuning {
 } leveldef_wave_kamikaze_tuning;
 
 typedef struct leveldef_curated_enemy {
-    int kind; /* level editor marker kind: 2=sine,3=v,4=kamikaze,5=boid,10/11/12=swarm variants,15=jelly_swarm,16=manta_wing,17=eel_swarm */
+    int kind; /* level editor marker kind: 2=sine,3=v,4=kamikaze,5=boid,10/11/12=swarm variants,15=jelly_swarm,16=manta_wing,17=eel_swarm,20=boss_controller */
     float x01; /* in screens (same unit as exit_x01) */
     float y01; /* 0..1 on screen */
     float a;
     float b;
     float c;
-    float d; /* optional extra parameter (kamikaze/boid_* style, jelly/eel size scale) */
-    float e; /* optional extra parameter (boid_* uses this as size scale) */
+    float d; /* optional extra parameter (kamikaze/boid_* style, jelly/eel size scale, boss variant id) */
+    float e; /* optional extra parameter (boid_* uses this as size scale, boss uses this as gates_exit bool) */
 } leveldef_curated_enemy;
 
 typedef struct leveldef_curated_formation_tuning {
@@ -389,6 +389,7 @@ typedef struct leveldef_level {
     int exit_enabled;
     float exit_x01;
     float exit_y01;
+    int exit_requires_boss_defeated;
     int asteroid_storm_enabled;
     float asteroid_storm_start_x01;
     float asteroid_storm_angle_deg;

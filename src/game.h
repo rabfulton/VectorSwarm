@@ -61,7 +61,28 @@ enum enemy_visual_kind {
     ENEMY_VISUAL_BOID_RAZOR = 5,
     ENEMY_VISUAL_BOID_LANTERN = 6,
     ENEMY_VISUAL_BOID_SHARD = 7,
-    ENEMY_VISUAL_BOID_WRAITH = 8
+    ENEMY_VISUAL_BOID_WRAITH = 8,
+    ENEMY_VISUAL_BOSS_CORE = 9,
+    ENEMY_VISUAL_BOSS_PLATE = 10,
+    ENEMY_VISUAL_BOSS_JOINT = 11,
+    ENEMY_VISUAL_BOSS_TURRET = 12,
+    ENEMY_VISUAL_BOSS_VENT = 13
+};
+
+enum boss_part_role {
+    BOSS_PART_ROLE_NONE = 0,
+    BOSS_PART_ROLE_CONTROLLER = 1,
+    BOSS_PART_ROLE_CORE = 2,
+    BOSS_PART_ROLE_ARMOR = 3,
+    BOSS_PART_ROLE_JOINT = 4,
+    BOSS_PART_ROLE_TURRET = 5,
+    BOSS_PART_ROLE_VENT = 6
+};
+
+enum boss_enemy_flags {
+    BOSS_ENEMY_FLAG_INVULNERABLE = 1 << 0,
+    BOSS_ENEMY_FLAG_NO_CONTACT_DAMAGE = 1 << 1,
+    BOSS_ENEMY_FLAG_WEAKPOINT = 1 << 2
 };
 
 typedef enum kamikaze_style_id {
@@ -163,6 +184,7 @@ typedef struct enemy {
     float visual_phase;
     float visual_param_a;
     float visual_param_b;
+    float boss_telegraph;
     float emp_push_ax;
     float emp_push_ay;
     float emp_push_time_s;
@@ -374,6 +396,7 @@ typedef struct eel_arc_effect {
     int owner_index;
     int owner_wave_id;
     int owner_slot_index;
+    int omnidirectional;
     uint32_t seed;
     float start_u;
     float base_angle;
@@ -407,6 +430,61 @@ typedef struct arc_node_runtime {
     float sound_timer_s;
     int energized_prev;
 } arc_node_runtime;
+
+typedef struct boss_enemy_attachment {
+    int active;
+    int owner_index;
+    int role;
+    int flags;
+    int hp_max;
+    int emitter_count;
+    float local_x;
+    float local_y;
+    float local_rot;
+    float emitter_local_x[2];
+    float emitter_local_y[2];
+    float emitter_cooldown_s[2];
+} boss_enemy_attachment;
+
+typedef struct boss_controller_runtime {
+    int active;
+    int boss_id;
+    uint32_t seed;
+    int phase;
+    int live_part_count;
+    int burst_shots_left;
+    int attack_index;
+    int gates_exit;
+    int destruction_active;
+    int telegraph_active;
+    int telegraph_kind;
+    int telegraph_part_index;
+    int telegraph_emitter_index;
+    int movement_mode;
+    float anchor_x;
+    float anchor_y;
+    float sway_phase_s;
+    float sway_amp_x;
+    float sway_amp_y;
+    float sway_speed;
+    float roll_amp_rad;
+    float bounds_radius;
+    float difficulty_scale;
+    float phase_time_s;
+    float attack_cooldown_s;
+    float burst_gap_s;
+    float telegraph_time_s;
+    float telegraph_total_s;
+    float movement_timer_s;
+    float movement_cooldown_s;
+    float behind_timer_s;
+    float lightning_cooldown_s;
+    float support_cooldown_s;
+    float movement_target_x;
+    float movement_target_y;
+    float destruction_time_s;
+    float detonation_timer_s;
+} boss_controller_runtime;
 
 typedef struct game_input {
     int left;
@@ -494,12 +572,16 @@ typedef struct game_state {
     int powerup_count;
     eel_arc_effect eel_arcs[MAX_EEL_ARCS];
     int eel_arc_count;
+    boss_enemy_attachment boss_attachments[MAX_ENEMIES];
+    boss_controller_runtime boss_controllers[MAX_ENEMIES];
     int powerup_magnet_active;
     float powerup_drop_credit; /* Smooths drop cadence while preserving average drop chance. */
     int exit_portal_active;
     float exit_portal_x;
     float exit_portal_y;
     float exit_portal_radius;
+    int exit_requires_boss_defeated;
+    int gating_bosses_remaining;
     float shield_time_remaining_s;
     int shield_active;
     int lightning_active;
@@ -562,6 +644,16 @@ void game_structure_avoidance_vector(
 );
 int game_line_of_sight_clear(const game_state* g, float x0, float y0, float x1, float y1, float radius);
 int game_structure_segment_blocked(const game_state* g, float x0, float y0, float x1, float y1, float pad_radius);
+int game_spawn_enemy_bullet(
+    game_state* g,
+    float x,
+    float y,
+    float dir_x,
+    float dir_y,
+    float speed,
+    float ttl_s,
+    float radius
+);
 int game_spawn_enemy_missile(
     game_state* g,
     float x,

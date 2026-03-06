@@ -237,6 +237,7 @@ static void vg_crt_from_retro(vg_crt_profile* crt, const vg_retro_params* retro)
 static const uint8_t vg_glyph_space[] = {VG_FONT_LAST};
 static const uint8_t vg_glyph_dot[] = {VG_FONT_POINT(3, 0), VG_FONT_POINT(4, 0), VG_FONT_LAST};
 static const uint8_t vg_glyph_comma[] = {VG_FONT_POINT(2, 0), VG_FONT_POINT(4, 2), VG_FONT_LAST};
+static const uint8_t vg_glyph_apostrophe[] = {VG_FONT_POINT(5, 12), VG_FONT_POINT(3, 9), VG_FONT_LAST};
 static const uint8_t vg_glyph_dash[] = {VG_FONT_POINT(2, 6), VG_FONT_POINT(6, 6), VG_FONT_LAST};
 static const uint8_t vg_glyph_plus[] = {VG_FONT_POINT(1, 6), VG_FONT_POINT(7, 6), VG_FONT_UP, VG_FONT_POINT(4, 9), VG_FONT_POINT(4, 3), VG_FONT_LAST};
 static const uint8_t vg_glyph_colon[] = {VG_FONT_POINT(4, 9), VG_FONT_POINT(4, 7), VG_FONT_UP, VG_FONT_POINT(4, 5), VG_FONT_POINT(4, 3), VG_FONT_LAST};
@@ -298,6 +299,8 @@ static const uint8_t* vg_lookup_glyph(char c) {
             return vg_glyph_dot;
         case ',':
             return vg_glyph_comma;
+        case '\'':
+            return vg_glyph_apostrophe;
         case '-':
             return vg_glyph_dash;
         case '+':

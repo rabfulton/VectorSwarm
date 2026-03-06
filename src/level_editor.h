@@ -23,6 +23,7 @@ enum level_editor_marker_kind {
     LEVEL_EDITOR_MARKER_JELLY_SWARM = 15,
     LEVEL_EDITOR_MARKER_MANTA_WING = 16,
     LEVEL_EDITOR_MARKER_EEL_SWARM = 17,
+    LEVEL_EDITOR_MARKER_BOSS = 20,
     LEVEL_EDITOR_MARKER_ASTEROID_STORM = 6,
     LEVEL_EDITOR_MARKER_MINEFIELD = 7,
     LEVEL_EDITOR_MARKER_MISSILE = 8,
@@ -70,6 +71,7 @@ typedef struct level_editor_layout {
     vg_rect prev_button;
     vg_rect next_button;
     vg_rect swarm_button;
+    vg_rect boss_button;
     vg_rect watcher_button;
     vg_rect asteroid_button;
     vg_rect mine_button;
