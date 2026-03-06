@@ -440,9 +440,9 @@ static int count_selected_properties(level_editor_state* s) {
     if (!s) {
         return 0;
     }
-    s->selected_property = 0;
+    s->selected_property = LEVEL_EDITOR_PROP_FIRST;
     level_editor_select_property(s, 1);
-    while (s->selected_property != 0 && n < 64) {
+    while (s->selected_property != LEVEL_EDITOR_PROP_FIRST && n < 64) {
         n += 1;
         level_editor_select_property(s, 1);
     }
@@ -460,7 +460,7 @@ static int verify_curated_property_adjustments(void) {
     editor.level_wave_mode = LEVELDEF_WAVES_CURATED;
     editor.marker_count = 1;
     editor.selected_marker = 0;
-    editor.selected_property = 0;
+    editor.selected_property = LEVEL_EDITOR_WAVE_PROP_TYPE;
 
     m = &editor.markers[0];
     memset(m, 0, sizeof(*m));
@@ -476,13 +476,13 @@ static int verify_curated_property_adjustments(void) {
         fprintf(stderr, "roundtrip: curated sine property count mismatch\n");
         return 0;
     }
-    editor.selected_property = 7;
+    editor.selected_property = LEVEL_EDITOR_WAVE_SINE_PROP_FORMATION_FIRE_PROB_MUL;
     level_editor_adjust_selected_property(&editor, 1.0f);
     if (fabsf(editor.level_curated_combat.formation.fire_prob_mul - 1.05f) > 1.0e-6f) {
         fprintf(stderr, "roundtrip: sine fire_prob multiplier mapping failed\n");
         return 0;
     }
-    editor.selected_property = 9;
+    editor.selected_property = LEVEL_EDITOR_WAVE_SINE_PROP_FORMATION_SHOT_COUNT;
     level_editor_adjust_selected_property(&editor, 1.0f);
     if (editor.level_curated_combat.formation.shot_count != 1) {
         fprintf(stderr, "roundtrip: sine shot_count mapping failed\n");
@@ -494,20 +494,20 @@ static int verify_curated_property_adjustments(void) {
         fprintf(stderr, "roundtrip: curated swarm property count mismatch\n");
         return 0;
     }
-    editor.selected_property = 7;
+    editor.selected_property = LEVEL_EDITOR_BOID_PROP_SIZE_SCALE;
     m->e = 1.0f;
     level_editor_adjust_selected_property(&editor, 1.0f);
     if (fabsf(m->e - 1.05f) > 1.0e-6f) {
         fprintf(stderr, "roundtrip: swarm size-scale mapping failed\n");
         return 0;
     }
-    editor.selected_property = 9;
+    editor.selected_property = LEVEL_EDITOR_BOID_PROP_SWARM_FIRE_PROB_MUL;
     level_editor_adjust_selected_property(&editor, 1.0f);
     if (fabsf(editor.level_curated_combat.swarm.fire_prob_mul - 1.05f) > 1.0e-6f) {
         fprintf(stderr, "roundtrip: swarm fire_prob multiplier mapping failed\n");
         return 0;
     }
-    editor.selected_property = 12;
+    editor.selected_property = LEVEL_EDITOR_BOID_PROP_SWARM_SHOT_COUNT;
     level_editor_adjust_selected_property(&editor, 1.0f);
     if (editor.level_curated_combat.swarm.shot_count != 1) {
         fprintf(stderr, "roundtrip: swarm shot_count mapping failed\n");
@@ -519,7 +519,7 @@ static int verify_curated_property_adjustments(void) {
         fprintf(stderr, "roundtrip: curated kamikaze property count mismatch\n");
         return 0;
     }
-    editor.selected_property = 10;
+    editor.selected_property = LEVEL_EDITOR_WAVE_KAMIKAZE_PROP_FIRE_PROB_MUL;
     level_editor_adjust_selected_property(&editor, 1.0f);
     if (fabsf(editor.level_curated_combat.kamikaze.fire_prob_mul - 1.05f) > 1.0e-6f) {
         fprintf(stderr, "roundtrip: kamikaze fire_prob multiplier mapping failed\n");
@@ -531,7 +531,7 @@ static int verify_curated_property_adjustments(void) {
         fprintf(stderr, "roundtrip: curated manta property count mismatch\n");
         return 0;
     }
-    editor.selected_property = 8;
+    editor.selected_property = LEVEL_EDITOR_MANTA_WING_PROP_MISSILE_COUNT_BONUS;
     level_editor_adjust_selected_property(&editor, 1.0f);
     if (editor.level_curated_combat.manta.missile_count_bonus != 1) {
         fprintf(stderr, "roundtrip: manta missile bonus mapping failed\n");
@@ -543,7 +543,7 @@ static int verify_curated_property_adjustments(void) {
         fprintf(stderr, "roundtrip: curated eel property count mismatch\n");
         return 0;
     }
-    editor.selected_property = 9;
+    editor.selected_property = LEVEL_EDITOR_EEL_SWARM_PROP_ARC_FIRE_RATE_MUL;
     level_editor_adjust_selected_property(&editor, 1.0f);
     if (fabsf(editor.level_curated_combat.eel.arc_fire_rate_mul - 1.05f) > 1.0e-6f) {
         fprintf(stderr, "roundtrip: eel arc rate multiplier mapping failed\n");
@@ -561,7 +561,7 @@ static int verify_wave_type_remap_semantics(void) {
     editor.level_wave_mode = LEVELDEF_WAVES_CURATED;
     editor.marker_count = 1;
     editor.selected_marker = 0;
-    editor.selected_property = 0;
+    editor.selected_property = LEVEL_EDITOR_WAVE_PROP_TYPE;
 
     m = &editor.markers[0];
     memset(m, 0, sizeof(*m));
@@ -724,7 +724,7 @@ static int verify_level_semantic_roundtrip(const leveldef_db* db) {
     editor.level_wave_mode = LEVELDEF_WAVES_CURATED;
     editor.marker_count = 1;
     editor.selected_marker = 0;
-    editor.selected_property = 0;
+    editor.selected_property = LEVEL_EDITOR_WAVE_PROP_TYPE;
     memset(&editor.markers[0], 0, sizeof(editor.markers[0]));
     editor.markers[0].kind = LEVEL_EDITOR_MARKER_WAVE_SINE;
     editor.markers[0].track = LEVEL_EDITOR_TRACK_SPATIAL;
@@ -787,7 +787,7 @@ static int verify_level_semantic_roundtrip(const leveldef_db* db) {
     }
 
     editor.selected_marker = -1;
-    editor.selected_property = 6;
+    editor.selected_property = LEVEL_EDITOR_LEVEL_PROP_POWERUP_DROP;
     level_editor_adjust_selected_property(&editor, 1.0f);
     if (!level_editor_build_level(&editor, db, &expected_level)) {
         fprintf(stderr, "roundtrip: build expected modified failed\n");

@@ -2012,7 +2012,7 @@ static int marker_property_count(const level_editor_state* s) {
         return 0;
     }
     if (s->selected_marker < 0 || s->selected_marker >= s->marker_count) {
-        return 8; /* WAVE MODE, RENDER STYLE, THEME, ENEMY PALETTE, BACKGROUND, MASK, LENGTH, POWERUP DROP */
+        return LEVEL_EDITOR_LEVEL_PROP_COUNT;
     }
     const int kind = s->markers[s->selected_marker].kind;
     if (kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
@@ -2776,7 +2776,7 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
         }
     }
     s->selected_marker = (s->marker_count > 0) ? 0 : -1;
-    s->selected_property = 0;
+    s->selected_property = LEVEL_EDITOR_PROP_FIRST;
 }
 
 void level_editor_init(level_editor_state* s) {
@@ -2808,7 +2808,7 @@ void level_editor_init(level_editor_state* s) {
     s->level_length_screens = 12.0f;
     s->timeline_drag = 0;
     s->selected_marker = -1;
-    s->selected_property = 0;
+    s->selected_property = LEVEL_EDITOR_PROP_FIRST;
     s->entity_tool_selected = LEVEL_EDITOR_TOOL_NONE;
     s->entity_drag_active = 0;
     s->entity_drag_kind = 0;
@@ -3078,7 +3078,7 @@ static void add_marker_at_view(
         return;
     }
     s->selected_marker = s->marker_count - 1;
-    s->selected_property = 0;
+    s->selected_property = LEVEL_EDITOR_PROP_FIRST;
     s->entity_tool_selected = LEVEL_EDITOR_TOOL_NONE;
     mark_editor_dirty(s);
     snprintf(s->status_text, sizeof(s->status_text), "added %s", marker_kind_name(kind));
@@ -3134,7 +3134,7 @@ static void add_spatial_marker_at_x01(level_editor_state* s, int kind, float x01
         return;
     }
     s->selected_marker = s->marker_count - 1;
-    s->selected_property = 0;
+    s->selected_property = LEVEL_EDITOR_PROP_FIRST;
     s->entity_tool_selected = LEVEL_EDITOR_TOOL_NONE;
     mark_editor_dirty(s);
     snprintf(s->status_text, sizeof(s->status_text), "added %s", marker_kind_name(kind));
@@ -3166,7 +3166,7 @@ static void add_marker_at_timeline(level_editor_state* s, int kind, float x01) {
         return;
     }
     s->selected_marker = s->marker_count - 1;
-    s->selected_property = 0;
+    s->selected_property = LEVEL_EDITOR_PROP_FIRST;
     s->entity_tool_selected = LEVEL_EDITOR_TOOL_NONE;
     mark_editor_dirty(s);
     snprintf(s->status_text, sizeof(s->status_text), "added %s", marker_kind_name(kind));
@@ -3229,7 +3229,7 @@ static void add_structure_marker_at_view(level_editor_state* s, float mx01, floa
         m->g = 1.0f;
     }
     s->selected_marker = s->marker_count - 1;
-    s->selected_property = 0;
+    s->selected_property = LEVEL_EDITOR_PROP_FIRST;
     mark_editor_dirty(s);
 }
 
@@ -3277,7 +3277,7 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
         const float my01 = (mouse_y - l.viewport.y) / fmaxf(l.viewport.h, 1.0f);
         place_structure_marker_from_view(s, s->marker_drag_index, mx01, my01);
         s->selected_marker = s->marker_drag_index;
-        s->selected_property = 0;
+        s->selected_property = LEVEL_EDITOR_PROP_FIRST;
         mark_editor_dirty(s);
         return 1;
     }
@@ -3434,7 +3434,7 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
             const int picked = pick_event_marker_in_enemy_timeline(s, mouse_x, &l);
             if (picked >= 0) {
                 s->selected_marker = picked;
-                s->selected_property = 0;
+                s->selected_property = LEVEL_EDITOR_PROP_FIRST;
                 return 1;
             }
             const float tx01 = clampf((mouse_x - l.timeline_enemy_track.x) / fmaxf(l.timeline_enemy_track.w, 1.0f), 0.0f, 1.0f);
@@ -3464,7 +3464,7 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
             if (s->structure_tool_selected > 0 && s->entity_tool_selected == LEVEL_EDITOR_TOOL_NONE) {
                 if (best >= 0) {
                     s->selected_marker = best;
-                    s->selected_property = 0;
+                    s->selected_property = LEVEL_EDITOR_PROP_FIRST;
                     if (s->markers[best].kind == LEVEL_EDITOR_MARKER_STRUCTURE &&
                         s->markers[best].track == LEVEL_EDITOR_TRACK_SPATIAL) {
                         s->marker_drag_active = 1;
@@ -3503,7 +3503,7 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
                     fprintf(stderr, "[editor_pick] action=clear_selection\n");
                 }
             }
-            s->selected_property = 0;
+            s->selected_property = LEVEL_EDITOR_PROP_FIRST;
             return 1;
         }
     }
@@ -3602,7 +3602,7 @@ void level_editor_select_property(level_editor_state* s, int delta) {
     }
     const int prop_n = marker_property_count(s);
     if (prop_n <= 0) {
-        s->selected_property = 0;
+        s->selected_property = LEVEL_EDITOR_PROP_FIRST;
         return;
     }
     s->selected_property = (s->selected_property + delta + prop_n) % prop_n;
@@ -3638,7 +3638,7 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
         return;
     }
     if (s->selected_property < 0) {
-        s->selected_property = 0;
+        s->selected_property = LEVEL_EDITOR_PROP_FIRST;
     }
     if (s->selected_property >= prop_count) {
         s->selected_property = prop_count - 1;
@@ -3646,7 +3646,7 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
     const float pos_delta = marker_position_delta(delta);
     if (s->selected_marker < 0 || s->selected_marker >= s->marker_count) {
         switch (s->selected_property) {
-            case 0: {
+            case LEVEL_EDITOR_LEVEL_PROP_WAVE_MODE: {
                 const int dir = (delta >= 0.0f) ? 1 : -1;
                 const int n = 3;
                 int m = s->level_wave_mode;
@@ -3655,7 +3655,7 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
                 }
                 s->level_wave_mode = (m + dir + n) % n;
             } break;
-            case 1: {
+            case LEVEL_EDITOR_LEVEL_PROP_RENDER_STYLE: {
                 const int dir = (delta >= 0.0f) ? 1 : -1;
                 const int n = 6;
                 int r = s->level_render_style;
@@ -3665,13 +3665,13 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
                 s->level_render_style = (r + dir + n) % n;
                 s->level_style = level_style_from_render_style(s->level_render_style);
             } break;
-            case 2: {
+            case LEVEL_EDITOR_LEVEL_PROP_THEME: {
                 const int dir = (delta >= 0.0f) ? 1 : -1;
                 const int n = 3;
                 int p = clampi(s->level_theme_palette, 0, n - 1);
                 s->level_theme_palette = (p + dir + n) % n;
             } break;
-            case 3:
+            case LEVEL_EDITOR_LEVEL_PROP_ENEMY_PALETTE:
             {
                 const int dir = (delta >= 0.0f) ? 1 : -1;
                 const int n = LEVELDEF_ENEMY_PALETTE_TOXIC - LEVELDEF_ENEMY_PALETTE_DEFAULT + 1;
@@ -3679,7 +3679,7 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
                 ep = LEVELDEF_ENEMY_PALETTE_DEFAULT + ((ep - LEVELDEF_ENEMY_PALETTE_DEFAULT + dir + n) % n);
                 s->level_enemy_palette = ep;
             } break;
-            case 4:
+            case LEVEL_EDITOR_LEVEL_PROP_BACKGROUND:
             {
                 const int dir = (delta >= 0.0f) ? 1 : -1;
                 const int n = LEVELDEF_BACKGROUND_ICE - LEVELDEF_BACKGROUND_STARS + 1;
@@ -3687,7 +3687,7 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
                 bg = LEVELDEF_BACKGROUND_STARS + ((bg - LEVELDEF_BACKGROUND_STARS + dir + n) % n);
                 s->level_background_style = bg;
             } break;
-            case 5:
+            case LEVEL_EDITOR_LEVEL_PROP_BG_MASK:
             {
                 const int dir = (delta >= 0.0f) ? 1 : -1;
                 const int n = LEVELDEF_BG_MASK_WINDOWS - LEVELDEF_BG_MASK_NONE + 1;
@@ -3695,14 +3695,14 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
                 mask = LEVELDEF_BG_MASK_NONE + ((mask - LEVELDEF_BG_MASK_NONE + dir + n) % n);
                 s->level_background_mask_style = mask;
             } break;
-            case 6:
+            case LEVEL_EDITOR_LEVEL_PROP_LENGTH:
                 s->level_length_screens = clampf(
                     s->level_length_screens + delta * 1.0f,
                     1.0f,
                     400.0f
                 );
                 break;
-            case 7:
+            case LEVEL_EDITOR_LEVEL_PROP_POWERUP_DROP:
                 s->level_powerup_drop_chance = clampf(
                     s->level_powerup_drop_chance + delta * 0.01f,
                     0.0f,
@@ -3919,49 +3919,49 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             const int tuned_prop = s->selected_property - base_prop_count;
             if (m->kind == LEVEL_EDITOR_MARKER_WAVE_SINE || m->kind == LEVEL_EDITOR_MARKER_WAVE_V) {
                 switch (tuned_prop) {
-                    case 0: s->level_curated_combat.formation.fire_prob_mul += delta * 0.05f; break;
-                    case 1: s->level_curated_combat.formation.cooldown_mul += delta * 0.05f; break;
-                    case 2: s->level_curated_combat.formation.shot_count =
+                    case LEVEL_EDITOR_CURATED_FORMATION_PROP_FIRE_PROB_MUL: s->level_curated_combat.formation.fire_prob_mul += delta * 0.05f; break;
+                    case LEVEL_EDITOR_CURATED_FORMATION_PROP_COOLDOWN_MUL: s->level_curated_combat.formation.cooldown_mul += delta * 0.05f; break;
+                    case LEVEL_EDITOR_CURATED_FORMATION_PROP_SHOT_COUNT: s->level_curated_combat.formation.shot_count =
                         cycle_shot_count(s->level_curated_combat.formation.shot_count, delta); break;
-                    case 3: s->level_curated_combat.formation.aim_error_mul += delta * 0.05f; break;
-                    case 4: s->level_curated_combat.formation.projectile_speed_mul += delta * 0.05f; break;
-                    case 5: s->level_curated_combat.formation.spread_mul += delta * 0.05f; break;
+                    case LEVEL_EDITOR_CURATED_FORMATION_PROP_AIM_ERROR_MUL: s->level_curated_combat.formation.aim_error_mul += delta * 0.05f; break;
+                    case LEVEL_EDITOR_CURATED_FORMATION_PROP_PROJECTILE_SPEED_MUL: s->level_curated_combat.formation.projectile_speed_mul += delta * 0.05f; break;
+                    case LEVEL_EDITOR_CURATED_FORMATION_PROP_SPREAD_MUL: s->level_curated_combat.formation.spread_mul += delta * 0.05f; break;
                     default: break;
                 }
             } else if (m->kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE) {
                 switch (tuned_prop) {
-                    case 0: s->level_curated_combat.kamikaze.fire_prob_mul += delta * 0.05f; break;
-                    case 1: s->level_curated_combat.kamikaze.speed_mul += delta * 0.05f; break;
-                    case 2: s->level_curated_combat.kamikaze.accel_mul += delta * 0.05f; break;
+                    case LEVEL_EDITOR_CURATED_KAMIKAZE_PROP_FIRE_PROB_MUL: s->level_curated_combat.kamikaze.fire_prob_mul += delta * 0.05f; break;
+                    case LEVEL_EDITOR_CURATED_KAMIKAZE_PROP_SPEED_MUL: s->level_curated_combat.kamikaze.speed_mul += delta * 0.05f; break;
+                    case LEVEL_EDITOR_CURATED_KAMIKAZE_PROP_ACCEL_MUL: s->level_curated_combat.kamikaze.accel_mul += delta * 0.05f; break;
                     default: break;
                 }
             } else if (m->kind == LEVEL_EDITOR_MARKER_MANTA_WING) {
                 switch (tuned_prop) {
-                    case 0: s->level_curated_combat.manta.fire_prob_mul += delta * 0.05f; break;
-                    case 1: s->level_curated_combat.manta.missile_count_bonus += (delta >= 0.0f) ? 1 : -1; break;
-                    case 2: s->level_curated_combat.manta.missile_cooldown_mul += delta * 0.05f; break;
-                    case 3: s->level_curated_combat.manta.missile_charge_mul += delta * 0.05f; break;
+                    case LEVEL_EDITOR_CURATED_MANTA_PROP_FIRE_PROB_MUL: s->level_curated_combat.manta.fire_prob_mul += delta * 0.05f; break;
+                    case LEVEL_EDITOR_CURATED_MANTA_PROP_MISSILE_COUNT_BONUS: s->level_curated_combat.manta.missile_count_bonus += (delta >= 0.0f) ? 1 : -1; break;
+                    case LEVEL_EDITOR_CURATED_MANTA_PROP_MISSILE_COOLDOWN_MUL: s->level_curated_combat.manta.missile_cooldown_mul += delta * 0.05f; break;
+                    case LEVEL_EDITOR_CURATED_MANTA_PROP_MISSILE_CHARGE_MUL: s->level_curated_combat.manta.missile_charge_mul += delta * 0.05f; break;
                     default: break;
                 }
             } else if (m->kind == LEVEL_EDITOR_MARKER_EEL_SWARM) {
                 switch (tuned_prop) {
-                    case 0: s->level_curated_combat.eel.fire_prob_mul += delta * 0.05f; break;
-                    case 1: s->level_curated_combat.eel.arc_fire_rate_mul += delta * 0.05f; break;
-                    case 2: s->level_curated_combat.eel.arc_duration_mul += delta * 0.05f; break;
-                    case 3: s->level_curated_combat.eel.arc_range_mul += delta * 0.05f; break;
-                    case 4: s->level_curated_combat.eel.arc_damage_interval_mul += delta * 0.05f; break;
+                    case LEVEL_EDITOR_CURATED_EEL_PROP_FIRE_PROB_MUL: s->level_curated_combat.eel.fire_prob_mul += delta * 0.05f; break;
+                    case LEVEL_EDITOR_CURATED_EEL_PROP_ARC_FIRE_RATE_MUL: s->level_curated_combat.eel.arc_fire_rate_mul += delta * 0.05f; break;
+                    case LEVEL_EDITOR_CURATED_EEL_PROP_ARC_DURATION_MUL: s->level_curated_combat.eel.arc_duration_mul += delta * 0.05f; break;
+                    case LEVEL_EDITOR_CURATED_EEL_PROP_ARC_RANGE_MUL: s->level_curated_combat.eel.arc_range_mul += delta * 0.05f; break;
+                    case LEVEL_EDITOR_CURATED_EEL_PROP_ARC_DAMAGE_INTERVAL_MUL: s->level_curated_combat.eel.arc_damage_interval_mul += delta * 0.05f; break;
                     default: break;
                 }
             } else if (boid_item) {
                 switch (tuned_prop) {
-                    case 0: s->level_curated_combat.swarm.fire_prob_mul += delta * 0.05f; break;
-                    case 1: s->level_curated_combat.swarm.spread_prob_mul += delta * 0.05f; break;
-                    case 2: s->level_curated_combat.swarm.cooldown_mul += delta * 0.05f; break;
-                    case 3: s->level_curated_combat.swarm.shot_count =
+                    case LEVEL_EDITOR_CURATED_SWARM_PROP_FIRE_PROB_MUL: s->level_curated_combat.swarm.fire_prob_mul += delta * 0.05f; break;
+                    case LEVEL_EDITOR_CURATED_SWARM_PROP_SPREAD_PROB_MUL: s->level_curated_combat.swarm.spread_prob_mul += delta * 0.05f; break;
+                    case LEVEL_EDITOR_CURATED_SWARM_PROP_COOLDOWN_MUL: s->level_curated_combat.swarm.cooldown_mul += delta * 0.05f; break;
+                    case LEVEL_EDITOR_CURATED_SWARM_PROP_SHOT_COUNT: s->level_curated_combat.swarm.shot_count =
                         cycle_shot_count(s->level_curated_combat.swarm.shot_count, delta); break;
-                    case 4: s->level_curated_combat.swarm.aim_error_mul += delta * 0.05f; break;
-                    case 5: s->level_curated_combat.swarm.projectile_speed_mul += delta * 0.05f; break;
-                    case 6: s->level_curated_combat.swarm.spread_mul += delta * 0.05f; break;
+                    case LEVEL_EDITOR_CURATED_SWARM_PROP_AIM_ERROR_MUL: s->level_curated_combat.swarm.aim_error_mul += delta * 0.05f; break;
+                    case LEVEL_EDITOR_CURATED_SWARM_PROP_PROJECTILE_SPEED_MUL: s->level_curated_combat.swarm.projectile_speed_mul += delta * 0.05f; break;
+                    case LEVEL_EDITOR_CURATED_SWARM_PROP_SPREAD_MUL: s->level_curated_combat.swarm.spread_mul += delta * 0.05f; break;
                     default: break;
                 }
             }
@@ -4228,7 +4228,7 @@ int level_editor_revert(level_editor_state* s) {
         );
     }
     s->selected_marker = (s->marker_count > 0) ? 0 : -1;
-    s->selected_property = 0;
+    s->selected_property = LEVEL_EDITOR_PROP_FIRST;
     s->entity_tool_selected = LEVEL_EDITOR_TOOL_NONE;
     s->entity_drag_active = 0;
     s->entity_drag_kind = 0;
@@ -4245,7 +4245,7 @@ void level_editor_new_blank(level_editor_state* s) {
     }
     clear_markers(s);
     s->timeline_01 = 0.0f;
-    s->selected_property = 0;
+    s->selected_property = LEVEL_EDITOR_PROP_FIRST;
     s->entry_active = 1;
     s->source_path[0] = '\0';
     s->source_text[0] = '\0';
@@ -4292,7 +4292,7 @@ int level_editor_delete_selected(level_editor_state* s) {
         s->selected_marker = s->marker_count - 1;
     }
     if (s->selected_marker < 0) {
-        s->selected_property = 0;
+        s->selected_property = LEVEL_EDITOR_PROP_FIRST;
     } else {
         const int prop_n = marker_property_count(s);
         if (s->selected_property >= prop_n) {

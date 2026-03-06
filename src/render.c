@@ -2,6 +2,7 @@
 
 #include "acoustics_ui_layout.h"
 #include "boss.h"
+#include "level_editor.h"
 #include "leveldef.h"
 #include "menu.h"
 #include "planetarium/commander_nick_dialogues.h"
@@ -5849,46 +5850,46 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             {
                 int selected_prop = metrics->level_editor_selected_property;
                 if (selected_prop < 0) selected_prop = 0;
-                if (selected_prop > 7) selected_prop = 7;
+                if (selected_prop >= LEVEL_EDITOR_LEVEL_PROP_COUNT) selected_prop = LEVEL_EDITOR_LEVEL_PROP_COUNT - 1;
                 char row[96];
                 const vg_rect rb0 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
                 snprintf(row, sizeof(row), "WAVE MODE      %s", editor_wave_mode_name(metrics->level_editor_wave_mode));
-                r = draw_ui_button_shaded(ctx, rb0, row, 10.4f * ui, &frame, &text, (selected_prop == 0) ? 1 : 0);
+                r = draw_ui_button_shaded(ctx, rb0, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_WAVE_MODE) ? 1 : 0);
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb1 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
                 snprintf(row, sizeof(row), "RENDER STYLE   %s", editor_render_style_name(metrics->level_editor_render_style));
-                r = draw_ui_button_shaded(ctx, rb1, row, 10.4f * ui, &frame, &text, (selected_prop == 1) ? 1 : 0);
+                r = draw_ui_button_shaded(ctx, rb1, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_RENDER_STYLE) ? 1 : 0);
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb2 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
                 snprintf(row, sizeof(row), "THEME          %s", editor_theme_palette_name(metrics->level_editor_theme_palette));
-                r = draw_ui_button_shaded(ctx, rb2, row, 10.4f * ui, &frame, &text, (selected_prop == 2) ? 1 : 0);
+                r = draw_ui_button_shaded(ctx, rb2, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_THEME) ? 1 : 0);
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb3 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
                 snprintf(row, sizeof(row), "ENEMY PALETTE  %s", editor_enemy_palette_name(metrics->level_editor_enemy_palette));
-                r = draw_ui_button_shaded(ctx, rb3, row, 10.4f * ui, &frame, &text, (selected_prop == 3) ? 1 : 0);
+                r = draw_ui_button_shaded(ctx, rb3, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_ENEMY_PALETTE) ? 1 : 0);
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb4 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
                 snprintf(row, sizeof(row), "BACKGROUND     %s", editor_background_style_name(metrics->level_editor_background_style));
-                r = draw_ui_button_shaded(ctx, rb4, row, 10.4f * ui, &frame, &text, (selected_prop == 4) ? 1 : 0);
+                r = draw_ui_button_shaded(ctx, rb4, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_BACKGROUND) ? 1 : 0);
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb5 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
                 snprintf(row, sizeof(row), "BG MASK        %s", editor_background_mask_style_name(metrics->level_editor_background_mask_style));
-                r = draw_ui_button_shaded(ctx, rb5, row, 10.4f * ui, &frame, &text, (selected_prop == 5) ? 1 : 0);
+                r = draw_ui_button_shaded(ctx, rb5, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_BG_MASK) ? 1 : 0);
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb6 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
                 snprintf(row, sizeof(row), "LENGTH         %.1f", metrics->level_editor_level_length_screens);
-                r = draw_ui_button_shaded(ctx, rb6, row, 10.4f * ui, &frame, &text, (selected_prop == 6) ? 1 : 0);
+                r = draw_ui_button_shaded(ctx, rb6, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_LENGTH) ? 1 : 0);
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb7 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
                 snprintf(row, sizeof(row), "POWERUP DROP   %.2f", metrics->level_editor_powerup_drop_chance);
-                r = draw_ui_button_shaded(ctx, rb7, row, 10.4f * ui, &frame, &text, (selected_prop == 7) ? 1 : 0);
+                r = draw_ui_button_shaded(ctx, rb7, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_POWERUP_DROP) ? 1 : 0);
                 if (r != VG_OK) return r;
             }
             ty -= 34.0f * ui;
