@@ -378,7 +378,6 @@ vec4 hero_fauna_overlay(vec2 uv, vec2 cam_uv, float t, float parallax, float den
         float strand_live = step(abs(strand_idx), mix(3.0, 8.0, seed_b));
         float bend = sin(t * (0.55 + 0.25 * strand_seed) + id * 0.43 + strand_idx * 0.82) * cap_w * (0.03 + 0.04 * strand_seed);
         bend += sin(t * (1.10 + 0.25 * seed_c) + curtain_v * 2.6 + strand_idx * 1.17) * cap_w * (0.05 + 0.10 * strand_seed) * curtain_v * curtain_v;
-        bend += cos(t * (0.74 + 0.18 * seed) + curtain_v * 4.0 + strand_idx * 0.49) * cap_w * 0.03 * curtain_v;
         float strand_x = strand_center + bend;
         float strand_w = cap_w * mix(0.018, 0.034, strand_seed) * mix(1.0, 0.42, curtain_v);
         float vertical = smoothstep(-0.004, 0.02, local_y) * (1.0 - smoothstep(curtain_len * 0.96, curtain_len, local_y));
@@ -438,15 +437,18 @@ void main() {
     vec2 haze_uv = world_uv * spore_scale * vec2(1.2, 0.9);
     haze_uv += vec2(t * 0.010, -t * 0.006) * (0.5 + drift_speed * 0.4);
     float haze0 = fbm(haze_uv * vec2(1.0, 1.6));
-    float haze1 = fbm(haze_uv * vec2(2.1, 2.4) + vec2(1.7, -3.2));
+    float haze1 = noise01(haze_uv * vec2(2.3, 2.6) + vec2(1.7, -3.2));
     float haze = smoothstep(0.30, 0.92, haze0 * 0.68 + haze1 * 0.32);
 
     vec4 forest_cache = texture(u_forest_cache, uv);
     vec3 bg_trunks = forest_cache.rgb;
     float canopy_far = forest_cache.a;
     vec4 flora_tex = texture(u_kelp, uv);
-    vec4 hero_fauna = hero_fauna_overlay(uv, cam_uv, t, parallax, flora_density, bark_col, haze_col, glow_col);
     float flora_pre = clamp(flora_tex.a, 0.0, 1.0);
+    vec4 hero_fauna = vec4(0.0);
+    if (flora_pre < 0.86 && uv.y > 0.18 && uv.y < 0.98) {
+        hero_fauna = hero_fauna_overlay(uv, cam_uv, t, parallax, flora_density, bark_col, haze_col, glow_col);
+    }
     float flora_far = max(canopy_far * 0.88, flora_pre * 0.12);
     float flora_mid = flora_pre;
     vec3 flora_rgb = flora_tex.rgb;
@@ -487,14 +489,15 @@ void main() {
 
     float ray = 0.0;
     vec2 ray_dir = normalize(vec2(-0.48, 0.88));
-    for (int i = 0; i < 4; ++i) {
+    int ray_steps = (high_quality > 0.5) ? 3 : 2;
+    for (int i = 0; i < 3; ++i) {
         float fi = float(i);
         vec2 suv = uv + ray_dir * fi * 0.042;
-        float weight = (high_quality > 0.5 || i < 3) ? 1.0 : 0.0;
+        float weight = (i < ray_steps) ? 1.0 : 0.0;
         float openness = 1.0 - texture(u_forest_cache, suv).a;
         ray += openness * weight;
     }
-    ray /= (high_quality > 0.5) ? 4.0 : 3.0;
+    ray /= float(ray_steps);
     float godray = ray * haze * godray_strength * smoothstep(0.06, 0.72, uv.y) * (1.0 - flora_mid * 0.55);
     col += ray_col * godray * 0.25;
 

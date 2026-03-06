@@ -297,6 +297,9 @@ typedef struct app {
     VkDevice device;
     VkQueue graphics_queue;
     VkQueue present_queue;
+    int debug_utils_enabled;
+    PFN_vkCmdBeginDebugUtilsLabelEXT pfn_vkCmdBeginDebugUtilsLabelEXT;
+    PFN_vkCmdEndDebugUtilsLabelEXT pfn_vkCmdEndDebugUtilsLabelEXT;
     uint32_t graphics_queue_family;
     uint32_t present_queue_family;
 
@@ -2484,6 +2487,8 @@ static void record_gpu_grid_sim(app* a, VkCommandBuffer cmd, float dt);
 static void record_gpu_grid(app* a, VkCommandBuffer cmd);
 static void record_gpu_arc_beam(app* a, VkCommandBuffer cmd, float t);
 static void record_gpu_industry(app* a, VkCommandBuffer cmd, float t);
+static void begin_gpu_label(app* a, VkCommandBuffer cmd, const char* name, float r, float g, float b);
+static void end_gpu_label(app* a, VkCommandBuffer cmd);
 static void reset_terrain_tuning(app* a);
 static void sync_terrain_tuning_text(app* a);
 static int handle_terrain_tuning_key(app* a, SDL_Keycode key);
@@ -2491,6 +2496,25 @@ static int apply_video_mode(app* a);
 static void map_mouse_to_scene_coords(const app* a, int mouse_x, int mouse_y, float* out_x, float* out_y);
 
 static int audio_spatial_enqueue(app* a, uint8_t type, float pan, float gain);
+
+static void begin_gpu_label(app* a, VkCommandBuffer cmd, const char* name, float r, float g, float b) {
+    if (!a || !cmd || !name || !a->pfn_vkCmdBeginDebugUtilsLabelEXT) {
+        return;
+    }
+    VkDebugUtilsLabelEXT label = {
+        .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
+        .pLabelName = name,
+        .color = {r, g, b, 1.0f}
+    };
+    a->pfn_vkCmdBeginDebugUtilsLabelEXT(cmd, &label);
+}
+
+static void end_gpu_label(app* a, VkCommandBuffer cmd) {
+    if (!a || !cmd || !a->pfn_vkCmdEndDebugUtilsLabelEXT) {
+        return;
+    }
+    a->pfn_vkCmdEndDebugUtilsLabelEXT(cmd);
+}
 
 static void acoustics_defaults(app* a) {
     if (!a) {
@@ -5580,11 +5604,31 @@ static int apply_video_mode(app* a) {
 static int create_instance(app* a) {
     uint32_t ext_count = 0;
     if (!SDL_Vulkan_GetInstanceExtensions(a->window, &ext_count, NULL) || ext_count == 0) return 0;
-    const char** exts = (const char**)calloc(ext_count, sizeof(*exts));
+    uint32_t avail_count = 0;
+    int have_debug_utils = 0;
+    if (vkEnumerateInstanceExtensionProperties(NULL, &avail_count, NULL) == VK_SUCCESS && avail_count > 0) {
+        VkExtensionProperties* avail = (VkExtensionProperties*)calloc(avail_count, sizeof(*avail));
+        if (avail) {
+            if (vkEnumerateInstanceExtensionProperties(NULL, &avail_count, avail) == VK_SUCCESS) {
+                for (uint32_t i = 0; i < avail_count; ++i) {
+                    if (strcmp(avail[i].extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0) {
+                        have_debug_utils = 1;
+                        break;
+                    }
+                }
+            }
+            free(avail);
+        }
+    }
+    const uint32_t total_ext_count = ext_count + (have_debug_utils ? 1u : 0u);
+    const char** exts = (const char**)calloc(total_ext_count, sizeof(*exts));
     if (!exts) return 0;
     if (!SDL_Vulkan_GetInstanceExtensions(a->window, &ext_count, exts)) {
         free(exts);
         return 0;
+    }
+    if (have_debug_utils) {
+        exts[ext_count++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
     }
     VkApplicationInfo ai = {
         .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
@@ -5601,6 +5645,7 @@ static int create_instance(app* a) {
         .ppEnabledExtensionNames = exts
     };
     VkResult r = vkCreateInstance(&ci, NULL, &a->instance);
+    a->debug_utils_enabled = (r == VK_SUCCESS && have_debug_utils) ? 1 : 0;
     free(exts);
     return check_vk(r, "vkCreateInstance");
 }
@@ -5685,6 +5730,14 @@ static int create_device(app* a) {
     if (!check_vk(vkCreateDevice(a->physical_device, &ci, NULL, &a->device), "vkCreateDevice")) return 0;
     vkGetDeviceQueue(a->device, a->graphics_queue_family, 0, &a->graphics_queue);
     vkGetDeviceQueue(a->device, a->present_queue_family, 0, &a->present_queue);
+    a->pfn_vkCmdBeginDebugUtilsLabelEXT = NULL;
+    a->pfn_vkCmdEndDebugUtilsLabelEXT = NULL;
+    if (a->debug_utils_enabled) {
+        a->pfn_vkCmdBeginDebugUtilsLabelEXT =
+            (PFN_vkCmdBeginDebugUtilsLabelEXT)vkGetDeviceProcAddr(a->device, "vkCmdBeginDebugUtilsLabelEXT");
+        a->pfn_vkCmdEndDebugUtilsLabelEXT =
+            (PFN_vkCmdEndDebugUtilsLabelEXT)vkGetDeviceProcAddr(a->device, "vkCmdEndDebugUtilsLabelEXT");
+    }
     return 1;
 }
 
@@ -9963,10 +10016,12 @@ static void record_gpu_underwater(app* a, VkCommandBuffer cmd, float t) {
     pc.p7[3] = lvl->underwater_kelp_tint_strength;
 
     set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    begin_gpu_label(a, cmd, "bg underwater", 0.15f, 0.55f, 0.70f);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_layout, 0, 1, &a->underwater_desc_set, 0, NULL);
     vkCmdPushConstants(cmd, a->underwater_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
+    end_gpu_label(a, cmd);
 #endif
 }
 
@@ -10038,10 +10093,12 @@ static void record_gpu_fire(app* a, VkCommandBuffer cmd, float t) {
     }
 
     set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    begin_gpu_label(a, cmd, "bg fire", 0.78f, 0.30f, 0.12f);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->fire_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_layout, 0, 1, &a->underwater_desc_set, 0, NULL);
     vkCmdPushConstants(cmd, a->underwater_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
+    end_gpu_label(a, cmd);
 #endif
 }
 
@@ -10100,10 +10157,12 @@ static void record_gpu_ice(app* a, VkCommandBuffer cmd, float t) {
     pc.p5[1] = fmaxf(lvl->ice_snow_speed, 0.0f);
 
     set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    begin_gpu_label(a, cmd, "bg ice", 0.45f, 0.70f, 0.90f);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->ice_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_layout, 0, 1, &a->underwater_desc_set, 0, NULL);
     vkCmdPushConstants(cmd, a->underwater_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
+    end_gpu_label(a, cmd);
 #endif
 }
 
@@ -10169,10 +10228,12 @@ static void record_gpu_forest_flora(app* a, VkCommandBuffer cmd, float t) {
     }
 
     set_viewport_scissor(cmd, a->underwater_kelp_w, a->underwater_kelp_h);
+    begin_gpu_label(a, cmd, "bg forest flora", 0.40f, 0.72f, 0.48f);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->forest_flora_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_layout, 0, 1, &a->underwater_desc_set, 0, NULL);
     vkCmdPushConstants(cmd, a->underwater_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
+    end_gpu_label(a, cmd);
 #endif
 }
 
@@ -10223,10 +10284,12 @@ static void record_gpu_forest_cache(app* a, VkCommandBuffer cmd, float t) {
     pc.p4[3] = clampf(lvl->forest_flora_density, 0.0f, 4.0f);
 
     set_viewport_scissor(cmd, a->underwater_kelp_w, a->underwater_kelp_h);
+    begin_gpu_label(a, cmd, "bg forest cache", 0.26f, 0.58f, 0.34f);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->forest_cache_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_layout, 0, 1, &a->underwater_desc_set, 0, NULL);
     vkCmdPushConstants(cmd, a->underwater_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
+    end_gpu_label(a, cmd);
 #endif
 }
 
@@ -10307,10 +10370,12 @@ static void record_gpu_forest(app* a, VkCommandBuffer cmd, float t) {
     }
 
     set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    begin_gpu_label(a, cmd, "bg forest main", 0.18f, 0.48f, 0.22f);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->forest_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_layout, 0, 1, &a->underwater_desc_set, 0, NULL);
     vkCmdPushConstants(cmd, a->underwater_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
+    end_gpu_label(a, cmd);
 #endif
 }
 
@@ -10387,9 +10452,11 @@ static void record_gpu_underwater_kelp(app* a, VkCommandBuffer cmd, float t) {
     vkCmdSetViewport(cmd, 0, 1, &vp);
     vkCmdSetScissor(cmd, 0, 1, &sc);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_kelp_pipeline);
+    begin_gpu_label(a, cmd, "bg underwater kelp", 0.18f, 0.62f, 0.42f);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_layout, 0, 1, &a->underwater_desc_set, 0, NULL);
     vkCmdPushConstants(cmd, a->underwater_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
+    end_gpu_label(a, cmd);
 #endif
 }
 
