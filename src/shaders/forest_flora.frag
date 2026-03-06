@@ -145,18 +145,20 @@ void main() {
     float species_b = noise01(vec2((uv.x + cam_uv.x * 0.28) * 5.2 + 3.7, uv.y * 1.8 - 1.1));
     float species_c = noise01(vec2((uv.x + cam_uv.x * 0.18) * 8.1 - 2.3, uv.y * 0.95 + 4.8));
 
-    vec3 stem_a = vec3(0.18, 0.24, 0.23);
-    vec3 stem_b = vec3(0.22, 0.18, 0.28);
-    vec3 stem_c = vec3(0.16, 0.24, 0.30);
-    vec3 cap_a = vec3(0.76, 0.95, 0.85);
-    vec3 cap_b = vec3(0.98, 0.80, 0.84);
-    vec3 cap_c = vec3(0.84, 0.80, 1.00);
-    vec3 cap_d = vec3(1.00, 0.95, 0.78);
+    vec3 stem_a = vec3(0.20, 0.32, 0.28);
+    vec3 stem_b = vec3(0.28, 0.18, 0.32);
+    vec3 stem_c = vec3(0.17, 0.26, 0.36);
+    vec3 cap_a = vec3(0.44, 0.68, 0.60);
+    vec3 cap_b = vec3(0.70, 0.48, 0.62);
+    vec3 cap_c = vec3(0.56, 0.54, 0.80);
+    vec3 cap_d = vec3(0.80, 0.70, 0.44);
     vec3 stem_col = mix(stem_a, stem_b, species_a);
     stem_col = mix(stem_col, stem_c, species_b * 0.55);
     vec3 cap_col = mix(cap_a, cap_b, species_a);
     cap_col = mix(cap_col, cap_c, species_b * 0.62);
     cap_col = mix(cap_col, cap_d, species_c * 0.35);
+    stem_col *= mix(vec3(0.92, 1.02, 0.96), vec3(1.06, 0.92, 1.02), species_c * 0.75);
+    cap_col *= mix(vec3(0.94, 1.04, 0.94), vec3(1.08, 0.92, 1.08), species_b * 0.72);
 
     vec2 far = trunk_layer(uv, cam_uv.x, 0.12 + 0.08 * parallax, flora_density * 0.72, wobble_amp * 0.28, wobble_speed * 0.65, t);
     vec2 mid = trunk_layer(uv, cam_uv.x, 0.28 + 0.14 * parallax, flora_density, wobble_amp * 0.46, wobble_speed * 0.88, t + 3.7);
@@ -167,21 +169,21 @@ void main() {
     float roots = root_arch_band(uv, cam_uv.x, 0.36 + 0.18 * parallax, root_arch_density);
     float pulse = 0.55 + 0.45 * sin(t * (0.35 + pulse_freq * 0.55) + uv.x * 9.0);
 
-    float alpha = max(far.x * 0.44, mid.x * 0.68);
-    alpha = max(alpha, roots * (0.42 + 0.20 * foreground_alpha));
-    alpha = max(alpha, near.x * foreground_alpha * 0.78);
+    float alpha = max(far.x * 0.52, mid.x * 0.84);
+    alpha = max(alpha, roots * (0.50 + 0.18 * foreground_alpha));
+    alpha = max(alpha, near.x * 0.98);
     alpha = sat(alpha);
 
     float glow = max(far.y * 0.26, mid.y * 0.84);
     glow = max(glow, near.y * 0.92);
     glow *= pc.p2.w * (0.72 + 0.38 * pulse);
 
-    vec3 col = mix(bark_col * 0.72, stem_col, 0.72) * (0.20 + 0.10 * far.x);
-    col = mix(col, stem_col * 0.52 + cap_col * 0.08, mid.x * 0.72);
-    col = mix(col, stem_col * 0.34 + cap_col * 0.20, near.x * 0.58);
-    col += cap_col * glow * 0.72;
-    col += glow_col * glow * 0.30;
-    col += vec3(0.98, 0.99, 0.96) * glow * 0.14;
+    vec3 col = mix(bark_col * 0.40, stem_col, 0.82) * (0.18 + 0.16 * far.x);
+    col = mix(col, stem_col * 0.72 + cap_col * 0.22, mid.x * 0.88);
+    col = mix(col, stem_col * 0.22 + cap_col * 0.72, near.x * 0.94);
+    col += cap_col * glow * 0.54;
+    col += glow_col * glow * 0.04;
+    col += cap_col * glow * 0.06;
     col *= 0.86 + 0.08 * noise01(vec2(uv.x * 6.0, uv.y * 9.0) + vec2(1.7, -3.9));
 
     out_color = vec4(col, alpha);

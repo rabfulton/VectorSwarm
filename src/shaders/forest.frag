@@ -275,8 +275,10 @@ vec3 background_megatrunks(vec2 uv, vec2 cam_uv, float canopy_density, float par
     return vec3(sat(mass), sat(rim), sat(veins));
 }
 
-vec2 foreground_vines(vec2 uv, vec2 cam_uv, float t, float parallax, float density) {
-    float vine = 0.0;
+vec4 foreground_vines(vec2 uv, vec2 cam_uv, float t, float parallax, float density) {
+    float vine0 = 0.0;
+    float vine1 = 0.0;
+    float vine2 = 0.0;
     float thorn = 0.0;
     float band_count = floor(mix(2.0, 4.0, sat(density * 0.28)));
     float x = (uv.x + cam_uv.x * (0.58 + 0.16 * parallax));
@@ -297,7 +299,13 @@ vec2 foreground_vines(vec2 uv, vec2 cam_uv, float t, float parallax, float densi
         float width = mix(0.030, 0.054, seed_b);
         float body = 1.0 - smoothstep(width * 0.70, width, abs(uv.y - center));
         body *= smoothstep(0.76, 0.93, uv.y) * live;
-        vine = max(vine, body);
+        if (i == 0) {
+            vine0 = max(vine0, body);
+        } else if (i == 1) {
+            vine1 = max(vine1, body);
+        } else {
+            vine2 = max(vine2, body);
+        }
 
         float seg = fract(wave * (1.6 + 0.8 * seed) + seed * 4.0);
         float tooth = smoothstep(0.84, 0.96, 1.0 - abs(seg * 2.0 - 1.0));
@@ -308,7 +316,7 @@ vec2 foreground_vines(vec2 uv, vec2 cam_uv, float t, float parallax, float densi
         thorn = max(thorn, thorn_a * (0.32 + 0.16 * seed_b));
     }
 
-    return vec2(sat(vine), sat(thorn));
+    return vec4(sat(vine0), sat(vine1), sat(vine2), sat(thorn));
 }
 
 void main() {
@@ -357,7 +365,11 @@ void main() {
     float flora_pre = clamp(flora_tex.a, 0.0, 1.0);
     float flora_far = max(canopy_far * 0.88, flora_pre * 0.16);
     float flora_mid = flora_pre;
-    float flora_glow = sat((max(max(flora_tex.r, flora_tex.g), flora_tex.b) - flora_pre * 0.16) * 2.8);
+    vec3 flora_rgb = flora_tex.rgb;
+    float flora_lum = dot(flora_rgb, vec3(0.2126, 0.7152, 0.0722));
+    flora_rgb = mix(vec3(flora_lum), flora_rgb, 1.24);
+    flora_rgb *= 0.90;
+    float flora_glow = sat((max(max(flora_rgb.r, flora_rgb.g), flora_rgb.b) - flora_pre * 0.24) * 1.6);
 
     float pulse = 0.55 + 0.45 * sin(t * (0.35 + pulse_freq * 0.55) + haze1 * 9.0);
     vec4 cloud = vec4(0.0);
@@ -372,15 +384,15 @@ void main() {
     vec3 trunk_rim = mix(vec3(0.28, 0.42, 0.36), glow_col * 0.82, 0.55);
     vec3 cloud_col = vec3(0.0);
     col = mix(col, far_col, flora_far * 0.58);
-    col = mix(col, mid_col, flora_mid * 0.80);
+    col = mix(col, mid_col, flora_mid * 0.94);
     col = mix(col, trunk_shadow, bg_trunks.x * 0.82);
     col += trunk_rim * bg_trunks.y * 0.84;
     col += mix(glow_col, vec3(0.78, 0.90, 0.86), 0.40) * bg_trunks.z * 0.40;
-    col = mix(col, flora_tex.rgb, flora_pre * 0.62);
-    col *= (1.0 - flora_pre * 0.06);
-    col += flora_tex.rgb * flora_glow * 0.92;
-    col += glow_col * translucency * 0.92;
-    col += mix(glow_col, vec3(0.92, 0.98, 0.90), 0.35) * hot_rim * 0.52;
+    col = mix(col, flora_rgb, flora_pre * 0.86);
+    col *= (1.0 - flora_pre * 0.010);
+    col += flora_rgb * flora_glow * 0.24;
+    col += glow_col * translucency * 0.52;
+    col += mix(glow_col, flora_rgb, 0.46) * hot_rim * 0.20;
 
     float ray = 0.0;
     vec2 ray_dir = normalize(vec2(-0.48, 0.88));
@@ -400,24 +412,34 @@ void main() {
     float dust = smoothstep(0.44, 0.92, haze0 * 0.64 + haze1 * 0.36);
     col = mix(col, mix(bark_col * 0.72, haze_col, 0.65), dust * pc.p2.w * 0.32);
 
-    vec2 vines = foreground_vines(uv, cam_uv, t, parallax, root_arch_density + flora_density * 0.5);
+    vec4 vines = foreground_vines(uv, cam_uv, t, parallax, root_arch_density + flora_density * 0.5);
     float near_occ = flora_pre * (0.18 + 0.14 * smoothstep(0.28, 1.0, uv.y));
     if (high_quality > 0.5) {
         near_occ = max(near_occ, trunk_band(uv, cam_uv.x, 0.60 + 0.24 * parallax, flora_density * 1.2, wobble_amp * 0.70, wobble_speed * 1.10, t + 7.9) * 0.65);
     }
-    near_occ = max(near_occ, vines.x);
     float occ_alpha = near_occ * foreground_alpha * smoothstep(0.12, 1.0, uv.y);
     col *= (1.0 - occ_alpha * 0.58);
-    col = mix(col, vec3(0.005, 0.008, 0.014), sat(vines.x * foreground_alpha * 1.40));
-    col = mix(col, vec3(0.0), sat(vines.y * foreground_alpha * 1.28));
+    float vine_mask0 = sat(vines.x * foreground_alpha * 1.18);
+    float vine_mask1 = sat(vines.y * foreground_alpha * 1.18);
+    float vine_mask2 = sat(vines.z * foreground_alpha * 1.18);
+    float thorn_mask = sat(vines.w * foreground_alpha * 1.18);
+    vec3 vine_col0 = bark_col * 0.32 + haze_col * 0.20 + vec3(0.05, 0.02, 0.06);
+    vec3 vine_col1 = bark_col * 0.28 + glow_col * 0.10 + vec3(0.03, 0.05, 0.02);
+    vec3 vine_col2 = bark_col * 0.24 + haze_col * 0.12 + glow_col * 0.08 + vec3(0.04, 0.02, 0.00);
+    vec3 thorn_col = bark_col * 0.18 + haze_col * 0.06 + vec3(0.03, 0.01, 0.03);
+    col = mix(col, vine_col0, smoothstep(0.06, 0.20, vine_mask0));
+    col = mix(col, vine_col1, smoothstep(0.06, 0.20, vine_mask1));
+    col = mix(col, vine_col2, smoothstep(0.06, 0.20, vine_mask2));
+    col = mix(col, thorn_col, smoothstep(0.04, 0.12, thorn_mask));
 
     float luminance = dot(col, vec3(0.2126, 0.7152, 0.0722));
-    col = mix(vec3(luminance), col, 1.35);
+    col = mix(vec3(luminance), col, 1.20);
     col = col / (vec3(1.0) + col * 0.28);
     col = clamp((col - 0.5) * 1.14 + 0.5, 0.0, 1.0);
 
-    float alpha = clamp(pc.p2.w * (0.52 + haze * 0.18 + flora_far * 0.16 + flora_mid * 0.22 + bg_trunks.x * 0.34), 0.0, 0.98);
+    float alpha = clamp(pc.p2.w * (0.52 + haze * 0.18 + flora_far * 0.16 + flora_mid * 0.40 + bg_trunks.x * 0.34), 0.0, 0.98);
     alpha = max(alpha, 0.72 + bg_trunks.x * 0.12);
     alpha = max(alpha, occ_alpha * 0.88);
+    alpha = max(alpha, max(max(vine_mask0, vine_mask1), vine_mask2) * 0.92);
     out_color = vec4(col, alpha);
 }

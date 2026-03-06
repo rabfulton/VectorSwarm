@@ -454,6 +454,7 @@ typedef struct app {
     forest_bg_spore_cluster forest_spore_clusters[FOREST_BG_SPORE_CLUSTER_CAP];
     int forest_spore_initialized;
     float forest_spore_last_t;
+    float forest_spore_last_camera_x;
     uint32_t forest_spore_rng;
     VkBuffer terrain_vertex_buffer;
     VkDeviceMemory terrain_vertex_memory;
@@ -8944,10 +8945,10 @@ static void forest_spore_respawn_cluster(app* a, const game_state* g, const leve
     }
     const float density = clampf(lvl->forest_spore_density, 0.0f, 4.0f);
     const float drift = fmaxf(lvl->forest_spore_drift_speed, 0.0f);
-    const float x_span = g->world_w * 1.9f;
-    const float x_left = g->camera_x - x_span * 0.55f;
-    const float y_top = g->camera_y + g->world_h * 0.18f;
-    const float y_span = g->world_h * 0.48f;
+    const float screen_w = g->world_w;
+    const float screen_h = g->world_h;
+    const float y_top = screen_h * 0.58f;
+    const float y_span = screen_h * 0.26f;
     const float rx = forest_spore_rand01(a);
     const float ry = forest_spore_rand01(a);
     const float rz = forest_spore_rand01(a);
@@ -8956,17 +8957,17 @@ static void forest_spore_respawn_cluster(app* a, const game_state* g, const leve
     c->active = 1;
     c->seed = forest_spore_rand01(a) * 4096.0f;
     c->hue = forest_spore_rand01(a);
-    c->x = x_left + rx * x_span;
+    c->x = -screen_w * (0.14f + 0.16f * rx);
     c->y = y_top + ry * y_span;
-    c->vx = 24.0f + drift * 26.0f + (rz - 0.5f) * 16.0f;
-    c->vy = (rw - 0.5f) * 10.0f;
-    c->age_s = forest_spore_rand01(a) * 1.4f;
-    c->life_s = 6.5f + forest_spore_rand01(a) * 7.0f;
-    c->spread_x = g->world_w * (0.030f + 0.050f * forest_spore_rand01(a) + density * 0.006f);
-    c->spread_y = g->world_h * (0.016f + 0.030f * forest_spore_rand01(a) + density * 0.004f);
-    c->particle_count = 8 + (int)lroundf(forest_spore_rand01(a) * 8.0f + density * 2.0f);
-    if (c->particle_count < 8) c->particle_count = 8;
-    if (c->particle_count > 18) c->particle_count = 18;
+    c->vx = 14.0f + drift * 12.0f + (rz - 0.5f) * 5.0f;
+    c->vy = (rw - 0.5f) * 2.2f;
+    c->age_s = 0.0f;
+    c->life_s = 1000000.0f;
+    c->spread_x = screen_w * (0.085f + 0.080f * forest_spore_rand01(a) + density * 0.014f);
+    c->spread_y = screen_h * (0.020f + 0.026f * forest_spore_rand01(a) + density * 0.004f);
+    c->particle_count = 28 + (int)lroundf(forest_spore_rand01(a) * 14.0f + density * 4.0f);
+    if (c->particle_count < 28) c->particle_count = 28;
+    if (c->particle_count > 48) c->particle_count = 48;
 }
 
 static void append_gpu_forest_spores(
@@ -8983,22 +8984,30 @@ static void append_gpu_forest_spores(
     if (!a || !g || !lvl || !out || !inout_n) {
         return;
     }
+    (void)use_cyl_projection;
 
     uint32_t n = *inout_n;
     const float density = clampf(lvl->forest_spore_density, 0.0f, 4.0f);
     const float drift = fmaxf(lvl->forest_spore_drift_speed, 0.0f);
-    const float quality = a->video_menu_high_quality ? 1.0f : 0.68f;
-    int target_clusters = (int)lroundf((10.0f + density * 4.0f) * quality);
-    if (target_clusters < 8) target_clusters = 8;
+    const float quality = a->video_menu_high_quality ? 1.0f : 0.72f;
+    int target_clusters = (int)lroundf((3.0f + density * 1.9f) * quality);
+    if (target_clusters < 3) target_clusters = 3;
     if (target_clusters > FOREST_BG_SPORE_CLUSTER_CAP) target_clusters = FOREST_BG_SPORE_CLUSTER_CAP;
 
+    const float screen_w = g->world_w;
+    const float screen_h = g->world_h;
+    const float y_top = screen_h * 0.58f;
+    const float y_span = screen_h * 0.26f;
+    int initializing = 0;
     if (!a->forest_spore_initialized || g->t < a->forest_spore_last_t) {
         memset(a->forest_spore_clusters, 0, sizeof(a->forest_spore_clusters));
         if (a->forest_spore_rng == 0u) {
             a->forest_spore_rng = 0x7f4a7c15u ^ ((uint32_t)fabsf(g->camera_x) * 2246822519u);
         }
         a->forest_spore_last_t = g->t;
+        a->forest_spore_last_camera_x = g->camera_x;
         a->forest_spore_initialized = 1;
+        initializing = 1;
     }
 
     float dt = g->t - a->forest_spore_last_t;
@@ -9008,7 +9017,9 @@ static void append_gpu_forest_spores(
     if (dt > 0.05f) {
         dt = 0.05f;
     }
+    float camera_dx = g->camera_x - a->forest_spore_last_camera_x;
     a->forest_spore_last_t = g->t;
+    a->forest_spore_last_camera_x = g->camera_x;
 
     int active_clusters = 0;
     for (int i = 0; i < FOREST_BG_SPORE_CLUSTER_CAP; ++i) {
@@ -9021,13 +9032,18 @@ static void append_gpu_forest_spores(
             continue;
         }
         forest_spore_respawn_cluster(a, g, lvl, &a->forest_spore_clusters[i]);
+        if (initializing) {
+            const float frac = (target_clusters > 1) ? ((float)active_clusters / (float)(target_clusters - 1)) : 0.5f;
+            a->forest_spore_clusters[i].x = screen_w * (0.04f + frac * 0.92f);
+            a->forest_spore_clusters[i].y = y_top + forest_spore_rand01(a) * y_span;
+        }
         active_clusters += 1;
     }
 
-    const float x_min = g->camera_x - g->world_w * 1.05f;
-    const float x_max = g->camera_x + g->world_w * 1.05f;
-    const float y_min = g->camera_y - g->world_h * 0.70f;
-    const float y_max = g->camera_y + g->world_h * 0.42f;
+    const float wrap_x0 = -screen_w * 0.18f;
+    const float wrap_x1 = screen_w * 1.18f;
+    const float wrap_y0 = y_top - screen_h * 0.03f;
+    const float wrap_y1 = y_top + y_span + screen_h * 0.04f;
 
     for (int i = 0; i < FOREST_BG_SPORE_CLUSTER_CAP && n < GPU_PARTICLE_MAX_INSTANCES; ++i) {
         forest_bg_spore_cluster* c = &a->forest_spore_clusters[i];
@@ -9035,16 +9051,11 @@ static void append_gpu_forest_spores(
             continue;
         }
 
-        c->age_s += dt;
-        if (c->age_s >= c->life_s) {
-            forest_spore_respawn_cluster(a, g, lvl, c);
-        }
-
         float flow_x = 0.0f;
         float flow_y = 0.0f;
         sample_shared_noise_flow(
-            c->x / fmaxf(g->world_w, 1.0f) * 0.47f + c->seed * 0.00027f + g->t * 0.020f,
-            c->y / fmaxf(g->world_h, 1.0f) * 0.39f + c->seed * 0.00019f - g->t * 0.026f,
+            c->x / fmaxf(screen_w, 1.0f) * 0.47f + c->seed * 0.00027f + g->t * 0.020f,
+            c->y / fmaxf(screen_h, 1.0f) * 0.39f + c->seed * 0.00019f - g->t * 0.026f,
             &flow_x,
             &flow_y
         );
@@ -9053,16 +9064,32 @@ static void append_gpu_forest_spores(
             c->seed * 0.00023f - g->t * 0.051f + c->y * 0.0013f,
             2
         ) - 0.5f;
-        const float wind_x = 18.0f + drift * 34.0f;
-        const float wind_y = -3.0f + flow_y * 8.0f;
-        c->vx += (wind_x + flow_x * 32.0f + gust * 18.0f - c->vx * 0.32f) * dt;
-        c->vy += (wind_y + flow_y * 24.0f + gust * 8.0f - c->vy * 0.45f) * dt;
+        const float wind_x = 18.0f + drift * 20.0f;
+        const float wind_y = flow_y * 8.0f;
+        c->vx += (wind_x + flow_x * 18.0f + gust * 8.0f - c->vx * 0.16f) * dt;
+        c->vy += (wind_y + flow_y * 14.0f + gust * 5.0f - c->vy * 0.24f) * dt;
         c->x += c->vx * dt;
+        c->x -= camera_dx;
         c->y += c->vy * dt;
 
-        if (!isfinite(c->x) || !isfinite(c->y) ||
-            c->x < x_min || c->x > x_max || c->y < y_min || c->y > y_max) {
+        if (!isfinite(c->x) || !isfinite(c->y)) {
             forest_spore_respawn_cluster(a, g, lvl, c);
+        }
+        if (c->x > wrap_x1 + c->spread_x) {
+            c->x = wrap_x0 - c->spread_x * (0.70f + forest_spore_rand01(a) * 0.45f);
+            c->y = y_top + forest_spore_rand01(a) * y_span;
+            c->seed += 73.0f + forest_spore_rand01(a) * 180.0f;
+            c->hue = repeatf(c->hue + 0.16f + forest_spore_rand01(a) * 0.18f, 1.0f);
+        } else if (c->x < wrap_x0 - c->spread_x) {
+            c->x = wrap_x1 + c->spread_x * (0.70f + forest_spore_rand01(a) * 0.45f);
+            c->y = y_top + forest_spore_rand01(a) * y_span;
+            c->seed += 73.0f + forest_spore_rand01(a) * 180.0f;
+            c->hue = repeatf(c->hue + 0.16f + forest_spore_rand01(a) * 0.18f, 1.0f);
+        }
+        if (c->y < wrap_y0 - c->spread_y) {
+            c->y = wrap_y1 - c->spread_y * (0.10f + 0.20f * forest_spore_rand01(a));
+        } else if (c->y > wrap_y1 + c->spread_y) {
+            c->y = wrap_y0 + c->spread_y * (0.10f + 0.20f * forest_spore_rand01(a));
         }
 
         float cluster_speed = sqrtf(c->vx * c->vx + c->vy * c->vy);
@@ -9073,9 +9100,6 @@ static void append_gpu_forest_spores(
         const float dir_y = c->vy / cluster_speed;
         const float perp_x = -dir_y;
         const float perp_y = dir_x;
-        const float life01 = clampf(c->age_s / fmaxf(c->life_s, 1.0e-4f), 0.0f, 1.0f);
-        const float cluster_fade = clampf(life01 / 0.14f, 0.0f, 1.0f) * clampf((1.0f - life01) / 0.20f, 0.0f, 1.0f);
-
         for (int j = 0; j < c->particle_count && n < GPU_PARTICLE_MAX_INSTANCES; ++j) {
             const uint32_t h0 = hash_u32((uint32_t)(i + 1) * 0x9e3779b9u ^ (uint32_t)(j + 3) * 0x85ebca6bu);
             const uint32_t h1 = hash_u32(h0 ^ 0x7f4a7c15u);
@@ -9083,27 +9107,21 @@ static void append_gpu_forest_spores(
             const float u0 = (float)(h0 & 0x00ffffffu) / 16777215.0f;
             const float u1 = (float)(h1 & 0x00ffffffu) / 16777215.0f;
             const float u2 = (float)(h2 & 0x00ffffffu) / 16777215.0f;
-            const float orbit_phase = g->t * (0.32f + 0.28f * u1 + drift * 0.10f) + c->seed * 0.013f + (float)j * 1.37f;
-            const float along = (u0 - 0.5f) * c->spread_x * (0.55f + 0.55f * u2);
-            const float across = sinf(orbit_phase + u2 * 6.2831853f) * c->spread_y * (0.22f + 0.68f * u1);
-            const float swirl = cosf(orbit_phase * 0.63f + u0 * 7.0f) * c->spread_x * 0.08f;
-            const float wx = c->x + dir_x * (along + swirl) + perp_x * across;
-            const float wy = c->y + dir_y * (along * 0.10f) + perp_y * across;
+            const float orbit_phase = g->t * (0.30f + 0.24f * u1 + drift * 0.10f) + c->seed * 0.013f + (float)j * 1.21f;
+            const float gust_phase = g->t * (0.22f + 0.12f * u2) + c->seed * 0.0041f + (float)j * 0.31f;
+            const float rank = (u0 * 2.0f - 1.0f);
+            const float sheet = (u1 * 2.0f - 1.0f);
+            const float along = rank * c->spread_x * (0.48f + 0.36f * u2);
+            const float stream = sinf(orbit_phase + u2 * 6.2831853f) * c->spread_x * (0.05f + 0.09f * u1);
+            const float gust_y = sinf(gust_phase) * c->spread_y * (0.22f + 0.28f * u0);
+            const float across = sheet * c->spread_y * (0.34f + 0.26f * u2) +
+                                 cosf(orbit_phase * 0.63f + u0 * 7.0f) * c->spread_y * 0.42f +
+                                 gust_y;
+            const float sx = c->x + dir_x * (along * 0.78f + stream) + perp_x * across;
+            const float sy = c->y + dir_y * (along * 0.22f + stream * 0.16f) + perp_y * across;
+            const float depth = 1.0f;
 
-            float sx = 0.0f;
-            float sy = 0.0f;
-            float depth = 1.0f;
-            if (use_cyl_projection) {
-                project_cylinder_point_gpu(g, wx, wy, &sx, &sy, &depth);
-            } else {
-                sx = wx + g->world_w * 0.5f - g->camera_x;
-                sy = wy + g->world_h * 0.5f - g->camera_y;
-            }
-            if (sx < -24.0f || sx > g->world_w + 24.0f || sy < -24.0f || sy > g->world_h + 24.0f) {
-                continue;
-            }
-
-            float radius = 1.2f + (1.0f - u2) * 2.1f;
+            float radius = 0.72f + (1.0f - u2) * 1.10f;
             if (use_cyl_projection) {
                 radius *= (0.40f + 0.85f * depth);
             }
@@ -9113,13 +9131,13 @@ static void append_gpu_forest_spores(
             out[n].y = sy;
             out[n].radius_px = radius;
             out[n].kind = 4.0f;
-            out[n].r = clampf(0.72f + 0.22f * (1.0f - color_mix) + (u0 - 0.5f) * 0.08f, 0.0f, 1.0f);
-            out[n].g = clampf(0.80f + 0.14f * color_mix + (u1 - 0.5f) * 0.10f, 0.0f, 1.0f);
-            out[n].b = clampf(0.86f + 0.12f * u2 + color_mix * 0.06f, 0.0f, 1.0f);
-            out[n].a = clampf((0.16f + 0.28f * (1.0f - u2)) * cluster_fade, 0.0f, 0.56f);
+            out[n].r = clampf(0.54f + 0.24f * (1.0f - color_mix) + (u0 - 0.5f) * 0.10f, 0.0f, 1.0f);
+            out[n].g = clampf(0.62f + 0.18f * color_mix + (u1 - 0.5f) * 0.10f, 0.0f, 1.0f);
+            out[n].b = clampf(0.72f + 0.18f * u2 + color_mix * 0.08f, 0.0f, 1.0f);
+            out[n].a = clampf(0.18f + 0.22f * (1.0f - u2), 0.0f, 0.42f);
             out[n].dir_x = dir_x;
             out[n].dir_y = dir_y;
-            out[n].trail = clampf(0.02f + cluster_speed / 520.0f, 0.0f, 0.14f);
+            out[n].trail = clampf(0.01f + cluster_speed / 760.0f, 0.0f, 0.08f);
             out[n].heat = 0.22f + 0.78f * u1;
 
             if (io_r_min && radius < *io_r_min) *io_r_min = radius;
@@ -11193,9 +11211,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             }
             if (use_gpu_forest) {
                 record_gpu_forest(a, cmd, t);
-                if (use_gpu_particles) {
-                    record_gpu_particles(a, cmd, 0, 1, NULL);
-                }
+                record_gpu_particles(a, cmd, 0, 1, NULL);
             }
 
             /* Keep foreground pass depth ordering deterministic after split background/GPU passes. */
@@ -11278,12 +11294,14 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
     bloom_pc.p3[1] = 0.76f;
     vkCmdPushConstants(cmd, a->post_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(bloom_pc), &bloom_pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
-    if (a->particle_bloom_enabled && menu_is_gameplay(&a->menu)) {
+    if (menu_is_gameplay(&a->menu)) {
         const leveldef_level* bloom_lvl = game_current_leveldef(&a->game);
         if (bloom_lvl && bloom_lvl->background_style == LEVELDEF_BACKGROUND_FOREST) {
             record_gpu_particles_bloom(a, cmd, 0, 1);
         }
-        record_gpu_particles_bloom(a, cmd, 1, (a->game.level_style == LEVEL_STYLE_REVOLVER) ? 0 : 1);
+        if (a->particle_bloom_enabled) {
+            record_gpu_particles_bloom(a, cmd, 1, (a->game.level_style == LEVEL_STYLE_REVOLVER) ? 0 : 1);
+        }
     }
     vkCmdEndRenderPass(cmd);
 
