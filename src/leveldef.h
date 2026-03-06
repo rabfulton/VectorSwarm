@@ -39,7 +39,8 @@ enum leveldef_background_style {
     LEVELDEF_BACKGROUND_SOLID = 4,
     LEVELDEF_BACKGROUND_UNDERWATER = 5,
     LEVELDEF_BACKGROUND_FIRE = 6,
-    LEVELDEF_BACKGROUND_ICE = 7
+    LEVELDEF_BACKGROUND_ICE = 7,
+    LEVELDEF_BACKGROUND_FOREST = 8
 };
 
 enum leveldef_background_mask_style {
@@ -361,6 +362,20 @@ typedef struct leveldef_level {
     float ice_snow_density;
     float ice_snow_angle_deg;
     float ice_snow_speed;
+    float forest_spore_density;
+    float forest_spore_scale;
+    float forest_spore_drift_speed;
+    float forest_haze_alpha;
+    float forest_canopy_density;
+    float forest_parallax_strength;
+    float forest_flora_density;
+    float forest_branch_wobble_amp;
+    float forest_branch_wobble_speed;
+    float forest_membrane_glow;
+    float forest_biolume_pulse_freq;
+    float forest_godray_strength;
+    float forest_root_arch_density;
+    float forest_foreground_occluder_alpha;
     int render_style; /* enum level_render_style_id */
     int wave_mode;
     int spawn_mode; /* enum leveldef_spawn_mode */

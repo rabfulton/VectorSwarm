@@ -179,6 +179,7 @@ static int background_style_from_name(const char* name) {
     if (strcmp(name, "underwater") == 0) return LEVELDEF_BACKGROUND_UNDERWATER;
     if (strcmp(name, "fire") == 0) return LEVELDEF_BACKGROUND_FIRE;
     if (strcmp(name, "ice") == 0) return LEVELDEF_BACKGROUND_ICE;
+    if (strcmp(name, "forest") == 0) return LEVELDEF_BACKGROUND_FOREST;
     return -1;
 }
 
@@ -426,6 +427,20 @@ void leveldef_init_defaults(leveldef_db* db) {
         db->levels[i].ice_snow_density = 1.00f;
         db->levels[i].ice_snow_angle_deg = -24.0f;
         db->levels[i].ice_snow_speed = 1.00f;
+        db->levels[i].forest_spore_density = 1.00f;
+        db->levels[i].forest_spore_scale = 1.00f;
+        db->levels[i].forest_spore_drift_speed = 1.00f;
+        db->levels[i].forest_haze_alpha = 0.55f;
+        db->levels[i].forest_canopy_density = 1.00f;
+        db->levels[i].forest_parallax_strength = 1.00f;
+        db->levels[i].forest_flora_density = 1.00f;
+        db->levels[i].forest_branch_wobble_amp = 0.70f;
+        db->levels[i].forest_branch_wobble_speed = 0.70f;
+        db->levels[i].forest_membrane_glow = 0.50f;
+        db->levels[i].forest_biolume_pulse_freq = 0.45f;
+        db->levels[i].forest_godray_strength = 0.30f;
+        db->levels[i].forest_root_arch_density = 0.70f;
+        db->levels[i].forest_foreground_occluder_alpha = 0.50f;
         db->levels[i].wave_mode = -1;
         db->levels[i].render_style = -1;
         db->levels[i].spawn_mode = -1;
@@ -1104,6 +1119,34 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_level->ice_snow_angle_deg = strtof(v, NULL);
                     } else if (strcmp(k, "ice.snow_speed") == 0) {
                         cur_level->ice_snow_speed = strtof(v, NULL);
+                    } else if (strcmp(k, "forest.spore_density") == 0) {
+                        cur_level->forest_spore_density = strtof(v, NULL);
+                    } else if (strcmp(k, "forest.spore_scale") == 0) {
+                        cur_level->forest_spore_scale = strtof(v, NULL);
+                    } else if (strcmp(k, "forest.spore_drift_speed") == 0) {
+                        cur_level->forest_spore_drift_speed = strtof(v, NULL);
+                    } else if (strcmp(k, "forest.haze_alpha") == 0) {
+                        cur_level->forest_haze_alpha = strtof(v, NULL);
+                    } else if (strcmp(k, "forest.canopy_density") == 0) {
+                        cur_level->forest_canopy_density = strtof(v, NULL);
+                    } else if (strcmp(k, "forest.parallax_strength") == 0) {
+                        cur_level->forest_parallax_strength = strtof(v, NULL);
+                    } else if (strcmp(k, "forest.flora_density") == 0) {
+                        cur_level->forest_flora_density = strtof(v, NULL);
+                    } else if (strcmp(k, "forest.branch_wobble_amp") == 0) {
+                        cur_level->forest_branch_wobble_amp = strtof(v, NULL);
+                    } else if (strcmp(k, "forest.branch_wobble_speed") == 0) {
+                        cur_level->forest_branch_wobble_speed = strtof(v, NULL);
+                    } else if (strcmp(k, "forest.membrane_glow") == 0) {
+                        cur_level->forest_membrane_glow = strtof(v, NULL);
+                    } else if (strcmp(k, "forest.biolume_pulse_freq") == 0) {
+                        cur_level->forest_biolume_pulse_freq = strtof(v, NULL);
+                    } else if (strcmp(k, "forest.godray_strength") == 0) {
+                        cur_level->forest_godray_strength = strtof(v, NULL);
+                    } else if (strcmp(k, "forest.root_arch_density") == 0) {
+                        cur_level->forest_root_arch_density = strtof(v, NULL);
+                    } else if (strcmp(k, "forest.foreground_occluder_alpha") == 0) {
+                        cur_level->forest_foreground_occluder_alpha = strtof(v, NULL);
                     } else if (strcmp(k, "render_style") == 0) {
                         cur_level->render_style = render_style_from_name(v);
                     } else if (strcmp(k, "wave_mode") == 0) {
@@ -1593,9 +1636,9 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
             }
             ok = 0;
         }
-        if (l->background_style < LEVELDEF_BACKGROUND_STARS || l->background_style > LEVELDEF_BACKGROUND_ICE) {
+        if (l->background_style < LEVELDEF_BACKGROUND_STARS || l->background_style > LEVELDEF_BACKGROUND_FOREST) {
             if (log_out) {
-                fprintf(log_out, "leveldef: level %d invalid background (expected stars|none|nebula|grid|solid|underwater|fire|ice)\n", i);
+                fprintf(log_out, "leveldef: level %d invalid background (expected stars|none|nebula|grid|solid|underwater|fire|ice|forest)\n", i);
             }
             ok = 0;
         }
@@ -1643,6 +1686,25 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
             l->ice_snow_speed < 0.0f || l->ice_snow_speed > 6.0f || !isfinite(l->ice_snow_speed)) {
             if (log_out) {
                 fprintf(log_out, "leveldef: level %d invalid ice tuning values\n", i);
+            }
+            ok = 0;
+        }
+        if (l->forest_spore_density < 0.0f || l->forest_spore_density > 4.0f || !isfinite(l->forest_spore_density) ||
+            l->forest_spore_scale <= 0.0f || l->forest_spore_scale > 8.0f || !isfinite(l->forest_spore_scale) ||
+            l->forest_spore_drift_speed < 0.0f || l->forest_spore_drift_speed > 6.0f || !isfinite(l->forest_spore_drift_speed) ||
+            l->forest_haze_alpha < 0.0f || l->forest_haze_alpha > 1.0f || !isfinite(l->forest_haze_alpha) ||
+            l->forest_canopy_density < 0.0f || l->forest_canopy_density > 4.0f || !isfinite(l->forest_canopy_density) ||
+            l->forest_parallax_strength < 0.0f || l->forest_parallax_strength > 4.0f || !isfinite(l->forest_parallax_strength) ||
+            l->forest_flora_density < 0.0f || l->forest_flora_density > 4.0f || !isfinite(l->forest_flora_density) ||
+            l->forest_branch_wobble_amp < 0.0f || l->forest_branch_wobble_amp > 4.0f || !isfinite(l->forest_branch_wobble_amp) ||
+            l->forest_branch_wobble_speed < 0.0f || l->forest_branch_wobble_speed > 6.0f || !isfinite(l->forest_branch_wobble_speed) ||
+            l->forest_membrane_glow < 0.0f || l->forest_membrane_glow > 2.0f || !isfinite(l->forest_membrane_glow) ||
+            l->forest_biolume_pulse_freq < 0.0f || l->forest_biolume_pulse_freq > 6.0f || !isfinite(l->forest_biolume_pulse_freq) ||
+            l->forest_godray_strength < 0.0f || l->forest_godray_strength > 2.0f || !isfinite(l->forest_godray_strength) ||
+            l->forest_root_arch_density < 0.0f || l->forest_root_arch_density > 4.0f || !isfinite(l->forest_root_arch_density) ||
+            l->forest_foreground_occluder_alpha < 0.0f || l->forest_foreground_occluder_alpha > 1.0f || !isfinite(l->forest_foreground_occluder_alpha)) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid forest tuning values\n", i);
             }
             ok = 0;
         }

@@ -1113,6 +1113,7 @@ static const char* background_style_name(int style) {
         case LEVELDEF_BACKGROUND_UNDERWATER: return "underwater";
         case LEVELDEF_BACKGROUND_FIRE: return "fire";
         case LEVELDEF_BACKGROUND_ICE: return "ice";
+        case LEVELDEF_BACKGROUND_FOREST: return "forest";
         case LEVELDEF_BACKGROUND_STARS:
         default: return "stars";
     }
@@ -1690,7 +1691,7 @@ static int build_level_serialized_text(
     if (!appendf(out, out_cap, &used, "wave_mode=%s\n", wave_mode_name(lvl.wave_mode))) return 0;
     if (!appendf(out, out_cap, &used, "theme_palette=%d\n", clampi(lvl.theme_palette, 0, 2))) return 0;
     if (!appendf(out, out_cap, &used, "enemy_palette=%s\n", enemy_palette_name(lvl.enemy_palette))) return 0;
-    if (!appendf(out, out_cap, &used, "background=%s\n", background_style_name(clampi(lvl.background_style, LEVELDEF_BACKGROUND_STARS, LEVELDEF_BACKGROUND_ICE)))) return 0;
+    if (!appendf(out, out_cap, &used, "background=%s\n", background_style_name(clampi(lvl.background_style, LEVELDEF_BACKGROUND_STARS, LEVELDEF_BACKGROUND_FOREST)))) return 0;
     if (lvl.background_style == LEVELDEF_BACKGROUND_UNDERWATER) {
         if (!appendf(out, out_cap, &used, "underwater.density=%.3f\n", lvl.underwater_density)) return 0;
         if (!appendf(out, out_cap, &used, "underwater.caustic_strength=%.3f\n", lvl.underwater_caustic_strength)) return 0;
@@ -1726,6 +1727,21 @@ static int build_level_serialized_text(
         if (!appendf(out, out_cap, &used, "ice.snow_density=%.3f\n", lvl.ice_snow_density)) return 0;
         if (!appendf(out, out_cap, &used, "ice.snow_angle_deg=%.3f\n", lvl.ice_snow_angle_deg)) return 0;
         if (!appendf(out, out_cap, &used, "ice.snow_speed=%.3f\n", lvl.ice_snow_speed)) return 0;
+    } else if (lvl.background_style == LEVELDEF_BACKGROUND_FOREST) {
+        if (!appendf(out, out_cap, &used, "forest.spore_density=%.3f\n", lvl.forest_spore_density)) return 0;
+        if (!appendf(out, out_cap, &used, "forest.spore_scale=%.3f\n", lvl.forest_spore_scale)) return 0;
+        if (!appendf(out, out_cap, &used, "forest.spore_drift_speed=%.3f\n", lvl.forest_spore_drift_speed)) return 0;
+        if (!appendf(out, out_cap, &used, "forest.haze_alpha=%.3f\n", lvl.forest_haze_alpha)) return 0;
+        if (!appendf(out, out_cap, &used, "forest.canopy_density=%.3f\n", lvl.forest_canopy_density)) return 0;
+        if (!appendf(out, out_cap, &used, "forest.parallax_strength=%.3f\n", lvl.forest_parallax_strength)) return 0;
+        if (!appendf(out, out_cap, &used, "forest.flora_density=%.3f\n", lvl.forest_flora_density)) return 0;
+        if (!appendf(out, out_cap, &used, "forest.branch_wobble_amp=%.3f\n", lvl.forest_branch_wobble_amp)) return 0;
+        if (!appendf(out, out_cap, &used, "forest.branch_wobble_speed=%.3f\n", lvl.forest_branch_wobble_speed)) return 0;
+        if (!appendf(out, out_cap, &used, "forest.membrane_glow=%.3f\n", lvl.forest_membrane_glow)) return 0;
+        if (!appendf(out, out_cap, &used, "forest.biolume_pulse_freq=%.3f\n", lvl.forest_biolume_pulse_freq)) return 0;
+        if (!appendf(out, out_cap, &used, "forest.godray_strength=%.3f\n", lvl.forest_godray_strength)) return 0;
+        if (!appendf(out, out_cap, &used, "forest.root_arch_density=%.3f\n", lvl.forest_root_arch_density)) return 0;
+        if (!appendf(out, out_cap, &used, "forest.foreground_occluder_alpha=%.3f\n", lvl.forest_foreground_occluder_alpha)) return 0;
     }
     if (!appendf(out, out_cap, &used, "background_mask=%s\n", background_mask_style_name(clampi(lvl.background_mask_style, LEVELDEF_BG_MASK_NONE, LEVELDEF_BG_MASK_WINDOWS)))) return 0;
     if (!appendf(out, out_cap, &used, "spawn_mode=%s\n", spawn_mode_name(lvl.spawn_mode))) return 0;
@@ -2925,7 +2941,7 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
             s->level_wave_mode = lvl->wave_mode;
             s->level_theme_palette = clampi(lvl->theme_palette, 0, 2);
             s->level_enemy_palette = clampi(lvl->enemy_palette, LEVELDEF_ENEMY_PALETTE_DEFAULT, LEVELDEF_ENEMY_PALETTE_TOXIC);
-            s->level_background_style = clampi(lvl->background_style, LEVELDEF_BACKGROUND_STARS, LEVELDEF_BACKGROUND_ICE);
+            s->level_background_style = clampi(lvl->background_style, LEVELDEF_BACKGROUND_STARS, LEVELDEF_BACKGROUND_FOREST);
             s->level_background_mask_style = clampi(lvl->background_mask_style, LEVELDEF_BG_MASK_NONE, LEVELDEF_BG_MASK_WINDOWS);
             s->level_asteroid_storm_enabled = lvl->asteroid_storm_enabled ? 1 : 0;
             s->level_asteroid_storm_angle_deg = lvl->asteroid_storm_angle_deg;
@@ -3682,8 +3698,8 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             case LEVEL_EDITOR_LEVEL_PROP_BACKGROUND:
             {
                 const int dir = (delta >= 0.0f) ? 1 : -1;
-                const int n = LEVELDEF_BACKGROUND_ICE - LEVELDEF_BACKGROUND_STARS + 1;
-                int bg = clampi(s->level_background_style, LEVELDEF_BACKGROUND_STARS, LEVELDEF_BACKGROUND_ICE);
+                const int n = LEVELDEF_BACKGROUND_FOREST - LEVELDEF_BACKGROUND_STARS + 1;
+                int bg = clampi(s->level_background_style, LEVELDEF_BACKGROUND_STARS, LEVELDEF_BACKGROUND_FOREST);
                 bg = LEVELDEF_BACKGROUND_STARS + ((bg - LEVELDEF_BACKGROUND_STARS + dir + n) % n);
                 s->level_background_style = bg;
             } break;

@@ -98,7 +98,7 @@
 - `drifter_shaded`
 - `fog`
 - `wave_mode` enum: `normal`, `boid_only`, or `curated`
-- `background` enum: `stars`, `none`, `nebula`, `grid`, `solid`, `underwater`, `fire`
+- `background` enum: `stars`, `none`, `nebula`, `grid`, `solid`, `underwater`, `fire`, `ice`, `forest`
 - `underwater.*` tuning keys (density/caustics/kelp variants) when `background=underwater`
 - `fire.magma_scale` float
 - `fire.warp_amp` float
@@ -108,6 +108,21 @@
 - `fire.distortion_amp` float
 - `fire.smoke_alpha_cap` float
 - `fire.ember_spawn_rate` float
+- `ice.*` tuning keys when `background=ice`
+- `forest.spore_density` float
+- `forest.spore_scale` float
+- `forest.spore_drift_speed` float
+- `forest.haze_alpha` float
+- `forest.canopy_density` float
+- `forest.parallax_strength` float
+- `forest.flora_density` float
+- `forest.branch_wobble_amp` float
+- `forest.branch_wobble_speed` float
+- `forest.membrane_glow` float
+- `forest.biolume_pulse_freq` float
+- `forest.godray_strength` float
+- `forest.root_arch_density` float
+- `forest.foreground_occluder_alpha` float
 - `background_mask` enum: `none`, `terrain`, `windows`
 - `spawn_mode` enum:
 - `sequenced_clear` (spawn next wave only when clear + cooldown elapsed)
