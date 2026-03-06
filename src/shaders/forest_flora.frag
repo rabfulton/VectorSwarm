@@ -67,7 +67,9 @@ vec2 trunk_layer(vec2 uv, float camera_x, float layer_parallax, float density, f
         float y_top = y_base - height;
         float cap_mode = step(0.52, seed_c);
         float cap_y = y_top + height * mix(0.07, 0.18, seed_b);
+        float pod_rx = width * mix(0.95, 2.05, seed_b);
         float pod_ry = height * mix(0.15, 0.40, seed);
+        float umb_rx = width * mix(2.0, 4.9, seed);
         float umb_ry = height * mix(0.06, 0.18, seed_b);
         float top_extent = min(y_top, min(cap_y + height * 0.05 - pod_ry, cap_y - umb_ry));
         float top_margin = 0.18;
@@ -77,9 +79,9 @@ vec2 trunk_layer(vec2 uv, float camera_x, float layer_parallax, float density, f
             y_base += push_down;
             cap_y += push_down;
         }
-        float shape_y_min = y_top - height * 0.12;
-        float shape_y_max = y_base + 0.03;
-        float shape_x_max = width * 5.0;
+        float shape_y_min = min(y_top - height * 0.12, min(cap_y + height * 0.05 - pod_ry, cap_y - umb_ry)) - 0.01;
+        float shape_y_max = max(y_base + 0.03, cap_y + height * 0.28 + 0.01);
+        float shape_x_max = max(width * 5.0, max(pod_rx, umb_rx) * 1.04);
 
         if (abs(fx - center) > shape_x_max || uv.y < shape_y_min || uv.y > shape_y_max) {
             continue;
@@ -96,12 +98,12 @@ vec2 trunk_layer(vec2 uv, float camera_x, float layer_parallax, float density, f
         body = max(body, base_bulb * 0.65);
 
         float edge_noise = noise01(vec2(id * 0.19 + fx * 2.4, uv.y * 4.8 + seed * 6.1));
-        float pod_dx = (fx - center) / max(width * mix(0.95, 2.05, seed_b), 1.0e-4);
+        float pod_dx = (fx - center) / max(pod_rx, 1.0e-4);
         float pod_dy = (uv.y - (cap_y + height * 0.05)) / max(pod_ry, 1.0e-4);
         float pod_r2 = pod_dx * pod_dx + pod_dy * pod_dy * mix(0.8, 1.25, edge_noise);
         float pod = 1.0 - smoothstep(0.74, 1.0, pod_r2);
 
-        float umb_dx = (fx - center) / max(width * mix(2.0, 4.9, seed), 1.0e-4);
+        float umb_dx = (fx - center) / max(umb_rx, 1.0e-4);
         float umb_dy = (uv.y - cap_y) / max(umb_ry, 1.0e-4);
         float umb_r2 = umb_dx * umb_dx + umb_dy * umb_dy * mix(1.6, 2.8, 1.0 - seed_b);
         float umbrella = 1.0 - smoothstep(0.74, 1.0, umb_r2 + (edge_noise - 0.5) * 0.14);
