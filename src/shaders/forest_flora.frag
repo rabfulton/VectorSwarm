@@ -40,6 +40,9 @@ vec4 composite_over(vec4 dst, vec3 src_col, float src_a) {
 }
 
 vec2 trunk_layer(vec2 uv, float camera_x, float layer_parallax, float density, float wobble_amp, float wobble_speed, float t) {
+    if (uv.y < 0.06 || uv.y > 1.04) {
+        return vec2(0.0);
+    }
     float lane_count = mix(6.0, 15.0, sat(density * 0.35));
     float x = (uv.x + camera_x * layer_parallax) * lane_count;
     float cell = floor(x);
@@ -60,6 +63,13 @@ vec2 trunk_layer(vec2 uv, float camera_x, float layer_parallax, float density, f
         float height = mix(0.18, 0.88, seed) * mix(0.72, 1.24, density * 0.20) * mix(0.74, 1.26, seed_c);
         float y_base = 1.02;
         float y_top = y_base - height;
+        float shape_y_min = y_top - height * 0.12;
+        float shape_y_max = y_base + 0.03;
+        float shape_x_max = width * 5.0;
+
+        if (abs(fx - center) > shape_x_max || uv.y < shape_y_min || uv.y > shape_y_max) {
+            continue;
+        }
 
         float stem_u = sat((uv.y - y_top) / max(y_base - y_top, 1.0e-4));
         float stem_width = mix(width * 0.18, width * (0.40 + 0.16 * seed_c), smoothstep(0.0, 1.0, stem_u));
@@ -95,7 +105,9 @@ vec2 trunk_layer(vec2 uv, float camera_x, float layer_parallax, float density, f
         float cap = mix(pod, umbrella, cap_mode);
         float cap_rim = smoothstep(0.12, 0.74, cap) * (1.0 - smoothstep(0.78, 0.98, cap));
 
-        float veil_noise = noise01(vec2(id * 0.17, uv.y * 1.6) + vec2(t * 0.01, -t * 0.02));
+        /* Reuse the cap breakup sample and add a cheap oscillating bias instead of a second noise fetch. */
+        float veil_wave = 0.5 + 0.5 * sin(t * (0.34 + 0.18 * seed_b) + id * 0.91 + uv.y * (3.4 + 1.6 * seed));
+        float veil_noise = sat(edge_noise * 0.62 + veil_wave * 0.32 + (seed_c - 0.5) * 0.16);
         float veil = smoothstep(0.54, 0.78, veil_noise) * umbrella * smoothstep(cap_y, cap_y + height * 0.20, uv.y);
         veil *= 1.0 - smoothstep(width * 0.4, width * 2.5, abs(fx - center));
 
@@ -107,6 +119,9 @@ vec2 trunk_layer(vec2 uv, float camera_x, float layer_parallax, float density, f
 }
 
 float root_arch_band(vec2 uv, float camera_x, float parallax, float density) {
+    if (uv.y < 0.54 || uv.y > 1.04) {
+        return 0.0;
+    }
     float arc_count = mix(4.0, 9.0, sat(density * 0.30));
     float x = (uv.x + camera_x * parallax) * arc_count;
     float cell = floor(x);
@@ -121,6 +136,9 @@ float root_arch_band(vec2 uv, float camera_x, float parallax, float density) {
         float span = mix(0.42, 0.82, seed);
         float rise = mix(0.08, 0.22, seed);
         float y = 1.03 - uv.y;
+        if (abs(fx - center) > span * 1.3 || y < -0.08 || y > rise + 0.24) {
+            continue;
+        }
         float dx = (fx - center) / span;
         float dy = (y - rise) / max(rise, 1.0e-4);
         float ring = abs(dot(vec2(dx, dy), vec2(dx, dy)) - 1.0);
@@ -154,7 +172,8 @@ void main() {
     vec3 glow_col = pc.p2.rgb;
     float species_a = noise01(vec2((uv.x + cam_uv.x * 0.32) * 2.6, uv.y * 0.55 + 1.4));
     float species_b = noise01(vec2((uv.x + cam_uv.x * 0.28) * 5.2 + 3.7, uv.y * 1.8 - 1.1));
-    float species_c = noise01(vec2((uv.x + cam_uv.x * 0.18) * 8.1 - 2.3, uv.y * 0.95 + 4.8));
+    float species_c_wave = 0.5 + 0.5 * sin((uv.x + cam_uv.x * 0.24) * 7.3 + uv.y * 1.7 + species_a * 4.2 - species_b * 3.1);
+    float species_c = sat(mix(species_a, species_b, 0.58) * 0.82 + species_c_wave * 0.18);
 
     vec3 stem_a = vec3(0.20, 0.32, 0.28);
     vec3 stem_b = vec3(0.28, 0.18, 0.32);
@@ -208,7 +227,8 @@ void main() {
     col += cap_col * mid_glow * 0.30;
     col += cap_col * near_glow * 0.18;
     col += glow_col * (mid_glow * 0.03 + near_glow * 0.02);
-    col *= 0.86 + 0.08 * noise01(vec2(uv.x * 6.0, uv.y * 9.0) + vec2(1.7, -3.9));
+    float surface_breakup = mix(species_a, species_b, 0.44);
+    col *= 0.85 + 0.09 * surface_breakup;
 
     out_color = vec4(col, alpha);
 }

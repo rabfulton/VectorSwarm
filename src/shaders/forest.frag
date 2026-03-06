@@ -321,6 +321,9 @@ vec4 foreground_vines(vec2 uv, vec2 cam_uv, float t, float parallax, float densi
 }
 
 vec4 hero_fauna_overlay(vec2 uv, vec2 cam_uv, float t, float parallax, float density, vec3 bark_col, vec3 haze_col, vec3 glow_col) {
+    if (uv.y < 0.18 || uv.y > 1.04) {
+        return vec4(0.0);
+    }
     float lane_count = mix(2.8, 4.4, sat(density * 0.26));
     float x = (uv.x + cam_uv.x * (0.30 + 0.12 * parallax)) * lane_count;
     float cell = floor(x);
@@ -342,8 +345,14 @@ vec4 hero_fauna_overlay(vec2 uv, vec2 cam_uv, float t, float parallax, float den
         float cap_y = mix(0.38, 0.70, seed);
         float stem_w = cap_w * mix(0.08, 0.16, seed_c);
         float y_base = 1.02;
+        float shape_y_min = cap_y - cap_h * 1.8;
+        float shape_y_max = y_base + 0.03;
+        float shape_x_max = cap_w * 4.8;
 
         float dx = fx - center;
+        if (abs(dx) > shape_x_max || uv.y < shape_y_min || uv.y > shape_y_max) {
+            continue;
+        }
         float stem = 1.0 - smoothstep(stem_w * 0.65, stem_w, abs(dx));
         stem *= smoothstep(cap_y, cap_y + 0.03, uv.y) * (1.0 - smoothstep(y_base - 0.02, y_base + 0.02, uv.y));
 
