@@ -331,8 +331,8 @@ vec4 hero_fauna_overlay(vec2 uv, vec2 cam_uv, float t, float parallax, float den
     vec3 accum_col = vec3(0.0);
     float accum_a = 0.0;
 
-    for (int i = -1; i <= 1; ++i) {
-        float fi = float(i);
+    for (int i = 0; i < 2; ++i) {
+        float fi = (i == 0) ? 0.0 : ((fx < 0.0) ? -1.0 : 1.0);
         float id = cell + fi;
         float seed = hash11(id * 13.17 + 0.37);
         float seed_b = hash11(id * 29.41 + 1.19);
@@ -368,22 +368,26 @@ vec4 hero_fauna_overlay(vec2 uv, vec2 cam_uv, float t, float parallax, float den
         float curtain_top = cap_y + cap_h * 0.10;
         float curtain_len = mix(0.14, 0.34, seed) * mix(0.85, 1.35, seed_b);
         float local_y = uv.y - curtain_top;
-        float curtain_v = sat(local_y / max(curtain_len, 1.0e-4));
         float attach = 1.0 - smoothstep(cap_w * 0.18, cap_w * 0.96, abs(dx));
-        float strand_space = max(cap_w * mix(0.08, 0.14, seed_c), 1.0e-4);
-        float strand_coord = dx / strand_space;
-        float strand_idx = floor(strand_coord + 0.5);
-        float strand_seed = hash11(id * 19.1 + strand_idx * 0.91 + seed_c * 5.3);
-        float strand_center = center + strand_idx * strand_space;
-        float strand_live = step(abs(strand_idx), mix(3.0, 8.0, seed_b));
-        float bend = sin(t * (0.55 + 0.25 * strand_seed) + id * 0.43 + strand_idx * 0.82) * cap_w * (0.03 + 0.04 * strand_seed);
-        bend += sin(t * (1.10 + 0.25 * seed_c) + curtain_v * 2.6 + strand_idx * 1.17) * cap_w * (0.05 + 0.10 * strand_seed) * curtain_v * curtain_v;
-        float strand_x = strand_center + bend;
-        float strand_w = cap_w * mix(0.018, 0.034, strand_seed) * mix(1.0, 0.42, curtain_v);
-        float vertical = smoothstep(-0.004, 0.02, local_y) * (1.0 - smoothstep(curtain_len * 0.96, curtain_len, local_y));
-        float strand = 1.0 - smoothstep(strand_w * 0.45, strand_w, abs(fx - strand_x));
-        float tendril = strand * vertical * attach * strand_live * 0.82;
-        float tendril_glow = strand * vertical * attach * strand_live * 0.08;
+        float tendril = 0.0;
+        float tendril_glow = 0.0;
+        if (attach > 0.001 && local_y > -0.004 && local_y < curtain_len) {
+            float curtain_v = sat(local_y / max(curtain_len, 1.0e-4));
+            float strand_space = max(cap_w * mix(0.08, 0.14, seed_c), 1.0e-4);
+            float strand_coord = dx / strand_space;
+            float strand_idx = floor(strand_coord + 0.5);
+            float strand_seed = hash11(id * 19.1 + strand_idx * 0.91 + seed_c * 5.3);
+            float strand_center = center + strand_idx * strand_space;
+            float strand_live = step(abs(strand_idx), mix(3.0, 8.0, seed_b));
+            float bend = sin(t * (0.55 + 0.25 * strand_seed) + id * 0.43 + strand_idx * 0.82) * cap_w * (0.03 + 0.04 * strand_seed);
+            bend += sin(t * (1.10 + 0.25 * seed_c) + curtain_v * 2.6 + strand_idx * 1.17) * cap_w * (0.05 + 0.10 * strand_seed) * curtain_v * curtain_v;
+            float strand_x = strand_center + bend;
+            float strand_w = cap_w * mix(0.018, 0.034, strand_seed) * mix(1.0, 0.42, curtain_v);
+            float vertical = smoothstep(-0.004, 0.02, local_y) * (1.0 - smoothstep(curtain_len * 0.96, curtain_len, local_y));
+            float strand = 1.0 - smoothstep(strand_w * 0.45, strand_w, abs(fx - strand_x));
+            tendril = strand * vertical * attach * strand_live * 0.82;
+            tendril_glow = strand * vertical * attach * strand_live * 0.08;
+        }
 
         float cap_rim = smoothstep(0.18, 0.74, cap) * (1.0 - smoothstep(0.80, 0.98, cap));
         float cap_fill = cap * 0.24;
@@ -446,7 +450,7 @@ void main() {
     vec4 flora_tex = texture(u_kelp, uv);
     float flora_pre = clamp(flora_tex.a, 0.0, 1.0);
     vec4 hero_fauna = vec4(0.0);
-    if (flora_pre < 0.86 && uv.y > 0.18 && uv.y < 0.98) {
+    if (flora_pre < 0.60 && uv.y > 0.24 && uv.y < 0.92) {
         hero_fauna = hero_fauna_overlay(uv, cam_uv, t, parallax, flora_density, bark_col, haze_col, glow_col);
     }
     float flora_far = max(canopy_far * 0.88, flora_pre * 0.12);
@@ -454,7 +458,7 @@ void main() {
     vec3 flora_rgb = flora_tex.rgb;
     float flora_lum = dot(flora_rgb, vec3(0.2126, 0.7152, 0.0722));
     float flora_species_a = noise01(vec2((uv.x + cam_uv.x * 0.24) * 3.4 + 0.7, uv.y * 0.9 + 1.2));
-    float flora_species_b = noise01(vec2((uv.x + cam_uv.x * 0.31) * 5.6 - 1.4, uv.y * 1.6 + 3.1));
+    float flora_species_b = fract(flora_species_a * 0.73 + haze1 * 0.61 + uv.y * 0.17);
     vec3 flora_tint = mix(vec3(0.82, 1.04, 0.96), vec3(1.08, 0.86, 1.02), flora_species_a);
     flora_tint = mix(flora_tint, vec3(0.96, 0.90, 1.12), flora_species_b * 0.58);
     flora_rgb *= flora_tint;
@@ -489,8 +493,8 @@ void main() {
 
     float ray = 0.0;
     vec2 ray_dir = normalize(vec2(-0.48, 0.88));
-    int ray_steps = (high_quality > 0.5) ? 3 : 2;
-    for (int i = 0; i < 3; ++i) {
+    int ray_steps = (high_quality > 0.5) ? 2 : 1;
+    for (int i = 0; i < 2; ++i) {
         float fi = float(i);
         vec2 suv = uv + ray_dir * fi * 0.042;
         float weight = (i < ray_steps) ? 1.0 : 0.0;
