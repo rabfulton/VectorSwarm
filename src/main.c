@@ -9719,14 +9719,14 @@ static void record_gpu_forest(app* a, VkCommandBuffer cmd, float t) {
     pc.p4[2] = clampf(lvl->forest_parallax_strength, 0.0f, 4.0f);
     pc.p4[3] = clampf(lvl->forest_flora_density, 0.0f, 4.0f);
 
-    pc.p5[0] = 0.420f;
-    pc.p5[1] = 0.690f;
-    pc.p5[2] = 0.560f;
+    pc.p5[0] = 0.560f;
+    pc.p5[1] = 0.900f;
+    pc.p5[2] = 0.720f;
     pc.p5[3] = clampf(lvl->forest_membrane_glow, 0.0f, 2.0f);
 
     pc.p6[0] = clampf(lvl->forest_root_arch_density, 0.0f, 4.0f);
     pc.p6[1] = clampf(lvl->forest_godray_strength, 0.0f, 2.0f);
-    pc.p6[2] = 0.0f;
+    pc.p6[2] = a->video_menu_high_quality ? 1.0f : 0.0f;
     pc.p6[3] = 0.0f;
 
     pc.p7[0] = clampf(lvl->forest_branch_wobble_amp, 0.0f, 4.0f);
@@ -9737,10 +9737,12 @@ static void record_gpu_forest(app* a, VkCommandBuffer cmd, float t) {
     if (palette_mode == 1) {
         pc.p2[0] += 0.020f;
         pc.p2[1] += 0.015f;
-        pc.p5[0] += 0.050f;
+        pc.p5[0] += 0.060f;
+        pc.p5[1] += 0.020f;
     } else if (palette_mode == 2) {
         pc.p2[2] += 0.060f;
-        pc.p5[2] += 0.100f;
+        pc.p5[1] += 0.030f;
+        pc.p5[2] += 0.120f;
         pc.p2[1] += 0.020f;
     }
 

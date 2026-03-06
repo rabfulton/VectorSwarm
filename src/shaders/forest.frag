@@ -28,7 +28,7 @@ float noise01(vec2 uv) {
 float fbm(vec2 uv) {
     float v = 0.0;
     float a = 0.5;
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 3; ++i) {
         v += a * noise01(uv);
         uv = uv * 2.03 + vec2(0.37, -0.29);
         a *= 0.5;
@@ -65,7 +65,8 @@ float trunk_band(vec2 uv, float camera_x, float layer_parallax, float density, f
         float vertical = smoothstep(y_top - 0.03, y_top + 0.03, uv.y) * (1.0 - smoothstep(y_base - 0.02, y_base + 0.02, uv.y));
         float cap_dx = (fx - center) / max(width * mix(1.7, 2.8, seed), 1.0e-4);
         float cap_dy = (uv.y - (y_top + height * 0.10)) / max(height * mix(0.12, 0.22, seed_b), 1.0e-4);
-        float cap = 1.0 - smoothstep(0.78, 1.0, length(vec2(cap_dx, cap_dy)));
+        float cap_r2 = dot(vec2(cap_dx, cap_dy), vec2(cap_dx, cap_dy));
+        float cap = 1.0 - smoothstep(0.76, 1.0, cap_r2);
         accum = max(accum, max(stem * vertical, cap));
     }
 
@@ -89,8 +90,8 @@ float root_arch_band(vec2 uv, float camera_x, float parallax, float density, flo
         float y = 1.03 - uv.y;
         float dx = (fx - center) / span;
         float dy = (y - rise) / max(rise, 1.0e-4);
-        float ring = abs(length(vec2(dx, dy)) - 1.0);
-        float arch = 1.0 - smoothstep(0.02, 0.08, ring);
+        float ring = abs(dot(vec2(dx, dy), vec2(dx, dy)) - 1.0);
+        float arch = 1.0 - smoothstep(0.04, 0.22, ring);
         arch *= smoothstep(-0.2, 0.3, y);
         arch *= 1.0 - smoothstep(rise + 0.02, rise + 0.18, y);
         accum = max(accum, arch);
@@ -103,10 +104,20 @@ float canopy_mask(vec2 uv, vec2 cam_uv, float drift, float density, float parall
     vec2 far_uv = (uv + cam_uv * (0.18 + 0.18 * parallax)) * vec2(1.6, 0.85);
     far_uv += vec2(t * 0.005, -t * 0.004) * (0.5 + 0.5 * drift);
     float base = fbm(far_uv * vec2(1.0, 1.8));
-    float detail = fbm(far_uv * vec2(2.2, 2.8) + vec2(3.1, -1.7));
-    float coverage = smoothstep(0.42, 0.86, base * 0.72 + detail * 0.42 + density * 0.14);
+    float detail = noise01(far_uv * vec2(2.2, 2.8) + vec2(3.1, -1.7));
+    float coverage = smoothstep(0.42, 0.86, base * 0.74 + detail * 0.30 + density * 0.14);
     coverage *= smoothstep(0.02, 0.48, uv.y);
     return sat(coverage);
+}
+
+float canopy_openness_fast(vec2 uv, vec2 cam_uv, float drift, float density, float parallax, float t) {
+    vec2 ray_uv = (uv + cam_uv * (0.12 + 0.14 * parallax)) * vec2(1.45, 0.78);
+    ray_uv += vec2(t * 0.004, -t * 0.003) * (0.5 + 0.4 * drift);
+    float a = noise01(ray_uv * vec2(1.2, 2.0));
+    float b = noise01(ray_uv * vec2(2.0, 2.7) + vec2(2.3, -1.1));
+    float coverage = smoothstep(0.48, 0.84, a * 0.68 + b * 0.32 + density * 0.12);
+    coverage *= smoothstep(0.02, 0.46, uv.y);
+    return 1.0 - sat(coverage);
 }
 
 void main() {
@@ -126,6 +137,7 @@ void main() {
     float membrane_glow = clamp(pc.p5.w, 0.0, 2.0);
     float root_arch_density = clamp(pc.p6.x, 0.0, 4.0);
     float godray_strength = clamp(pc.p6.y, 0.0, 2.0);
+    float high_quality = step(0.5, pc.p6.z);
     float wobble_amp = clamp(pc.p7.x, 0.0, 4.0);
     float wobble_speed = clamp(pc.p7.y, 0.0, 6.0);
     float pulse_freq = clamp(pc.p7.z, 0.0, 6.0);
@@ -159,23 +171,26 @@ void main() {
     float pulse = 0.55 + 0.45 * sin(t * (0.35 + pulse_freq * 0.55) + haze1 * 9.0);
 
     float rim = smoothstep(0.12, 0.88, flora_mid) * (1.0 - smoothstep(0.90, 1.0, flora_mid));
-    float translucency = rim * membrane_glow * pulse * smoothstep(0.12, 0.74, uv.y);
+    float translucency = rim * membrane_glow * (0.75 + 0.65 * pulse) * smoothstep(0.10, 0.78, uv.y);
+    float hot_rim = pow(rim, 0.72) * membrane_glow * (0.55 + 0.75 * pulse);
 
     vec3 far_col = bark_col * (0.55 + haze * 0.25);
     vec3 mid_col = mix(bark_col * 0.72, haze_col * 0.75, haze * 0.20);
     col = mix(col, far_col, flora_far * 0.56);
     col = mix(col, mid_col, flora_mid * 0.84);
-    col += glow_col * translucency * 0.58;
+    col += glow_col * translucency * 0.92;
+    col += mix(glow_col, vec3(0.92, 0.98, 0.90), 0.35) * hot_rim * 0.52;
 
     float ray = 0.0;
     vec2 ray_dir = normalize(vec2(-0.48, 0.88));
-    for (int i = 0; i < 7; ++i) {
+    for (int i = 0; i < 4; ++i) {
         float fi = float(i);
         vec2 suv = uv + ray_dir * fi * 0.042;
-        float openness = 1.0 - canopy_mask(suv, cam_uv, drift_speed, canopy_density, parallax * 0.25, t);
-        ray += openness;
+        float weight = (high_quality > 0.5 || i < 3) ? 1.0 : 0.0;
+        float openness = canopy_openness_fast(suv, cam_uv, drift_speed, canopy_density, parallax * 0.25, t);
+        ray += openness * weight;
     }
-    ray /= 7.0;
+    ray /= (high_quality > 0.5) ? 4.0 : 3.0;
     float godray = ray * haze * godray_strength * smoothstep(0.06, 0.72, uv.y) * (1.0 - flora_mid * 0.55);
     col += ray_col * godray * 0.25;
 
@@ -191,8 +206,10 @@ void main() {
     float dust = smoothstep(0.44, 0.92, haze0 * 0.64 + haze1 * 0.36);
     col = mix(col, mix(bark_col * 0.72, haze_col, 0.65), dust * pc.p2.w * 0.32);
 
-    float near_occ = trunk_band(uv, cam_uv.x, 0.60 + 0.24 * parallax, flora_density * 1.2, wobble_amp * 0.70, wobble_speed * 1.10, t + 7.9);
-    near_occ = max(near_occ, root_arch_band(uv, cam_uv.x, 0.68 + 0.24 * parallax, root_arch_density * 1.25, t + 2.1));
+    float near_occ = max(roots * 0.62, trunks_mid * 0.30);
+    if (high_quality > 0.5) {
+        near_occ = max(near_occ, trunk_band(uv, cam_uv.x, 0.60 + 0.24 * parallax, flora_density * 1.2, wobble_amp * 0.70, wobble_speed * 1.10, t + 7.9));
+    }
     float occ_alpha = near_occ * foreground_alpha * smoothstep(0.16, 1.0, uv.y);
     col *= (1.0 - occ_alpha * 0.82);
 
