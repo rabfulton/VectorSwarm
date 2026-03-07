@@ -320,90 +320,6 @@ vec4 foreground_vines(vec2 uv, vec2 cam_uv, float t, float parallax, float densi
     return vec4(sat(vine0), sat(vine1), sat(vine2), sat(thorn));
 }
 
-vec4 hero_fauna_overlay(vec2 uv, vec2 cam_uv, float t, float parallax, float density, vec3 bark_col, vec3 haze_col, vec3 glow_col) {
-    if (uv.y < 0.18 || uv.y > 1.04) {
-        return vec4(0.0);
-    }
-    float lane_count = mix(2.8, 4.4, sat(density * 0.26));
-    float x = (uv.x + cam_uv.x * (0.30 + 0.12 * parallax)) * lane_count;
-    float cell = floor(x);
-    float fx = fract(x) - 0.5;
-    vec3 accum_col = vec3(0.0);
-    float accum_a = 0.0;
-
-    for (int i = 0; i < 2; ++i) {
-        float fi = (i == 0) ? 0.0 : ((fx < 0.0) ? -1.0 : 1.0);
-        float id = cell + fi;
-        float seed = hash11(id * 13.17 + 0.37);
-        float seed_b = hash11(id * 29.41 + 1.19);
-        float seed_c = hash11(id * 41.73 + 2.81);
-        float species = hash11(id * 7.31 + 5.17);
-        float sway = sin(t * (0.10 + 0.07 * seed_b) + id * 0.61) * (0.035 + 0.020 * seed);
-        float center = fi + (seed - 0.5) * 0.42 + sway;
-        float cap_w = mix(0.10, 0.24, seed_b) * mix(0.86, 1.28, seed);
-        float cap_h = cap_w * mix(0.20, 0.34, seed_c);
-        float cap_y = mix(0.38, 0.70, seed);
-        float stem_w = cap_w * mix(0.08, 0.16, seed_c);
-        float y_base = 1.02;
-        float shape_y_min = cap_y - cap_h * 1.8;
-        float shape_y_max = y_base + 0.03;
-        float shape_x_max = cap_w * 4.8;
-
-        float dx = fx - center;
-        if (abs(dx) > shape_x_max || uv.y < shape_y_min || uv.y > shape_y_max) {
-            continue;
-        }
-        float stem = 1.0 - smoothstep(stem_w * 0.65, stem_w, abs(dx));
-        stem *= smoothstep(cap_y, cap_y + 0.03, uv.y) * (1.0 - smoothstep(y_base - 0.02, y_base + 0.02, uv.y));
-
-        float cap_dx = dx / max(cap_w, 1.0e-4);
-        float cap_dy = (uv.y - cap_y) / max(cap_h, 1.0e-4);
-        float cap = 1.0 - smoothstep(0.84, 1.0, cap_dx * cap_dx + cap_dy * cap_dy);
-
-        vec3 stem_col = mix(bark_col * 0.62 + haze_col * 0.18, bark_col * 0.42 + glow_col * 0.12, species);
-        vec3 cap_col = mix(vec3(0.58, 0.82, 0.72), vec3(0.84, 0.60, 0.76), species);
-        cap_col = mix(cap_col, vec3(0.70, 0.66, 0.94), seed_b * 0.55);
-        cap_col = mix(cap_col, vec3(0.88, 0.78, 0.56), seed_c * 0.28);
-
-        float curtain_top = cap_y + cap_h * 0.10;
-        float curtain_len = mix(0.14, 0.34, seed) * mix(0.85, 1.35, seed_b);
-        float local_y = uv.y - curtain_top;
-        float attach = 1.0 - smoothstep(cap_w * 0.18, cap_w * 0.96, abs(dx));
-        float tendril = 0.0;
-        float tendril_glow = 0.0;
-        if (attach > 0.001 && local_y > -0.004 && local_y < curtain_len) {
-            float curtain_v = sat(local_y / max(curtain_len, 1.0e-4));
-            float strand_space = max(cap_w * mix(0.08, 0.14, seed_c), 1.0e-4);
-            float strand_coord = dx / strand_space;
-            float strand_idx = floor(strand_coord + 0.5);
-            float strand_seed = hash11(id * 19.1 + strand_idx * 0.91 + seed_c * 5.3);
-            float strand_center = center + strand_idx * strand_space;
-            float strand_live = step(abs(strand_idx), mix(3.0, 8.0, seed_b));
-            float bend = sin(t * (0.55 + 0.25 * strand_seed) + id * 0.43 + strand_idx * 0.82) * cap_w * (0.03 + 0.04 * strand_seed);
-            bend += sin(t * (1.10 + 0.25 * seed_c) + curtain_v * 2.6 + strand_idx * 1.17) * cap_w * (0.05 + 0.10 * strand_seed) * curtain_v * curtain_v;
-            float strand_x = strand_center + bend;
-            float strand_w = cap_w * mix(0.018, 0.034, strand_seed) * mix(1.0, 0.42, curtain_v);
-            float vertical = smoothstep(-0.004, 0.02, local_y) * (1.0 - smoothstep(curtain_len * 0.96, curtain_len, local_y));
-            float strand = 1.0 - smoothstep(strand_w * 0.45, strand_w, abs(fx - strand_x));
-            tendril = strand * vertical * attach * strand_live * 0.82;
-            tendril_glow = strand * vertical * attach * strand_live * 0.08;
-        }
-
-        float cap_rim = smoothstep(0.18, 0.74, cap) * (1.0 - smoothstep(0.80, 0.98, cap));
-        float cap_fill = cap * 0.24;
-        float obj_a = max(stem * 0.72, max(cap_fill, tendril));
-        vec3 obj_col = mix(stem_col, cap_col, smoothstep(0.26, 0.76, cap_rim + tendril * 0.24));
-        obj_col += cap_col * cap_rim * 0.26;
-        obj_col += cap_col * tendril_glow * 0.85;
-        obj_col += glow_col * tendril_glow * 0.22;
-
-        accum_col += obj_col * obj_a * (1.0 - accum_a);
-        accum_a += obj_a * (1.0 - accum_a);
-    }
-
-    return vec4(accum_col, sat(accum_a));
-}
-
 void main() {
     vec2 frag_px = gl_FragCoord.xy;
     vec2 vp = vec2(max(pc.p0.x, 1.0), max(pc.p0.y, 1.0));
@@ -449,10 +365,6 @@ void main() {
     float canopy_far = forest_cache.a;
     vec4 flora_tex = texture(u_kelp, uv);
     float flora_pre = clamp(flora_tex.a, 0.0, 1.0);
-    vec4 hero_fauna = vec4(0.0);
-    if (flora_pre < 0.60 && uv.y > 0.24 && uv.y < 0.92) {
-        hero_fauna = hero_fauna_overlay(uv, cam_uv, t, parallax, flora_density, bark_col, haze_col, glow_col);
-    }
     float flora_far = max(canopy_far * 0.88, flora_pre * 0.12);
     float flora_mid = flora_pre;
     vec3 flora_rgb = flora_tex.rgb;
@@ -488,9 +400,6 @@ void main() {
     col += flora_rgb * flora_glow * 0.16;
     col += glow_col * translucency * 0.30;
     col += mix(glow_col, flora_rgb, 0.46) * hot_rim * 0.10;
-    float hero_mask = hero_fauna.a * (1.0 - flora_pre * 0.82);
-    col = mix(col, hero_fauna.rgb, hero_mask * 0.82);
-
     float ray = 0.0;
     vec2 ray_dir = normalize(vec2(-0.48, 0.88));
     int ray_steps = (high_quality > 0.5) ? 2 : 1;
@@ -510,7 +419,7 @@ void main() {
     float dust = smoothstep(0.44, 0.92, haze0 * 0.64 + haze1 * 0.36);
     col = mix(col, mix(bark_col * 0.72, haze_col, 0.65), dust * pc.p2.w * 0.32);
 
-    float near_occ = hero_fauna.a * 0.08;
+    float near_occ = 0.0;
     if (high_quality > 0.5) {
         near_occ = max(near_occ, trunk_band(uv, cam_uv.x, 0.60 + 0.24 * parallax, flora_density * 0.95, wobble_amp * 0.70, wobble_speed * 1.10, t + 7.9) * 0.26);
     }
@@ -525,6 +434,5 @@ void main() {
     float alpha = clamp(pc.p2.w * (0.52 + haze * 0.18 + flora_far * 0.16 + flora_mid * 0.40 + bg_trunks.x * 0.34), 0.0, 0.98);
     alpha = max(alpha, 0.72 + bg_trunks.x * 0.12);
     alpha = max(alpha, occ_alpha * 0.88);
-    alpha = max(alpha, hero_mask * 0.70);
     out_color = vec4(col, alpha);
 }
