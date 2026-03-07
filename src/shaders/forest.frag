@@ -351,7 +351,7 @@ void main() {
     vec3 glow_col = pc.p5.rgb;
     vec3 ray_col = vec3(0.80, 0.87, 0.74);
 
-    vec3 col = mix(vec3(0.018, 0.020, 0.030), mix(haze_col, vec3(0.10, 0.18, 0.14), 0.35), smoothstep(0.0, 0.82, uv.y));
+    vec3 col = mix(vec3(0.018, 0.020, 0.030), haze_col * 0.92 + vec3(0.010, 0.016, 0.024), smoothstep(0.0, 0.82, uv.y));
     col = mix(col, bark_col * 0.70 + vec3(0.01, 0.00, 0.02), smoothstep(0.80, 1.0, uv.y));
 
     vec2 haze_uv = world_uv * spore_scale * vec2(1.2, 0.9);
@@ -385,8 +385,8 @@ void main() {
     float translucency = rim * membrane_glow * (0.75 + 0.65 * pulse) * smoothstep(0.10, 0.78, uv.y);
     float hot_rim = pow(rim, 0.72) * membrane_glow * (0.55 + 0.75 * pulse);
 
-    vec3 far_col = mix(bark_col * 0.70, vec3(0.16, 0.28, 0.24), haze * 0.28);
-    vec3 mid_col = mix(bark_col * 0.58, haze_col * 0.95, haze * 0.30);
+    vec3 far_col = mix(bark_col * 0.66, haze_col * 0.72 + vec3(0.012, 0.018, 0.024), haze * 0.36);
+    vec3 mid_col = mix(bark_col * 0.52, haze_col * 1.08, haze * 0.42);
     vec3 trunk_shadow = vec3(0.01, 0.015, 0.025);
     vec3 trunk_rim = mix(vec3(0.28, 0.42, 0.36), glow_col * 0.82, 0.55);
     vec3 cloud_col = vec3(0.0);
@@ -395,6 +395,7 @@ void main() {
     col = mix(col, trunk_shadow, bg_trunks.x * 0.82);
     col += trunk_rim * bg_trunks.y * 0.84;
     col += mix(glow_col, vec3(0.78, 0.90, 0.86), 0.40) * bg_trunks.z * 0.40;
+    col = mix(col, haze_col * 0.88 + vec3(0.01, 0.01, 0.02), haze * pc.p2.w * 0.22);
     col = mix(col, flora_rgb, flora_pre * 0.70);
     col *= (1.0 - flora_pre * 0.010);
     col += flora_rgb * flora_glow * 0.16;
@@ -417,7 +418,7 @@ void main() {
     float spores = 0.0;
 
     float dust = smoothstep(0.44, 0.92, haze0 * 0.64 + haze1 * 0.36);
-    col = mix(col, mix(bark_col * 0.72, haze_col, 0.65), dust * pc.p2.w * 0.32);
+    col = mix(col, haze_col * 0.94 + vec3(0.012, 0.014, 0.020), dust * pc.p2.w * 0.42);
 
     float near_occ = 0.0;
     if (high_quality > 0.5) {
