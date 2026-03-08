@@ -137,7 +137,7 @@ vec4 kelp_field(vec2 world_px, float t) {
 
             float aa_along = max(fwidth(along), 0.015);
             float along_lo = smoothstep(0.02 - aa_along, 0.12 + aa_along, along);
-            float along_hi = smoothstep(1.0 + aa_along, 0.86 - aa_along, along);
+            float along_hi = 1.0 - smoothstep(0.86 - aa_along, 1.0 + aa_along, along);
             body *= along_lo * along_hi;
 
             float rib = 1.0 - smoothstep(max(0.0, -aa * 0.5), width * 0.28 + aa * 0.5, d);

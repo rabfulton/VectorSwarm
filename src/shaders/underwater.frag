@@ -170,7 +170,7 @@ vec4 kelp_field(vec2 world_px, float t) {
             dx -= tile_w * round(dx / tile_w);
             float d = abs(dx);
             float body = 1.0 - smoothstep(width * 0.70, width, d);
-            body *= smoothstep(0.02, 0.12, along) * smoothstep(1.0, 0.86, along);
+            body *= smoothstep(0.02, 0.12, along) * (1.0 - smoothstep(0.86, 1.0, along));
 
             float rib = 1.0 - smoothstep(0.0, width * 0.28, d);
             vec3 stem_col = mix(pc.p1.rgb * 0.70, pc.p2.rgb * 1.05, 0.25 + 0.55 * lf);
