@@ -11377,11 +11377,6 @@ static void structure_tile_emit(
     }
     {
         structure_tile_pc pc;
-        const float inset = fminf(fminf(dst_w, dst_h) * 0.035f, 3.0f);
-        const float dx = dst_x + inset;
-        const float dy = dst_y + inset;
-        const float dw = fmaxf(dst_w - inset * 2.0f, 1.0f);
-        const float dh = fmaxf(dst_h - inset * 2.0f, 1.0f);
         float uv00_x = u0, uv00_y = v0;
         float uv10_x = u1, uv10_y = v0;
         float uv11_x = u1, uv11_y = v1;
@@ -11398,10 +11393,10 @@ static void structure_tile_emit(
         );
         pc.p0[0] = (float)a->swapchain_extent.width;
         pc.p0[1] = (float)a->swapchain_extent.height;
-        pc.p0[2] = dx;
-        pc.p0[3] = dy;
-        pc.p1[0] = dw;
-        pc.p1[1] = dh;
+        pc.p0[2] = dst_x;
+        pc.p0[3] = dst_y;
+        pc.p1[0] = dst_w;
+        pc.p1[1] = dst_h;
         pc.p1[2] = alpha;
         pc.p2[0] = uv00_x;
         pc.p2[1] = uv00_y;
