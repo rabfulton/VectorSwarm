@@ -19,6 +19,18 @@
 #define LEVELDEF_STRUCTURE_GRID_H 36
 #define LEVELDEF_STRUCTURE_GRID_SCALE 2
 
+enum {
+    LEVELDEF_STRUCTURE_PREFAB_PANEL_SQ = 0,
+    LEVELDEF_STRUCTURE_PREFAB_INSET_SQ = 1,
+    LEVELDEF_STRUCTURE_PREFAB_X_BRACE = 2,
+    LEVELDEF_STRUCTURE_PREFAB_TRI = 3,
+    LEVELDEF_STRUCTURE_PREFAB_TRIPLE = 4,
+    LEVELDEF_STRUCTURE_PREFAB_PIPE = 5,
+    LEVELDEF_STRUCTURE_PREFAB_VALVE = 6,
+    LEVELDEF_STRUCTURE_PREFAB_VENT = 7,
+    LEVELDEF_STRUCTURE_PREFAB_TEX_PANEL = 8
+};
+
 enum leveldef_wave_mode {
     LEVELDEF_WAVES_NORMAL = 0,
     LEVELDEF_WAVES_BOID_ONLY = 1,
@@ -330,6 +342,11 @@ typedef struct leveldef_level {
     int enemy_palette; /* enum leveldef_enemy_palette */
     int background_style; /* enum leveldef_background_style */
     int background_mask_style; /* enum leveldef_background_mask_style */
+    int texture_atlas_id; /* enum texture_atlas_id */
+    int texture_tile_w_px;
+    int texture_tile_h_px;
+    int texture_panel_w_units;
+    int texture_panel_h_units;
     float underwater_density;
     float underwater_caustic_strength;
     float underwater_caustic_scale;

@@ -1,5 +1,6 @@
 #include "level_editor.h"
 #include "boss.h"
+#include "texture_atlas.h"
 
 #include <ctype.h>
 #include <math.h>
@@ -166,6 +167,39 @@ static void structure_prefab_dims(int prefab_id, int* out_w, int* out_h) {
     if (out_h) *out_h = h;
 }
 
+static void structure_prefab_dims_for_level(const level_editor_state* s, int prefab_id, int* out_w, int* out_h) {
+    structure_prefab_dims(prefab_id, out_w, out_h);
+    if (prefab_id == LEVELDEF_STRUCTURE_PREFAB_TEX_PANEL) {
+        if (out_w) *out_w = (s && s->level_texture_panel_w_units > 0) ? s->level_texture_panel_w_units : 1;
+        if (out_h) *out_h = (s && s->level_texture_panel_h_units > 0) ? s->level_texture_panel_h_units : 1;
+    }
+}
+
+static int structure_prefab_uses_vent_params(int prefab_id) {
+    return prefab_id == LEVELDEF_STRUCTURE_PREFAB_VENT;
+}
+
+static int structure_prefab_uses_tile_params(int prefab_id) {
+    return prefab_id == LEVELDEF_STRUCTURE_PREFAB_TEX_PANEL;
+}
+
+static int structure_grid_x_steps_for_prefab(float level_screens, int prefab_id) {
+    if (prefab_id == LEVELDEF_STRUCTURE_PREFAB_VENT) {
+        const float ls = fmaxf(level_screens, 1.0f);
+        const int steps = (int)lroundf(ls * (float)(LEVELDEF_STRUCTURE_GRID_W - 1));
+        return (steps < 1) ? 1 : steps;
+    }
+    return structure_grid_x_steps_for_level(level_screens);
+}
+
+static int structure_grid_y_steps_for_prefab(int prefab_id) {
+    if (prefab_id == LEVELDEF_STRUCTURE_PREFAB_VENT) {
+        const int steps = LEVELDEF_STRUCTURE_GRID_H - 1;
+        return (steps < 1) ? 1 : steps;
+    }
+    return structure_grid_y_steps();
+}
+
 static int structure_overlaps_cell(
     const level_editor_state* s,
     int layer,
@@ -191,13 +225,16 @@ static int structure_overlaps_cell(
         if (m->kind != LEVEL_EDITOR_MARKER_STRUCTURE || m->track != LEVEL_EDITOR_TRACK_SPATIAL) {
             continue;
         }
+        if (clampi((int)lroundf(m->a), 0, 31) == LEVELDEF_STRUCTURE_PREFAB_VENT) {
+            continue;
+        }
         const int mlayer = clampi((int)lroundf(m->b), 0, 1);
         if (mlayer != layer) {
             continue;
         }
         int mw = 1;
         int mh = 1;
-        structure_prefab_dims(clampi((int)lroundf(m->a), 0, 31), &mw, &mh);
+        structure_prefab_dims_for_level(s, clampi((int)lroundf(m->a), 0, 31), &mw, &mh);
         const int mgx = clampi((int)lroundf(m->x01 * (float)gx_steps), 0, gx_steps);
         const int mgy = clampi((int)lroundf(m->y01 * (float)structure_grid_y_steps()), 0, structure_grid_y_steps());
         const int bx0 = mgx;
@@ -227,15 +264,17 @@ static void place_structure_marker_from_view(level_editor_state* s, int marker_i
     const float y01 = clampf(my01, 0.0f, 1.0f);
     const int prefab_id = clampi((int)lroundf(m->a), 0, 31);
     const int layer = clampi((int)lroundf(m->b), 0, 1);
-    const int gx_steps = structure_grid_x_steps_for_level(level_screens);
+    const int gx_steps = structure_grid_x_steps_for_prefab(level_screens, prefab_id);
+    const int gy_steps = structure_grid_y_steps_for_prefab(prefab_id);
     int w_units = 1;
     int h_units = 1;
-    structure_prefab_dims(prefab_id, &w_units, &h_units);
+    structure_prefab_dims_for_level(s, prefab_id, &w_units, &h_units);
     const int max_gx = gx_steps - w_units + 1;
-    const int max_gy = structure_grid_y_steps() - h_units + 1;
+    const int max_gy = gy_steps - h_units + 1;
     int gx = structure_cell_from_mouse01(x01, gx_steps, max_gx);
-    int gy = structure_cell_from_mouse01(y01, structure_grid_y_steps(), max_gy);
-    if (structure_overlaps_cell(s, layer, gx_steps, marker_index, gx, gy, w_units, h_units)) {
+    int gy = structure_cell_from_mouse01(y01, gy_steps, max_gy);
+    if (prefab_id != LEVELDEF_STRUCTURE_PREFAB_VENT &&
+        structure_overlaps_cell(s, layer, gx_steps, marker_index, gx, gy, w_units, h_units)) {
         for (int radius = 1; radius <= 16; ++radius) {
             const int candidates[2] = {gx + radius, gx - radius};
             int found = 0;
@@ -253,7 +292,7 @@ static void place_structure_marker_from_view(level_editor_state* s, int marker_i
         }
     }
     m->x01 = (float)gx / (float)gx_steps;
-    m->y01 = (float)gy / (float)structure_grid_y_steps();
+    m->y01 = (float)gy / (float)gy_steps;
 }
 
 static int strieq(const char* a, const char* b) {
@@ -776,6 +815,11 @@ static void level_editor_save_snapshot(level_editor_state* s) {
     s->snapshot_level_enemy_palette = s->level_enemy_palette;
     s->snapshot_level_background_style = s->level_background_style;
     s->snapshot_level_background_mask_style = s->level_background_mask_style;
+    s->snapshot_level_texture_atlas_id = s->level_texture_atlas_id;
+    s->snapshot_level_texture_tile_w_px = s->level_texture_tile_w_px;
+    s->snapshot_level_texture_tile_h_px = s->level_texture_tile_h_px;
+    s->snapshot_level_texture_panel_w_units = s->level_texture_panel_w_units;
+    s->snapshot_level_texture_panel_h_units = s->level_texture_panel_h_units;
     s->snapshot_level_asteroid_storm_enabled = s->level_asteroid_storm_enabled;
     s->snapshot_level_asteroid_storm_angle_deg = s->level_asteroid_storm_angle_deg;
     s->snapshot_level_asteroid_storm_speed = s->level_asteroid_storm_speed;
@@ -900,8 +944,6 @@ static int pick_spatial_marker_in_viewport(
     {
         int hits[LEVEL_EDITOR_MAX_MARKERS];
         int hit_n = 0;
-        const int gx_steps = structure_grid_x_steps_for_level(level_screens);
-        const int gy_steps = structure_grid_y_steps();
         for (int i = 0; i < s->marker_count && hit_n < LEVEL_EDITOR_MAX_MARKERS; ++i) {
             const level_editor_marker* m = &s->markers[i];
             if (m->kind != LEVEL_EDITOR_MARKER_STRUCTURE) {
@@ -910,12 +952,35 @@ static int pick_spatial_marker_in_viewport(
             if (!level_editor_enemy_spatial(s) && marker_is_event_item(s, m)) {
                 continue;
             }
+            const int prefab_id = clampi((int)lroundf(m->a), 0, 31);
+            const int gx_steps = structure_grid_x_steps_for_prefab(level_screens, prefab_id);
+            const int gy_steps = structure_grid_y_steps_for_prefab(prefab_id);
             int w_units = 1;
             int h_units = 1;
             int q = ((int)lroundf(m->c) % 4 + 4) % 4;
             const int gx = clampi((int)lroundf(m->x01 * (float)gx_steps), 0, gx_steps);
             const int gy = clampi((int)lroundf(m->y01 * (float)gy_steps), 0, gy_steps);
-            structure_prefab_dims(clampi((int)lroundf(m->a), 0, 31), &w_units, &h_units);
+            structure_prefab_dims_for_level(s, prefab_id, &w_units, &h_units);
+            if (prefab_id == LEVELDEF_STRUCTURE_PREFAB_VENT) {
+                const float half_x = 0.5f / (float)gx_steps;
+                const float x0 = ((float)gx / (float)gx_steps) - half_x;
+                const float x1 = ((float)gx / (float)gx_steps) + half_x;
+                const float y0 = (float)gy / (float)gy_steps;
+                const float y1 = (float)(gy + 1) / (float)gy_steps;
+                if (x1 < view_min || x0 > view_max) {
+                    continue;
+                }
+                const float vx0 = (x0 - view_min) / view_span;
+                const float vx1 = (x1 - view_min) / view_span;
+                const float min_x = fminf(vx0, vx1);
+                const float max_x = fmaxf(vx0, vx1);
+                const float min_y = fminf(y0, y1);
+                const float max_y = fmaxf(y0, y1);
+                if (mx01 >= min_x && mx01 <= max_x && my01 >= min_y && my01 <= max_y) {
+                    hits[hit_n++] = i;
+                }
+                continue;
+            }
             if ((q & 1) != 0) {
                 const int tmp = w_units;
                 w_units = h_units;
@@ -1343,6 +1408,11 @@ static int build_level_serialized_text(
     lvl.enemy_palette = clampi(s->level_enemy_palette, LEVELDEF_ENEMY_PALETTE_DEFAULT, LEVELDEF_ENEMY_PALETTE_TOXIC);
     lvl.background_style = s->level_background_style;
     lvl.background_mask_style = s->level_background_mask_style;
+    lvl.texture_atlas_id = s->level_texture_atlas_id;
+    lvl.texture_tile_w_px = s->level_texture_tile_w_px;
+    lvl.texture_tile_h_px = s->level_texture_tile_h_px;
+    lvl.texture_panel_w_units = s->level_texture_panel_w_units;
+    lvl.texture_panel_h_units = s->level_texture_panel_h_units;
     lvl.powerup_drop_chance = clampf(s->level_powerup_drop_chance, 0.0f, 1.0f);
     lvl.editor_length_screens = level_len;
     lvl.searchlight_count = 0;
@@ -1503,27 +1573,41 @@ static int build_level_serialized_text(
         memset(&st, 0, sizeof(st));
         st.prefab_id = clampi((int)lroundf(m->a), 0, 31);
         st.layer = clampi((int)lroundf(m->b), 0, 1);
-        st.grid_x = clampi(
-            (int)lroundf(m->x01 * (float)structure_grid_x_steps_for_level(level_len)),
-            0,
-            structure_grid_x_steps_for_level(level_len)
-        );
-        st.grid_y = clampi((int)lroundf(m->y01 * (float)structure_grid_y_steps()), 0, structure_grid_y_steps());
+        if (st.prefab_id == LEVELDEF_STRUCTURE_PREFAB_VENT) {
+            const int gx_half_steps = structure_grid_x_steps_for_prefab(level_len, st.prefab_id);
+            const int gy_half_steps = structure_grid_y_steps_for_prefab(st.prefab_id);
+            const int gx_half = clampi((int)lroundf(m->x01 * (float)gx_half_steps), 0, gx_half_steps);
+            const int gy_half = clampi((int)lroundf(m->y01 * (float)gy_half_steps), 0, gy_half_steps);
+            st.grid_x = gx_half / 2;
+            st.grid_y = gy_half / 2;
+            st.variant = (gx_half & 1) | ((gy_half & 1) << 1);
+        } else {
+            st.grid_x = clampi(
+                (int)lroundf(m->x01 * (float)structure_grid_x_steps_for_level(level_len)),
+                0,
+                structure_grid_x_steps_for_level(level_len)
+            );
+            st.grid_y = clampi((int)lroundf(m->y01 * (float)structure_grid_y_steps()), 0, structure_grid_y_steps());
+        }
         st.rotation_quadrants = clampi((int)lroundf(m->c), 0, 3);
         {
             const int flip = clampi((int)lroundf(m->d), 0, 3);
             st.flip_x = (flip & 1) ? 1 : 0;
             st.flip_y = (flip & 2) ? 1 : 0;
         }
-        structure_prefab_dims(st.prefab_id, &st.w_units, &st.h_units);
+        structure_prefab_dims_for_level(s, st.prefab_id, &st.w_units, &st.h_units);
         {
             const int max_gx = structure_grid_x_steps_for_level(level_len) - st.w_units + 1;
             const int max_gy = structure_grid_y_steps() - st.h_units + 1;
             st.grid_x = clampi(st.grid_x, 0, (max_gx > 0) ? max_gx : 0);
             st.grid_y = clampi(st.grid_y, 0, (max_gy > 0) ? max_gy : 0);
         }
-        st.variant = 0;
-        st.vent_density = fmaxf(m->e, 0.01f);
+        if (structure_prefab_uses_vent_params(st.prefab_id)) {
+            st.vent_density = fmaxf(m->e, 0.01f);
+        } else {
+            st.variant = clampi((int)lroundf(m->e), -1, 4095);
+            st.vent_density = 1.0f;
+        }
         st.vent_opacity = fmaxf(m->f, 0.01f);
         st.vent_plume_height = fmaxf(m->g, 0.01f);
         lvl.structures[lvl.structure_count++] = st;
@@ -1690,6 +1774,11 @@ static int build_level_serialized_text(
     if (!appendf(out, out_cap, &used, "render_style=%s\n", render_style_name(lvl.render_style))) return 0;
     if (!appendf(out, out_cap, &used, "wave_mode=%s\n", wave_mode_name(lvl.wave_mode))) return 0;
     if (!appendf(out, out_cap, &used, "theme_palette=%d\n", clampi(lvl.theme_palette, 0, 2))) return 0;
+    if (!appendf(out, out_cap, &used, "texture_atlas=%s\n", texture_atlas_name(lvl.texture_atlas_id))) return 0;
+    if (!appendf(out, out_cap, &used, "texture_tile_w=%d\n", lvl.texture_tile_w_px)) return 0;
+    if (!appendf(out, out_cap, &used, "texture_tile_h=%d\n", lvl.texture_tile_h_px)) return 0;
+    if (!appendf(out, out_cap, &used, "texture_panel_w_units=%d\n", lvl.texture_panel_w_units)) return 0;
+    if (!appendf(out, out_cap, &used, "texture_panel_h_units=%d\n", lvl.texture_panel_h_units)) return 0;
     if (!appendf(out, out_cap, &used, "enemy_palette=%s\n", enemy_palette_name(lvl.enemy_palette))) return 0;
     if (!appendf(out, out_cap, &used, "background=%s\n", background_style_name(clampi(lvl.background_style, LEVELDEF_BACKGROUND_STARS, LEVELDEF_BACKGROUND_FOREST)))) return 0;
     if (lvl.background_style == LEVELDEF_BACKGROUND_UNDERWATER) {
@@ -2050,7 +2139,14 @@ static int marker_property_count(const level_editor_state* s) {
         return 5;
     }
     if (kind == LEVEL_EDITOR_MARKER_STRUCTURE) {
-        return 9;
+        const int prefab_id = clampi((int)lroundf(s->markers[s->selected_marker].a), 0, 31);
+        if (structure_prefab_uses_vent_params(prefab_id)) {
+            return 9;
+        }
+        if (structure_prefab_uses_tile_params(prefab_id)) {
+            return 7;
+        }
+        return 6;
     }
     if (kind == LEVEL_EDITOR_MARKER_EXIT) {
         return 2;
@@ -2499,6 +2595,7 @@ void level_editor_compute_layout(float w, float h, level_editor_layout* out) {
         out->construction_button_5 = (vg_rect){tb_x + (btn_w + btn_gap) * 5.0f, tb_y, btn_w, btn_h};
         out->construction_button_6 = (vg_rect){tb_x + (btn_w + btn_gap) * 6.0f, tb_y, btn_w, btn_h};
         out->construction_button_7 = (vg_rect){tb_x + (btn_w + btn_gap) * 7.0f, tb_y, btn_w, btn_h};
+        out->construction_button_8 = (vg_rect){tb_x + (btn_w + btn_gap) * 8.0f, tb_y, btn_w, btn_h};
     }
     const float len_screens = 1.0f;
     const float window_w = out->timeline_track.w / len_screens;
@@ -2508,6 +2605,21 @@ void level_editor_compute_layout(float w, float h, level_editor_layout* out) {
         window_w,
         out->timeline_track.h
     };
+}
+
+vg_rect level_editor_tile_picker_rect(const level_editor_layout* layout) {
+    if (!layout) {
+        return (vg_rect){0};
+    }
+    {
+        const float side = fminf(layout->properties.w - 24.0f, layout->properties.h * 0.28f);
+        return (vg_rect){
+            layout->properties.x + 12.0f,
+            layout->properties.y + 14.0f,
+            fmaxf(side, 64.0f),
+            fmaxf(side, 64.0f)
+        };
+    }
 }
 
 static void sync_timeline_window(level_editor_state* s, level_editor_layout* l) {
@@ -2678,7 +2790,16 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
         );
         if (s->marker_count > before) {
             level_editor_marker* m = &s->markers[s->marker_count - 1];
-            m->e = (st->vent_density > 0.0f) ? st->vent_density : 1.0f;
+            if (structure_prefab_uses_vent_params(st->prefab_id)) {
+                const int vent_variant = (st->variant >= 0) ? st->variant : 0;
+                const int gx_half = st->grid_x * 2 + (vent_variant & 1);
+                const int gy_half = st->grid_y * 2 + ((vent_variant >> 1) & 1);
+                m->x01 = (float)gx_half / (float)structure_grid_x_steps_for_prefab(s->level_length_screens, st->prefab_id);
+                m->y01 = (float)gy_half / (float)structure_grid_y_steps_for_prefab(st->prefab_id);
+                m->e = (st->vent_density > 0.0f) ? st->vent_density : 1.0f;
+            } else {
+                m->e = (float)st->variant;
+            }
             m->f = (st->vent_opacity > 0.0f) ? st->vent_opacity : 1.0f;
             m->g = (st->vent_plume_height > 0.0f) ? st->vent_plume_height : 1.0f;
         }
@@ -2807,6 +2928,11 @@ void level_editor_init(level_editor_state* s) {
     s->level_enemy_palette = LEVELDEF_ENEMY_PALETTE_DEFAULT;
     s->level_background_style = LEVELDEF_BACKGROUND_NONE;
     s->level_background_mask_style = LEVELDEF_BG_MASK_NONE;
+    s->level_texture_atlas_id = TEXTURE_ATLAS_TILES;
+    s->level_texture_tile_w_px = texture_atlas_default_tile_w(TEXTURE_ATLAS_TILES);
+    s->level_texture_tile_h_px = texture_atlas_default_tile_h(TEXTURE_ATLAS_TILES);
+    s->level_texture_panel_w_units = 1;
+    s->level_texture_panel_h_units = 1;
     s->level_asteroid_storm_enabled = 0;
     s->level_asteroid_storm_angle_deg = 180.0f;
     s->level_asteroid_storm_speed = 190.0f;
@@ -2893,14 +3019,20 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
                     int h_units = 1;
                     int q = 0;
                     float right_screens = 0.0f;
-                    structure_prefab_dims(st->prefab_id, &w_units, &h_units);
+                    w_units = (st->w_units > 0) ? st->w_units : 1;
+                    h_units = (st->h_units > 0) ? st->h_units : 1;
                     q = ((st->rotation_quadrants % 4) + 4) % 4;
                     if ((q & 1) != 0) {
                         const int tmp = w_units;
                         w_units = h_units;
                         h_units = tmp;
                     }
-                    right_screens = ((float)st->grid_x + (float)w_units) / fmaxf(steps_per_screen, 1.0f);
+                    if (st->prefab_id == LEVELDEF_STRUCTURE_PREFAB_VENT) {
+                        const int vent_variant = (st->variant >= 0) ? st->variant : 0;
+                        right_screens = ((float)st->grid_x + ((vent_variant & 1) ? 0.5f : 0.0f) + 0.5f) / fmaxf(steps_per_screen, 1.0f);
+                    } else {
+                        right_screens = ((float)st->grid_x + (float)w_units) / fmaxf(steps_per_screen, 1.0f);
+                    }
                     struct_len = fmaxf(struct_len, right_screens + 0.25f);
                 }
                 data_len = fmaxf(data_len, struct_len);
@@ -2943,6 +3075,11 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
             s->level_enemy_palette = clampi(lvl->enemy_palette, LEVELDEF_ENEMY_PALETTE_DEFAULT, LEVELDEF_ENEMY_PALETTE_TOXIC);
             s->level_background_style = clampi(lvl->background_style, LEVELDEF_BACKGROUND_STARS, LEVELDEF_BACKGROUND_FOREST);
             s->level_background_mask_style = clampi(lvl->background_mask_style, LEVELDEF_BG_MASK_NONE, LEVELDEF_BG_MASK_WINDOWS);
+            s->level_texture_atlas_id = texture_atlas_get(lvl->texture_atlas_id) ? lvl->texture_atlas_id : TEXTURE_ATLAS_TILES;
+            s->level_texture_tile_w_px = (lvl->texture_tile_w_px > 0) ? lvl->texture_tile_w_px : texture_atlas_default_tile_w(s->level_texture_atlas_id);
+            s->level_texture_tile_h_px = (lvl->texture_tile_h_px > 0) ? lvl->texture_tile_h_px : texture_atlas_default_tile_h(s->level_texture_atlas_id);
+            s->level_texture_panel_w_units = (lvl->texture_panel_w_units > 0) ? lvl->texture_panel_w_units : 1;
+            s->level_texture_panel_h_units = (lvl->texture_panel_h_units > 0) ? lvl->texture_panel_h_units : 1;
             s->level_asteroid_storm_enabled = lvl->asteroid_storm_enabled ? 1 : 0;
             s->level_asteroid_storm_angle_deg = lvl->asteroid_storm_angle_deg;
             s->level_asteroid_storm_speed = lvl->asteroid_storm_speed;
@@ -2963,6 +3100,11 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
                 (s->level_render_style == LEVEL_RENDER_DRIFTER || s->level_render_style == LEVEL_RENDER_DRIFTER_SHADED)
                 ? LEVELDEF_BG_MASK_TERRAIN
                 : LEVELDEF_BG_MASK_NONE;
+            s->level_texture_atlas_id = TEXTURE_ATLAS_TILES;
+            s->level_texture_tile_w_px = texture_atlas_default_tile_w(TEXTURE_ATLAS_TILES);
+            s->level_texture_tile_h_px = texture_atlas_default_tile_h(TEXTURE_ATLAS_TILES);
+            s->level_texture_panel_w_units = 1;
+            s->level_texture_panel_h_units = 1;
             s->level_powerup_drop_chance = 0.12f;
             s->level_kamikaze_style = KAMIKAZE_STYLE_CLASSIC;
             level_editor_set_default_curated_tuning(&s->level_curated_combat);
@@ -3012,6 +3154,16 @@ void level_editor_backspace(level_editor_state* s) {
 
 static int point_in_rect(float x, float y, vg_rect r) {
     return (x >= r.x && x <= (r.x + r.w) && y >= r.y && y <= (r.y + r.h));
+}
+
+static int selected_structure_supports_tiles(const level_editor_state* s) {
+    if (!s || s->selected_marker < 0 || s->selected_marker >= s->marker_count) {
+        return 0;
+    }
+    if (s->markers[s->selected_marker].kind != LEVEL_EDITOR_MARKER_STRUCTURE) {
+        return 0;
+    }
+    return structure_prefab_uses_tile_params(clampi((int)lroundf(s->markers[s->selected_marker].a), 0, 31));
 }
 
 static void add_marker_at_view(
@@ -3200,15 +3352,17 @@ static void add_structure_marker_at_view(level_editor_state* s, float mx01, floa
     const float y01 = clampf(my01, 0.0f, 1.0f);
     const int prefab_id = clampi(s->structure_tool_selected - 1, 0, 31);
     const int layer = (prefab_id >= 5) ? 1 : 0;
-    const int gx_steps = structure_grid_x_steps_for_level(level_screens);
+    const int gx_steps = structure_grid_x_steps_for_prefab(level_screens, prefab_id);
+    const int gy_steps = structure_grid_y_steps_for_prefab(prefab_id);
     int w_units = 1;
     int h_units = 1;
-    structure_prefab_dims(prefab_id, &w_units, &h_units);
+    structure_prefab_dims_for_level(s, prefab_id, &w_units, &h_units);
     const int max_gx = gx_steps - w_units + 1;
-    const int max_gy = structure_grid_y_steps() - h_units + 1;
+    const int max_gy = gy_steps - h_units + 1;
     int gx = structure_cell_from_mouse01(x01, gx_steps, max_gx);
-    int gy = structure_cell_from_mouse01(y01, structure_grid_y_steps(), max_gy);
-    if (structure_overlaps_cell(s, layer, gx_steps, -1, gx, gy, w_units, h_units)) {
+    int gy = structure_cell_from_mouse01(y01, gy_steps, max_gy);
+    if (prefab_id != LEVELDEF_STRUCTURE_PREFAB_VENT &&
+        structure_overlaps_cell(s, layer, gx_steps, -1, gx, gy, w_units, h_units)) {
         for (int radius = 1; radius <= 16; ++radius) {
             const int candidates[2] = {gx + radius, gx - radius};
             int found = 0;
@@ -3232,7 +3386,7 @@ static void add_structure_marker_at_view(level_editor_state* s, float mx01, floa
         1,
         0.0f,
         (float)gx / (float)gx_steps,
-        (float)gy / (float)structure_grid_y_steps(),
+        (float)gy / (float)gy_steps,
         (float)prefab_id,
         (float)layer,
         0.0f,
@@ -3240,7 +3394,7 @@ static void add_structure_marker_at_view(level_editor_state* s, float mx01, floa
     );
     if (s->marker_count > 0) {
         level_editor_marker* m = &s->markers[s->marker_count - 1];
-        m->e = 1.0f;
+        m->e = structure_prefab_uses_vent_params(prefab_id) ? 1.0f : -1.0f;
         m->f = 1.0f;
         m->g = 1.0f;
     }
@@ -3334,6 +3488,22 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
             s->entry_active = 0;
             return 5;
         }
+        if (selected_structure_supports_tiles(s)) {
+            vg_rect picker = level_editor_tile_picker_rect(&l);
+            int cols = 0;
+            int rows = 0;
+            if (point_in_rect(mouse_x, mouse_y, picker) &&
+                texture_atlas_grid_dims(s->level_texture_atlas_id, s->level_texture_tile_w_px, s->level_texture_tile_h_px, &cols, &rows)) {
+                const float cell_w = picker.w / (float)cols;
+                const float cell_h = picker.h / (float)rows;
+                const int gx = clampi((int)((mouse_x - picker.x) / fmaxf(cell_w, 1.0f)), 0, cols - 1);
+                const int gy = clampi((int)((mouse_y - picker.y) / fmaxf(cell_h, 1.0f)), 0, rows - 1);
+                s->markers[s->selected_marker].e = (float)(gy * cols + gx);
+                mark_editor_dirty(s);
+                snprintf(s->status_text, sizeof(s->status_text), "tile %d", (int)lroundf(s->markers[s->selected_marker].e));
+                return 1;
+            }
+        }
         if (point_in_rect(mouse_x, mouse_y, l.construction_button_0)) {
             toggle_structure_tool(s, 1, "panel square", mouse_x, mouse_y);
             return 1;
@@ -3364,6 +3534,10 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
         }
         if (point_in_rect(mouse_x, mouse_y, l.construction_button_7)) {
             toggle_structure_tool(s, 8, "duct vent", mouse_x, mouse_y);
+            return 1;
+        }
+        if (point_in_rect(mouse_x, mouse_y, l.construction_button_8)) {
+            toggle_structure_tool(s, 9, "textured panel", mouse_x, mouse_y);
             return 1;
         }
         if (point_in_rect(mouse_x, mouse_y, l.swarm_button)) {
@@ -3711,6 +3885,42 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
                 mask = LEVELDEF_BG_MASK_NONE + ((mask - LEVELDEF_BG_MASK_NONE + dir + n) % n);
                 s->level_background_mask_style = mask;
             } break;
+            case LEVEL_EDITOR_LEVEL_PROP_TEXTURE_ATLAS:
+            {
+                const int dir = (delta >= 0.0f) ? 1 : -1;
+                const int n = TEXTURE_ATLAS_COUNT;
+                int atlas = clampi(s->level_texture_atlas_id, 0, n - 1);
+                atlas = (atlas + dir + n) % n;
+                s->level_texture_atlas_id = atlas;
+            } break;
+            case LEVEL_EDITOR_LEVEL_PROP_TEXTURE_TILE_W:
+                s->level_texture_tile_w_px = clampi(
+                    s->level_texture_tile_w_px + (((delta >= 0.0f) ? 1 : -1) * 16),
+                    16,
+                    2048
+                );
+                break;
+            case LEVEL_EDITOR_LEVEL_PROP_TEXTURE_TILE_H:
+                s->level_texture_tile_h_px = clampi(
+                    s->level_texture_tile_h_px + (((delta >= 0.0f) ? 1 : -1) * 16),
+                    16,
+                    2048
+                );
+                break;
+            case LEVEL_EDITOR_LEVEL_PROP_TEXTURE_PANEL_W:
+                s->level_texture_panel_w_units = clampi(
+                    s->level_texture_panel_w_units + ((delta >= 0.0f) ? 1 : -1),
+                    1,
+                    16
+                );
+                break;
+            case LEVEL_EDITOR_LEVEL_PROP_TEXTURE_PANEL_H:
+                s->level_texture_panel_h_units = clampi(
+                    s->level_texture_panel_h_units + ((delta >= 0.0f) ? 1 : -1),
+                    1,
+                    16
+                );
+                break;
             case LEVEL_EDITOR_LEVEL_PROP_LENGTH:
                 s->level_length_screens = clampf(
                     s->level_length_screens + delta * 1.0f,
@@ -3845,15 +4055,18 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
         return;
     }
     if (m->kind == LEVEL_EDITOR_MARKER_STRUCTURE) {
-        const float gx_step = 1.0f / (float)structure_grid_x_steps_for_level(s->level_length_screens);
-        const float gy_step = 1.0f / (float)structure_grid_y_steps();
+        const int prefab_id = clampi((int)lroundf(m->a), 0, 31);
+        const int uses_vent = structure_prefab_uses_vent_params(prefab_id);
+        const int uses_tile = structure_prefab_uses_tile_params(prefab_id);
+        const float gx_step = 1.0f / (float)structure_grid_x_steps_for_prefab(s->level_length_screens, prefab_id);
+        const float gy_step = 1.0f / (float)structure_grid_y_steps_for_prefab(prefab_id);
         switch (s->selected_property) {
             case 0: m->x01 = clampf(m->x01 + ((delta >= 0.0f) ? gx_step : -gx_step), 0.0f, 1.0f); break;
             case 1: m->y01 = clampf(m->y01 + ((delta >= 0.0f) ? gy_step : -gy_step), 0.0f, 1.0f); break;
             case 2: {
                 int id = (int)lroundf(m->a) + ((delta >= 0.0f) ? 1 : -1);
-                if (id < 0) id = 7;
-                if (id > 7) id = 0;
+                if (id < 0) id = LEVELDEF_STRUCTURE_PREFAB_TEX_PANEL;
+                if (id > LEVELDEF_STRUCTURE_PREFAB_TEX_PANEL) id = 0;
                 m->a = (float)id;
             } break;
             case 3: m->b = (m->b >= 0.5f) ? 0.0f : 1.0f; break;
@@ -3863,24 +4076,37 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
                 flip ^= 1;
                 m->d = (float)flip;
             } break;
-            case 6: m->e = clampf(m->e + delta * 0.1f, 0.10f, 6.00f); break;
-            case 7: m->f = clampf(m->f + delta * 0.1f, 0.10f, 6.00f); break;
-            case 8: m->g = clampf(m->g + delta * 0.1f, 0.20f, 8.00f); break;
+            case 6:
+                if (uses_vent) {
+                    m->e = clampf(m->e + delta * 0.1f, 0.10f, 6.00f);
+                } else if (uses_tile) {
+                    m->e = (float)clampi((int)lroundf(m->e) + ((delta >= 0.0f) ? 1 : -1), -1, 4095);
+                }
+                break;
+            case 7:
+                if (uses_vent) {
+                    m->f = clampf(m->f + delta * 0.1f, 0.10f, 6.00f);
+                }
+                break;
+            case 8:
+                if (uses_vent) {
+                    m->g = clampf(m->g + delta * 0.1f, 0.20f, 8.00f);
+                }
+                break;
             default: break;
         }
-        m->x01 = snap_x01_level(m->x01, s->level_length_screens);
-        m->y01 = snap_y01(m->y01);
         {
-            const int gx_steps = structure_grid_x_steps_for_level(s->level_length_screens);
+            const int gx_steps = structure_grid_x_steps_for_prefab(s->level_length_screens, prefab_id);
+            const int gy_steps = structure_grid_y_steps_for_prefab(prefab_id);
             int w_units = 1;
             int h_units = 1;
             int gx = clampi((int)lroundf(m->x01 * (float)gx_steps), 0, gx_steps);
-            int gy = clampi((int)lroundf(m->y01 * (float)structure_grid_y_steps()), 0, structure_grid_y_steps());
-            structure_prefab_dims(clampi((int)lroundf(m->a), 0, 31), &w_units, &h_units);
+            int gy = clampi((int)lroundf(m->y01 * (float)gy_steps), 0, gy_steps);
+            structure_prefab_dims_for_level(s, clampi((int)lroundf(m->a), 0, 31), &w_units, &h_units);
             gx = clampi(gx, 0, ((gx_steps - w_units + 1) > 0) ? (gx_steps - w_units + 1) : 0);
-            gy = clampi(gy, 0, ((structure_grid_y_steps() - h_units + 1) > 0) ? (structure_grid_y_steps() - h_units + 1) : 0);
+            gy = clampi(gy, 0, ((gy_steps - h_units + 1) > 0) ? (gy_steps - h_units + 1) : 0);
             m->x01 = (float)gx / (float)gx_steps;
-            m->y01 = (float)gy / (float)structure_grid_y_steps();
+            m->y01 = (float)gy / (float)gy_steps;
         }
         mark_editor_dirty(s);
         return;
@@ -4223,6 +4449,11 @@ int level_editor_revert(level_editor_state* s) {
     s->level_enemy_palette = s->snapshot_level_enemy_palette;
     s->level_background_style = s->snapshot_level_background_style;
     s->level_background_mask_style = s->snapshot_level_background_mask_style;
+    s->level_texture_atlas_id = s->snapshot_level_texture_atlas_id;
+    s->level_texture_tile_w_px = s->snapshot_level_texture_tile_w_px;
+    s->level_texture_tile_h_px = s->snapshot_level_texture_tile_h_px;
+    s->level_texture_panel_w_units = s->snapshot_level_texture_panel_w_units;
+    s->level_texture_panel_h_units = s->snapshot_level_texture_panel_h_units;
     s->level_asteroid_storm_enabled = s->snapshot_level_asteroid_storm_enabled;
     s->level_asteroid_storm_angle_deg = s->snapshot_level_asteroid_storm_angle_deg;
     s->level_asteroid_storm_speed = s->snapshot_level_asteroid_storm_speed;
@@ -4281,6 +4512,11 @@ void level_editor_new_blank(level_editor_state* s) {
     s->level_enemy_palette = LEVELDEF_ENEMY_PALETTE_DEFAULT;
     s->level_background_style = LEVELDEF_BACKGROUND_NONE;
     s->level_background_mask_style = LEVELDEF_BG_MASK_NONE;
+    s->level_texture_atlas_id = TEXTURE_ATLAS_TILES;
+    s->level_texture_tile_w_px = texture_atlas_default_tile_w(TEXTURE_ATLAS_TILES);
+    s->level_texture_tile_h_px = texture_atlas_default_tile_h(TEXTURE_ATLAS_TILES);
+    s->level_texture_panel_w_units = 1;
+    s->level_texture_panel_h_units = 1;
     s->level_asteroid_storm_enabled = 0;
     s->level_asteroid_storm_angle_deg = 180.0f;
     s->level_asteroid_storm_speed = 190.0f;

@@ -29,6 +29,7 @@ add_executable(v_type
     src/planetarium/planetarium_validate.c
     src/render.c
     src/settings.c
+    src/texture_atlas.c
     src/wavetable_poly_synth_lib.c
 )
 set_target_properties(v_type PROPERTIES OUTPUT_NAME "VectorSwarm")
@@ -94,6 +95,8 @@ if(GLSLANG_VALIDATOR AND XXD_EXECUTABLE)
     set(V_TYPE_ARC_BEAM_FRAG_SPV ${V_TYPE_SHADER_GEN_DIR}/arc_beam.frag.spv)
     set(V_TYPE_INDUSTRY_FRAG_SPV ${V_TYPE_SHADER_GEN_DIR}/industry.frag.spv)
     set(V_TYPE_REVOLVER_FRAG_SPV ${V_TYPE_SHADER_GEN_DIR}/revolver.frag.spv)
+    set(V_TYPE_STRUCTURE_TILE_VERT_SPV ${V_TYPE_SHADER_GEN_DIR}/structure_tile.vert.spv)
+    set(V_TYPE_STRUCTURE_TILE_FRAG_SPV ${V_TYPE_SHADER_GEN_DIR}/structure_tile.frag.spv)
     set(V_TYPE_TERRAIN_VERT_HDR ${V_TYPE_SHADER_GEN_DIR}/terrain_vert_spv.h)
     set(V_TYPE_TERRAIN_FRAG_HDR ${V_TYPE_SHADER_GEN_DIR}/terrain_frag_spv.h)
     set(V_TYPE_TERRAIN_WIRE_VERT_HDR ${V_TYPE_SHADER_GEN_DIR}/terrain_wire_vert_spv.h)
@@ -121,6 +124,8 @@ if(GLSLANG_VALIDATOR AND XXD_EXECUTABLE)
     set(V_TYPE_ARC_BEAM_FRAG_HDR ${V_TYPE_SHADER_GEN_DIR}/arc_beam_frag_spv.h)
     set(V_TYPE_INDUSTRY_FRAG_HDR ${V_TYPE_SHADER_GEN_DIR}/industry_frag_spv.h)
     set(V_TYPE_REVOLVER_FRAG_HDR ${V_TYPE_SHADER_GEN_DIR}/revolver_frag_spv.h)
+    set(V_TYPE_STRUCTURE_TILE_VERT_HDR ${V_TYPE_SHADER_GEN_DIR}/structure_tile_vert_spv.h)
+    set(V_TYPE_STRUCTURE_TILE_FRAG_HDR ${V_TYPE_SHADER_GEN_DIR}/structure_tile_frag_spv.h)
 
     add_custom_command(
         OUTPUT ${V_TYPE_TERRAIN_VERT_HDR}
@@ -284,7 +289,19 @@ if(GLSLANG_VALIDATOR AND XXD_EXECUTABLE)
         COMMAND ${XXD_EXECUTABLE} -i -n v_type_revolver_frag_spv ${V_TYPE_REVOLVER_FRAG_SPV} > ${V_TYPE_REVOLVER_FRAG_HDR}
         DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/revolver.frag
     )
-    add_custom_target(v_type_vk_shaders DEPENDS ${V_TYPE_TERRAIN_VERT_HDR} ${V_TYPE_TERRAIN_FRAG_HDR} ${V_TYPE_TERRAIN_WIRE_VERT_HDR} ${V_TYPE_TERRAIN_WIRE_FRAG_HDR} ${V_TYPE_PARTICLE_VERT_HDR} ${V_TYPE_PARTICLE_FRAG_HDR} ${V_TYPE_PARTICLE_BLOOM_FRAG_HDR} ${V_TYPE_WORMHOLE_LINE_VERT_HDR} ${V_TYPE_WORMHOLE_LINE_FRAG_HDR} ${V_TYPE_RADAR_LINE_VERT_HDR} ${V_TYPE_RADAR_LINE_FRAG_HDR} ${V_TYPE_FOG_VERT_HDR} ${V_TYPE_FOG_FRAG_HDR} ${V_TYPE_UNDERWATER_FRAG_HDR} ${V_TYPE_UNDERWATER_KELP_FRAG_HDR} ${V_TYPE_FIRE_FRAG_HDR} ${V_TYPE_ICE_FRAG_HDR} ${V_TYPE_FOREST_FRAG_HDR} ${V_TYPE_FOREST_CACHE_FRAG_HDR} ${V_TYPE_FOREST_FLORA_FRAG_HDR} ${V_TYPE_GRID_VERT_HDR} ${V_TYPE_GRID_FRAG_HDR} ${V_TYPE_GRID_SIM_FRAG_HDR} ${V_TYPE_ARC_BEAM_VERT_HDR} ${V_TYPE_ARC_BEAM_FRAG_HDR} ${V_TYPE_INDUSTRY_FRAG_HDR} ${V_TYPE_REVOLVER_FRAG_HDR})
+    add_custom_command(
+        OUTPUT ${V_TYPE_STRUCTURE_TILE_VERT_HDR}
+        COMMAND ${GLSLANG_VALIDATOR} -V ${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/structure_tile.vert -o ${V_TYPE_STRUCTURE_TILE_VERT_SPV}
+        COMMAND ${XXD_EXECUTABLE} -i -n v_type_structure_tile_vert_spv ${V_TYPE_STRUCTURE_TILE_VERT_SPV} > ${V_TYPE_STRUCTURE_TILE_VERT_HDR}
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/structure_tile.vert
+    )
+    add_custom_command(
+        OUTPUT ${V_TYPE_STRUCTURE_TILE_FRAG_HDR}
+        COMMAND ${GLSLANG_VALIDATOR} -V ${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/structure_tile.frag -o ${V_TYPE_STRUCTURE_TILE_FRAG_SPV}
+        COMMAND ${XXD_EXECUTABLE} -i -n v_type_structure_tile_frag_spv ${V_TYPE_STRUCTURE_TILE_FRAG_SPV} > ${V_TYPE_STRUCTURE_TILE_FRAG_HDR}
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/structure_tile.frag
+    )
+    add_custom_target(v_type_vk_shaders DEPENDS ${V_TYPE_TERRAIN_VERT_HDR} ${V_TYPE_TERRAIN_FRAG_HDR} ${V_TYPE_TERRAIN_WIRE_VERT_HDR} ${V_TYPE_TERRAIN_WIRE_FRAG_HDR} ${V_TYPE_PARTICLE_VERT_HDR} ${V_TYPE_PARTICLE_FRAG_HDR} ${V_TYPE_PARTICLE_BLOOM_FRAG_HDR} ${V_TYPE_WORMHOLE_LINE_VERT_HDR} ${V_TYPE_WORMHOLE_LINE_FRAG_HDR} ${V_TYPE_RADAR_LINE_VERT_HDR} ${V_TYPE_RADAR_LINE_FRAG_HDR} ${V_TYPE_FOG_VERT_HDR} ${V_TYPE_FOG_FRAG_HDR} ${V_TYPE_UNDERWATER_FRAG_HDR} ${V_TYPE_UNDERWATER_KELP_FRAG_HDR} ${V_TYPE_FIRE_FRAG_HDR} ${V_TYPE_ICE_FRAG_HDR} ${V_TYPE_FOREST_FRAG_HDR} ${V_TYPE_FOREST_CACHE_FRAG_HDR} ${V_TYPE_FOREST_FLORA_FRAG_HDR} ${V_TYPE_GRID_VERT_HDR} ${V_TYPE_GRID_FRAG_HDR} ${V_TYPE_GRID_SIM_FRAG_HDR} ${V_TYPE_ARC_BEAM_VERT_HDR} ${V_TYPE_ARC_BEAM_FRAG_HDR} ${V_TYPE_INDUSTRY_FRAG_HDR} ${V_TYPE_REVOLVER_FRAG_HDR} ${V_TYPE_STRUCTURE_TILE_VERT_HDR} ${V_TYPE_STRUCTURE_TILE_FRAG_HDR})
     add_dependencies(v_type v_type_vk_shaders)
     target_compile_definitions(v_type PRIVATE V_TYPE_HAS_TERRAIN_SHADERS=1)
     target_include_directories(v_type PRIVATE ${V_TYPE_SHADER_GEN_DIR})
@@ -297,6 +314,7 @@ add_executable(level_roundtrip_test
     src/boss.c
     src/level_editor.c
     src/leveldef.c
+    src/texture_atlas.c
 )
 target_include_directories(level_roundtrip_test PRIVATE
     src

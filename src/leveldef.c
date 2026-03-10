@@ -1,5 +1,6 @@
 #include "leveldef.h"
 #include "boss.h"
+#include "texture_atlas.h"
 
 #include <dirent.h>
 #include <ctype.h>
@@ -395,6 +396,11 @@ void leveldef_init_defaults(leveldef_db* db) {
         db->levels[i].enemy_palette = LEVELDEF_ENEMY_PALETTE_DEFAULT;
         db->levels[i].background_style = LEVELDEF_BACKGROUND_STARS;
         db->levels[i].background_mask_style = LEVELDEF_BG_MASK_NONE;
+        db->levels[i].texture_atlas_id = TEXTURE_ATLAS_TILES;
+        db->levels[i].texture_tile_w_px = texture_atlas_default_tile_w(TEXTURE_ATLAS_TILES);
+        db->levels[i].texture_tile_h_px = texture_atlas_default_tile_h(TEXTURE_ATLAS_TILES);
+        db->levels[i].texture_panel_w_units = 1;
+        db->levels[i].texture_panel_h_units = 1;
         db->levels[i].underwater_density = 1.0f;
         db->levels[i].underwater_caustic_strength = 1.0f;
         db->levels[i].underwater_caustic_scale = 1.0f;
@@ -1049,6 +1055,21 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_level->editor_length_screens = strtof(v, NULL);
                     } else if (strcmp(k, "theme_palette") == 0) {
                         cur_level->theme_palette = atoi(v);
+                    } else if (strcmp(k, "texture_atlas") == 0) {
+                        const texture_atlas_def* atlas = texture_atlas_find_by_name(v);
+                        if (atlas) {
+                            cur_level->texture_atlas_id = atlas->id;
+                        } else if (log_out) {
+                            fprintf(log_out, "leveldef: invalid texture_atlas '%s'\n", v);
+                        }
+                    } else if (strcmp(k, "texture_tile_w") == 0) {
+                        cur_level->texture_tile_w_px = atoi(v);
+                    } else if (strcmp(k, "texture_tile_h") == 0) {
+                        cur_level->texture_tile_h_px = atoi(v);
+                    } else if (strcmp(k, "texture_panel_w_units") == 0) {
+                        cur_level->texture_panel_w_units = atoi(v);
+                    } else if (strcmp(k, "texture_panel_h_units") == 0) {
+                        cur_level->texture_panel_h_units = atoi(v);
                     } else if (strcmp(k, "enemy_palette") == 0) {
                         cur_level->enemy_palette = enemy_palette_from_name(v);
                     } else if (strcmp(k, "background") == 0) {
@@ -1627,6 +1648,33 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
         if (l->theme_palette < 0 || l->theme_palette > 2) {
             if (log_out) {
                 fprintf(log_out, "leveldef: level %d invalid theme_palette (expected 0..2)\n", i);
+            }
+            ok = 0;
+        }
+        if (!texture_atlas_get(l->texture_atlas_id)) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid texture_atlas\n", i);
+            }
+            ok = 0;
+        }
+        if (l->texture_tile_w_px <= 0 || l->texture_tile_h_px <= 0) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid texture tile size\n", i);
+            }
+            ok = 0;
+        } else {
+            int cols = 0;
+            int rows = 0;
+            if (!texture_atlas_grid_dims(l->texture_atlas_id, l->texture_tile_w_px, l->texture_tile_h_px, &cols, &rows)) {
+                if (log_out) {
+                    fprintf(log_out, "leveldef: level %d texture tile size incompatible with atlas\n", i);
+                }
+                ok = 0;
+            }
+        }
+        if (l->texture_panel_w_units <= 0 || l->texture_panel_h_units <= 0) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid textured panel span\n", i);
             }
             ok = 0;
         }

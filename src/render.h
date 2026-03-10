@@ -157,6 +157,11 @@ typedef struct render_metrics {
     int level_editor_enemy_palette;
     int level_editor_background_style;
     int level_editor_background_mask_style;
+    int level_editor_texture_atlas_id;
+    int level_editor_texture_tile_w_px;
+    int level_editor_texture_tile_h_px;
+    int level_editor_texture_panel_w_units;
+    int level_editor_texture_panel_h_units;
     int level_editor_asteroid_storm_enabled;
     float level_editor_asteroid_storm_angle_deg;
     float level_editor_asteroid_storm_speed;
@@ -213,6 +218,10 @@ typedef struct render_metrics {
     float level_editor_marker_e[LEVEL_EDITOR_MAX_MARKERS];
     float level_editor_marker_f[LEVEL_EDITOR_MAX_MARKERS];
     float level_editor_marker_g[LEVEL_EDITOR_MAX_MARKERS];
+    const uint8_t* structure_tiles_rgba8;
+    uint32_t structure_tiles_w;
+    uint32_t structure_tiles_h;
+    uint32_t structure_tiles_stride;
     int controls_selected;
     int controls_selected_column;
     int controls_rebinding_action;

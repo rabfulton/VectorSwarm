@@ -87,6 +87,7 @@ typedef struct level_editor_layout {
     vg_rect construction_button_5;
     vg_rect construction_button_6;
     vg_rect construction_button_7;
+    vg_rect construction_button_8;
 } level_editor_layout;
 
 typedef struct level_editor_state {
@@ -97,6 +98,11 @@ typedef struct level_editor_state {
     int level_enemy_palette;
     int level_background_style;
     int level_background_mask_style;
+    int level_texture_atlas_id;
+    int level_texture_tile_w_px;
+    int level_texture_tile_h_px;
+    int level_texture_panel_w_units;
+    int level_texture_panel_h_units;
     int level_asteroid_storm_enabled;
     float level_asteroid_storm_angle_deg;
     float level_asteroid_storm_speed;
@@ -139,6 +145,11 @@ typedef struct level_editor_state {
     int snapshot_level_enemy_palette;
     int snapshot_level_background_style;
     int snapshot_level_background_mask_style;
+    int snapshot_level_texture_atlas_id;
+    int snapshot_level_texture_tile_w_px;
+    int snapshot_level_texture_tile_h_px;
+    int snapshot_level_texture_panel_w_units;
+    int snapshot_level_texture_panel_h_units;
     int snapshot_level_asteroid_storm_enabled;
     float snapshot_level_asteroid_storm_angle_deg;
     float snapshot_level_asteroid_storm_speed;
@@ -162,9 +173,14 @@ enum {
     LEVEL_EDITOR_LEVEL_PROP_ENEMY_PALETTE = 3,
     LEVEL_EDITOR_LEVEL_PROP_BACKGROUND = 4,
     LEVEL_EDITOR_LEVEL_PROP_BG_MASK = 5,
-    LEVEL_EDITOR_LEVEL_PROP_LENGTH = 6,
-    LEVEL_EDITOR_LEVEL_PROP_POWERUP_DROP = 7,
-    LEVEL_EDITOR_LEVEL_PROP_COUNT = 8
+    LEVEL_EDITOR_LEVEL_PROP_TEXTURE_ATLAS = 6,
+    LEVEL_EDITOR_LEVEL_PROP_TEXTURE_TILE_W = 7,
+    LEVEL_EDITOR_LEVEL_PROP_TEXTURE_TILE_H = 8,
+    LEVEL_EDITOR_LEVEL_PROP_TEXTURE_PANEL_W = 9,
+    LEVEL_EDITOR_LEVEL_PROP_TEXTURE_PANEL_H = 10,
+    LEVEL_EDITOR_LEVEL_PROP_LENGTH = 11,
+    LEVEL_EDITOR_LEVEL_PROP_POWERUP_DROP = 12,
+    LEVEL_EDITOR_LEVEL_PROP_COUNT = 13
 };
 
 enum {
@@ -258,6 +274,7 @@ enum {
 
 void level_editor_init(level_editor_state* s);
 void level_editor_compute_layout(float w, float h, level_editor_layout* out);
+vg_rect level_editor_tile_picker_rect(const level_editor_layout* layout);
 int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, const char* name);
 void level_editor_append_text(level_editor_state* s, const char* utf8);
 void level_editor_backspace(level_editor_state* s);

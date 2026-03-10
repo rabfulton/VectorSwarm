@@ -6,6 +6,7 @@
 #include "leveldef.h"
 #include "menu.h"
 #include "planetarium/commander_nick_dialogues.h"
+#include "texture_atlas.h"
 #include "vg_ui.h"
 #include "vg_ui_ext.h"
 #include "vg_pointer.h"
@@ -58,9 +59,12 @@ static vg_result draw_structure_prefab_tile(
     float by,
     float unit_w,
     float unit_h,
+    int w_units_override,
+    int h_units_override,
     int rotation_quadrants,
     int flip_x,
     int flip_y,
+    int show_tex_panel_placeholder,
     const vg_stroke_style* st,
     const vg_fill_style* fill
 );
@@ -2007,12 +2011,13 @@ static void structure_prefab_dims_world(int prefab_id, int* out_w, int* out_h) {
 static vg_result draw_level_structures(
     vg_context* ctx,
     const game_state* g,
+    const render_metrics* metrics,
     const palette_theme* pal,
     const vg_stroke_style* land_halo,
     const vg_stroke_style* land_main,
     int draw_cpu_vent_smoke
 ) {
-    if (!ctx || !g || !pal || !land_halo || !land_main || g->render_style == LEVEL_RENDER_CYLINDER) {
+    if (!ctx || !g || !metrics || !pal || !land_halo || !land_main || g->render_style == LEVEL_RENDER_CYLINDER) {
         return VG_OK;
     }
     const leveldef_level* lvl = game_current_leveldef(g);
@@ -2048,9 +2053,8 @@ static vg_result draw_level_structures(
         const leveldef_structure_instance* st = &lvl->structures[i];
         const vg_stroke_style* hl = (st->layer > 0) ? &feature_halo : &base_halo;
         const vg_stroke_style* mn = (st->layer > 0) ? &feature_main : &base_main;
-        int w_units = 1;
-        int h_units = 1;
-        structure_prefab_dims_world(st->prefab_id, &w_units, &h_units);
+        const int w_units = (st->w_units > 0) ? st->w_units : 1;
+        const int h_units = (st->h_units > 0) ? st->h_units : 1;
         const float bx = (float)st->grid_x * unit_w;
         const float by = (float)st->grid_y * unit_h;
         const float bw = unit_w * (float)w_units;
@@ -2061,40 +2065,47 @@ static vg_result draw_level_structures(
         }
 
         vg_result vr = VG_OK;
-
-        vr = draw_structure_prefab_tile(
-            ctx,
-            st->prefab_id,
-            st->layer,
-            bx,
-            by,
-            unit_w,
-            unit_h,
-            st->rotation_quadrants,
-            st->flip_x,
-            st->flip_y,
-            hl,
-            &base_fill
-        );
-        if (vr != VG_OK) {
-            return vr;
-        }
-        vr = draw_structure_prefab_tile(
-            ctx,
-            st->prefab_id,
-            st->layer,
-            bx,
-            by,
-            unit_w,
-            unit_h,
-            st->rotation_quadrants,
-            st->flip_x,
-            st->flip_y,
-            mn,
-            NULL
-        );
-        if (vr != VG_OK) {
-            return vr;
+        if (st->prefab_id != LEVELDEF_STRUCTURE_PREFAB_VENT) {
+            vr = draw_structure_prefab_tile(
+                ctx,
+                st->prefab_id,
+                st->layer,
+                bx,
+                by,
+                unit_w,
+                unit_h,
+                (st->w_units > 0) ? st->w_units : 1,
+                (st->h_units > 0) ? st->h_units : 1,
+                st->rotation_quadrants,
+                st->flip_x,
+                st->flip_y,
+                0,
+                hl,
+                &base_fill
+            );
+            if (vr != VG_OK) {
+                return vr;
+            }
+            vr = draw_structure_prefab_tile(
+                ctx,
+                st->prefab_id,
+                st->layer,
+                bx,
+                by,
+                unit_w,
+                unit_h,
+                (st->w_units > 0) ? st->w_units : 1,
+                (st->h_units > 0) ? st->h_units : 1,
+                st->rotation_quadrants,
+                st->flip_x,
+                st->flip_y,
+                0,
+                mn,
+                NULL
+            );
+            if (vr != VG_OK) {
+                return vr;
+            }
         }
 
         if (st->layer > 0 && st->prefab_id == 5) {
@@ -2135,16 +2146,19 @@ static vg_result draw_level_structures(
                     }
                 }
             }
-        } else if (draw_cpu_vent_smoke && st->layer > 0 && st->prefab_id >= 7) {
+        } else if (draw_cpu_vent_smoke && st->layer > 0 && st->prefab_id == LEVELDEF_STRUCTURE_PREFAB_VENT) {
             const float vent_density = (st->vent_density > 0.0f) ? st->vent_density : 1.0f;
             const float vent_opacity = (st->vent_opacity > 0.0f) ? st->vent_opacity : 1.0f;
             const float vent_height = (st->vent_plume_height > 0.0f) ? st->vent_plume_height : 1.0f;
+            const int vent_variant = (st->variant >= 0) ? st->variant : 0;
+            const float vent_x_offset = ((vent_variant & 1) ? 0.5f : 0.0f) * unit_w;
+            const float vent_y_offset = (((vent_variant >> 1) & 1) ? 0.5f : 0.0f) * unit_h;
             const int streams = clampi((int)lroundf(5.0f * vent_density), 2, 14);
             const int puffs_per_stream = clampi((int)lroundf(10.0f * vent_density), 4, 24);
-            const float vent_y = bh;
+            const float vent_y = bh + vent_y_offset;
             for (int stream = 0; stream < streams; ++stream) {
                 const float stream_t = (streams > 1) ? ((float)stream / (float)(streams - 1)) : 0.5f;
-                const float vent_x = bw * (0.24f + 0.52f * stream_t);
+                const float vent_x = vent_x_offset + unit_w * (0.24f + 0.52f * stream_t);
                 for (int puff = 0; puff < puffs_per_stream; ++puff) {
                     const int seed = st->grid_x * 73 + st->grid_y * 41 + stream * 101 + puff * 31;
                     const float h = (float)(seed & 255) / 255.0f;
@@ -4416,6 +4430,23 @@ static int editor_structure_grid_steps_y(void) {
     return (steps < 1) ? 1 : steps;
 }
 
+static int editor_structure_grid_steps_x_for_prefab(float level_screens, int prefab_id) {
+    if (prefab_id == LEVELDEF_STRUCTURE_PREFAB_VENT) {
+        const float ls = fmaxf(level_screens, 1.0f);
+        const int steps = (int)lroundf(ls * (float)(LEVELDEF_STRUCTURE_GRID_W - 1));
+        return (steps < 1) ? 1 : steps;
+    }
+    return editor_structure_grid_steps_x(level_screens);
+}
+
+static int editor_structure_grid_steps_y_for_prefab(int prefab_id) {
+    if (prefab_id == LEVELDEF_STRUCTURE_PREFAB_VENT) {
+        const int steps = LEVELDEF_STRUCTURE_GRID_H - 1;
+        return (steps < 1) ? 1 : steps;
+    }
+    return editor_structure_grid_steps_y();
+}
+
 static void editor_structure_prefab_dims(int prefab_id, int* out_w, int* out_h) {
     int w = 1;
     int h = 1;
@@ -4424,6 +4455,14 @@ static void editor_structure_prefab_dims(int prefab_id, int* out_w, int* out_h) 
     }
     if (out_w) *out_w = w;
     if (out_h) *out_h = h;
+}
+
+static int editor_structure_prefab_uses_vent_params(int prefab_id) {
+    return prefab_id == LEVELDEF_STRUCTURE_PREFAB_VENT;
+}
+
+static int editor_structure_prefab_uses_tile_params(int prefab_id) {
+    return prefab_id == LEVELDEF_STRUCTURE_PREFAB_TEX_PANEL;
 }
 
 static vg_vec2 structure_map_point(
@@ -4507,23 +4546,41 @@ static vg_result draw_structure_prefab_tile(
     float by,
     float unit_w,
     float unit_h,
+    int w_units_override,
+    int h_units_override,
     int rotation_quadrants,
     int flip_x,
     int flip_y,
+    int show_tex_panel_placeholder,
     const vg_stroke_style* st,
     const vg_fill_style* fill
 ) {
     int w_units = 1;
     int h_units = 1;
-    editor_structure_prefab_dims(prefab_id, &w_units, &h_units);
+    if (w_units_override > 0 && h_units_override > 0) {
+        w_units = w_units_override;
+        h_units = h_units_override;
+    } else {
+        editor_structure_prefab_dims(prefab_id, &w_units, &h_units);
+    }
     const float w = unit_w * (float)w_units;
     const float h = unit_h * (float)h_units;
     vg_result r = VG_OK;
+    if (prefab_id == LEVELDEF_STRUCTURE_PREFAB_TEX_PANEL) {
+        if (!show_tex_panel_placeholder) {
+            return VG_OK;
+        }
+        return structure_draw_rect_transformed(
+            ctx, 0.0f, 0.0f, w, h, bx, by, w, h,
+            rotation_quadrants, flip_x ? 1 : 0, flip_y ? 1 : 0,
+            st, fill
+        );
+    }
     if (prefab_id != 3) {
         r = structure_draw_rect_transformed(
             ctx, 0.0f, 0.0f, w, h, bx, by, w, h,
             rotation_quadrants, flip_x ? 1 : 0, flip_y ? 1 : 0,
-            st, (fill && layer == 0) ? fill : NULL
+            st, (fill && layer == 0 && prefab_id != LEVELDEF_STRUCTURE_PREFAB_TEX_PANEL) ? fill : NULL
         );
         if (r != VG_OK) return r;
     }
@@ -4634,7 +4691,7 @@ static vg_result draw_structure_prefab_tile(
         }
         return VG_OK;
     }
-    if (prefab_id >= 7) {
+    if (prefab_id == LEVELDEF_STRUCTURE_PREFAB_VENT) {
         const float mx = fminf(unit_w * 0.18f, w * 0.24f);
         const float my = fminf(unit_h * 0.22f, h * 0.30f);
         return structure_draw_rect_transformed(
@@ -4901,15 +4958,20 @@ static int editor_marker_properties_text(
         return n;
     }
     if (kind == 9) {
+        const int prefab_id = clampi((int)lroundf(metrics->level_editor_marker_a[sel]), 0, 31);
         if (n < cap) { out_labels[n] = "POS X"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_x01[sel]); n++; }
         if (n < cap) { out_labels[n] = "POS Y"; snprintf(out_values[n], 32, "%.3f", metrics->level_editor_marker_y01[sel]); n++; }
         if (n < cap) { out_labels[n] = "PREFAB"; snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_a[sel]); n++; }
         if (n < cap) { out_labels[n] = "LAYER"; snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_b[sel]); n++; }
         if (n < cap) { out_labels[n] = "ROT"; snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_c[sel]); n++; }
         if (n < cap) { out_labels[n] = "FLIP"; snprintf(out_values[n], 32, "%.0f", metrics->level_editor_marker_d[sel]); n++; }
-        if (n < cap) { out_labels[n] = "VENT DENSITY"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_e[sel]); n++; }
-        if (n < cap) { out_labels[n] = "VENT OPACITY"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_f[sel]); n++; }
-        if (n < cap) { out_labels[n] = "VENT HEIGHT"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_g[sel]); n++; }
+        if (editor_structure_prefab_uses_vent_params(prefab_id)) {
+            if (n < cap) { out_labels[n] = "VENT DENSITY"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_e[sel]); n++; }
+            if (n < cap) { out_labels[n] = "VENT OPACITY"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_f[sel]); n++; }
+            if (n < cap) { out_labels[n] = "VENT HEIGHT"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_g[sel]); n++; }
+        } else if (editor_structure_prefab_uses_tile_params(prefab_id)) {
+            if (n < cap) { out_labels[n] = "TILE"; snprintf(out_values[n], 32, "%d", (int)lroundf(metrics->level_editor_marker_e[sel])); n++; }
+        }
         return n;
     }
     if (kind == 20) {
@@ -5190,6 +5252,10 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     const vg_rect ctb_btn5 = {ctb_x + (ctb_btn_w + ctb_gap) * 5.0f, ctb_y, ctb_btn_w, ctb_btn_h};
     const vg_rect ctb_btn6 = {ctb_x + (ctb_btn_w + ctb_gap) * 6.0f, ctb_y, ctb_btn_w, ctb_btn_h};
     const vg_rect ctb_btn7 = {ctb_x + (ctb_btn_w + ctb_gap) * 7.0f, ctb_y, ctb_btn_w, ctb_btn_h};
+    const vg_rect ctb_btn8 = {ctb_x + (ctb_btn_w + ctb_gap) * 8.0f, ctb_y, ctb_btn_w, ctb_btn_h};
+    level_editor_layout editor_layout;
+    level_editor_compute_layout(w, h, &editor_layout);
+    const vg_rect tile_picker = level_editor_tile_picker_rect(&editor_layout);
     char level_name_disp[96];
     const int enemy_spatial =
         (metrics->level_editor_wave_mode == LEVELDEF_WAVES_CURATED);
@@ -5279,6 +5345,8 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     r = draw_ui_button_shaded(ctx, ctb_btn6, "VALVE", 9.8f * ui, &layer2_frame, &layer2_text, metrics->level_editor_structure_tool_selected == 7 ? 1 : 0);
     if (r != VG_OK) return r;
     r = draw_ui_button_shaded(ctx, ctb_btn7, "VENT", 9.8f * ui, &layer2_frame, &layer2_text, metrics->level_editor_structure_tool_selected == 8 ? 1 : 0);
+    if (r != VG_OK) return r;
+    r = draw_ui_button_shaded(ctx, ctb_btn8, "TEX PANEL", 8.8f * ui, &layer1_frame, &layer1_text, metrics->level_editor_structure_tool_selected == 9 ? 1 : 0);
     if (r != VG_OK) return r;
     r = draw_ui_button_shaded(ctx, swarm_btn, "SWARM", 10.2f * ui, &frame, &text, metrics->level_editor_tool_selected == 5 ? 1 : 0);
     if (r != VG_OK) return r;
@@ -5693,8 +5761,8 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                     const float view_min_local = start_screen / len_screens;
                     const float view_max_local = (start_screen + 1.0f) / len_screens;
                     const float view_span_local = fmaxf(view_max_local - view_min_local, 1.0e-6f);
-                    const int gx_steps_total = editor_structure_grid_steps_x(len_screens);
-                    const int gy_steps = editor_structure_grid_steps_y();
+                    const int gx_steps_total = editor_structure_grid_steps_x_for_prefab(len_screens, prefab);
+                    const int gy_steps = editor_structure_grid_steps_y_for_prefab(prefab);
                     const int gx = clampi((int)lroundf(mx01 * (float)gx_steps_total), 0, gx_steps_total);
                     const int gy = clampi((int)lroundf(my01 * (float)gy_steps), 0, gy_steps);
                     const float x0 = (float)gx / (float)gx_steps_total;
@@ -5702,27 +5770,52 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                     const float visible_x_steps = (float)gx_steps_total * view_span_local;
                     const float cell_w = viewport.w / fmaxf(visible_x_steps, 1.0f);
                     const float cell_h = viewport.h / (float)gy_steps;
-                    const float bx = viewport.x + ((x0 - view_min_local) / view_span_local) * viewport.w;
-                    const float by = viewport.y + y0 * viewport.h;
+                    float bx = viewport.x + ((x0 - view_min_local) / view_span_local) * viewport.w;
+                    float by = viewport.y + y0 * viewport.h;
                     vg_fill_style fill = {
                         .intensity = 0.55f,
                         .color = (vg_color){pal.primary_dim.r, pal.primary_dim.g, pal.primary_dim.b, 0.15f},
                         .blend = VG_BLEND_ALPHA
                     };
-                    r = draw_structure_prefab_tile(
-                        ctx,
-                        prefab,
-                        layer,
-                        bx,
-                        by,
-                        cell_w,
-                        cell_h,
-                        (int)lroundf(metrics->level_editor_marker_c[i]),
-                        (((int)lroundf(metrics->level_editor_marker_d[i])) & 1),
-                        ((((int)lroundf(metrics->level_editor_marker_d[i])) >> 1) & 1),
-                        &st,
-                        &fill
-                    );
+                    if (prefab == LEVELDEF_STRUCTURE_PREFAB_VENT) {
+                        bx -= cell_w * 0.5f;
+                        const vg_vec2 stem[2] = {
+                            {bx + cell_w * 0.50f, by + cell_h * 0.18f},
+                            {bx + cell_w * 0.50f, by + cell_h * 0.62f}
+                        };
+                        const vg_vec2 cap[2] = {
+                            {bx + cell_w * 0.34f, by + cell_h * 0.18f},
+                            {bx + cell_w * 0.66f, by + cell_h * 0.18f}
+                        };
+                        const vg_vec2 plume[3] = {
+                            {bx + cell_w * 0.42f, by + cell_h * 0.72f},
+                            {bx + cell_w * 0.57f, by + cell_h * 0.88f},
+                            {bx + cell_w * 0.48f, by + cell_h * 1.02f}
+                        };
+                        r = vg_draw_polyline(ctx, stem, 2, &st, 0);
+                        if (r != VG_OK) return r;
+                        r = vg_draw_polyline(ctx, cap, 2, &st, 0);
+                        if (r != VG_OK) return r;
+                        r = vg_draw_polyline(ctx, plume, 3, &st, 0);
+                    } else {
+                        r = draw_structure_prefab_tile(
+                            ctx,
+                            prefab,
+                            layer,
+                            bx,
+                            by,
+                            cell_w,
+                            cell_h,
+                            (prefab == LEVELDEF_STRUCTURE_PREFAB_TEX_PANEL) ? metrics->level_editor_texture_panel_w_units : 0,
+                            (prefab == LEVELDEF_STRUCTURE_PREFAB_TEX_PANEL) ? metrics->level_editor_texture_panel_h_units : 0,
+                            (int)lroundf(metrics->level_editor_marker_c[i]),
+                            (((int)lroundf(metrics->level_editor_marker_d[i])) & 1),
+                            ((((int)lroundf(metrics->level_editor_marker_d[i])) >> 1) & 1),
+                            (prefab == LEVELDEF_STRUCTURE_PREFAB_TEX_PANEL && (int)lroundf(metrics->level_editor_marker_e[i]) < 0) ? 1 : 0,
+                            &st,
+                            &fill
+                        );
+                    }
                 }
             } else if (kind == 20) {
                 const float rr = 25.0f * ui * glyph_scale;
@@ -5831,6 +5924,39 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                     if (r != VG_OK) return r;
                     ty -= 32.0f * ui;
                 }
+                if (kind == 9 && editor_structure_prefab_uses_tile_params(clampi((int)lroundf(metrics->level_editor_marker_a[sel]), 0, 31))) {
+                    int cols = 0;
+                    int rows = 0;
+                    if (texture_atlas_grid_dims(
+                            metrics->level_editor_texture_atlas_id,
+                            metrics->level_editor_texture_tile_w_px,
+                            metrics->level_editor_texture_tile_h_px,
+                            &cols,
+                            &rows) &&
+                        cols > 0 && rows > 0) {
+                        const int selected_tile = (int)lroundf(metrics->level_editor_marker_e[sel]);
+                        const float cell_w = tile_picker.w / (float)cols;
+                        const float cell_h = tile_picker.h / (float)rows;
+                        r = draw_text_vector_glow(ctx, "TILE PICKER", (vg_vec2){tile_picker.x, tile_picker.y + tile_picker.h + 12.0f * ui}, 9.0f * ui, 0.48f * ui, &frame, &text);
+                        if (r != VG_OK) return r;
+                        for (int gy = 0; gy < rows; ++gy) {
+                            for (int gx = 0; gx < cols; ++gx) {
+                                const int tile_id = gy * cols + gx;
+                                const vg_rect cell = {
+                                    tile_picker.x + (float)gx * cell_w,
+                                    tile_picker.y + (float)gy * cell_h,
+                                    cell_w,
+                                    cell_h
+                                };
+                                vg_stroke_style cell_stroke = frame;
+                                cell_stroke.width_px = (tile_id == selected_tile) ? 2.2f * ui : 1.0f * ui;
+                                cell_stroke.color = (tile_id == selected_tile) ? pal.secondary : pal.primary_dim;
+                                r = vg_draw_rect(ctx, cell, &cell_stroke);
+                                if (r != VG_OK) return r;
+                            }
+                        }
+                    }
+                }
                 r = draw_text_vector_glow(ctx, "TAB FIELD  LEFT/RIGHT EDIT", (vg_vec2){tx, ty - 4.0f * ui}, 9.2f * ui, 0.52f * ui, &frame, &text);
                 if (r != VG_OK) return r;
             }
@@ -5884,13 +6010,38 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb6 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
-                snprintf(row, sizeof(row), "LENGTH         %.1f", metrics->level_editor_level_length_screens);
-                r = draw_ui_button_shaded(ctx, rb6, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_LENGTH) ? 1 : 0);
+                snprintf(row, sizeof(row), "ATLAS          %s", texture_atlas_name(metrics->level_editor_texture_atlas_id));
+                r = draw_ui_button_shaded(ctx, rb6, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_TEXTURE_ATLAS) ? 1 : 0);
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb7 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
+                snprintf(row, sizeof(row), "TILE W        %d", metrics->level_editor_texture_tile_w_px);
+                r = draw_ui_button_shaded(ctx, rb7, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_TEXTURE_TILE_W) ? 1 : 0);
+                if (r != VG_OK) return r;
+                ty -= 32.0f * ui;
+                const vg_rect rb8 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
+                snprintf(row, sizeof(row), "TILE H        %d", metrics->level_editor_texture_tile_h_px);
+                r = draw_ui_button_shaded(ctx, rb8, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_TEXTURE_TILE_H) ? 1 : 0);
+                if (r != VG_OK) return r;
+                ty -= 32.0f * ui;
+                const vg_rect rb9 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
+                snprintf(row, sizeof(row), "TEX W UNITS   %d", metrics->level_editor_texture_panel_w_units);
+                r = draw_ui_button_shaded(ctx, rb9, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_TEXTURE_PANEL_W) ? 1 : 0);
+                if (r != VG_OK) return r;
+                ty -= 32.0f * ui;
+                const vg_rect rb10 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
+                snprintf(row, sizeof(row), "TEX H UNITS   %d", metrics->level_editor_texture_panel_h_units);
+                r = draw_ui_button_shaded(ctx, rb10, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_TEXTURE_PANEL_H) ? 1 : 0);
+                if (r != VG_OK) return r;
+                ty -= 32.0f * ui;
+                const vg_rect rb11 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
+                snprintf(row, sizeof(row), "LENGTH         %.1f", metrics->level_editor_level_length_screens);
+                r = draw_ui_button_shaded(ctx, rb11, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_LENGTH) ? 1 : 0);
+                if (r != VG_OK) return r;
+                ty -= 32.0f * ui;
+                const vg_rect rb12 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
                 snprintf(row, sizeof(row), "POWERUP DROP   %.2f", metrics->level_editor_powerup_drop_chance);
-                r = draw_ui_button_shaded(ctx, rb7, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_POWERUP_DROP) ? 1 : 0);
+                r = draw_ui_button_shaded(ctx, rb12, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_POWERUP_DROP) ? 1 : 0);
                 if (r != VG_OK) return r;
             }
             ty -= 34.0f * ui;
@@ -5997,8 +6148,8 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             const float view_min = start_screen / len_screens;
             const float view_max = (start_screen + 1.0f) / len_screens;
             const float view_span = fmaxf(view_max - view_min, 1.0e-6f);
-            const int gx_steps_total = editor_structure_grid_steps_x(len_screens);
-            const int gy_steps = editor_structure_grid_steps_y();
+            const int gx_steps_total = editor_structure_grid_steps_x_for_prefab(len_screens, prefab);
+            const int gy_steps = editor_structure_grid_steps_y_for_prefab(prefab);
             const float mx01 = clampf((metrics->level_editor_drag_x - viewport.x) / fmaxf(viewport.w, 1.0f), 0.0f, 1.0f);
             const float my01 = clampf((metrics->level_editor_drag_y - viewport.y) / fmaxf(viewport.h, 1.0f), 0.0f, 1.0f);
             const float x01 = view_min + mx01 * fmaxf(view_max - view_min, 1.0e-6f);
@@ -6009,8 +6160,8 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             const float visible_x_steps = (float)gx_steps_total * view_span;
             const float cell_w = viewport.w / fmaxf(visible_x_steps, 1.0f);
             const float cell_h = viewport.h / (float)gy_steps;
-            const float bx = viewport.x + ((gx01 - view_min) / view_span) * viewport.w;
-            const float by = viewport.y + gy01 * viewport.h;
+            float bx = viewport.x + ((gx01 - view_min) / view_span) * viewport.w;
+            float by = viewport.y + gy01 * viewport.h;
             gs.color = (layer == 0) ? pal.primary_dim : pal.secondary;
             {
                 vg_fill_style fill = {
@@ -6018,20 +6169,45 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                     .color = (vg_color){gs.color.r, gs.color.g, gs.color.b, 0.12f},
                     .blend = VG_BLEND_ALPHA
                 };
-                r = draw_structure_prefab_tile(
-                    ctx,
-                    prefab,
-                    layer,
-                    bx,
-                    by,
-                    cell_w,
-                    cell_h,
-                    0,
-                    0,
-                    0,
-                    &gs,
-                    &fill
-                );
+                if (prefab == LEVELDEF_STRUCTURE_PREFAB_VENT) {
+                    bx -= cell_w * 0.5f;
+                    const vg_vec2 stem[2] = {
+                        {bx + cell_w * 0.50f, by + cell_h * 0.18f},
+                        {bx + cell_w * 0.50f, by + cell_h * 0.62f}
+                    };
+                    const vg_vec2 cap[2] = {
+                        {bx + cell_w * 0.34f, by + cell_h * 0.18f},
+                        {bx + cell_w * 0.66f, by + cell_h * 0.18f}
+                    };
+                    const vg_vec2 plume[3] = {
+                        {bx + cell_w * 0.42f, by + cell_h * 0.72f},
+                        {bx + cell_w * 0.57f, by + cell_h * 0.88f},
+                        {bx + cell_w * 0.48f, by + cell_h * 1.02f}
+                    };
+                    r = vg_draw_polyline(ctx, stem, 2, &gs, 0);
+                    if (r != VG_OK) return r;
+                    r = vg_draw_polyline(ctx, cap, 2, &gs, 0);
+                    if (r != VG_OK) return r;
+                    r = vg_draw_polyline(ctx, plume, 3, &gs, 0);
+                } else {
+                    r = draw_structure_prefab_tile(
+                        ctx,
+                        prefab,
+                        layer,
+                        bx,
+                        by,
+                        cell_w,
+                        cell_h,
+                        (prefab == LEVELDEF_STRUCTURE_PREFAB_TEX_PANEL) ? metrics->level_editor_texture_panel_w_units : 0,
+                        (prefab == LEVELDEF_STRUCTURE_PREFAB_TEX_PANEL) ? metrics->level_editor_texture_panel_h_units : 0,
+                        0,
+                        0,
+                        0,
+                        (prefab == LEVELDEF_STRUCTURE_PREFAB_TEX_PANEL) ? 1 : 0,
+                        &gs,
+                        &fill
+                    );
+                }
             }
         } else {
             r = draw_editor_diamond(ctx, (vg_vec2){metrics->level_editor_drag_x, metrics->level_editor_drag_y}, 7.0f * ui, &gs);
@@ -11669,7 +11845,7 @@ skip_legacy_landscape:
             return r;
         }
     }
-    r = draw_level_structures(ctx, g, &pal, &land_halo, &land_main, metrics->use_gpu_particles ? 0 : 1);
+    r = draw_level_structures(ctx, g, metrics, &pal, &land_halo, &land_main, metrics->use_gpu_particles ? 0 : 1);
     if (r != VG_OK) {
         (void)vg_transform_pop(ctx);
         return r;

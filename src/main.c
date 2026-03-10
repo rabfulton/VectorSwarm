@@ -10,6 +10,7 @@
 #include "planetarium_propaganda.h"
 #include "render.h"
 #include "settings.h"
+#include "texture_atlas.h"
 #include "ui_layout.h"
 #include "vg.h"
 #include "vg_ui.h"
@@ -83,6 +84,8 @@
 #include "arc_beam_frag_spv.h"
 #include "industry_frag_spv.h"
 #include "revolver_frag_spv.h"
+#include "structure_tile_vert_spv.h"
+#include "structure_tile_frag_spv.h"
 #endif
 
 #define APP_WIDTH 1280
@@ -271,6 +274,13 @@ typedef struct arc_beam_pc {
     float p1[4];        /* x=radius_px, y=jag_px, z=seed */
 } arc_beam_pc;
 
+typedef struct structure_tile_pc {
+    float p0[4]; /* x=viewport_w, y=viewport_h, z=dst_x_px, w=dst_y_px */
+    float p1[4]; /* x=dst_w_px, y=dst_h_px, z=alpha, w=unused */
+    float p2[4]; /* xy=uv00, zw=uv10 */
+    float p3[4]; /* xy=uv11, zw=uv01 */
+} structure_tile_pc;
+
 typedef struct terrain_tuning {
     float hue_shift;
     float brightness;
@@ -429,6 +439,15 @@ typedef struct app {
     VkDeviceMemory industry_memory;
     VkImageView industry_view;
     VkSampler industry_sampler;
+    VkPipelineLayout structure_tile_layout;
+    VkPipeline structure_tile_pipeline;
+    VkDescriptorSetLayout structure_tile_desc_layout;
+    VkDescriptorPool structure_tile_desc_pool;
+    VkDescriptorSet structure_tile_desc_set;
+    VkImage structure_tile_image;
+    VkDeviceMemory structure_tile_memory;
+    VkImageView structure_tile_view;
+    VkSampler structure_tile_sampler;
     VkBuffer wormhole_tri_vertex_buffer;
     VkDeviceMemory wormhole_tri_vertex_memory;
     void* wormhole_tri_vertex_map;
@@ -450,6 +469,7 @@ typedef struct app {
     int use_gpu_arc;
     int use_gpu_industry;
     int use_gpu_revolver;
+    int use_gpu_structure_tiles;
     int use_gpu_particles;
     int disable_scene_split;
     VkBuffer particle_instance_buffer;
@@ -688,6 +708,10 @@ typedef struct app {
     uint32_t industry_w;
     uint32_t industry_h;
     uint32_t industry_stride;
+    uint8_t* structure_tiles_rgba8;
+    uint32_t structure_tiles_w;
+    uint32_t structure_tiles_h;
+    uint32_t structure_tiles_stride;
     float nick_threshold;
     float nick_contrast;
     float nick_scanline_pitch_px;
@@ -741,6 +765,12 @@ static int check_vk(VkResult r, const char* what) {
 }
 
 static float clampf(float v, float lo, float hi) {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+static int clampi(int v, int lo, int hi) {
     if (v < lo) return lo;
     if (v > hi) return hi;
     return v;
@@ -2464,6 +2494,7 @@ static int create_grid_resources(app* a);
 static int create_arc_beam_resources(app* a);
 static int create_industry_resources(app* a);
 static int create_revolver_pipeline(app* a);
+static int create_structure_tile_resources(app* a);
 static void reset_grid_sim_state(app* a);
 static int create_vg_context(app* a);
 static void set_tty_message(app* a, const char* msg);
@@ -2487,6 +2518,7 @@ static void record_gpu_grid_sim(app* a, VkCommandBuffer cmd, float dt);
 static void record_gpu_grid(app* a, VkCommandBuffer cmd);
 static void record_gpu_arc_beam(app* a, VkCommandBuffer cmd, float t);
 static void record_gpu_industry(app* a, VkCommandBuffer cmd, float t);
+static void record_gpu_structure_tiles(app* a, VkCommandBuffer cmd, int pass);
 static void begin_gpu_label(app* a, VkCommandBuffer cmd, const char* name, float r, float g, float b);
 static void end_gpu_label(app* a, VkCommandBuffer cmd);
 static void reset_terrain_tuning(app* a);
@@ -4475,6 +4507,41 @@ static void init_planetarium_assets(app* a) {
                 SDL_FreeSurface(rgba);
             }
         }
+
+        {
+            const texture_atlas_def* atlas = texture_atlas_get(TEXTURE_ATLAS_TILES);
+            const char* asset = atlas ? atlas->asset_path : "assets/images/tiles.png";
+            char p1[256];
+            char p2[256];
+            snprintf(p1, sizeof(p1), "../%s", asset);
+            snprintf(p2, sizeof(p2), "../../%s", asset);
+            {
+                const char* tile_candidates[] = {asset, p1, p2};
+                src = NULL;
+                for (size_t i = 0; i < sizeof(tile_candidates) / sizeof(tile_candidates[0]); ++i) {
+                    src = IMG_Load(tile_candidates[i]);
+                    if (src) {
+                        break;
+                    }
+                }
+            }
+            if (src) {
+                SDL_Surface* rgba = SDL_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_RGBA32, 0);
+                SDL_FreeSurface(src);
+                src = NULL;
+                if (rgba) {
+                    const size_t bytes = (size_t)rgba->pitch * (size_t)rgba->h;
+                    a->structure_tiles_rgba8 = (uint8_t*)malloc(bytes);
+                    if (a->structure_tiles_rgba8) {
+                        memcpy(a->structure_tiles_rgba8, rgba->pixels, bytes);
+                        a->structure_tiles_w = (uint32_t)rgba->w;
+                        a->structure_tiles_h = (uint32_t)rgba->h;
+                        a->structure_tiles_stride = (uint32_t)rgba->pitch;
+                    }
+                    SDL_FreeSurface(rgba);
+                }
+            }
+        }
     }
 #endif
 }
@@ -4872,6 +4939,7 @@ static void cleanup(app* a) {
     if (a->arc_beam_pipeline) vkDestroyPipeline(a->device, a->arc_beam_pipeline, NULL);
     if (a->industry_pipeline) vkDestroyPipeline(a->device, a->industry_pipeline, NULL);
     if (a->revolver_pipeline) vkDestroyPipeline(a->device, a->revolver_pipeline, NULL);
+    if (a->structure_tile_pipeline) vkDestroyPipeline(a->device, a->structure_tile_pipeline, NULL);
     if (a->post_layout) vkDestroyPipelineLayout(a->device, a->post_layout, NULL);
     if (a->terrain_layout) vkDestroyPipelineLayout(a->device, a->terrain_layout, NULL);
     if (a->particle_layout) vkDestroyPipelineLayout(a->device, a->particle_layout, NULL);
@@ -4883,6 +4951,7 @@ static void cleanup(app* a) {
     if (a->grid_sim_layout) vkDestroyPipelineLayout(a->device, a->grid_sim_layout, NULL);
     if (a->arc_beam_layout) vkDestroyPipelineLayout(a->device, a->arc_beam_layout, NULL);
     if (a->industry_layout) vkDestroyPipelineLayout(a->device, a->industry_layout, NULL);
+    if (a->structure_tile_layout) vkDestroyPipelineLayout(a->device, a->structure_tile_layout, NULL);
     if (a->underwater_desc_pool) vkDestroyDescriptorPool(a->device, a->underwater_desc_pool, NULL);
     if (a->underwater_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->underwater_desc_layout, NULL);
     if (a->particle_desc_pool) vkDestroyDescriptorPool(a->device, a->particle_desc_pool, NULL);
@@ -4891,12 +4960,15 @@ static void cleanup(app* a) {
     if (a->grid_state_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->grid_state_desc_layout, NULL);
     if (a->industry_desc_pool) vkDestroyDescriptorPool(a->device, a->industry_desc_pool, NULL);
     if (a->industry_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->industry_desc_layout, NULL);
+    if (a->structure_tile_desc_pool) vkDestroyDescriptorPool(a->device, a->structure_tile_desc_pool, NULL);
+    if (a->structure_tile_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->structure_tile_desc_layout, NULL);
     if (a->underwater_noise_sampler) vkDestroySampler(a->device, a->underwater_noise_sampler, NULL);
     if (a->grid_state_sampler) vkDestroySampler(a->device, a->grid_state_sampler, NULL);
     if (a->post_desc_pool) vkDestroyDescriptorPool(a->device, a->post_desc_pool, NULL);
     if (a->post_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->post_desc_layout, NULL);
     if (a->post_sampler) vkDestroySampler(a->device, a->post_sampler, NULL);
     if (a->industry_sampler) vkDestroySampler(a->device, a->industry_sampler, NULL);
+    if (a->structure_tile_sampler) vkDestroySampler(a->device, a->structure_tile_sampler, NULL);
 
     if (a->scene_fb) vkDestroyFramebuffer(a->device, a->scene_fb, NULL);
     if (a->bloom_fb) vkDestroyFramebuffer(a->device, a->bloom_fb, NULL);
@@ -4914,6 +4986,7 @@ static void cleanup(app* a) {
     if (a->grid_state_view[0]) vkDestroyImageView(a->device, a->grid_state_view[0], NULL);
     if (a->grid_state_view[1]) vkDestroyImageView(a->device, a->grid_state_view[1], NULL);
     if (a->industry_view) vkDestroyImageView(a->device, a->industry_view, NULL);
+    if (a->structure_tile_view) vkDestroyImageView(a->device, a->structure_tile_view, NULL);
     if (a->scene_image) vkDestroyImage(a->device, a->scene_image, NULL);
     if (a->scene_depth_image) vkDestroyImage(a->device, a->scene_depth_image, NULL);
     if (a->scene_msaa_image) vkDestroyImage(a->device, a->scene_msaa_image, NULL);
@@ -4924,6 +4997,7 @@ static void cleanup(app* a) {
     if (a->grid_state_image[0]) vkDestroyImage(a->device, a->grid_state_image[0], NULL);
     if (a->grid_state_image[1]) vkDestroyImage(a->device, a->grid_state_image[1], NULL);
     if (a->industry_image) vkDestroyImage(a->device, a->industry_image, NULL);
+    if (a->structure_tile_image) vkDestroyImage(a->device, a->structure_tile_image, NULL);
     if (a->scene_memory) vkFreeMemory(a->device, a->scene_memory, NULL);
     if (a->scene_depth_memory) vkFreeMemory(a->device, a->scene_depth_memory, NULL);
     if (a->scene_msaa_memory) vkFreeMemory(a->device, a->scene_msaa_memory, NULL);
@@ -5014,6 +5088,10 @@ static void cleanup(app* a) {
     if (a->industry_rgba8) {
         free(a->industry_rgba8);
         a->industry_rgba8 = NULL;
+    }
+    if (a->structure_tiles_rgba8) {
+        free(a->structure_tiles_rgba8);
+        a->structure_tiles_rgba8 = NULL;
     }
     IMG_Quit();
 #endif
@@ -5213,6 +5291,10 @@ static void destroy_render_runtime(app* a) {
         vkDestroyDescriptorPool(a->device, a->industry_desc_pool, NULL);
         a->industry_desc_pool = VK_NULL_HANDLE;
     }
+    if (a->structure_tile_desc_pool) {
+        vkDestroyDescriptorPool(a->device, a->structure_tile_desc_pool, NULL);
+        a->structure_tile_desc_pool = VK_NULL_HANDLE;
+    }
     if (a->post_desc_layout) {
         vkDestroyDescriptorSetLayout(a->device, a->post_desc_layout, NULL);
         a->post_desc_layout = VK_NULL_HANDLE;
@@ -5225,6 +5307,10 @@ static void destroy_render_runtime(app* a) {
         vkDestroyDescriptorSetLayout(a->device, a->industry_desc_layout, NULL);
         a->industry_desc_layout = VK_NULL_HANDLE;
     }
+    if (a->structure_tile_desc_layout) {
+        vkDestroyDescriptorSetLayout(a->device, a->structure_tile_desc_layout, NULL);
+        a->structure_tile_desc_layout = VK_NULL_HANDLE;
+    }
     if (a->post_sampler) {
         vkDestroySampler(a->device, a->post_sampler, NULL);
         a->post_sampler = VK_NULL_HANDLE;
@@ -5236,6 +5322,10 @@ static void destroy_render_runtime(app* a) {
     if (a->industry_sampler) {
         vkDestroySampler(a->device, a->industry_sampler, NULL);
         a->industry_sampler = VK_NULL_HANDLE;
+    }
+    if (a->structure_tile_sampler) {
+        vkDestroySampler(a->device, a->structure_tile_sampler, NULL);
+        a->structure_tile_sampler = VK_NULL_HANDLE;
     }
     if (a->scene_fb) {
         vkDestroyFramebuffer(a->device, a->scene_fb, NULL);
@@ -5297,6 +5387,10 @@ static void destroy_render_runtime(app* a) {
         vkDestroyImageView(a->device, a->industry_view, NULL);
         a->industry_view = VK_NULL_HANDLE;
     }
+    if (a->structure_tile_view) {
+        vkDestroyImageView(a->device, a->structure_tile_view, NULL);
+        a->structure_tile_view = VK_NULL_HANDLE;
+    }
     if (a->scene_image) {
         vkDestroyImage(a->device, a->scene_image, NULL);
         a->scene_image = VK_NULL_HANDLE;
@@ -5332,6 +5426,10 @@ static void destroy_render_runtime(app* a) {
     if (a->industry_image) {
         vkDestroyImage(a->device, a->industry_image, NULL);
         a->industry_image = VK_NULL_HANDLE;
+    }
+    if (a->structure_tile_image) {
+        vkDestroyImage(a->device, a->structure_tile_image, NULL);
+        a->structure_tile_image = VK_NULL_HANDLE;
     }
     if (a->grid_sim_sources_map && a->grid_sim_sources_memory) {
         vkUnmapMemory(a->device, a->grid_sim_sources_memory);
@@ -5559,6 +5657,7 @@ static int recreate_render_runtime(app* a) {
         !create_grid_resources(a) ||
         !create_arc_beam_resources(a) ||
         !create_industry_resources(a) ||
+        !create_structure_tile_resources(a) ||
         !create_revolver_pipeline(a) ||
         !create_vg_context(a)) {
         return 0;
@@ -8423,6 +8522,311 @@ static int create_industry_resources(app* a) {
 #endif
 }
 
+static int create_structure_tile_resources(app* a) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    return 1;
+#else
+    if (!a) {
+        return 0;
+    }
+    a->use_gpu_structure_tiles = 0;
+    if (!a->structure_tiles_rgba8 ||
+        a->structure_tiles_w == 0u ||
+        a->structure_tiles_h == 0u ||
+        a->structure_tiles_stride < a->structure_tiles_w * 4u) {
+        return 1;
+    }
+
+    VkDeviceSize image_bytes = (VkDeviceSize)a->structure_tiles_h * (VkDeviceSize)a->structure_tiles_stride;
+    VkBuffer staging = VK_NULL_HANDLE;
+    VkDeviceMemory staging_mem = VK_NULL_HANDLE;
+    if (!create_buffer(
+            a, image_bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &staging, &staging_mem)) {
+        return 0;
+    }
+    void* mapped = NULL;
+    if (!check_vk(vkMapMemory(a->device, staging_mem, 0, image_bytes, 0, &mapped), "vkMapMemory(structure tile staging)")) {
+        vkDestroyBuffer(a->device, staging, NULL);
+        vkFreeMemory(a->device, staging_mem, NULL);
+        return 0;
+    }
+    {
+        uint8_t* dst = (uint8_t*)mapped;
+        for (uint32_t row = 0; row < a->structure_tiles_h; ++row) {
+            const uint32_t src_row = a->structure_tiles_h - 1u - row;
+            memcpy(
+                dst + (size_t)row * (size_t)a->structure_tiles_stride,
+                a->structure_tiles_rgba8 + (size_t)src_row * (size_t)a->structure_tiles_stride,
+                (size_t)a->structure_tiles_stride
+            );
+        }
+    }
+    vkUnmapMemory(a->device, staging_mem);
+
+    if (!create_image_2d(
+            a,
+            a->structure_tiles_w,
+            a->structure_tiles_h,
+            VK_FORMAT_R8G8B8A8_UNORM,
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            VK_SAMPLE_COUNT_1_BIT,
+            &a->structure_tile_image,
+            &a->structure_tile_memory,
+            &a->structure_tile_view)) {
+        vkDestroyBuffer(a->device, staging, NULL);
+        vkFreeMemory(a->device, staging_mem, NULL);
+        return 0;
+    }
+
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    if (!begin_one_shot_commands(a, &cmd)) {
+        vkDestroyBuffer(a->device, staging, NULL);
+        vkFreeMemory(a->device, staging_mem, NULL);
+        return 0;
+    }
+    VkImageMemoryBarrier to_dst = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = 0,
+        .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = a->structure_tile_image,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        }
+    };
+    vkCmdPipelineBarrier(
+        cmd,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0,
+        0, NULL,
+        0, NULL,
+        1, &to_dst
+    );
+    VkBufferImageCopy copy = {
+        .bufferOffset = 0,
+        .bufferRowLength = a->structure_tiles_stride / 4u,
+        .bufferImageHeight = a->structure_tiles_h,
+        .imageSubresource = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .mipLevel = 0,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        },
+        .imageOffset = {0, 0, 0},
+        .imageExtent = {a->structure_tiles_w, a->structure_tiles_h, 1}
+    };
+    vkCmdCopyBufferToImage(cmd, staging, a->structure_tile_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+    VkImageMemoryBarrier to_sampled = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = a->structure_tile_image,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        }
+    };
+    vkCmdPipelineBarrier(
+        cmd,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0,
+        0, NULL,
+        0, NULL,
+        1, &to_sampled
+    );
+    if (!end_one_shot_commands(a, &cmd)) {
+        vkDestroyBuffer(a->device, staging, NULL);
+        vkFreeMemory(a->device, staging_mem, NULL);
+        return 0;
+    }
+    vkDestroyBuffer(a->device, staging, NULL);
+    vkFreeMemory(a->device, staging_mem, NULL);
+
+    VkSamplerCreateInfo sampler = {
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .magFilter = VK_FILTER_NEAREST,
+        .minFilter = VK_FILTER_NEAREST,
+        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
+        .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .minLod = 0.0f,
+        .maxLod = 1.0f,
+        .maxAnisotropy = 1.0f
+    };
+    if (!check_vk(vkCreateSampler(a->device, &sampler, NULL, &a->structure_tile_sampler), "vkCreateSampler(structure tile)")) {
+        return 0;
+    }
+
+    VkDescriptorSetLayoutBinding bind = {
+        .binding = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT
+    };
+    VkDescriptorSetLayoutCreateInfo dsl = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 1,
+        .pBindings = &bind
+    };
+    if (!check_vk(vkCreateDescriptorSetLayout(a->device, &dsl, NULL, &a->structure_tile_desc_layout), "vkCreateDescriptorSetLayout(structure tile)")) {
+        return 0;
+    }
+    VkDescriptorPoolSize ps = {
+        .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1
+    };
+    VkDescriptorPoolCreateInfo dp = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .maxSets = 1,
+        .poolSizeCount = 1,
+        .pPoolSizes = &ps
+    };
+    if (!check_vk(vkCreateDescriptorPool(a->device, &dp, NULL, &a->structure_tile_desc_pool), "vkCreateDescriptorPool(structure tile)")) {
+        return 0;
+    }
+    VkDescriptorSetAllocateInfo dsa = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .descriptorPool = a->structure_tile_desc_pool,
+        .descriptorSetCount = 1,
+        .pSetLayouts = &a->structure_tile_desc_layout
+    };
+    if (!check_vk(vkAllocateDescriptorSets(a->device, &dsa, &a->structure_tile_desc_set), "vkAllocateDescriptorSets(structure tile)")) {
+        return 0;
+    }
+    VkDescriptorImageInfo di = {
+        .sampler = a->structure_tile_sampler,
+        .imageView = a->structure_tile_view,
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    };
+    VkWriteDescriptorSet wr = {
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = a->structure_tile_desc_set,
+        .dstBinding = 0,
+        .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .pImageInfo = &di
+    };
+    vkUpdateDescriptorSets(a->device, 1, &wr, 0, NULL);
+
+    VkPushConstantRange pc = {
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        .offset = 0,
+        .size = sizeof(structure_tile_pc)
+    };
+    VkPipelineLayoutCreateInfo pli = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = &a->structure_tile_desc_layout,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &pc
+    };
+    if (!check_vk(vkCreatePipelineLayout(a->device, &pli, NULL, &a->structure_tile_layout), "vkCreatePipelineLayout(structure tile)")) {
+        return 0;
+    }
+
+    VkShaderModuleCreateInfo vs_ci = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = v_type_structure_tile_vert_spv_len,
+        .pCode = (const uint32_t*)v_type_structure_tile_vert_spv
+    };
+    VkShaderModuleCreateInfo fs_ci = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = v_type_structure_tile_frag_spv_len,
+        .pCode = (const uint32_t*)v_type_structure_tile_frag_spv
+    };
+    VkShaderModule vs = VK_NULL_HANDLE;
+    VkShaderModule fs = VK_NULL_HANDLE;
+    if (!check_vk(vkCreateShaderModule(a->device, &vs_ci, NULL, &vs), "vkCreateShaderModule(structure tile vs)")) {
+        return 0;
+    }
+    if (!check_vk(vkCreateShaderModule(a->device, &fs_ci, NULL, &fs), "vkCreateShaderModule(structure tile fs)")) {
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+
+    VkPipelineShaderStageCreateInfo stages[2] = {
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vs, .pName = "main"},
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = fs, .pName = "main"}
+    };
+    VkPipelineVertexInputStateCreateInfo vi = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    VkPipelineInputAssemblyStateCreateInfo ia = {.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO, .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST};
+    VkPipelineViewportStateCreateInfo vp = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .scissorCount = 1};
+    VkPipelineRasterizationStateCreateInfo rs = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .lineWidth = 1.0f,
+        .cullMode = VK_CULL_MODE_NONE,
+        .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE
+    };
+    VkPipelineMultisampleStateCreateInfo ms = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .rasterizationSamples = scene_samples(a)};
+    VkPipelineColorBlendAttachmentState cb_att = {
+        .blendEnable = VK_TRUE,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .colorBlendOp = VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .alphaBlendOp = VK_BLEND_OP_ADD,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
+    };
+    VkPipelineColorBlendStateCreateInfo cb = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1, .pAttachments = &cb_att};
+    VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo ds = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .dynamicStateCount = 2, .pDynamicStates = dyn};
+    VkPipelineDepthStencilStateCreateInfo depth = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .depthTestEnable = VK_FALSE,
+        .depthWriteEnable = VK_FALSE,
+        .depthCompareOp = VK_COMPARE_OP_ALWAYS
+    };
+    VkGraphicsPipelineCreateInfo gp = {
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .stageCount = 2,
+        .pStages = stages,
+        .pVertexInputState = &vi,
+        .pInputAssemblyState = &ia,
+        .pViewportState = &vp,
+        .pRasterizationState = &rs,
+        .pMultisampleState = &ms,
+        .pDepthStencilState = &depth,
+        .pColorBlendState = &cb,
+        .pDynamicState = &ds,
+        .layout = a->structure_tile_layout,
+        .renderPass = a->scene_render_pass,
+        .subpass = 0
+    };
+    if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->structure_tile_pipeline), "vkCreateGraphicsPipelines(structure tile)")) {
+        vkDestroyShaderModule(a->device, fs, NULL);
+        vkDestroyShaderModule(a->device, vs, NULL);
+        return 0;
+    }
+    vkDestroyShaderModule(a->device, fs, NULL);
+    vkDestroyShaderModule(a->device, vs, NULL);
+    a->use_gpu_structure_tiles = 1;
+    return 1;
+#endif
+}
+
 /* Creates a second pipeline that uses the same layout/descriptor as the
    industry pipeline but with the revolver fragment shader.  Must be called
    after create_industry_resources() so industry_layout exists. */
@@ -9557,18 +9961,21 @@ static void update_gpu_particle_instances(app* a, int emit_runtime_particles, in
             const float unit_h = g->world_h / (float)((LEVELDEF_STRUCTURE_GRID_H - 1) / LEVELDEF_STRUCTURE_GRID_SCALE);
             for (int i = 0; i < lvl->structure_count && i < LEVELDEF_MAX_STRUCTURES; ++i) {
                 const leveldef_structure_instance* st = &lvl->structures[i];
-                if (st->layer <= 0 || st->prefab_id < 7) {
+                if (st->layer <= 0 || st->prefab_id != LEVELDEF_STRUCTURE_PREFAB_VENT) {
                     continue;
                 }
                 if (n >= GPU_PARTICLE_MAX_INSTANCES) {
                     break;
                 }
-                const float bx = (float)st->grid_x * unit_w;
-                const float by = (float)st->grid_y * unit_h;
+                const int vent_variant = (st->variant >= 0) ? st->variant : 0;
+                const float bx = (((float)st->grid_x + ((vent_variant & 1) ? 0.5f : 0.0f)) - 0.5f) * unit_w;
+                const float by = ((float)st->grid_y + (((vent_variant >> 1) & 1) ? 0.5f : 0.0f)) * unit_h;
                 const int seed_base = st->grid_x * 97 + st->grid_y * 53;
                 append_gpu_vent_smoke_plume(
                     g, out, &n, palette_mode, 0,
-                    bx, by, unit_w, unit_h,
+                    bx, by,
+                    unit_w * (float)((st->w_units > 0) ? st->w_units : 1),
+                    unit_h * (float)((st->h_units > 0) ? st->h_units : 1),
                     st->vent_density, st->vent_opacity, st->vent_plume_height,
                     seed_base, &r_sum, &r_min, &r_max
                 );
@@ -10793,9 +11200,9 @@ static void record_gpu_arc_beam(app* a, VkCommandBuffer cmd, float t) {
         pc.color_hot[1] = col_hot[1];
         pc.color_hot[2] = col_hot[2];
         pc.seg[0] = n0->x + g->world_w * 0.5f - g->camera_x;
-        pc.seg[1] = n0->y + g->world_h * 0.5f - g->camera_y;
+        pc.seg[1] = (float)a->swapchain_extent.height - (n0->y + g->world_h * 0.5f - g->camera_y);
         pc.seg[2] = n1->x + g->world_w * 0.5f - g->camera_x;
-        pc.seg[3] = n1->y + g->world_h * 0.5f - g->camera_y;
+        pc.seg[3] = (float)a->swapchain_extent.height - (n1->y + g->world_h * 0.5f - g->camera_y);
         pc.p1[0] = clampf(n0->radius * 0.16f, 4.0f, 22.0f);
         pc.p1[1] = clampf(n0->radius * 0.40f, 5.0f, 30.0f);
         pc.p1[2] = (float)i * 0.173f + 0.37f;
@@ -10840,6 +11247,328 @@ static void record_gpu_industry(app* a, VkCommandBuffer cmd, float t) {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->industry_layout, 0, 1, &a->industry_desc_set, 0, NULL);
     vkCmdPushConstants(cmd, a->industry_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
+#endif
+}
+
+enum {
+    STRUCTURE_TILE_PASS_WORLD = 0,
+    STRUCTURE_TILE_PASS_EDITOR_UI = 1
+};
+
+static int structure_tile_uv_rect(
+    const app* a,
+    int atlas_id,
+    int tile_w_px,
+    int tile_h_px,
+    int tile_index,
+    float* out_u0,
+    float* out_v0,
+    float* out_u1,
+    float* out_v1
+) {
+    int cols = 0;
+    int rows = 0;
+    if (!a || !out_u0 || !out_v0 || !out_u1 || !out_v1) {
+        return 0;
+    }
+    if (atlas_id != TEXTURE_ATLAS_TILES ||
+        !texture_atlas_grid_dims(atlas_id, tile_w_px, tile_h_px, &cols, &rows) ||
+        cols <= 0 || rows <= 0 ||
+        tile_index < 0 || tile_index >= cols * rows ||
+        a->structure_tiles_w == 0u || a->structure_tiles_h == 0u) {
+        return 0;
+    }
+    {
+        const int tile_x = tile_index % cols;
+        const int tile_y = tile_index / cols;
+        *out_u0 = ((float)tile_x * (float)tile_w_px) / (float)a->structure_tiles_w;
+        *out_v0 = ((float)tile_y * (float)tile_h_px) / (float)a->structure_tiles_h;
+        *out_u1 = ((float)(tile_x + 1) * (float)tile_w_px) / (float)a->structure_tiles_w;
+        *out_v1 = ((float)(tile_y + 1) * (float)tile_h_px) / (float)a->structure_tiles_h;
+    }
+    return 1;
+}
+
+static void structure_tile_transform_uvs(
+    float* uv00_x,
+    float* uv00_y,
+    float* uv10_x,
+    float* uv10_y,
+    float* uv11_x,
+    float* uv11_y,
+    float* uv01_x,
+    float* uv01_y,
+    int rotation_quadrants,
+    int flip_x,
+    int flip_y
+) {
+    float x[4];
+    float y[4];
+    if (!uv00_x || !uv00_y || !uv10_x || !uv10_y || !uv11_x || !uv11_y || !uv01_x || !uv01_y) {
+        return;
+    }
+    x[0] = *uv00_x; y[0] = *uv00_y;
+    x[1] = *uv10_x; y[1] = *uv10_y;
+    x[2] = *uv11_x; y[2] = *uv11_y;
+    x[3] = *uv01_x; y[3] = *uv01_y;
+    if (flip_x) {
+        float tx = x[0], ty = y[0];
+        x[0] = x[1]; y[0] = y[1];
+        x[1] = tx;   y[1] = ty;
+        tx = x[3]; ty = y[3];
+        x[3] = x[2]; y[3] = y[2];
+        x[2] = tx;   y[2] = ty;
+    }
+    if (flip_y) {
+        float tx = x[0], ty = y[0];
+        x[0] = x[3]; y[0] = y[3];
+        x[3] = tx;   y[3] = ty;
+        tx = x[1]; ty = y[1];
+        x[1] = x[2]; y[1] = y[2];
+        x[2] = tx;   y[2] = ty;
+    }
+    {
+        const int q = ((rotation_quadrants % 4) + 4) % 4;
+        for (int i = 0; i < q; ++i) {
+            const float tx = x[0];
+            const float ty = y[0];
+            x[0] = x[3]; y[0] = y[3];
+            x[3] = x[2]; y[3] = y[2];
+            x[2] = x[1]; y[2] = y[1];
+            x[1] = tx;   y[1] = ty;
+        }
+    }
+    *uv00_x = x[0]; *uv00_y = y[0];
+    *uv10_x = x[1]; *uv10_y = y[1];
+    *uv11_x = x[2]; *uv11_y = y[2];
+    *uv01_x = x[3]; *uv01_y = y[3];
+}
+
+static void structure_tile_emit(
+    app* a,
+    VkCommandBuffer cmd,
+    float dst_x,
+    float dst_y,
+    float dst_w,
+    float dst_h,
+    int atlas_id,
+    int tile_w_px,
+    int tile_h_px,
+    int tile_index,
+    int rotation_quadrants,
+    int flip_x,
+    int flip_y,
+    float alpha
+) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a; (void)cmd; (void)dst_x; (void)dst_y; (void)dst_w; (void)dst_h;
+    (void)atlas_id; (void)tile_w_px; (void)tile_h_px; (void)tile_index;
+    (void)rotation_quadrants; (void)flip_x; (void)flip_y; (void)alpha;
+#else
+    float u0 = 0.0f;
+    float v0 = 0.0f;
+    float u1 = 0.0f;
+    float v1 = 0.0f;
+    if (!a || !cmd || dst_w <= 0.5f || dst_h <= 0.5f || alpha <= 0.0f) {
+        return;
+    }
+    if (!structure_tile_uv_rect(a, atlas_id, tile_w_px, tile_h_px, tile_index, &u0, &v0, &u1, &v1)) {
+        return;
+    }
+    {
+        structure_tile_pc pc;
+        const float inset = fminf(fminf(dst_w, dst_h) * 0.035f, 3.0f);
+        const float dx = dst_x + inset;
+        const float dy = dst_y + inset;
+        const float dw = fmaxf(dst_w - inset * 2.0f, 1.0f);
+        const float dh = fmaxf(dst_h - inset * 2.0f, 1.0f);
+        float uv00_x = u0, uv00_y = v0;
+        float uv10_x = u1, uv10_y = v0;
+        float uv11_x = u1, uv11_y = v1;
+        float uv01_x = u0, uv01_y = v1;
+        memset(&pc, 0, sizeof(pc));
+        structure_tile_transform_uvs(
+            &uv00_x, &uv00_y,
+            &uv10_x, &uv10_y,
+            &uv11_x, &uv11_y,
+            &uv01_x, &uv01_y,
+            rotation_quadrants,
+            flip_x,
+            flip_y
+        );
+        pc.p0[0] = (float)a->swapchain_extent.width;
+        pc.p0[1] = (float)a->swapchain_extent.height;
+        pc.p0[2] = dx;
+        pc.p0[3] = dy;
+        pc.p1[0] = dw;
+        pc.p1[1] = dh;
+        pc.p1[2] = alpha;
+        pc.p2[0] = uv00_x;
+        pc.p2[1] = uv00_y;
+        pc.p2[2] = uv10_x;
+        pc.p2[3] = uv10_y;
+        pc.p3[0] = uv11_x;
+        pc.p3[1] = uv11_y;
+        pc.p3[2] = uv01_x;
+        pc.p3[3] = uv01_y;
+        vkCmdPushConstants(cmd, a->structure_tile_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+        vkCmdDraw(cmd, 6, 1, 0, 0);
+    }
+#endif
+}
+
+static void record_gpu_structure_tiles(app* a, VkCommandBuffer cmd, int pass) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    (void)cmd;
+    (void)pass;
+#else
+    if (!a || !cmd || !a->use_gpu_structure_tiles || !a->structure_tile_pipeline || !a->structure_tile_layout || !a->structure_tile_desc_set) {
+        return;
+    }
+    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->structure_tile_pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->structure_tile_layout, 0, 1, &a->structure_tile_desc_set, 0, NULL);
+
+    if (pass == STRUCTURE_TILE_PASS_WORLD) {
+        if (menu_is_gameplay(&a->menu)) {
+            const leveldef_level* lvl = game_current_leveldef(&a->game);
+            if (!lvl || lvl->texture_atlas_id != TEXTURE_ATLAS_TILES) {
+                return;
+            }
+            {
+                const float unit_w = a->game.world_w * (float)LEVELDEF_STRUCTURE_GRID_SCALE / (float)(LEVELDEF_STRUCTURE_GRID_W - 1);
+                const float unit_h = a->game.world_h / (float)((LEVELDEF_STRUCTURE_GRID_H - 1) / LEVELDEF_STRUCTURE_GRID_SCALE);
+                for (int i = 0; i < lvl->structure_count && i < LEVELDEF_MAX_STRUCTURES; ++i) {
+                    const leveldef_structure_instance* st = &lvl->structures[i];
+                    if (st->prefab_id != LEVELDEF_STRUCTURE_PREFAB_TEX_PANEL || st->variant < 0) {
+                        continue;
+                    }
+                    {
+                        const float bx = (float)st->grid_x * unit_w;
+                        const float by = (float)st->grid_y * unit_h;
+                        const float sx = bx + a->game.world_w * 0.5f - a->game.camera_x;
+                        const float sy = by + a->game.world_h * 0.5f - a->game.camera_y;
+                        structure_tile_emit(
+                            a, cmd,
+                            sx, sy,
+                            unit_w * (float)((st->w_units > 0) ? st->w_units : 1),
+                            unit_h * (float)((st->h_units > 0) ? st->h_units : 1),
+                            lvl->texture_atlas_id,
+                            lvl->texture_tile_w_px,
+                            lvl->texture_tile_h_px,
+                            st->variant,
+                            st->rotation_quadrants,
+                            st->flip_x,
+                            st->flip_y,
+                            1.0f
+                        );
+                    }
+                }
+            }
+            return;
+        }
+        if (menu_is_screen(&a->menu, APP_SCREEN_LEVEL_EDITOR)) {
+            level_editor_layout layout;
+            const float len_screens = fmaxf(a->level_editor.level_length_screens, 1.0f);
+            const float start_screen = clampf(a->level_editor.timeline_01, 0.0f, 1.0f) * fmaxf(len_screens - 1.0f, 0.0f);
+            const float view_min = start_screen / len_screens;
+            const float view_max = (start_screen + 1.0f) / len_screens;
+            const float view_span = fmaxf(view_max - view_min, 1.0e-6f);
+            const int gx_steps_total = ((int)lroundf(len_screens * (float)(LEVELDEF_STRUCTURE_GRID_W - 1)) / LEVELDEF_STRUCTURE_GRID_SCALE) < 1
+                ? 1
+                : ((int)lroundf(len_screens * (float)(LEVELDEF_STRUCTURE_GRID_W - 1)) / LEVELDEF_STRUCTURE_GRID_SCALE);
+            const int gy_steps = (((LEVELDEF_STRUCTURE_GRID_H - 1) / LEVELDEF_STRUCTURE_GRID_SCALE) < 1)
+                ? 1
+                : ((LEVELDEF_STRUCTURE_GRID_H - 1) / LEVELDEF_STRUCTURE_GRID_SCALE);
+            level_editor_compute_layout((float)a->swapchain_extent.width, (float)a->swapchain_extent.height, &layout);
+            if (a->level_editor.level_texture_atlas_id != TEXTURE_ATLAS_TILES) {
+                return;
+            }
+            for (int i = 0; i < a->level_editor.marker_count && i < LEVEL_EDITOR_MAX_MARKERS; ++i) {
+                const level_editor_marker* m = &a->level_editor.markers[i];
+                if (m->kind != LEVEL_EDITOR_MARKER_STRUCTURE ||
+                    clampi((int)lroundf(m->a), 0, 31) != LEVELDEF_STRUCTURE_PREFAB_TEX_PANEL ||
+                    (int)lroundf(m->e) < 0) {
+                    continue;
+                }
+                {
+                    const int gx = clampi((int)lroundf(m->x01 * (float)gx_steps_total), 0, gx_steps_total);
+                    const int gy = clampi((int)lroundf(m->y01 * (float)gy_steps), 0, gy_steps);
+                    const float x0 = (float)gx / (float)gx_steps_total;
+                    const float y0 = (float)gy / (float)gy_steps;
+                    const float visible_x_steps = (float)gx_steps_total * view_span;
+                    const float cell_w = layout.viewport.w / fmaxf(visible_x_steps, 1.0f);
+                    const float cell_h = layout.viewport.h / (float)gy_steps;
+                    const float bx = layout.viewport.x + ((x0 - view_min) / view_span) * layout.viewport.w;
+                    const float by = layout.viewport.y + y0 * layout.viewport.h;
+                    structure_tile_emit(
+                        a, cmd,
+                        bx, by,
+                        cell_w * (float)((a->level_editor.level_texture_panel_w_units > 0) ? a->level_editor.level_texture_panel_w_units : 1),
+                        cell_h * (float)((a->level_editor.level_texture_panel_h_units > 0) ? a->level_editor.level_texture_panel_h_units : 1),
+                        a->level_editor.level_texture_atlas_id,
+                        a->level_editor.level_texture_tile_w_px,
+                        a->level_editor.level_texture_tile_h_px,
+                        (int)lroundf(m->e),
+                        (int)lroundf(m->c),
+                        (((int)lroundf(m->d)) & 1),
+                        ((((int)lroundf(m->d)) >> 1) & 1),
+                        1.0f
+                    );
+                }
+            }
+        }
+        return;
+    }
+
+    if (pass == STRUCTURE_TILE_PASS_EDITOR_UI && menu_is_screen(&a->menu, APP_SCREEN_LEVEL_EDITOR)) {
+        const int sel = a->level_editor.selected_marker;
+        level_editor_layout layout;
+        vg_rect picker;
+        int cols = 0;
+        int rows = 0;
+        if (sel < 0 || sel >= a->level_editor.marker_count || sel >= LEVEL_EDITOR_MAX_MARKERS) {
+            return;
+        }
+        if (a->level_editor.markers[sel].kind != LEVEL_EDITOR_MARKER_STRUCTURE ||
+            clampi((int)lroundf(a->level_editor.markers[sel].a), 0, 31) != LEVELDEF_STRUCTURE_PREFAB_TEX_PANEL ||
+            a->level_editor.level_texture_atlas_id != TEXTURE_ATLAS_TILES) {
+            return;
+        }
+        if (!texture_atlas_grid_dims(
+                a->level_editor.level_texture_atlas_id,
+                a->level_editor.level_texture_tile_w_px,
+                a->level_editor.level_texture_tile_h_px,
+                &cols,
+                &rows) ||
+            cols <= 0 || rows <= 0) {
+            return;
+        }
+        level_editor_compute_layout((float)a->swapchain_extent.width, (float)a->swapchain_extent.height, &layout);
+        picker = level_editor_tile_picker_rect(&layout);
+        for (int gy = 0; gy < rows; ++gy) {
+            for (int gx = 0; gx < cols; ++gx) {
+                const float cell_w = picker.w / (float)cols;
+                const float cell_h = picker.h / (float)rows;
+                structure_tile_emit(
+                    a, cmd,
+                    picker.x + (float)gx * cell_w,
+                    picker.y + (float)gy * cell_h,
+                    cell_w,
+                    cell_h,
+                    a->level_editor.level_texture_atlas_id,
+                    a->level_editor.level_texture_tile_w_px,
+                    a->level_editor.level_texture_tile_h_px,
+                    gy * cols + gx,
+                    0,
+                    0,
+                    0,
+                    1.0f
+                );
+            }
+        }
+    }
 #endif
 }
 
@@ -11142,6 +11871,11 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .level_editor_enemy_palette = a->level_editor.level_enemy_palette,
         .level_editor_background_style = a->level_editor.level_background_style,
         .level_editor_background_mask_style = a->level_editor.level_background_mask_style,
+        .level_editor_texture_atlas_id = a->level_editor.level_texture_atlas_id,
+        .level_editor_texture_tile_w_px = a->level_editor.level_texture_tile_w_px,
+        .level_editor_texture_tile_h_px = a->level_editor.level_texture_tile_h_px,
+        .level_editor_texture_panel_w_units = a->level_editor.level_texture_panel_w_units,
+        .level_editor_texture_panel_h_units = a->level_editor.level_texture_panel_h_units,
         .level_editor_asteroid_storm_enabled = a->level_editor.level_asteroid_storm_enabled,
         .level_editor_asteroid_storm_angle_deg = a->level_editor.level_asteroid_storm_angle_deg,
         .level_editor_asteroid_storm_speed = a->level_editor.level_asteroid_storm_speed,
@@ -11260,6 +11994,10 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
     metrics.acoustics_mixtape_drag_active = a->acoustics_mixtape_drag_active;
     metrics.acoustics_mixtape_drag_source = a->acoustics_mixtape_drag_source;
     metrics.acoustics_mixtape_drag_target = a->acoustics_mixtape_drag_target;
+    metrics.structure_tiles_rgba8 = a->structure_tiles_rgba8;
+    metrics.structure_tiles_w = a->structure_tiles_w;
+    metrics.structure_tiles_h = a->structure_tiles_h;
+    metrics.structure_tiles_stride = a->structure_tiles_stride;
     for (int i = 0; i < MIXTAPE_MAX_TRACKS; ++i) {
         metrics.acoustics_mixtape_playlist_indices[i] = (i < a->mod_playlist_count) ? a->mod_playlist_indices[i] : -1;
         if (i < a->mod_track_count) {
@@ -11351,6 +12089,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             if (use_gpu_arc) {
                 record_gpu_arc_beam(a, cmd, t);
             }
+            record_gpu_structure_tiles(a, cmd, STRUCTURE_TILE_PASS_WORLD);
             metrics.scene_phase = 3; /* overlay-no-clear */
             {
                 vr = render_frame(a->vg, &a->game, &metrics);
@@ -11375,6 +12114,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             if (use_gpu_arc) {
                 record_gpu_arc_beam(a, cmd, t);
             }
+            record_gpu_structure_tiles(a, cmd, STRUCTURE_TILE_PASS_WORLD);
             metrics.scene_phase = 3; /* overlay-no-clear */
             {
                 vr = render_frame(a->vg, &a->game, &metrics);
@@ -11474,6 +12214,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
 
             /* Keep foreground pass depth ordering deterministic after split background/GPU passes. */
             clear_scene_depth(cmd, a->swapchain_extent);
+            record_gpu_structure_tiles(a, cmd, STRUCTURE_TILE_PASS_WORLD);
             metrics.scene_phase = stable_underwater_overlay ? 3 : 2;
             {
                 vr = render_frame(a->vg, &a->game, &metrics);
@@ -11497,6 +12238,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             metrics.use_gpu_arc = 0;
             metrics.use_gpu_industry = 0;
             metrics.scene_phase = 0;
+            record_gpu_structure_tiles(a, cmd, STRUCTURE_TILE_PASS_WORLD);
             {
                 vr = render_frame(a->vg, &a->game, &metrics);
             }
@@ -11507,6 +12249,9 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
             if (use_gpu_particles) {
                 record_gpu_particles(a, cmd, 1, 1, NULL);
             }
+        }
+        if (menu_is_screen(&a->menu, APP_SCREEN_LEVEL_EDITOR)) {
+            record_gpu_structure_tiles(a, cmd, STRUCTURE_TILE_PASS_EDITOR_UI);
         }
     }
     if (a->force_clear_frames > 0) {
@@ -11834,6 +12579,10 @@ int main(void) {
         fprintf(stderr, "planetarium validation failed; continuing with best-effort defaults\n");
     }
     if (!create_industry_resources(&a)) {
+        cleanup(&a);
+        return 1;
+    }
+    if (!create_structure_tile_resources(&a)) {
         cleanup(&a);
         return 1;
     }
