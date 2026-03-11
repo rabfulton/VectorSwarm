@@ -451,7 +451,8 @@ static void structure_aabb_world_enemy(
     if (!g || !st || !out_min_x || !out_min_y || !out_max_x || !out_max_y) {
         return;
     }
-    structure_prefab_dims_world(st->prefab_id, &w_units, &h_units);
+    w_units = (st->w_units > 0) ? st->w_units : 1;
+    h_units = (st->h_units > 0) ? st->h_units : 1;
     unit_w = g->world_w * (float)LEVELDEF_STRUCTURE_GRID_SCALE / (float)(LEVELDEF_STRUCTURE_GRID_W - 1);
     unit_h = g->world_h * (float)LEVELDEF_STRUCTURE_GRID_SCALE / (float)(LEVELDEF_STRUCTURE_GRID_H - 1);
     bx = (float)st->grid_x * unit_w;
@@ -468,6 +469,19 @@ static void structure_aabb_world_enemy(
     *out_min_y = by;
     *out_max_x = bx + bw;
     *out_max_y = by + bh;
+}
+
+static int structure_blocks_enemy(const leveldef_structure_instance* st) {
+    if (!st) {
+        return 0;
+    }
+    if (st->prefab_id == LEVELDEF_STRUCTURE_PREFAB_VENT) {
+        return 0;
+    }
+    if (st->prefab_id == LEVELDEF_STRUCTURE_PREFAB_TEX_PANEL) {
+        return 1;
+    }
+    return st->layer == 0;
 }
 
 static int swarm_structure_collision_response(
@@ -508,7 +522,7 @@ static int swarm_structure_collision_response(
         float nx;
         float ny;
         float pen;
-        if (st->layer != 0) {
+        if (!structure_blocks_enemy(st)) {
             continue;
         }
         structure_aabb_world_enemy(g, st, &min_x, &min_y, &max_x, &max_y);
@@ -3628,7 +3642,7 @@ static void update_enemy_swarm(game_state* g, enemy* e, float dt, int uses_cylin
                 float lateral_limit;
                 float lookahead;
                 float course_w;
-                if (st->layer != 0) {
+                if (!structure_blocks_enemy(st)) {
                     continue;
                 }
                 structure_aabb_world_enemy(g, st, &min_x, &min_y, &max_x, &max_y);
