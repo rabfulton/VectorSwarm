@@ -4465,6 +4465,13 @@ static int editor_structure_prefab_uses_tile_params(int prefab_id) {
     return prefab_id == LEVELDEF_STRUCTURE_PREFAB_TEX_PANEL;
 }
 
+static int editor_structure_prefab_default_layer(int prefab_id) {
+    if (prefab_id == LEVELDEF_STRUCTURE_PREFAB_TEX_PANEL) {
+        return 0;
+    }
+    return (prefab_id >= 5) ? 1 : 0;
+}
+
 static vg_vec2 structure_map_point(
     float lx,
     float ly,
@@ -6142,7 +6149,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             const int prefab = metrics->level_editor_structure_tool_selected > 0
                 ? (metrics->level_editor_structure_tool_selected - 1)
                 : 0;
-            const int layer = (prefab >= 5) ? 1 : 0;
+            const int layer = editor_structure_prefab_default_layer(prefab);
             const float len_screens = fmaxf(metrics->level_editor_level_length_screens, 1.0f);
             const float start_screen = clampf(metrics->level_editor_timeline_01, 0.0f, 1.0f) * fmaxf(len_screens - 1.0f, 0.0f);
             const float view_min = start_screen / len_screens;

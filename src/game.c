@@ -441,6 +441,19 @@ static void structure_aabb_world(
     *out_max_y = by + bh;
 }
 
+static int structure_blocks_gameplay(const leveldef_structure_instance* st) {
+    if (!st) {
+        return 0;
+    }
+    if (st->prefab_id == LEVELDEF_STRUCTURE_PREFAB_VENT) {
+        return 0;
+    }
+    if (st->prefab_id == LEVELDEF_STRUCTURE_PREFAB_TEX_PANEL) {
+        return 1;
+    }
+    return st->layer == 0;
+}
+
 static int segment_intersects_aabb(
     float x0,
     float y0,
@@ -520,7 +533,7 @@ int game_structure_circle_overlap(const game_state* g, float x, float y, float r
         float ny;
         float dx;
         float dy;
-        if (st->layer != 0) {
+        if (!structure_blocks_gameplay(st)) {
             continue;
         }
         structure_aabb_world(g, st, &min_x, &min_y, &max_x, &max_y);
@@ -644,7 +657,7 @@ int game_line_of_sight_clear(const game_state* g, float x0, float y0, float x1, 
         float min_y;
         float max_x;
         float max_y;
-        if (st->layer != 0) {
+        if (!structure_blocks_gameplay(st)) {
             continue;
         }
         structure_aabb_world(g, st, &min_x, &min_y, &max_x, &max_y);
@@ -701,7 +714,7 @@ int game_structure_segment_blocked(const game_state* g, float x0, float y0, floa
         int h_units = 1;
         int q;
         int gx0, gy0, gx1, gy1;
-        if (st->layer != 0) {
+        if (!structure_blocks_gameplay(st)) {
             continue;
         }
         w_units = (st->w_units > 0) ? st->w_units : 1;

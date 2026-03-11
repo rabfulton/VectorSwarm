@@ -183,6 +183,13 @@ static int structure_prefab_uses_tile_params(int prefab_id) {
     return prefab_id == LEVELDEF_STRUCTURE_PREFAB_TEX_PANEL;
 }
 
+static int structure_prefab_default_layer(int prefab_id) {
+    if (prefab_id == LEVELDEF_STRUCTURE_PREFAB_TEX_PANEL) {
+        return 0;
+    }
+    return (prefab_id >= 5) ? 1 : 0;
+}
+
 static int structure_grid_x_steps_for_prefab(float level_screens, int prefab_id) {
     if (prefab_id == LEVELDEF_STRUCTURE_PREFAB_VENT) {
         const float ls = fmaxf(level_screens, 1.0f);
@@ -3351,7 +3358,7 @@ static void add_structure_marker_at_view(level_editor_state* s, float mx01, floa
     const float x01 = view_min + clampf(mx01, 0.0f, 1.0f) * fmaxf(view_max - view_min, 1.0e-6f);
     const float y01 = clampf(my01, 0.0f, 1.0f);
     const int prefab_id = clampi(s->structure_tool_selected - 1, 0, 31);
-    const int layer = (prefab_id >= 5) ? 1 : 0;
+    const int layer = structure_prefab_default_layer(prefab_id);
     const int gx_steps = structure_grid_x_steps_for_prefab(level_screens, prefab_id);
     const int gy_steps = structure_grid_y_steps_for_prefab(prefab_id);
     int w_units = 1;
