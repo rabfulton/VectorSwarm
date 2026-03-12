@@ -866,6 +866,9 @@ static void configure_searchlights_for_level(game_state* g) {
                which produced vertical sweeps for 180deg span. */
             sweep_center_deg = 90.0f;
         }
+        if (d->sweep_motion == SEARCHLIGHT_MOTION_PENDULUM_INV) {
+            sweep_center_deg += 180.0f;
+        }
         sl->sweep_center_rad = deg_to_rad(sweep_center_deg);
         sl->sweep_amplitude_rad = deg_to_rad(d->sweep_amplitude_deg);
         sl->sweep_speed = d->sweep_speed;

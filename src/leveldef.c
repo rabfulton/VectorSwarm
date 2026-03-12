@@ -44,6 +44,7 @@ static int searchlight_motion_from_name(const char* name) {
     if (strcmp(name, "linear") == 0) return SEARCHLIGHT_MOTION_LINEAR;
     if (strcmp(name, "spin") == 0) return SEARCHLIGHT_MOTION_SPIN;
     if (strcmp(name, "pendulum") == 0) return SEARCHLIGHT_MOTION_PENDULUM;
+    if (strcmp(name, "pendulum_inv") == 0) return SEARCHLIGHT_MOTION_PENDULUM_INV;
     return -1;
 }
 

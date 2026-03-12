@@ -1303,17 +1303,19 @@ static vg_result draw_searchlights(
     vg_context* ctx,
     const game_state* g,
     const palette_theme* pal,
+    const enemy_palette_theme* enemy_pal,
     float intensity_scale,
     const vg_stroke_style* land_halo,
     const vg_stroke_style* land_main
 ) {
-    if (!ctx || !g || !pal || g->searchlight_count <= 0) {
+    if (!ctx || !g || !pal || !enemy_pal || g->searchlight_count <= 0) {
         return VG_OK;
     }
     const int can_stencil = (vg_stencil_clear(ctx, 0u) == VG_OK);
     const int tip_slices = 28;
     for (int i = 0; i < g->searchlight_count && i < MAX_SEARCHLIGHTS; ++i) {
         const searchlight* sl = &g->searchlights[i];
+        const int dome_inverted = (sl->sweep_motion == SEARCHLIGHT_MOTION_PENDULUM_INV);
         if (!sl->active || sl->length <= 1.0f) {
             continue;
         }
@@ -1338,7 +1340,7 @@ static vg_result draw_searchlights(
                 dome_fill[0] = (vg_vec2){sl->origin_x, sl->origin_y};
                 for (int k = 0; k <= DOME_SEG; ++k) {
                     const float u = (float)k / (float)DOME_SEG;
-                    const float a = u * 3.14159265359f;
+                    const float a = u * 3.14159265359f + (dome_inverted ? 3.14159265359f : 0.0f);
                     dome_fill[k + 1] = (vg_vec2){
                         sl->origin_x + cosf(a) * mask_rr,
                         sl->origin_y + sinf(a) * mask_rr
@@ -1363,9 +1365,18 @@ static vg_result draw_searchlights(
         }
         {
             const float rr = fmaxf(sl->source_radius, 2.0f);
-            const vg_color src_red = {1.0f, 0.22f, 0.22f, 0.95f};
-            const vg_fill_style src_fill = make_fill(0.72f * intensity_scale, src_red, VG_BLEND_ALPHA);
-            const vg_stroke_style src_stroke = make_stroke(1.6f, 0.90f * intensity_scale, src_red, VG_BLEND_ALPHA);
+            const vg_color src_color = enemy_pal->enemy_bullet;
+            const vg_fill_style src_fill = make_fill(
+                0.72f * intensity_scale,
+                (vg_color){src_color.r, src_color.g, src_color.b, 0.95f},
+                VG_BLEND_ALPHA
+            );
+            const vg_stroke_style src_stroke = make_stroke(
+                1.6f,
+                0.90f * intensity_scale,
+                (vg_color){src_color.r, src_color.g, src_color.b, 0.95f},
+                VG_BLEND_ALPHA
+            );
             if (sl->source_type == SEARCHLIGHT_SOURCE_ORB) {
                 enum { ORB_SEG = 20 };
                 vg_vec2 orb[ORB_SEG + 1];
@@ -1392,7 +1403,7 @@ static vg_result draw_searchlights(
                 dome_fill[0] = (vg_vec2){sl->origin_x, sl->origin_y};
                 for (int k = 0; k <= DOME_SEG; ++k) {
                     const float u = (float)k / (float)DOME_SEG;
-                    const float a = u * 3.14159265359f;
+                    const float a = u * 3.14159265359f + (dome_inverted ? 3.14159265359f : 0.0f);
                     const vg_vec2 p = {
                         sl->origin_x + cosf(a) * rr,
                         sl->origin_y + sinf(a) * rr
@@ -1416,7 +1427,7 @@ static vg_result draw_searchlights(
         const vg_vec2 dir0 = {cosf(a0), sinf(a0)};
         const vg_vec2 dir1 = {cosf(a1), sinf(a1)};
         const float body_len = sl->length * 0.80f;
-        const vg_color beam_col = pal->primary_dim;
+        const vg_color beam_col = enemy_pal->enemy_bullet_halo;
         vg_fill_style body_fill = make_fill(
             0.14f + 0.06f * intensity_scale,
             (vg_color){beam_col.r, beam_col.g, beam_col.b, 0.06f},
@@ -1480,6 +1491,8 @@ static vg_result draw_searchlights(
         rail_main.width_px *= 1.06f;
         rail_halo.intensity *= 0.78f;
         rail_main.intensity *= 0.86f;
+        rail_halo.color = (vg_color){enemy_pal->enemy_bullet_halo.r, enemy_pal->enemy_bullet_halo.g, enemy_pal->enemy_bullet_halo.b, 0.52f};
+        rail_main.color = (vg_color){enemy_pal->enemy_bullet.r, enemy_pal->enemy_bullet.g, enemy_pal->enemy_bullet.b, 0.82f};
         const vg_vec2 left_body[2] = {
             origin,
             {origin.x + dir0.x * body_len, origin.y + dir0.y * body_len}
@@ -2307,10 +2320,11 @@ static vg_result draw_missile_system(
     vg_context* ctx,
     const game_state* g,
     const palette_theme* pal,
+    const enemy_palette_theme* enemy_pal,
     const vg_stroke_style* land_halo,
     const vg_stroke_style* land_main
 ) {
-    if (!ctx || !g || !pal || !land_halo || !land_main) {
+    if (!ctx || !g || !pal || !enemy_pal || !land_halo || !land_main) {
         return VG_OK;
     }
     vg_stroke_style halo = *land_halo;
@@ -2331,8 +2345,10 @@ static vg_result draw_missile_system(
             }
             vg_stroke_style l_halo = halo;
             vg_stroke_style l_main = main;
-            l_halo.color = (vg_color){1.0f, 0.24f, 0.24f, 0.68f};
-            l_main.color = (vg_color){1.0f, 0.32f, 0.32f, 0.96f};
+            vg_fill_style l_fill = fill;
+            l_halo.color = (vg_color){enemy_pal->enemy_bullet_halo.r, enemy_pal->enemy_bullet_halo.g, enemy_pal->enemy_bullet_halo.b, 0.68f};
+            l_main.color = (vg_color){enemy_pal->enemy_bullet.r, enemy_pal->enemy_bullet.g, enemy_pal->enemy_bullet.b, 0.96f};
+            l_fill.color = (vg_color){enemy_pal->enemy.r * 0.35f, enemy_pal->enemy.g * 0.35f, enemy_pal->enemy.b * 0.35f, 0.48f};
             const float half = ((float)ml->count - 1.0f) * 0.5f;
             for (int k = 0; k < ml->count; ++k) {
                 if (k < ml->launched_count) {
@@ -2348,7 +2364,7 @@ static vg_result draw_missile_system(
                     {x + 8.5f, y - 8.0f},
                     {x, y + 14.0f}
                 };
-                vg_result r = vg_fill_convex(ctx, shape, 4, &fill);
+                vg_result r = vg_fill_convex(ctx, shape, 4, &l_fill);
                 if (r != VG_OK) return r;
                 r = vg_draw_polyline(ctx, shape, 5, &l_halo, 1);
                 if (r != VG_OK) return r;
@@ -2370,9 +2386,9 @@ static vg_result draw_missile_system(
         vg_stroke_style m_main = main;
         vg_fill_style m_fill = fill;
         if (m->owner == MISSILE_OWNER_ENEMY) {
-            m_halo.color = (vg_color){1.0f, 0.24f, 0.24f, 0.72f};
-            m_main.color = (vg_color){1.0f, 0.30f, 0.30f, 1.0f};
-            m_fill.color = (vg_color){0.35f, 0.08f, 0.08f, 0.48f};
+            m_halo.color = (vg_color){enemy_pal->enemy_bullet_halo.r, enemy_pal->enemy_bullet_halo.g, enemy_pal->enemy_bullet_halo.b, 0.72f};
+            m_main.color = (vg_color){enemy_pal->enemy_bullet.r, enemy_pal->enemy_bullet.g, enemy_pal->enemy_bullet.b, 1.0f};
+            m_fill.color = (vg_color){enemy_pal->enemy.r * 0.35f, enemy_pal->enemy.g * 0.35f, enemy_pal->enemy.b * 0.35f, 0.48f};
         }
         const float c = cosf(m->heading_rad);
         const float s = sinf(m->heading_rad);
@@ -4774,6 +4790,7 @@ static const char* editor_searchlight_motion_name(float v) {
     const int mode = (int)lroundf(v);
     if (mode == 0) return "LINEAR";
     if (mode == 2) return "SPIN";
+    if (mode == 3) return "PEND INV";
     return "PENDULUM";
 }
 
@@ -5623,8 +5640,8 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 const float sweep_speed = metrics->level_editor_marker_c[i];
                 const float sweep_angle_deg = fmaxf(metrics->level_editor_marker_d[i], 0.0f);
                 const float sweep_amp = sweep_angle_deg * 0.5f;
-                const int sweep_type = clampi((int)lroundf(metrics->level_editor_marker_g[i]), 0, 2);
-                const float base = metrics->level_editor_marker_delay_s[i] * (3.14159265f / 180.0f);
+                const int sweep_type = clampi((int)lroundf(metrics->level_editor_marker_g[i]), 0, 3);
+                const float base = (metrics->level_editor_marker_delay_s[i] + ((sweep_type == 3) ? 180.0f : 0.0f)) * (3.14159265f / 180.0f);
                 const float phase = t_s * sweep_speed;
                 float q = 0.0f;
                 if (sweep_type == 2) {
@@ -11831,7 +11848,7 @@ skip_legacy_landscape:
     world_view_bounds(g, 48.0f, 48.0f, &world_cull_min_x, &world_cull_min_y, &world_cull_max_x, &world_cull_max_y);
 
     if (g->searchlight_count > 0) {
-        r = draw_searchlights(ctx, g, &pal, intensity_scale, &land_halo, &land_main);
+        r = draw_searchlights(ctx, g, &pal, &enemy_pal, intensity_scale, &land_halo, &land_main);
         if (r != VG_OK) {
             (void)vg_transform_pop(ctx);
             return r;
@@ -11864,7 +11881,7 @@ skip_legacy_landscape:
         return r;
     }
     if (g->missile_launcher_count > 0 || g->missile_count > 0) {
-        r = draw_missile_system(ctx, g, &pal, &land_halo, &land_main);
+        r = draw_missile_system(ctx, g, &pal, &enemy_pal, &land_halo, &land_main);
         if (r != VG_OK) {
             (void)vg_transform_pop(ctx);
             return r;

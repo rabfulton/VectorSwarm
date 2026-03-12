@@ -1243,6 +1243,7 @@ static const char* searchlight_motion_name(int motion) {
     switch (motion) {
         case SEARCHLIGHT_MOTION_LINEAR: return "linear";
         case SEARCHLIGHT_MOTION_SPIN: return "spin";
+        case SEARCHLIGHT_MOTION_PENDULUM_INV: return "pendulum_inv";
         case SEARCHLIGHT_MOTION_PENDULUM: return "pendulum";
         default: return "pendulum";
     }
@@ -1492,7 +1493,7 @@ static int build_level_serialized_text(
             continue;
         }
         memset(&sl, 0, sizeof(sl));
-        sl.sweep_motion = clampi((int)lroundf(m->g), SEARCHLIGHT_MOTION_LINEAR, SEARCHLIGHT_MOTION_SPIN);
+        sl.sweep_motion = clampi((int)lroundf(m->g), SEARCHLIGHT_MOTION_LINEAR, SEARCHLIGHT_MOTION_PENDULUM_INV);
         sl.source_type = clampi((int)lroundf(m->e), SEARCHLIGHT_SOURCE_DOME, SEARCHLIGHT_SOURCE_ORB);
         sl.source_radius = (m->f > 0.0f) ? m->f : 14.0f;
         sl.clear_grace_s = 2.0f;
@@ -4030,7 +4031,7 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             case 5: m->d = clampf(m->d + delta * 1.0f, 0.0f, 360.0f); break;
             case 6: {
                 const int dir = (delta >= 0.0f) ? 1 : -1;
-                const int n = 3;
+                const int n = 4;
                 int mode = clampi((int)lroundf(m->g), 0, n - 1);
                 mode = (mode + dir + n) % n;
                 m->g = (float)mode;

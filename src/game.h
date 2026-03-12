@@ -227,7 +227,8 @@ typedef struct enemy_bullet {
 typedef enum searchlight_motion_type {
     SEARCHLIGHT_MOTION_LINEAR = 0,
     SEARCHLIGHT_MOTION_PENDULUM = 1,
-    SEARCHLIGHT_MOTION_SPIN = 2
+    SEARCHLIGHT_MOTION_SPIN = 2,
+    SEARCHLIGHT_MOTION_PENDULUM_INV = 3
 } searchlight_motion_type;
 
 typedef enum searchlight_source_type {
