@@ -342,7 +342,7 @@ typedef struct leveldef_level {
     int enemy_palette; /* enum leveldef_enemy_palette */
     int background_style; /* enum leveldef_background_style */
     int background_mask_style; /* enum leveldef_background_mask_style */
-    int texture_atlas_id; /* enum texture_atlas_id */
+    int texture_atlas_id; /* runtime-discovered texture atlas id, or TEXTURE_ATLAS_NONE */
     int texture_tile_w_px;
     int texture_tile_h_px;
     int texture_panel_w_units;
@@ -400,6 +400,7 @@ typedef struct leveldef_level {
     int default_boid_profile;
     float wave_cooldown_initial_s;
     float wave_cooldown_between_s;
+    float event_wave_spawn_timeout_factor;
     int bidirectional_spawns;
     float cylinder_double_swarm_chance;
     float powerup_drop_chance;
@@ -485,6 +486,7 @@ int leveldef_discover_levels_from_dir(
     int out_cap,
     FILE* log_out
 );
+int leveldef_level_uses_textured_panels(const leveldef_level* lvl);
 int leveldef_find_boid_profile(const leveldef_db* db, const char* name);
 const leveldef_boid_profile* leveldef_get_boid_profile(const leveldef_db* db, int profile_id);
 const leveldef_level* leveldef_get_level(const leveldef_db* db, int level_style);

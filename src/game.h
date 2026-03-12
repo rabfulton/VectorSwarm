@@ -546,6 +546,7 @@ typedef struct game_state {
     int auto_event_running;
     int auto_event_running_kind;
     float auto_event_delay_s;
+    float auto_event_running_timeout_s;
     asteroid_body asteroids[MAX_ASTEROIDS];
     int asteroid_count;
     int asteroid_storm_enabled;

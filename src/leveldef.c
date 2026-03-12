@@ -8,6 +8,19 @@
 #include <stdlib.h>
 #include <string.h>
 
+int leveldef_level_uses_textured_panels(const leveldef_level* lvl) {
+    int i;
+    if (!lvl) {
+        return 0;
+    }
+    for (i = 0; i < lvl->structure_count && i < LEVELDEF_MAX_STRUCTURES; ++i) {
+        if (lvl->structures[i].prefab_id == LEVELDEF_STRUCTURE_PREFAB_TEX_PANEL) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int level_style_from_name(const char* name) {
     if (!name) {
         return -1;
@@ -396,9 +409,9 @@ void leveldef_init_defaults(leveldef_db* db) {
         db->levels[i].enemy_palette = LEVELDEF_ENEMY_PALETTE_DEFAULT;
         db->levels[i].background_style = LEVELDEF_BACKGROUND_STARS;
         db->levels[i].background_mask_style = LEVELDEF_BG_MASK_NONE;
-        db->levels[i].texture_atlas_id = TEXTURE_ATLAS_TILES;
-        db->levels[i].texture_tile_w_px = texture_atlas_default_tile_w(TEXTURE_ATLAS_TILES);
-        db->levels[i].texture_tile_h_px = texture_atlas_default_tile_h(TEXTURE_ATLAS_TILES);
+        db->levels[i].texture_atlas_id = TEXTURE_ATLAS_NONE;
+        db->levels[i].texture_tile_w_px = 256;
+        db->levels[i].texture_tile_h_px = 256;
         db->levels[i].texture_panel_w_units = 1;
         db->levels[i].texture_panel_h_units = 1;
         db->levels[i].underwater_density = 1.0f;
@@ -505,6 +518,7 @@ void leveldef_init_defaults(leveldef_db* db) {
         b->default_boid_profile = 0;
         b->wave_cooldown_initial_s = 0.65f;
         b->wave_cooldown_between_s = 2.0f;
+        b->event_wave_spawn_timeout_factor = 0.0f;
         b->bidirectional_spawns = 0;
         b->cylinder_double_swarm_chance = 0.0f;
         b->powerup_drop_chance = 0.12f;
@@ -1182,6 +1196,8 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_level->wave_cooldown_initial_s = strtof(v, NULL);
                     } else if (strcmp(k, "wave_cooldown_between_s") == 0) {
                         cur_level->wave_cooldown_between_s = strtof(v, NULL);
+                    } else if (strcmp(k, "event_wave_spawn_timeout_factor") == 0) {
+                        cur_level->event_wave_spawn_timeout_factor = strtof(v, NULL);
                     } else if (strcmp(k, "curated.formation.fire_prob_mul") == 0) {
                         cur_level->curated_combat.formation.fire_prob_mul = strtof(v, NULL);
                     } else if (strcmp(k, "curated.formation.cooldown_mul") == 0) {
@@ -1645,15 +1661,15 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
             }
             ok = 0;
         }
-        if (l->theme_palette < 0 || l->theme_palette > 2) {
+        if (l->event_wave_spawn_timeout_factor < 0.0f || !isfinite(l->event_wave_spawn_timeout_factor)) {
             if (log_out) {
-                fprintf(log_out, "leveldef: level %d invalid theme_palette (expected 0..2)\n", i);
+                fprintf(log_out, "leveldef: level %d invalid event_wave_spawn_timeout_factor\n", i);
             }
             ok = 0;
         }
-        if (!texture_atlas_get(l->texture_atlas_id)) {
+        if (l->theme_palette < 0 || l->theme_palette > 2) {
             if (log_out) {
-                fprintf(log_out, "leveldef: level %d invalid texture_atlas\n", i);
+                fprintf(log_out, "leveldef: level %d invalid theme_palette (expected 0..2)\n", i);
             }
             ok = 0;
         }
@@ -1662,10 +1678,15 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
                 fprintf(log_out, "leveldef: level %d invalid texture tile size\n", i);
             }
             ok = 0;
-        } else {
+        } else if (leveldef_level_uses_textured_panels(l)) {
             int cols = 0;
             int rows = 0;
-            if (!texture_atlas_grid_dims(l->texture_atlas_id, l->texture_tile_w_px, l->texture_tile_h_px, &cols, &rows)) {
+            if (!texture_atlas_get(l->texture_atlas_id)) {
+                if (log_out) {
+                    fprintf(log_out, "leveldef: level %d missing or invalid texture_atlas for textured panels\n", i);
+                }
+                ok = 0;
+            } else if (!texture_atlas_grid_dims(l->texture_atlas_id, l->texture_tile_w_px, l->texture_tile_h_px, &cols, &rows)) {
                 if (log_out) {
                     fprintf(log_out, "leveldef: level %d texture tile size incompatible with atlas\n", i);
                 }

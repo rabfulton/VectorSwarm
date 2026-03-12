@@ -271,6 +271,7 @@ static int compare_levels_semantic(const char* ctx, const leveldef_level* a, con
     CMP_INT_FIELD(ctx, a, b, default_boid_profile);
     CMP_FLOAT_FIELD(ctx, a, b, wave_cooldown_initial_s);
     CMP_FLOAT_FIELD(ctx, a, b, wave_cooldown_between_s);
+    CMP_FLOAT_FIELD(ctx, a, b, event_wave_spawn_timeout_factor);
     CMP_INT_FIELD(ctx, a, b, bidirectional_spawns);
     CMP_FLOAT_FIELD(ctx, a, b, cylinder_double_swarm_chance);
     CMP_FLOAT_FIELD(ctx, a, b, powerup_drop_chance);
@@ -778,6 +779,7 @@ static int verify_level_semantic_roundtrip(const leveldef_db* db) {
     editor.level_curated_combat.eel.arc_duration_mul = 0.75f;
     editor.level_curated_combat.eel.arc_range_mul = 1.10f;
     editor.level_curated_combat.eel.arc_damage_interval_mul = 0.85f;
+    editor.level_event_wave_spawn_timeout_factor = 1.50f;
 
     if (!level_editor_build_level(&editor, db, &expected_level)) {
         fprintf(stderr, "roundtrip: build expected curated failed\n");

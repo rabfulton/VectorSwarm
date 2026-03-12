@@ -2116,6 +2116,7 @@ static void apply_level_runtime_config(game_state* g) {
     g->auto_event_running = 0;
     g->auto_event_running_kind = -1;
     g->auto_event_delay_s = (lvl->event_count > 0) ? fmaxf(lvl->events[0].delay_s, 0.0f) : 0.0f;
+    g->auto_event_running_timeout_s = 0.0f;
     if (lvl->wave_mode != LEVELDEF_WAVES_CURATED && lvl->event_count > 0) {
         g->auto_event_delay_s = fmaxf(g->auto_event_delay_s, 2.5f);
     }
@@ -2986,12 +2987,21 @@ static void game_update_wave_spawning(game_state* g, float dt) {
                     g->auto_event_running = 0;
                     g->auto_event_index = (g->auto_event_index + 1) % lvl->event_count;
                     g->auto_event_delay_s = fmaxf(lvl->events[g->auto_event_index].delay_s, 0.0f);
+                    g->auto_event_running_timeout_s = 0.0f;
                 }
             } else {
-                if (game_enemy_count(g) <= 0) {
+                int advance = (game_enemy_count(g) <= 0) ? 1 : 0;
+                if (!advance && g->auto_event_running_timeout_s > 0.0f) {
+                    g->auto_event_running_timeout_s -= dt;
+                    if (g->auto_event_running_timeout_s <= 0.0f) {
+                        advance = 1;
+                    }
+                }
+                if (advance) {
                     g->auto_event_running = 0;
                     g->auto_event_index = (g->auto_event_index + 1) % lvl->event_count;
                     g->auto_event_delay_s = fmaxf(lvl->events[g->auto_event_index].delay_s, 0.0f);
+                    g->auto_event_running_timeout_s = 0.0f;
                 }
             }
             return;
@@ -3024,6 +3034,7 @@ static void game_update_wave_spawning(game_state* g, float dt) {
                 asteroid_storm_reset_emitters(g);
                 g->auto_event_running = 1;
                 g->auto_event_running_kind = ev_kind;
+                g->auto_event_running_timeout_s = 0.0f;
                 return;
             } else {
                 leveldef_level one = *lvl;
@@ -3054,6 +3065,10 @@ static void game_update_wave_spawning(game_state* g, float dt) {
                 );
                 g->auto_event_running = 1;
                 g->auto_event_running_kind = ev_kind;
+                g->auto_event_running_timeout_s =
+                    (lvl->event_wave_spawn_timeout_factor > 0.0f)
+                    ? (lvl->wave_cooldown_between_s * lvl->event_wave_spawn_timeout_factor)
+                    : 0.0f;
                 return;
             }
         }

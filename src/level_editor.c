@@ -21,6 +21,10 @@ static int clampi(int v, int lo, int hi) {
     return v;
 }
 
+static int editor_default_texture_atlas_id(void) {
+    return (texture_atlas_count() > 0) ? 0 : TEXTURE_ATLAS_NONE;
+}
+
 static void level_editor_set_default_curated_tuning(leveldef_curated_combat_tuning* t) {
     if (!t) {
         return;
@@ -832,6 +836,7 @@ static void level_editor_save_snapshot(level_editor_state* s) {
     s->snapshot_level_asteroid_storm_speed = s->level_asteroid_storm_speed;
     s->snapshot_level_asteroid_storm_duration_s = s->level_asteroid_storm_duration_s;
     s->snapshot_level_asteroid_storm_density = s->level_asteroid_storm_density;
+    s->snapshot_level_event_wave_spawn_timeout_factor = s->level_event_wave_spawn_timeout_factor;
     s->snapshot_level_powerup_drop_chance = s->level_powerup_drop_chance;
     s->snapshot_level_kamikaze_radius_min = s->level_kamikaze_radius_min;
     s->snapshot_level_kamikaze_radius_max = s->level_kamikaze_radius_max;
@@ -1406,6 +1411,7 @@ static int build_level_serialized_text(
             }
             lvl.wave_cooldown_initial_s = 0.65f;
             lvl.wave_cooldown_between_s = 2.0f;
+            lvl.event_wave_spawn_timeout_factor = 0.0f;
             lvl.exit_y01 = 0.5f;
         }
     }
@@ -1420,6 +1426,7 @@ static int build_level_serialized_text(
     lvl.texture_tile_h_px = s->level_texture_tile_h_px;
     lvl.texture_panel_w_units = s->level_texture_panel_w_units;
     lvl.texture_panel_h_units = s->level_texture_panel_h_units;
+    lvl.event_wave_spawn_timeout_factor = fmaxf(s->level_event_wave_spawn_timeout_factor, 0.0f);
     lvl.powerup_drop_chance = clampf(s->level_powerup_drop_chance, 0.0f, 1.0f);
     lvl.editor_length_screens = level_len;
     lvl.searchlight_count = 0;
@@ -1781,7 +1788,10 @@ static int build_level_serialized_text(
     if (!appendf(out, out_cap, &used, "render_style=%s\n", render_style_name(lvl.render_style))) return 0;
     if (!appendf(out, out_cap, &used, "wave_mode=%s\n", wave_mode_name(lvl.wave_mode))) return 0;
     if (!appendf(out, out_cap, &used, "theme_palette=%d\n", clampi(lvl.theme_palette, 0, 2))) return 0;
-    if (!appendf(out, out_cap, &used, "texture_atlas=%s\n", texture_atlas_name(lvl.texture_atlas_id))) return 0;
+    if (leveldef_level_uses_textured_panels(&lvl)) {
+        if (!texture_atlas_get(lvl.texture_atlas_id)) return 0;
+        if (!appendf(out, out_cap, &used, "texture_atlas=%s\n", texture_atlas_name(lvl.texture_atlas_id))) return 0;
+    }
     if (!appendf(out, out_cap, &used, "texture_tile_w=%d\n", lvl.texture_tile_w_px)) return 0;
     if (!appendf(out, out_cap, &used, "texture_tile_h=%d\n", lvl.texture_tile_h_px)) return 0;
     if (!appendf(out, out_cap, &used, "texture_panel_w_units=%d\n", lvl.texture_panel_w_units)) return 0;
@@ -1849,6 +1859,7 @@ static int build_level_serialized_text(
     }
     if (!appendf(out, out_cap, &used, "wave_cooldown_initial_s=%.3f\n", lvl.wave_cooldown_initial_s)) return 0;
     if (!appendf(out, out_cap, &used, "wave_cooldown_between_s=%.3f\n", lvl.wave_cooldown_between_s)) return 0;
+    if (!appendf(out, out_cap, &used, "event_wave_spawn_timeout_factor=%.3f\n", lvl.event_wave_spawn_timeout_factor)) return 0;
     {
         const int emit_curated_tuning =
             fabsf(lvl.curated_combat.formation.fire_prob_mul - 1.0f) > 1.0e-6f ||
@@ -2935,9 +2946,9 @@ void level_editor_init(level_editor_state* s) {
     s->level_enemy_palette = LEVELDEF_ENEMY_PALETTE_DEFAULT;
     s->level_background_style = LEVELDEF_BACKGROUND_NONE;
     s->level_background_mask_style = LEVELDEF_BG_MASK_NONE;
-    s->level_texture_atlas_id = TEXTURE_ATLAS_TILES;
-    s->level_texture_tile_w_px = texture_atlas_default_tile_w(TEXTURE_ATLAS_TILES);
-    s->level_texture_tile_h_px = texture_atlas_default_tile_h(TEXTURE_ATLAS_TILES);
+    s->level_texture_atlas_id = editor_default_texture_atlas_id();
+    s->level_texture_tile_w_px = 256;
+    s->level_texture_tile_h_px = 256;
     s->level_texture_panel_w_units = 1;
     s->level_texture_panel_h_units = 1;
     s->level_asteroid_storm_enabled = 0;
@@ -2945,6 +2956,7 @@ void level_editor_init(level_editor_state* s) {
     s->level_asteroid_storm_speed = 190.0f;
     s->level_asteroid_storm_duration_s = 12.0f;
     s->level_asteroid_storm_density = 1.0f;
+    s->level_event_wave_spawn_timeout_factor = 0.0f;
     s->level_powerup_drop_chance = 0.12f;
     s->level_kamikaze_radius_min = 11.0f;
     s->level_kamikaze_radius_max = 17.0f;
@@ -3082,7 +3094,7 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
             s->level_enemy_palette = clampi(lvl->enemy_palette, LEVELDEF_ENEMY_PALETTE_DEFAULT, LEVELDEF_ENEMY_PALETTE_TOXIC);
             s->level_background_style = clampi(lvl->background_style, LEVELDEF_BACKGROUND_STARS, LEVELDEF_BACKGROUND_FOREST);
             s->level_background_mask_style = clampi(lvl->background_mask_style, LEVELDEF_BG_MASK_NONE, LEVELDEF_BG_MASK_WINDOWS);
-            s->level_texture_atlas_id = texture_atlas_get(lvl->texture_atlas_id) ? lvl->texture_atlas_id : TEXTURE_ATLAS_TILES;
+            s->level_texture_atlas_id = texture_atlas_get(lvl->texture_atlas_id) ? lvl->texture_atlas_id : editor_default_texture_atlas_id();
             s->level_texture_tile_w_px = (lvl->texture_tile_w_px > 0) ? lvl->texture_tile_w_px : texture_atlas_default_tile_w(s->level_texture_atlas_id);
             s->level_texture_tile_h_px = (lvl->texture_tile_h_px > 0) ? lvl->texture_tile_h_px : texture_atlas_default_tile_h(s->level_texture_atlas_id);
             s->level_texture_panel_w_units = (lvl->texture_panel_w_units > 0) ? lvl->texture_panel_w_units : 1;
@@ -3092,6 +3104,7 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
             s->level_asteroid_storm_speed = lvl->asteroid_storm_speed;
             s->level_asteroid_storm_duration_s = lvl->asteroid_storm_duration_s;
             s->level_asteroid_storm_density = lvl->asteroid_storm_density;
+            s->level_event_wave_spawn_timeout_factor = fmaxf(lvl->event_wave_spawn_timeout_factor, 0.0f);
             s->level_powerup_drop_chance = lvl->powerup_drop_chance;
             s->level_kamikaze_radius_min = lvl->kamikaze.radius_min;
             s->level_kamikaze_radius_max = lvl->kamikaze.radius_max;
@@ -3107,11 +3120,12 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
                 (s->level_render_style == LEVEL_RENDER_DRIFTER || s->level_render_style == LEVEL_RENDER_DRIFTER_SHADED)
                 ? LEVELDEF_BG_MASK_TERRAIN
                 : LEVELDEF_BG_MASK_NONE;
-            s->level_texture_atlas_id = TEXTURE_ATLAS_TILES;
-            s->level_texture_tile_w_px = texture_atlas_default_tile_w(TEXTURE_ATLAS_TILES);
-            s->level_texture_tile_h_px = texture_atlas_default_tile_h(TEXTURE_ATLAS_TILES);
+            s->level_texture_atlas_id = editor_default_texture_atlas_id();
+            s->level_texture_tile_w_px = 256;
+            s->level_texture_tile_h_px = 256;
             s->level_texture_panel_w_units = 1;
             s->level_texture_panel_h_units = 1;
+            s->level_event_wave_spawn_timeout_factor = 0.0f;
             s->level_powerup_drop_chance = 0.12f;
             s->level_kamikaze_style = KAMIKAZE_STYLE_CLASSIC;
             level_editor_set_default_curated_tuning(&s->level_curated_combat);
@@ -3809,6 +3823,22 @@ const char* level_editor_selected_property_name(const level_editor_state* s) {
     static const char* names[10] = {"X", "Y", "A", "B", "C", "D", "E", "F", "G", "H"};
     static const char* boss_spatial[8] = {"TYPE", "X", "Y", "BOSS ID", "SEED", "DIFFICULTY", "VARIANT", "GATES EXIT"};
     static const char* boss_event[7] = {"TYPE", "ORDER", "DELAY", "BOSS ID", "SEED", "DIFFICULTY", "VARIANT"};
+    static const char* level_names[LEVEL_EDITOR_LEVEL_PROP_COUNT] = {
+        "WAVE MODE",
+        "RENDER STYLE",
+        "THEME",
+        "ENEMY PALETTE",
+        "BACKGROUND",
+        "BG MASK",
+        "ATLAS",
+        "TILE W",
+        "TILE H",
+        "TEX W UNITS",
+        "TEX H UNITS",
+        "LENGTH",
+        "EVENT WAVE FAC",
+        "POWERUP DROP"
+    };
     if (!s) {
         return "X";
     }
@@ -3821,6 +3851,8 @@ const char* level_editor_selected_property_name(const level_editor_state* s) {
                 : 0;
             return ev_item ? boss_event[idx] : boss_spatial[idx];
         }
+    } else if (s->selected_property >= 0 && s->selected_property < LEVEL_EDITOR_LEVEL_PROP_COUNT) {
+        return level_names[s->selected_property];
     }
     const int idx = (s->selected_property >= 0 && s->selected_property < 10) ? s->selected_property : 0;
     return names[idx];
@@ -3895,10 +3927,20 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             case LEVEL_EDITOR_LEVEL_PROP_TEXTURE_ATLAS:
             {
                 const int dir = (delta >= 0.0f) ? 1 : -1;
-                const int n = TEXTURE_ATLAS_COUNT;
-                int atlas = clampi(s->level_texture_atlas_id, 0, n - 1);
-                atlas = (atlas + dir + n) % n;
-                s->level_texture_atlas_id = atlas;
+                const int n = texture_atlas_count();
+                if (n > 0) {
+                    int atlas = s->level_texture_atlas_id;
+                    if (!texture_atlas_get(atlas)) {
+                        atlas = (dir >= 0.0f) ? -1 : 0;
+                    }
+                    atlas = (atlas + dir + n) % n;
+                    if (atlas < 0) {
+                        atlas += n;
+                    }
+                    s->level_texture_atlas_id = atlas;
+                } else {
+                    s->level_texture_atlas_id = TEXTURE_ATLAS_NONE;
+                }
             } break;
             case LEVEL_EDITOR_LEVEL_PROP_TEXTURE_TILE_W:
                 s->level_texture_tile_w_px = clampi(
@@ -3933,6 +3975,13 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
                     s->level_length_screens + delta * 1.0f,
                     1.0f,
                     400.0f
+                );
+                break;
+            case LEVEL_EDITOR_LEVEL_PROP_EVENT_WAVE_TIMEOUT:
+                s->level_event_wave_spawn_timeout_factor = clampf(
+                    s->level_event_wave_spawn_timeout_factor + delta * 0.1f,
+                    0.0f,
+                    20.0f
                 );
                 break;
             case LEVEL_EDITOR_LEVEL_PROP_POWERUP_DROP:
@@ -4466,6 +4515,7 @@ int level_editor_revert(level_editor_state* s) {
     s->level_asteroid_storm_speed = s->snapshot_level_asteroid_storm_speed;
     s->level_asteroid_storm_duration_s = s->snapshot_level_asteroid_storm_duration_s;
     s->level_asteroid_storm_density = s->snapshot_level_asteroid_storm_density;
+    s->level_event_wave_spawn_timeout_factor = s->snapshot_level_event_wave_spawn_timeout_factor;
     s->level_powerup_drop_chance = s->snapshot_level_powerup_drop_chance;
     s->level_kamikaze_radius_min = s->snapshot_level_kamikaze_radius_min;
     s->level_kamikaze_radius_max = s->snapshot_level_kamikaze_radius_max;
@@ -4519,9 +4569,9 @@ void level_editor_new_blank(level_editor_state* s) {
     s->level_enemy_palette = LEVELDEF_ENEMY_PALETTE_DEFAULT;
     s->level_background_style = LEVELDEF_BACKGROUND_NONE;
     s->level_background_mask_style = LEVELDEF_BG_MASK_NONE;
-    s->level_texture_atlas_id = TEXTURE_ATLAS_TILES;
-    s->level_texture_tile_w_px = texture_atlas_default_tile_w(TEXTURE_ATLAS_TILES);
-    s->level_texture_tile_h_px = texture_atlas_default_tile_h(TEXTURE_ATLAS_TILES);
+    s->level_texture_atlas_id = editor_default_texture_atlas_id();
+    s->level_texture_tile_w_px = 256;
+    s->level_texture_tile_h_px = 256;
     s->level_texture_panel_w_units = 1;
     s->level_texture_panel_h_units = 1;
     s->level_asteroid_storm_enabled = 0;
@@ -4529,6 +4579,7 @@ void level_editor_new_blank(level_editor_state* s) {
     s->level_asteroid_storm_speed = 190.0f;
     s->level_asteroid_storm_duration_s = 12.0f;
     s->level_asteroid_storm_density = 1.0f;
+    s->level_event_wave_spawn_timeout_factor = 0.0f;
     s->level_powerup_drop_chance = 0.12f;
     s->level_kamikaze_radius_min = 11.0f;
     s->level_kamikaze_radius_max = 17.0f;

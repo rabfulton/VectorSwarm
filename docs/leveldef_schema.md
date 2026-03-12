@@ -99,6 +99,13 @@
 - `fog`
 - `wave_mode` enum: `normal`, `boid_only`, or `curated`
 - `background` enum: `stars`, `none`, `nebula`, `grid`, `solid`, `underwater`, `fire`, `ice`, `forest`
+- `texture_atlas` optional string:
+- Runtime-discovered from `assets/images/*tiles*.png`
+- Stored as the filename stem, e.g. `tiles` or `tiles_ice`
+- Required only when the level contains textured-panel structures (`prefab_id=8`)
+- `texture_tile_w` int
+- `texture_tile_h` int
+- Tile atlases are expected to use 256x256 tiles
 - `underwater.*` tuning keys (density/caustics/kelp variants) when `background=underwater`
 - `fire.magma_scale` float
 - `fire.warp_amp` float

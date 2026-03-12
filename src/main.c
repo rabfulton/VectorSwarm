@@ -712,6 +712,7 @@ typedef struct app {
     uint32_t structure_tiles_w;
     uint32_t structure_tiles_h;
     uint32_t structure_tiles_stride;
+    int current_structure_tile_atlas_id;
     float nick_threshold;
     float nick_contrast;
     float nick_scanline_pitch_px;
@@ -2495,6 +2496,9 @@ static int create_arc_beam_resources(app* a);
 static int create_industry_resources(app* a);
 static int create_revolver_pipeline(app* a);
 static int create_structure_tile_resources(app* a);
+static void destroy_structure_tile_resources(app* a);
+static void unload_structure_tile_pixels(app* a);
+static int ensure_active_structure_tile_resources(app* a);
 static void reset_grid_sim_state(app* a);
 static int create_vg_context(app* a);
 static void set_tty_message(app* a, const char* msg);
@@ -4508,40 +4512,6 @@ static void init_planetarium_assets(app* a) {
             }
         }
 
-        {
-            const texture_atlas_def* atlas = texture_atlas_get(TEXTURE_ATLAS_TILES);
-            const char* asset = atlas ? atlas->asset_path : "assets/images/tiles.png";
-            char p1[256];
-            char p2[256];
-            snprintf(p1, sizeof(p1), "../%s", asset);
-            snprintf(p2, sizeof(p2), "../../%s", asset);
-            {
-                const char* tile_candidates[] = {asset, p1, p2};
-                src = NULL;
-                for (size_t i = 0; i < sizeof(tile_candidates) / sizeof(tile_candidates[0]); ++i) {
-                    src = IMG_Load(tile_candidates[i]);
-                    if (src) {
-                        break;
-                    }
-                }
-            }
-            if (src) {
-                SDL_Surface* rgba = SDL_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_RGBA32, 0);
-                SDL_FreeSurface(src);
-                src = NULL;
-                if (rgba) {
-                    const size_t bytes = (size_t)rgba->pitch * (size_t)rgba->h;
-                    a->structure_tiles_rgba8 = (uint8_t*)malloc(bytes);
-                    if (a->structure_tiles_rgba8) {
-                        memcpy(a->structure_tiles_rgba8, rgba->pixels, bytes);
-                        a->structure_tiles_w = (uint32_t)rgba->w;
-                        a->structure_tiles_h = (uint32_t)rgba->h;
-                        a->structure_tiles_stride = (uint32_t)rgba->pitch;
-                    }
-                    SDL_FreeSurface(rgba);
-                }
-            }
-        }
     }
 #endif
 }
@@ -5089,10 +5059,7 @@ static void cleanup(app* a) {
         free(a->industry_rgba8);
         a->industry_rgba8 = NULL;
     }
-    if (a->structure_tiles_rgba8) {
-        free(a->structure_tiles_rgba8);
-        a->structure_tiles_rgba8 = NULL;
-    }
+    unload_structure_tile_pixels(a);
     IMG_Quit();
 #endif
     if (a->surveillance_svg_asset) {
@@ -5657,7 +5624,6 @@ static int recreate_render_runtime(app* a) {
         !create_grid_resources(a) ||
         !create_arc_beam_resources(a) ||
         !create_industry_resources(a) ||
-        !create_structure_tile_resources(a) ||
         !create_revolver_pipeline(a) ||
         !create_vg_context(a)) {
         return 0;
@@ -8827,6 +8793,177 @@ static int create_structure_tile_resources(app* a) {
 #endif
 }
 
+static void destroy_structure_tile_resources(app* a) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+#else
+    if (!a || !a->device) {
+        return;
+    }
+    a->use_gpu_structure_tiles = 0;
+    a->structure_tile_desc_set = VK_NULL_HANDLE;
+    if (a->structure_tile_pipeline) {
+        vkDestroyPipeline(a->device, a->structure_tile_pipeline, NULL);
+        a->structure_tile_pipeline = VK_NULL_HANDLE;
+    }
+    if (a->structure_tile_layout) {
+        vkDestroyPipelineLayout(a->device, a->structure_tile_layout, NULL);
+        a->structure_tile_layout = VK_NULL_HANDLE;
+    }
+    if (a->structure_tile_desc_pool) {
+        vkDestroyDescriptorPool(a->device, a->structure_tile_desc_pool, NULL);
+        a->structure_tile_desc_pool = VK_NULL_HANDLE;
+    }
+    if (a->structure_tile_desc_layout) {
+        vkDestroyDescriptorSetLayout(a->device, a->structure_tile_desc_layout, NULL);
+        a->structure_tile_desc_layout = VK_NULL_HANDLE;
+    }
+    if (a->structure_tile_sampler) {
+        vkDestroySampler(a->device, a->structure_tile_sampler, NULL);
+        a->structure_tile_sampler = VK_NULL_HANDLE;
+    }
+    if (a->structure_tile_view) {
+        vkDestroyImageView(a->device, a->structure_tile_view, NULL);
+        a->structure_tile_view = VK_NULL_HANDLE;
+    }
+    if (a->structure_tile_image) {
+        vkDestroyImage(a->device, a->structure_tile_image, NULL);
+        a->structure_tile_image = VK_NULL_HANDLE;
+    }
+    if (a->structure_tile_memory) {
+        vkFreeMemory(a->device, a->structure_tile_memory, NULL);
+        a->structure_tile_memory = VK_NULL_HANDLE;
+    }
+#endif
+}
+
+static void unload_structure_tile_pixels(app* a) {
+    if (!a) {
+        return;
+    }
+    if (a->structure_tiles_rgba8) {
+        free(a->structure_tiles_rgba8);
+        a->structure_tiles_rgba8 = NULL;
+    }
+    a->structure_tiles_w = 0u;
+    a->structure_tiles_h = 0u;
+    a->structure_tiles_stride = 0u;
+    a->current_structure_tile_atlas_id = TEXTURE_ATLAS_NONE;
+}
+
+static int load_structure_tile_pixels(app* a, int atlas_id) {
+#if !V_TYPE_HAS_SDL_IMAGE
+    (void)a;
+    (void)atlas_id;
+    return 0;
+#else
+    const texture_atlas_def* atlas = texture_atlas_get(atlas_id);
+    char p1[256];
+    char p2[256];
+    SDL_Surface* src = NULL;
+    if (!a || !atlas || !atlas->asset_path) {
+        return 0;
+    }
+    if (snprintf(p1, sizeof(p1), "../%s", atlas->asset_path) >= (int)sizeof(p1) ||
+        snprintf(p2, sizeof(p2), "../../%s", atlas->asset_path) >= (int)sizeof(p2)) {
+        return 0;
+    }
+    {
+        const char* tile_candidates[] = {atlas->asset_path, p1, p2};
+        for (size_t i = 0; i < sizeof(tile_candidates) / sizeof(tile_candidates[0]); ++i) {
+            src = IMG_Load(tile_candidates[i]);
+            if (src) {
+                break;
+            }
+        }
+    }
+    if (!src) {
+        fprintf(stderr, "structure tiles: failed to load atlas asset '%s'\n", atlas->asset_path);
+        return 0;
+    }
+    {
+        SDL_Surface* rgba = SDL_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_RGBA32, 0);
+        SDL_FreeSurface(src);
+        src = NULL;
+        if (!rgba) {
+            fprintf(stderr, "structure tiles: failed to convert atlas '%s' to RGBA\n", atlas->asset_path);
+            return 0;
+        }
+        {
+            const size_t bytes = (size_t)rgba->pitch * (size_t)rgba->h;
+            a->structure_tiles_rgba8 = (uint8_t*)malloc(bytes);
+            if (!a->structure_tiles_rgba8) {
+                SDL_FreeSurface(rgba);
+                return 0;
+            }
+            memcpy(a->structure_tiles_rgba8, rgba->pixels, bytes);
+            a->structure_tiles_w = (uint32_t)rgba->w;
+            a->structure_tiles_h = (uint32_t)rgba->h;
+            a->structure_tiles_stride = (uint32_t)rgba->pitch;
+            a->current_structure_tile_atlas_id = atlas_id;
+        }
+        SDL_FreeSurface(rgba);
+    }
+    return 1;
+#endif
+}
+
+static int desired_structure_tile_atlas_id(const app* a) {
+    int i;
+    if (!a) {
+        return TEXTURE_ATLAS_NONE;
+    }
+    if (menu_is_gameplay(&a->menu)) {
+        const leveldef_level* lvl = game_current_leveldef(&a->game);
+        if (lvl && leveldef_level_uses_textured_panels(lvl)) {
+            return lvl->texture_atlas_id;
+        }
+    }
+    if (menu_is_screen(&a->menu, APP_SCREEN_LEVEL_EDITOR)) {
+        for (i = 0; i < a->level_editor.marker_count && i < LEVEL_EDITOR_MAX_MARKERS; ++i) {
+            const level_editor_marker* m = &a->level_editor.markers[i];
+            if (m->kind == LEVEL_EDITOR_MARKER_STRUCTURE &&
+                clampi((int)lroundf(m->a), 0, 31) == LEVELDEF_STRUCTURE_PREFAB_TEX_PANEL) {
+                return a->level_editor.level_texture_atlas_id;
+            }
+        }
+    }
+    return TEXTURE_ATLAS_NONE;
+}
+
+static int ensure_active_structure_tile_resources(app* a) {
+    const int desired_atlas_id = desired_structure_tile_atlas_id(a);
+    if (!a) {
+        return 0;
+    }
+    if (desired_atlas_id == a->current_structure_tile_atlas_id) {
+        if (desired_atlas_id == TEXTURE_ATLAS_NONE) {
+            return 1;
+        }
+        if (a->use_gpu_structure_tiles) {
+            return 1;
+        }
+    }
+    destroy_structure_tile_resources(a);
+    unload_structure_tile_pixels(a);
+    if (desired_atlas_id == TEXTURE_ATLAS_NONE) {
+        return 1;
+    }
+    if (!texture_atlas_get(desired_atlas_id)) {
+        fprintf(stderr, "structure tiles: invalid atlas id %d requested\n", desired_atlas_id);
+        return 0;
+    }
+    if (!load_structure_tile_pixels(a, desired_atlas_id)) {
+        unload_structure_tile_pixels(a);
+        return 0;
+    }
+    if (!create_structure_tile_resources(a)) {
+        unload_structure_tile_pixels(a);
+        return 0;
+    }
+    return 1;
+}
+
 /* Creates a second pipeline that uses the same layout/descriptor as the
    industry pipeline but with the revolver fragment shader.  Must be called
    after create_industry_resources() so industry_layout exists. */
@@ -11271,7 +11408,7 @@ static int structure_tile_uv_rect(
     if (!a || !out_u0 || !out_v0 || !out_u1 || !out_v1) {
         return 0;
     }
-    if (atlas_id != TEXTURE_ATLAS_TILES ||
+    if (atlas_id != a->current_structure_tile_atlas_id ||
         !texture_atlas_grid_dims(atlas_id, tile_w_px, tile_h_px, &cols, &rows) ||
         cols <= 0 || rows <= 0 ||
         tile_index < 0 || tile_index >= cols * rows ||
@@ -11428,7 +11565,7 @@ static void record_gpu_structure_tiles(app* a, VkCommandBuffer cmd, int pass) {
     if (pass == STRUCTURE_TILE_PASS_WORLD) {
         if (menu_is_gameplay(&a->menu)) {
             const leveldef_level* lvl = game_current_leveldef(&a->game);
-            if (!lvl || lvl->texture_atlas_id != TEXTURE_ATLAS_TILES) {
+            if (!lvl || !leveldef_level_uses_textured_panels(lvl) || lvl->texture_atlas_id != a->current_structure_tile_atlas_id) {
                 return;
             }
             {
@@ -11477,7 +11614,7 @@ static void record_gpu_structure_tiles(app* a, VkCommandBuffer cmd, int pass) {
                 ? 1
                 : ((LEVELDEF_STRUCTURE_GRID_H - 1) / LEVELDEF_STRUCTURE_GRID_SCALE);
             level_editor_compute_layout((float)a->swapchain_extent.width, (float)a->swapchain_extent.height, &layout);
-            if (a->level_editor.level_texture_atlas_id != TEXTURE_ATLAS_TILES) {
+            if (a->level_editor.level_texture_atlas_id != a->current_structure_tile_atlas_id) {
                 return;
             }
             for (int i = 0; i < a->level_editor.marker_count && i < LEVEL_EDITOR_MAX_MARKERS; ++i) {
@@ -11528,7 +11665,7 @@ static void record_gpu_structure_tiles(app* a, VkCommandBuffer cmd, int pass) {
         }
         if (a->level_editor.markers[sel].kind != LEVEL_EDITOR_MARKER_STRUCTURE ||
             clampi((int)lroundf(a->level_editor.markers[sel].a), 0, 31) != LEVELDEF_STRUCTURE_PREFAB_TEX_PANEL ||
-            a->level_editor.level_texture_atlas_id != TEXTURE_ATLAS_TILES) {
+            a->level_editor.level_texture_atlas_id != a->current_structure_tile_atlas_id) {
             return;
         }
         if (!texture_atlas_grid_dims(
@@ -11876,6 +12013,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .level_editor_asteroid_storm_speed = a->level_editor.level_asteroid_storm_speed,
         .level_editor_asteroid_storm_duration_s = a->level_editor.level_asteroid_storm_duration_s,
         .level_editor_asteroid_storm_density = a->level_editor.level_asteroid_storm_density,
+        .level_editor_event_wave_spawn_timeout_factor = a->level_editor.level_event_wave_spawn_timeout_factor,
         .level_editor_powerup_drop_chance = a->level_editor.level_powerup_drop_chance,
         .level_editor_kamikaze_radius_min = a->level_editor.level_kamikaze_radius_min,
         .level_editor_kamikaze_radius_max = a->level_editor.level_kamikaze_radius_max,
@@ -12371,6 +12509,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
 int main(void) {
     app a;
     memset(&a, 0, sizeof(a));
+    a.current_structure_tile_atlas_id = TEXTURE_ATLAS_NONE;
     a.force_clear_frames = 2;
     a.crt_ui_selected = 0;
     a.crt_ui_mouse_drag = 0;
@@ -12574,10 +12713,6 @@ int main(void) {
         fprintf(stderr, "planetarium validation failed; continuing with best-effort defaults\n");
     }
     if (!create_industry_resources(&a)) {
-        cleanup(&a);
-        return 1;
-    }
-    if (!create_structure_tile_resources(&a)) {
         cleanup(&a);
         return 1;
     }
@@ -13296,6 +13431,11 @@ int main(void) {
         fps_smoothed += (fps_inst - fps_smoothed) * 0.10f;
 
         if (!check_vk(vkWaitForFences(a.device, 1, &a.in_flight, VK_TRUE, UINT64_MAX), "vkWaitForFences")) break;
+
+        if (!ensure_active_structure_tile_resources(&a)) {
+            fprintf(stderr, "render failure: could not load active structure tile atlas\n");
+            break;
+        }
 
         uint32_t image_index = 0;
         VkResult ar = vkAcquireNextImageKHR(a.device, a.swapchain, UINT64_MAX, a.image_available, VK_NULL_HANDLE, &image_index);

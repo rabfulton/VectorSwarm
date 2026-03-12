@@ -6017,7 +6017,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb6 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
-                snprintf(row, sizeof(row), "ATLAS          %s", texture_atlas_name(metrics->level_editor_texture_atlas_id));
+                snprintf(row, sizeof(row), "ATLAS          %s", texture_atlas_display_name(metrics->level_editor_texture_atlas_id));
                 r = draw_ui_button_shaded(ctx, rb6, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_TEXTURE_ATLAS) ? 1 : 0);
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
@@ -6047,8 +6047,13 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb12 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
+                snprintf(row, sizeof(row), "EVENT WAVE FAC %.2f", metrics->level_editor_event_wave_spawn_timeout_factor);
+                r = draw_ui_button_shaded(ctx, rb12, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_EVENT_WAVE_TIMEOUT) ? 1 : 0);
+                if (r != VG_OK) return r;
+                ty -= 32.0f * ui;
+                const vg_rect rb13 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
                 snprintf(row, sizeof(row), "POWERUP DROP   %.2f", metrics->level_editor_powerup_drop_chance);
-                r = draw_ui_button_shaded(ctx, rb12, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_POWERUP_DROP) ? 1 : 0);
+                r = draw_ui_button_shaded(ctx, rb13, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_POWERUP_DROP) ? 1 : 0);
                 if (r != VG_OK) return r;
             }
             ty -= 34.0f * ui;

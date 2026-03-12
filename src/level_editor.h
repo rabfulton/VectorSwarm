@@ -108,6 +108,7 @@ typedef struct level_editor_state {
     float level_asteroid_storm_speed;
     float level_asteroid_storm_duration_s;
     float level_asteroid_storm_density;
+    float level_event_wave_spawn_timeout_factor;
     float level_powerup_drop_chance;
     float level_kamikaze_radius_min;
     float level_kamikaze_radius_max;
@@ -155,6 +156,7 @@ typedef struct level_editor_state {
     float snapshot_level_asteroid_storm_speed;
     float snapshot_level_asteroid_storm_duration_s;
     float snapshot_level_asteroid_storm_density;
+    float snapshot_level_event_wave_spawn_timeout_factor;
     float snapshot_level_powerup_drop_chance;
     float snapshot_level_kamikaze_radius_min;
     float snapshot_level_kamikaze_radius_max;
@@ -179,8 +181,9 @@ enum {
     LEVEL_EDITOR_LEVEL_PROP_TEXTURE_PANEL_W = 9,
     LEVEL_EDITOR_LEVEL_PROP_TEXTURE_PANEL_H = 10,
     LEVEL_EDITOR_LEVEL_PROP_LENGTH = 11,
-    LEVEL_EDITOR_LEVEL_PROP_POWERUP_DROP = 12,
-    LEVEL_EDITOR_LEVEL_PROP_COUNT = 13
+    LEVEL_EDITOR_LEVEL_PROP_EVENT_WAVE_TIMEOUT = 12,
+    LEVEL_EDITOR_LEVEL_PROP_POWERUP_DROP = 13,
+    LEVEL_EDITOR_LEVEL_PROP_COUNT = 14
 };
 
 enum {
