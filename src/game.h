@@ -521,6 +521,7 @@ typedef struct game_state {
     float thruster_emit_accum;
     float camera_x;
     float camera_y;
+    float prev_camera_x;
     float camera_vx;
     float camera_vy;
     int level_style; /* enum level_style_id */

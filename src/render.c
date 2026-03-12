@@ -11652,7 +11652,8 @@ vg_result render_frame(vg_context* ctx, const game_state* g, const render_metric
             const float parallax = 0.08f + u * 0.28f;
             const float persistence_trail = 1.0f + (1.0f - crt.persistence_decay) * 2.8f;
             const float dt_safe = fmaxf(metrics->dt, 1e-4f);
-            const float vx = (g->stars[i].prev_x - g->stars[i].x) / dt_safe;
+            const float camera_dx = g->camera_x - g->prev_camera_x;
+            const float vx = ((g->stars[i].prev_x - g->stars[i].x) + camera_dx * parallax) / dt_safe;
             const float vy = (g->stars[i].prev_y - g->stars[i].y) / dt_safe;
             const float exposure_s = (1.0f / 60.0f) * (1.4f + 2.6f * u) * persistence_trail;
             float tx = g->stars[i].x + vx * exposure_s;

@@ -1161,8 +1161,7 @@ static void update_asteroid_storm(game_state* g, float dt) {
     if (g->asteroid_count <= 0) {
         g->asteroid_count = asteroid_target_count(g);
     }
-    if (!g->auto_event_mode &&
-        !g->asteroid_storm_active &&
+    if (!g->asteroid_storm_active &&
         !g->asteroid_storm_completed &&
         g->camera_x >= g->asteroid_storm_start_x) {
         asteroid_clear_bodies(g);
@@ -2162,6 +2161,7 @@ static int set_level_index(game_state* g, int index) {
     g->camera_vx = 0.0f;
     g->camera_x = g->player.b.x;
     g->camera_y = g->world_h * 0.5f;
+    g->prev_camera_x = g->camera_x;
     g->shield_radius = 52.0f * su;
     g->mine_push_ax = 0.0f;
     g->mine_push_ay = 0.0f;
@@ -2646,6 +2646,7 @@ void game_init(game_state* g, float world_w, float world_h) {
     g->shield_radius = 52.0f * su;
     g->camera_x = g->player.b.x;
     g->camera_y = world_h * 0.5f;
+    g->prev_camera_x = g->camera_x;
     g->level_style = LEVEL_STYLE_DEFENDER;
     g->level_index = 0;
     g->current_level_name[0] = '\0';
@@ -3131,6 +3132,7 @@ static void game_update_camera(game_state* g, float dt) {
     float rear_bias = 0.25f;
     float spring_k = 18.0f;
     float damping = 8.2f;
+    g->prev_camera_x = g->camera_x;
     if (level_uses_cylinder(g)) {
         rear_bias = 0.08f;
         spring_k = 26.0f;
