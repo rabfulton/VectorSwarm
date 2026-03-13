@@ -1765,9 +1765,13 @@ static void update_missile_system(game_state* g, float dt) {
 
     for (int i = 0; i < MAX_MISSILES; ++i) {
         homing_missile* m = &g->missiles[i];
+        float prev_x;
+        float prev_y;
         if (!m->active) {
             continue;
         }
+        prev_x = m->b.x;
+        prev_y = m->b.y;
 
         if (m->owner == MISSILE_OWNER_PLAYER && m->arm_delay_s > 0.0f) {
             m->arm_delay_s -= dt;
@@ -1777,6 +1781,10 @@ static void update_missile_system(game_state* g, float dt) {
             m->b.vx = m->forward_x * (130.0f * gameplay_ui_scale(g));
             m->b.vy = m->forward_y * (130.0f * gameplay_ui_scale(g));
             integrate_body(&m->b, dt);
+            if (game_structure_segment_blocked(g, prev_x, prev_y, m->b.x, m->b.y, m->radius)) {
+                explode_missile(g, m, 0);
+                continue;
+            }
             if (m->arm_delay_s > 0.0f) {
                 continue;
             }
@@ -1813,6 +1821,11 @@ static void update_missile_system(game_state* g, float dt) {
         m->b.vy = sinf(m->heading_rad) * m->speed;
         integrate_body(&m->b, dt);
         m->ttl_s -= dt;
+
+        if (game_structure_segment_blocked(g, prev_x, prev_y, m->b.x, m->b.y, m->radius)) {
+            explode_missile(g, m, 0);
+            continue;
+        }
 
         {
             const float su = gameplay_ui_scale(g);
@@ -1917,6 +1930,9 @@ static void configure_minefields_for_level(game_state* g) {
                 const float px = cx + (frands1() * 0.5f) * field_w;
                 const float py = cy + (frands1() * 0.5f) * field_h;
                 int overlap = 0;
+                if (game_structure_circle_overlap(g, px, py, rr)) {
+                    continue;
+                }
                 for (int j = 0; j < g->mine_count - 1; ++j) {
                     const mine* o = &g->mines[j];
                     if (!o->active) {
@@ -1977,9 +1993,13 @@ static void update_minefields(game_state* g, float dt) {
 
     for (int i = 0; i < g->mine_count && i < MAX_MINES; ++i) {
         mine* m = &g->mines[i];
+        float prev_x;
+        float prev_y;
         if (!m->active) {
             continue;
         }
+        prev_x = m->b.x;
+        prev_y = m->b.y;
         float dx = g->player.b.x - m->b.x;
         float dy = g->player.b.y - m->b.y;
         const float d2 = dx * dx + dy * dy;
@@ -1999,6 +2019,11 @@ static void update_minefields(game_state* g, float dt) {
             }
         }
         m->angle += m->spin_rate * dt;
+
+        if (game_structure_segment_blocked(g, prev_x, prev_y, m->b.x, m->b.y, m->radius)) {
+            explode_mine(g, m, m->b.vx, m->b.vy);
+            continue;
+        }
 
         /* Bullet impacts: mine takes 10 hits. */
         for (size_t bi = 0; bi < MAX_BULLETS; ++bi) {
