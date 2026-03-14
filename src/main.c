@@ -416,6 +416,9 @@ typedef struct app {
     float grid_prev_camera_x;
     float grid_prev_camera_y;
     float grid_sim_accum_s;
+    float sim_fixed_dt_s;
+    float sim_accum_s;
+    int sim_max_catchup_steps;
     float grid_sim_hz;
     float grid_sim_spring_k;
     float grid_sim_neighbor_coupling;
@@ -12509,6 +12512,9 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
 int main(void) {
     app a;
     memset(&a, 0, sizeof(a));
+    a.sim_fixed_dt_s = 1.0f / 120.0f;
+    a.sim_accum_s = 0.0f;
+    a.sim_max_catchup_steps = 8;
     a.current_structure_tile_atlas_id = TEXTURE_ATLAS_NONE;
     a.force_clear_frames = 2;
     a.crt_ui_selected = 0;
@@ -13354,13 +13360,24 @@ int main(void) {
         float dt_raw = (float)(now - last) / freq;
         last = now;
         if (dt_raw <= 0.0f) dt_raw = 1.0f / 60.0f;
-        float dt_sim = dt_raw;
-        if (dt_sim > (1.0f / 15.0f)) dt_sim = 1.0f / 15.0f;
+        if (dt_raw > 0.25f) dt_raw = 0.25f;
         if (!controls_ui_active(&a)) {
+            const float max_sim_catchup_s = a.sim_fixed_dt_s * (float)a.sim_max_catchup_steps;
+            int sim_steps = 0;
             mod_sync_gameplay_playlist(&a);
             sync_shipyard_weapon_to_game(&a);
-            game_update(&a.game, dt_sim, &in);
+            a.sim_accum_s += dt_raw;
+            if (a.sim_accum_s > max_sim_catchup_s) {
+                a.sim_accum_s = max_sim_catchup_s;
+            }
+            while (a.sim_accum_s >= a.sim_fixed_dt_s && sim_steps < a.sim_max_catchup_steps) {
+                game_update(&a.game, a.sim_fixed_dt_s, &in);
+                a.sim_accum_s -= a.sim_fixed_dt_s;
+                sim_steps++;
+            }
             update_level_start_teletype(&a);
+        } else {
+            a.sim_accum_s = 0.0f;
         }
         if (a.audio_ready) {
             const int thrust_on = (!controls_ui_active(&a)) &&
@@ -13407,7 +13424,7 @@ int main(void) {
             if (game_pop_wave_announcement(&a.game, wave_msg, sizeof(wave_msg))) {
                 set_tty_message(&a, wave_msg);
             }
-            (void)vg_text_fx_typewriter_update(&a.wave_tty, dt_sim);
+            (void)vg_text_fx_typewriter_update(&a.wave_tty, dt_raw);
             (void)vg_text_fx_typewriter_copy_visible(&a.wave_tty, a.wave_tty_visible, sizeof(a.wave_tty_visible));
         }
         vg_text_fx_marquee_update(&a.planetarium_marquee, dt_raw);
@@ -13454,7 +13471,7 @@ int main(void) {
 
         float t = (float)SDL_GetTicks() * 0.001f;
         a.swapchain_needs_recreate = 0;
-        if (!record_submit_present(&a, image_index, t, dt_sim, fps_smoothed)) {
+        if (!record_submit_present(&a, image_index, t, dt_raw, fps_smoothed)) {
             if (a.swapchain_needs_recreate) {
                 if (!recreate_render_runtime(&a)) {
                     fprintf(stderr, "render failure: swapchain flagged for recreate, but recreate failed\n");
