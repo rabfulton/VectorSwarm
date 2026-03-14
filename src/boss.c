@@ -1630,7 +1630,7 @@ int boss_update_enemy(game_state* g, int enemy_index, float dt) {
     } else if (ctrl->telegraph_active || ctrl->burst_shots_left > 0) {
         move_gain = 3.2f;
     }
-    gain = (dt > 1.0e-5f) ? clampf(dt * move_gain, 0.0f, 1.0f) : 1.0f;
+    gain = (dt > 1.0e-5f) ? (1.0f - expf(-move_gain * dt)) : 1.0f;
     e->b.x = lerpf(e->b.x, desired_x, gain);
     e->b.y = lerpf(e->b.y, desired_y, gain);
     e->b.vx = (dt > 1.0e-5f) ? (e->b.x - prev_x) / dt : 0.0f;

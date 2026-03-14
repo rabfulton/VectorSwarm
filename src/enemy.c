@@ -341,13 +341,13 @@ static void eel_update_spine(enemy* e, float dt, int uses_cylinder, float period
         if (d > 1.0e-5f) {
             const float overshoot = d - seg_len;
             if (overshoot > 0.0f) {
-                pull = clampf(dt * 16.0f, 0.15f, 1.0f);
+                pull = (dt > 0.0f) ? clampf(1.0f - expf(-16.0f * dt), 0.15f, 1.0f) : 1.0f;
                 cur_x -= (dx / d) * overshoot * pull;
                 cur_y -= (dy / d) * overshoot * pull;
             } else {
                 const float compress = (-overshoot) / fmaxf(seg_len, 1.0f);
                 if (compress > 0.55f) {
-                    pull = clampf(dt * 8.5f, 0.0f, 1.0f) * (compress - 0.55f);
+                    pull = (1.0f - expf(-8.5f * fmaxf(dt, 0.0f))) * (compress - 0.55f);
                     cur_x += (dx / d) * seg_len * pull;
                     cur_y += (dy / d) * seg_len * pull;
                 }
@@ -3184,7 +3184,7 @@ static void update_enemy_kamikaze(game_state* g, enemy* e, float dt, int uses_cy
 
     if (e->state == ENEMY_STATE_KAMIKAZE_COIL) {
         const int strike_range = (dist_to_player_now <= g->world_w * 0.24f) ? 1 : 0;
-        const float turn_rate = clampf(dt * (strike_range ? 22.0f : 12.0f), 0.0f, 1.0f);
+        const float turn_rate = 1.0f - expf(-(strike_range ? 22.0f : 12.0f) * fmaxf(dt, 0.0f));
         {
             float turn_x = strike_range ? player_dx : dir_x;
             float turn_y = strike_range ? player_dy : dir_y;
@@ -3308,7 +3308,7 @@ static void update_enemy_kamikaze(game_state* g, enemy* e, float dt, int uses_cy
             return;
         }
         if (e->kamikaze_is_turning) {
-            const float turn_rate = clampf(dt * 30.0f, 0.0f, 1.0f);
+            const float turn_rate = 1.0f - expf(-30.0f * fmaxf(dt, 0.0f));
             const float facing_dot = e->facing_x * sx + e->facing_y * sy;
             e->facing_x += (sx - e->facing_x) * turn_rate;
             e->facing_y += (sy - e->facing_y) * turn_rate;
@@ -4031,7 +4031,7 @@ void enemy_update_system(
                     }
                     normalize2(&dir_x, &dir_y);
                     {
-                        const float gain = clampf(dt * 6.0f, 0.0f, 1.0f);
+                        const float gain = 1.0f - expf(-6.0f * fmaxf(dt, 0.0f));
                         const float tvx = dir_x * min_speed;
                         const float tvy = dir_y * min_speed;
                         e->b.vx += (tvx - e->b.vx) * gain;

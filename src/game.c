@@ -2893,8 +2893,11 @@ static void game_update_powerups(game_state* g, float dt) {
         }
         p->spin += p->spin_rate * dt;
         p->bob_phase += dt * 2.8f;
-        p->b.vx *= fmaxf(0.0f, 1.0f - dt * 1.6f);
-        p->b.vy *= fmaxf(0.0f, 1.0f - dt * 1.6f);
+        {
+            const float drag = expf(-1.6f * fmaxf(dt, 0.0f));
+            p->b.vx *= drag;
+            p->b.vy *= drag;
+        }
         if (g->powerup_magnet_active && g->lives > 0) {
             const float to_x = uses_cylinder ? wrap_delta(g->player.b.x, p->b.x, period) : (g->player.b.x - p->b.x);
             const float to_y = g->player.b.y - p->b.y;
