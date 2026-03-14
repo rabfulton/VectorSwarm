@@ -17,6 +17,10 @@
 #define MIXTAPE_LABEL_CAP 96
 #define VIDEO_MENU_RES_COUNT 6
 #define VIDEO_MENU_DIAL_COUNT 12
+#define VIDEO_QUALITY_LOW 0
+#define VIDEO_QUALITY_MEDIUM 1
+#define VIDEO_QUALITY_HIGH 2
+#define VIDEO_QUALITY_COUNT 3
 #define CONTROL_ACTION_COUNT_RENDER 6
 #ifndef LEVEL_EDITOR_MAX_MARKERS
 #define LEVEL_EDITOR_MAX_MARKERS 256
@@ -62,7 +66,7 @@ typedef struct render_metrics {
     int menu_screen;
     int video_menu_selected;
     int video_menu_fullscreen;
-    int video_menu_high_quality;
+    int video_menu_quality;
     int palette_mode;
     float video_dial_01[VIDEO_MENU_DIAL_COUNT];
     int acoustics_selected;

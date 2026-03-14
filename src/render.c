@@ -4166,17 +4166,13 @@ static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render
             metrics->mouse_in_window &&
             metrics->mouse_x >= b.x && metrics->mouse_x <= (b.x + b.w) &&
             metrics->mouse_y >= b.y && metrics->mouse_y <= (b.y + b.h);
-        r = draw_lcars_text_button(
-            ctx,
-            b,
-            metrics->video_menu_high_quality ? "HIGH QUALITY ON" : "HIGH QUALITY OFF",
-            hover,
-            metrics->video_menu_high_quality ? 1 : 0,
-            ui,
-            &pal,
-            &frame,
-            &txt
-        );
+        const char* quality_label = "QUALITY HIGH";
+        if (metrics->video_menu_quality == VIDEO_QUALITY_LOW) {
+            quality_label = "QUALITY LOW";
+        } else if (metrics->video_menu_quality == VIDEO_QUALITY_MEDIUM) {
+            quality_label = "QUALITY MED";
+        }
+        r = draw_lcars_text_button(ctx, b, quality_label, hover, 1, ui, &pal, &frame, &txt);
         if (r != VG_OK) {
             return r;
         }

@@ -14,7 +14,7 @@ typedef struct app_settings {
     int fullscreen;
     int selected;
     int palette;
-    int high_quality;
+    int quality;
     int width;
     int height;
     float video_dial_01[VIDEO_MENU_DIAL_COUNT];

@@ -221,7 +221,7 @@ typedef struct fog_pc {
     float p0[4];      /* x=viewport_w, y=viewport_h, z=time_s, w=alpha_scale */
     float p1[4];      /* rgb=primary_dim, w=density_scale */
     float p2[4];      /* rgb=secondary, w=emitter_count */
-    float p3[4];      /* x=world_origin_x, y=world_origin_y, z=noise_scale, w=flow_scale */
+    float p3[4];      /* x=world_origin_x, y=world_origin_y, z=noise_scale, w=flow_scale (<0 => cached noise) */
     float emit[4][4]; /* x=sx, y=sy, z=radius_px, w=power*light_gain */
 } fog_pc;
 
@@ -312,6 +312,10 @@ typedef struct app {
     PFN_vkCmdEndDebugUtilsLabelEXT pfn_vkCmdEndDebugUtilsLabelEXT;
     uint32_t graphics_queue_family;
     uint32_t present_queue_family;
+    uint32_t physical_device_vendor_id;
+    VkPhysicalDeviceType physical_device_type;
+    int gpu_vendor_is_intel;
+    char physical_device_name[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE];
 
     VkSwapchainKHR swapchain;
     VkFormat swapchain_format;
@@ -380,6 +384,9 @@ typedef struct app {
     VkPipelineLayout radar_layout;
     VkPipeline radar_fill_pipeline;
     VkPipeline radar_pipeline;
+    VkDescriptorSetLayout fog_desc_layout;
+    VkDescriptorPool fog_desc_pool;
+    VkDescriptorSet fog_desc_set;
     VkPipelineLayout fog_layout;
     VkPipeline fog_pipeline;
     VkPipelineLayout underwater_layout;
@@ -635,7 +642,7 @@ typedef struct app {
     int crt_ui_mouse_drag;
     int video_menu_selected;
     int video_menu_fullscreen;
-    int video_menu_high_quality;
+    int video_menu_quality;
     int palette_mode;
     int msaa_enabled;
     VkSampleCountFlagBits msaa_samples;
@@ -748,6 +755,62 @@ static VkSampleCountFlagBits pick_msaa_samples(app* a) {
     /* DefconDraw Vulkan backend currently builds its internal line pipeline at 1x samples.
        Keep the scene pass at 1x to avoid render-pass/pipeline sample mismatches. */
     return VK_SAMPLE_COUNT_1_BIT;
+}
+
+static int clamp_video_quality(int quality) {
+    if (quality < VIDEO_QUALITY_LOW) {
+        return VIDEO_QUALITY_LOW;
+    }
+    if (quality > VIDEO_QUALITY_HIGH) {
+        return VIDEO_QUALITY_HIGH;
+    }
+    return quality;
+}
+
+static const char* video_quality_label(int quality) {
+    switch (clamp_video_quality(quality)) {
+        case VIDEO_QUALITY_LOW: return "LOW";
+        case VIDEO_QUALITY_MEDIUM: return "MED";
+        default: return "HIGH";
+    }
+}
+
+static float video_quality_scale(int quality, float low, float medium, float high) {
+    switch (clamp_video_quality(quality)) {
+        case VIDEO_QUALITY_LOW: return low;
+        case VIDEO_QUALITY_MEDIUM: return medium;
+        default: return high;
+    }
+}
+
+static int video_quality_uses_crt_effects(int quality) {
+    return clamp_video_quality(quality) != VIDEO_QUALITY_LOW;
+}
+
+static int video_quality_uses_barrel(int quality) {
+    return clamp_video_quality(quality) == VIDEO_QUALITY_HIGH;
+}
+
+static int video_quality_uses_particle_bloom(int quality) {
+    return clamp_video_quality(quality) != VIDEO_QUALITY_LOW;
+}
+
+static int video_quality_uses_shader_high_quality(int quality) {
+    return clamp_video_quality(quality) == VIDEO_QUALITY_HIGH;
+}
+
+static int video_quality_uses_cached_fog_noise(int quality) {
+    return clamp_video_quality(quality) != VIDEO_QUALITY_HIGH;
+}
+
+static const char* vk_physical_device_type_name(VkPhysicalDeviceType type) {
+    switch (type) {
+        case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: return "integrated";
+        case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU: return "discrete";
+        case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU: return "virtual";
+        case VK_PHYSICAL_DEVICE_TYPE_CPU: return "cpu";
+        default: return "other";
+    }
 }
 
 static VkSampleCountFlagBits scene_samples(const app* a) {
@@ -1654,7 +1717,7 @@ static void app_to_settings(const app* a, app_settings* out) {
     out->fullscreen = a->video_menu_fullscreen ? 1 : 0;
     out->selected = a->video_menu_selected;
     out->palette = a->palette_mode;
-    out->high_quality = a->video_menu_high_quality ? 1 : 0;
+    out->quality = clamp_video_quality(a->video_menu_quality);
     out->width = APP_WIDTH;
     out->height = APP_HEIGHT;
     if (out->selected > 0 && out->selected <= VIDEO_MENU_RES_COUNT) {
@@ -1678,7 +1741,7 @@ static void settings_to_app(app* a, const app_settings* in) {
     a->video_menu_fullscreen = in->fullscreen ? 1 : 0;
     a->video_menu_selected = in->selected;
     a->palette_mode = in->palette;
-    a->video_menu_high_quality = in->high_quality ? 1 : 0;
+    a->video_menu_quality = clamp_video_quality(in->quality);
     for (int i = 0; i < VIDEO_MENU_DIAL_COUNT; ++i) {
         a->video_dial_01[i] = clampf(in->video_dial_01[i], 0.0f, 1.0f);
     }
@@ -3803,8 +3866,13 @@ static int handle_video_menu_mouse(app* a, int mouse_x, int mouse_y, int set_val
         };
         if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
             if (set_value) {
-                a->video_menu_high_quality = a->video_menu_high_quality ? 0 : 1;
-                set_tty_message(a, a->video_menu_high_quality ? "high quality on" : "high quality off");
+                a->video_menu_quality = (a->video_menu_quality + 1) % VIDEO_QUALITY_COUNT;
+                {
+                    char msg[64];
+                    snprintf(msg, sizeof(msg), "video quality: %s", video_quality_label(a->video_menu_quality));
+                    set_tty_message(a, msg);
+                }
+                a->force_clear_frames = 1;
                 (void)save_settings(a);
             }
             return 1;
@@ -4929,6 +4997,8 @@ static void cleanup(app* a) {
     if (a->underwater_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->underwater_desc_layout, NULL);
     if (a->particle_desc_pool) vkDestroyDescriptorPool(a->device, a->particle_desc_pool, NULL);
     if (a->particle_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->particle_desc_layout, NULL);
+    if (a->fog_desc_pool) vkDestroyDescriptorPool(a->device, a->fog_desc_pool, NULL);
+    if (a->fog_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->fog_desc_layout, NULL);
     if (a->grid_state_desc_pool) vkDestroyDescriptorPool(a->device, a->grid_state_desc_pool, NULL);
     if (a->grid_state_desc_layout) vkDestroyDescriptorSetLayout(a->device, a->grid_state_desc_layout, NULL);
     if (a->industry_desc_pool) vkDestroyDescriptorPool(a->device, a->industry_desc_pool, NULL);
@@ -5216,6 +5286,14 @@ static void destroy_render_runtime(app* a) {
     if (a->radar_layout) {
         vkDestroyPipelineLayout(a->device, a->radar_layout, NULL);
         a->radar_layout = VK_NULL_HANDLE;
+    }
+    if (a->fog_desc_pool) {
+        vkDestroyDescriptorPool(a->device, a->fog_desc_pool, NULL);
+        a->fog_desc_pool = VK_NULL_HANDLE;
+    }
+    if (a->fog_desc_layout) {
+        vkDestroyDescriptorSetLayout(a->device, a->fog_desc_layout, NULL);
+        a->fog_desc_layout = VK_NULL_HANDLE;
     }
     if (a->fog_layout) {
         vkDestroyPipelineLayout(a->device, a->fog_layout, NULL);
@@ -5754,10 +5832,27 @@ static int pick_physical_device(app* a) {
         }
         free(qprops);
         if (!g || !p) continue;
+        VkPhysicalDeviceProperties props;
+        memset(&props, 0, sizeof(props));
+        vkGetPhysicalDeviceProperties(dev, &props);
         a->physical_device = dev;
         a->graphics_queue_family = gi;
         a->present_queue_family = pi;
+        a->physical_device_vendor_id = props.vendorID;
+        a->physical_device_type = props.deviceType;
+        a->gpu_vendor_is_intel = (props.vendorID == 0x8086u) ? 1 : 0;
+        snprintf(a->physical_device_name, sizeof(a->physical_device_name), "%s", props.deviceName);
         a->msaa_samples = pick_msaa_samples(a);
+        fprintf(
+            stderr,
+            "gpu selected: name=\"%s\" vendor=0x%04x type=%s graphics_q=%u present_q=%u intel=%d\n",
+            a->physical_device_name,
+            (unsigned)a->physical_device_vendor_id,
+            vk_physical_device_type_name(a->physical_device_type),
+            gi,
+            pi,
+            a->gpu_vendor_is_intel
+        );
         free(devs);
         return 1;
     }
@@ -5818,7 +5913,10 @@ static VkSurfaceFormatKHR choose_surface_format(const VkSurfaceFormatKHR* format
     return formats[0];
 }
 
-static VkPresentModeKHR choose_present_mode(const VkPresentModeKHR* modes, uint32_t count) {
+static VkPresentModeKHR choose_present_mode(const app* a, const VkPresentModeKHR* modes, uint32_t count) {
+    if (a && a->gpu_vendor_is_intel) {
+        return VK_PRESENT_MODE_FIFO_KHR;
+    }
     for (uint32_t i = 0; i < count; ++i) {
         if (modes[i] == VK_PRESENT_MODE_MAILBOX_KHR) return modes[i];
     }
@@ -5853,7 +5951,7 @@ static int create_swapchain(app* a) {
     VkPresentModeKHR* modes = (VkPresentModeKHR*)calloc(mode_count > 0 ? mode_count : 1u, sizeof(*modes));
     if (!modes) return 0;
     if (mode_count > 0) vkGetPhysicalDeviceSurfacePresentModesKHR(a->physical_device, a->surface, &mode_count, modes);
-    VkPresentModeKHR mode = choose_present_mode(modes, mode_count);
+    VkPresentModeKHR mode = choose_present_mode(a, modes, mode_count);
     free(modes);
 
     int drawable_w = 0;
@@ -7192,6 +7290,61 @@ static int create_fog_resources(app* a) {
     if (!a) {
         return 0;
     }
+    if (!a->underwater_noise_view || !a->underwater_noise_sampler) {
+        fprintf(stderr, "fog resources require shared noise texture\n");
+        return 0;
+    }
+
+    VkDescriptorSetLayoutBinding binding = {
+        .binding = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT
+    };
+    VkDescriptorSetLayoutCreateInfo dsl = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 1,
+        .pBindings = &binding
+    };
+    if (!check_vk(vkCreateDescriptorSetLayout(a->device, &dsl, NULL, &a->fog_desc_layout), "vkCreateDescriptorSetLayout(fog)")) {
+        return 0;
+    }
+    VkDescriptorPoolSize pool_size = {
+        .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1
+    };
+    VkDescriptorPoolCreateInfo pool = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .poolSizeCount = 1,
+        .pPoolSizes = &pool_size,
+        .maxSets = 1
+    };
+    if (!check_vk(vkCreateDescriptorPool(a->device, &pool, NULL, &a->fog_desc_pool), "vkCreateDescriptorPool(fog)")) {
+        return 0;
+    }
+    VkDescriptorSetAllocateInfo alloc = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .descriptorPool = a->fog_desc_pool,
+        .descriptorSetCount = 1,
+        .pSetLayouts = &a->fog_desc_layout
+    };
+    if (!check_vk(vkAllocateDescriptorSets(a->device, &alloc, &a->fog_desc_set), "vkAllocateDescriptorSets(fog)")) {
+        return 0;
+    }
+    VkDescriptorImageInfo noise_info = {
+        .sampler = a->underwater_noise_sampler,
+        .imageView = a->underwater_noise_view,
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    };
+    VkWriteDescriptorSet write = {
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = a->fog_desc_set,
+        .dstBinding = 0,
+        .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .pImageInfo = &noise_info
+    };
+    vkUpdateDescriptorSets(a->device, 1, &write, 0, NULL);
 
     VkPushConstantRange pc = {
         .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -7200,6 +7353,8 @@ static int create_fog_resources(app* a) {
     };
     VkPipelineLayoutCreateInfo pli = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = &a->fog_desc_layout,
         .pushConstantRangeCount = 1,
         .pPushConstantRanges = &pc
     };
@@ -9497,7 +9652,7 @@ static void append_gpu_fire_embers_and_ash(
         return;
     }
     uint32_t n = *inout_n;
-    const float quality = a->video_menu_high_quality ? 1.0f : 0.62f;
+    const float quality = video_quality_scale(a->video_menu_quality, 0.62f, 0.80f, 1.0f);
     const float spawn_rate = fmaxf(lvl->fire_ember_spawn_rate, 0.0f);
     int target_ember = (int)lroundf(spawn_rate * quality * 0.42f);
     int target_ash = (int)lroundf(spawn_rate * quality * 0.28f);
@@ -9705,7 +9860,7 @@ static void append_gpu_forest_spores(
     uint32_t n = *inout_n;
     const float density = clampf(lvl->forest_spore_density, 0.0f, 4.0f);
     const float drift = fmaxf(lvl->forest_spore_drift_speed, 0.0f);
-    const float quality = a->video_menu_high_quality ? 1.0f : 0.72f;
+    const float quality = video_quality_scale(a->video_menu_quality, 0.72f, 0.86f, 1.0f);
     int target_clusters = (int)lroundf((3.0f + density * 1.9f) * quality);
     if (target_clusters < 3) target_clusters = 3;
     if (target_clusters > FOREST_BG_SPORE_CLUSTER_CAP) target_clusters = FOREST_BG_SPORE_CLUSTER_CAP;
@@ -9882,7 +10037,7 @@ static void append_gpu_ice_snow(
     }
 
     uint32_t n = *inout_n;
-    const float quality = a->video_menu_high_quality ? 1.0f : 0.62f;
+    const float quality = video_quality_scale(a->video_menu_quality, 0.62f, 0.80f, 1.0f);
     const float density = clampf(lvl->ice_snow_density, 0.0f, 4.0f);
     int flake_count = (int)lroundf((100.0f + density * 220.0f) * quality);
     if (flake_count < 28) flake_count = 28;
@@ -10454,7 +10609,7 @@ static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t) {
     pc.p3[0] = cx - world_w * 0.5f;
     pc.p3[1] = cy - world_h * 0.5f;
     pc.p3[2] = a->fog_noise_scale;
-    pc.p3[3] = a->fog_flow_scale;
+    pc.p3[3] = video_quality_uses_cached_fog_noise(a->video_menu_quality) ? -a->fog_flow_scale : a->fog_flow_scale;
 
     int emit_n = 0;
     if (a->game.lives > 0 && emit_n < 4) {
@@ -10498,6 +10653,7 @@ static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t) {
 
     set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->fog_pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->fog_layout, 0, 1, &a->fog_desc_set, 0, NULL);
     vkCmdPushConstants(cmd, a->fog_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
 #endif
@@ -10556,7 +10712,7 @@ static void record_gpu_underwater(app* a, VkCommandBuffer cmd, float t) {
     pc.p6[0] = fmaxf(lvl->underwater_kelp_parallax_strength, 0.0f);
     pc.p6[1] = (float)a->swapchain_extent.width;
     pc.p6[2] = (float)a->swapchain_extent.height;
-    pc.p6[3] = a->video_menu_high_quality ? 1.0f : 0.0f;
+    pc.p6[3] = video_quality_uses_shader_high_quality(a->video_menu_quality) ? 1.0f : 0.0f;
     pc.p7[0] = lvl->underwater_kelp_tint_r;
     pc.p7[1] = lvl->underwater_kelp_tint_g;
     pc.p7[2] = lvl->underwater_kelp_tint_b;
@@ -10627,7 +10783,7 @@ static void record_gpu_fire(app* a, VkCommandBuffer cmd, float t) {
     pc.p6[0] = 1.000f;
     pc.p6[1] = 0.900f;
     pc.p6[2] = 0.640f;
-    pc.p6[3] = a->video_menu_high_quality ? 1.0f : 0.0f;
+    pc.p6[3] = video_quality_uses_shader_high_quality(a->video_menu_quality) ? 1.0f : 0.0f;
 
     pc.p7[0] = repeatf(t * 0.075f, 1.0f);
     pc.p7[1] = 0.5f + 0.5f * sinf(t * 0.31f);
@@ -10762,7 +10918,7 @@ static void record_gpu_forest_flora(app* a, VkCommandBuffer cmd, float t) {
 
     pc.p5[0] = clampf(lvl->forest_biolume_pulse_freq, 0.0f, 6.0f);
     pc.p5[1] = clampf(lvl->forest_foreground_occluder_alpha, 0.0f, 1.0f);
-    pc.p5[2] = a->video_menu_high_quality ? 1.0f : 0.0f;
+    pc.p5[2] = video_quality_uses_shader_high_quality(a->video_menu_quality) ? 1.0f : 0.0f;
 
     if (palette_mode == 1) {
         pc.p2[0] += 0.10f;
@@ -10894,7 +11050,7 @@ static void record_gpu_forest(app* a, VkCommandBuffer cmd, float t) {
 
     pc.p6[0] = clampf(lvl->forest_root_arch_density, 0.0f, 4.0f);
     pc.p6[1] = clampf(lvl->forest_godray_strength, 0.0f, 2.0f);
-    pc.p6[2] = a->video_menu_high_quality ? 1.0f : 0.0f;
+    pc.p6[2] = video_quality_uses_shader_high_quality(a->video_menu_quality) ? 1.0f : 0.0f;
     pc.p6[3] = 0.0f;
 
     pc.p7[0] = clampf(lvl->forest_branch_wobble_amp, 0.0f, 4.0f);
@@ -10978,7 +11134,7 @@ static void record_gpu_underwater_kelp(app* a, VkCommandBuffer cmd, float t) {
     pc.p6[0] = fmaxf(lvl->underwater_kelp_parallax_strength, 0.0f);
     pc.p6[1] = (float)a->underwater_kelp_w;
     pc.p6[2] = (float)a->underwater_kelp_h;
-    pc.p6[3] = a->video_menu_high_quality ? 1.0f : 0.0f;
+    pc.p6[3] = video_quality_uses_shader_high_quality(a->video_menu_quality) ? 1.0f : 0.0f;
     pc.p7[0] = lvl->underwater_kelp_tint_r;
     pc.p7[1] = lvl->underwater_kelp_tint_g;
     pc.p7[2] = lvl->underwater_kelp_tint_b;
@@ -11835,7 +11991,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         const int use_gpu_underwater = (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_UNDERWATER) ? 1 : 0;
         const int use_gpu_forest = (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_FOREST) ? 1 : 0;
         if (in_gameplay_scene && a->underwater_kelp_fb &&
-            ((use_gpu_underwater && !a->video_menu_high_quality) || use_gpu_forest)) {
+            ((use_gpu_underwater && !video_quality_uses_shader_high_quality(a->video_menu_quality)) || use_gpu_forest)) {
             if (use_gpu_forest && a->forest_cache_fb) {
                 VkClearValue forest_cache_clear = {.color = {{0.0f, 0.0f, 0.0f, 0.0f}}};
                 VkRenderPassBeginInfo forest_cache_rp = {
@@ -11920,7 +12076,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
         .menu_screen = a->menu.current,
         .video_menu_selected = a->video_menu_selected,
         .video_menu_fullscreen = a->video_menu_fullscreen,
-        .video_menu_high_quality = a->video_menu_high_quality,
+        .video_menu_quality = a->video_menu_quality,
         .palette_mode = menu_is_gameplay(&a->menu) ? gameplay_palette_mode(a) : a->palette_mode,
         .acoustics_selected = a->acoustics_selected,
         .acoustics_page = a->acoustics_page,
@@ -12411,34 +12567,45 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
     };
     vkCmdBeginRenderPass(cmd, &bloom_rp, VK_SUBPASS_CONTENTS_INLINE);
     set_viewport_scissor(cmd, a->bloom_w, a->bloom_h);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->bloom_pipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->post_layout, 0, 1, &a->post_desc_set, 0, NULL);
-
     vg_crt_profile crt;
     vg_get_crt_profile(a->vg, &crt);
+    const int crt_effects_enabled = video_quality_uses_crt_effects(a->video_menu_quality);
+    const int barrel_enabled = video_quality_uses_barrel(a->video_menu_quality);
+    const int particle_bloom_enabled =
+        a->particle_bloom_enabled && video_quality_uses_particle_bloom(a->video_menu_quality);
+    const float post_bloom_strength = crt_effects_enabled ? crt.bloom_strength : 0.0f;
+    const float post_bloom_radius = crt_effects_enabled ? crt.bloom_radius_px : 0.0f;
+    const float post_vignette = crt_effects_enabled ? crt.vignette_strength : 0.0f;
+    const float post_barrel = barrel_enabled ? crt.barrel_distortion : 0.0f;
+    const float post_scanline = crt_effects_enabled ? crt.scanline_strength : 0.0f;
+    const float post_noise = crt_effects_enabled ? crt.noise_strength : 0.0f;
     post_pc bloom_pc = {0};
     bloom_pc.p0[0] = 1.0f / (float)a->bloom_w;
     bloom_pc.p0[1] = 1.0f / (float)a->bloom_h;
-    bloom_pc.p0[2] = crt.bloom_strength;
-    bloom_pc.p0[3] = crt.bloom_radius_px * 0.5f;
-    bloom_pc.p1[0] = crt.vignette_strength;
-    bloom_pc.p1[1] = crt.barrel_distortion;
-    bloom_pc.p1[2] = crt.scanline_strength;
-    bloom_pc.p1[3] = crt.noise_strength;
+    bloom_pc.p0[2] = post_bloom_strength;
+    bloom_pc.p0[3] = post_bloom_radius * 0.5f;
+    bloom_pc.p1[0] = post_vignette;
+    bloom_pc.p1[1] = post_barrel;
+    bloom_pc.p1[2] = post_scanline;
+    bloom_pc.p1[3] = post_noise;
     bloom_pc.p2[0] = t;
     bloom_pc.p2[1] = a->show_crt_ui ? 1.0f : 0.0f;
     bloom_pc.p2[2] = 24.0f / (float)a->swapchain_extent.width;
     bloom_pc.p2[3] = 0.12f;
     bloom_pc.p3[0] = 0.44f;
     bloom_pc.p3[1] = 0.76f;
-    vkCmdPushConstants(cmd, a->post_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(bloom_pc), &bloom_pc);
-    vkCmdDraw(cmd, 3, 1, 0, 0);
+    if (crt_effects_enabled) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->bloom_pipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->post_layout, 0, 1, &a->post_desc_set, 0, NULL);
+        vkCmdPushConstants(cmd, a->post_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(bloom_pc), &bloom_pc);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+    }
     if (menu_is_gameplay(&a->menu)) {
         const leveldef_level* bloom_lvl = game_current_leveldef(&a->game);
-        if (bloom_lvl && bloom_lvl->background_style == LEVELDEF_BACKGROUND_FOREST) {
+        if (particle_bloom_enabled && bloom_lvl && bloom_lvl->background_style == LEVELDEF_BACKGROUND_FOREST) {
             record_gpu_particles_bloom(a, cmd, 0, 1);
         }
-        if (a->particle_bloom_enabled) {
+        if (particle_bloom_enabled) {
             record_gpu_particles_bloom(a, cmd, 1, (a->game.level_style == LEVEL_STYLE_REVOLVER) ? 0 : 1);
         }
     }
@@ -12460,12 +12627,12 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
     post_pc comp_pc = {0};
     comp_pc.p0[0] = 1.0f / (float)a->swapchain_extent.width;
     comp_pc.p0[1] = 1.0f / (float)a->swapchain_extent.height;
-    comp_pc.p0[2] = crt.bloom_strength;
-    comp_pc.p0[3] = crt.bloom_radius_px;
-    comp_pc.p1[0] = crt.vignette_strength;
-    comp_pc.p1[1] = crt.barrel_distortion;
-    comp_pc.p1[2] = crt.scanline_strength;
-    comp_pc.p1[3] = crt.noise_strength;
+    comp_pc.p0[2] = post_bloom_strength;
+    comp_pc.p0[3] = post_bloom_radius;
+    comp_pc.p1[0] = post_vignette;
+    comp_pc.p1[1] = post_barrel;
+    comp_pc.p1[2] = post_scanline;
+    comp_pc.p1[3] = post_noise;
     comp_pc.p2[0] = t;
     comp_pc.p2[1] = a->show_crt_ui ? 1.0f : 0.0f;
     comp_pc.p2[2] = 24.0f / (float)a->swapchain_extent.width;
@@ -12549,7 +12716,7 @@ int main(void) {
     sync_particle_tuning_text(&a);
     a.video_menu_selected = 1;
     a.video_menu_fullscreen = 0;
-    a.video_menu_high_quality = 0;
+    a.video_menu_quality = VIDEO_QUALITY_MEDIUM;
     a.palette_mode = 0;
     a.msaa_enabled = 1;
     a.video_dial_01[0] = 0.472223f; /* bloom strength */
