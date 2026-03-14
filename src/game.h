@@ -525,6 +525,7 @@ typedef struct game_state {
     float prev_camera_x;
     float camera_vx;
     float camera_vy;
+    float camera_bias_x;
     int level_style; /* enum level_style_id */
     int level_index;
     char current_level_name[64];

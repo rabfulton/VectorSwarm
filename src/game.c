@@ -2191,6 +2191,7 @@ static int set_level_index(game_state* g, int index) {
     g->camera_x = g->player.b.x;
     g->camera_y = g->world_h * 0.5f;
     g->prev_camera_x = g->camera_x;
+    g->camera_bias_x = g->world_w * 0.25f;
     g->shield_radius = 52.0f * su;
     g->mine_push_ax = 0.0f;
     g->mine_push_ay = 0.0f;
@@ -2676,6 +2677,7 @@ void game_init(game_state* g, float world_w, float world_h) {
     g->camera_x = g->player.b.x;
     g->camera_y = world_h * 0.5f;
     g->prev_camera_x = g->camera_x;
+    g->camera_bias_x = world_w * 0.25f;
     g->level_style = LEVEL_STYLE_DEFENDER;
     g->level_index = 0;
     g->current_level_name[0] = '\0';
@@ -3178,13 +3180,20 @@ static void game_update_camera(game_state* g, float dt) {
     float rear_bias = 0.25f;
     float spring_k = 18.0f;
     float damping = 8.2f;
+    float bias_tau = 0.12f;
     g->prev_camera_x = g->camera_x;
     if (level_uses_cylinder(g)) {
         rear_bias = 0.08f;
         spring_k = 26.0f;
         damping = 10.2f;
+        bias_tau = 0.08f;
     }
-    const float target_x = g->player.b.x + g->player.facing_x * (g->world_w * rear_bias);
+    {
+        const float target_bias = g->player.facing_x * (g->world_w * rear_bias);
+        const float bias_alpha = 1.0f - expf(-dt / fmaxf(bias_tau, 1.0e-4f));
+        g->camera_bias_x += (target_bias - g->camera_bias_x) * bias_alpha;
+    }
+    const float target_x = g->player.b.x + g->camera_bias_x;
     const float cam_ax = (target_x - g->camera_x) * spring_k - g->camera_vx * damping;
     g->camera_vx += cam_ax * dt;
     g->camera_x += g->camera_vx * dt;

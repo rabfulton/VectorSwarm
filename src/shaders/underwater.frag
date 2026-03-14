@@ -196,12 +196,6 @@ void main() {
     float t = pc.p0.z;
     float density = max(pc.p0.w, 0.0);
     float high_quality = step(0.5, pc.p6.w);
-
-    if (high_quality <= 0.5) {
-        out_color = texture(u_kelp, frag_px / vec2(w, h));
-        return;
-    }
-
     vec2 world_px = vec2(pc.p3.x, pc.p3.y) + frag_px;
     vec2 world_uv = world_px / vec2(max(pc.p4.z, 1.0), max(pc.p4.w, 1.0));
 
@@ -218,8 +212,16 @@ void main() {
     float ca = pow(nz, 2.2);
     ca *= max(pc.p1.w, 0.0) * density;
 
-    float bubbles = bubble_field_hq(world_px, t, pc.p4.x) * density;
-    vec4 kelp = kelp_field(world_px, t) * density;
+    float bubbles = mix(
+        bubble_field_fast(world_px, t, pc.p4.x),
+        bubble_field_hq(world_px, t, pc.p4.x),
+        high_quality
+    ) * density;
+    vec4 kelp = mix(
+        texture(u_kelp, frag_px / vec2(w, h)),
+        kelp_field(world_px, t),
+        high_quality
+    ) * density;
     float kelp_override = clamp(pc.p7.w, 0.0, 1.0);
     if (kelp_override > 0.0) {
         vec3 tint_rgb = max(pc.p7.rgb, vec3(0.0));

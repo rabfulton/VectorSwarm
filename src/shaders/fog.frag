@@ -56,8 +56,10 @@ void main() {
     float n0;
     float n1;
     if (use_cached_noise) {
-        vec4 s0 = texture(noise_tex, noise_uv * vec2(5.8, 2.8) + flow);
-        vec4 s1 = texture(noise_tex, noise_uv * vec2(11.2, 4.7) - flow * 1.7 + vec2(8.2, -4.4));
+        vec2 uv0 = noise_uv * (vec2(5.8, 2.8) / 5.0) + flow;
+        vec2 uv1 = noise_uv * (vec2(11.2, 4.7) / 5.0) - flow * 1.7 + vec2(8.2, -4.4) / 5.0;
+        vec4 s0 = texture(noise_tex, uv0);
+        vec4 s1 = texture(noise_tex, uv1);
         n0 = dot(s0.rgb, vec3(0.52, 0.33, 0.15));
         n1 = dot(s1.gba, vec3(0.42, 0.33, 0.25));
     } else {
