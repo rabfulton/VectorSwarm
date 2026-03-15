@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include <stdatomic.h>
 
-#define AUDIO_SPATIAL_EVENT_CAP 256
+#define AUDIO_SPATIAL_EVENT_CAP 1024
 #define AUDIO_COMBAT_VOICE_COUNT 24
 #define AUDIO_MAX_BEEP_SAMPLES 4096
 

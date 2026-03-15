@@ -167,6 +167,21 @@ static void game_set_player_dead(game_state* g, int queue_message);
 static void game_update_powerups(game_state* g, float dt);
 static void game_try_spawn_powerup_drop(game_state* g, float x, float y, float vx, float vy);
 
+static int game_audio_event_priority(game_audio_event_type type) {
+    switch (type) {
+        case GAME_AUDIO_EVENT_EXPLOSION:
+        case GAME_AUDIO_EVENT_EMP:
+        case GAME_AUDIO_EVENT_LIGHTNING:
+            return 3;
+        case GAME_AUDIO_EVENT_FX2:
+            return 2;
+        case GAME_AUDIO_EVENT_ENEMY_FIRE:
+        case GAME_AUDIO_EVENT_SEARCHLIGHT_FIRE:
+        default:
+            return 1;
+    }
+}
+
 static void game_queue_death_message(game_state* g) {
     if (!g || g->lives > 0) {
         return;
@@ -330,7 +345,6 @@ void game_on_enemy_destroyed(game_state* g, float x, float y, float vx, float vy
     }
     g->kills += 1;
     g->score += score_delta;
-    game_push_audio_event(g, GAME_AUDIO_EVENT_EXPLOSION, x, y);
     game_try_spawn_powerup_drop(g, x, y, vx, vy);
 }
 
@@ -1438,6 +1452,7 @@ static void explode_missile(game_state* g, homing_missile* m, int direct_hit) {
                 e->hp = hp_max - 1;
                 if (e->hp <= 0) {
                     e->active = 0;
+                    game_push_audio_event(g, GAME_AUDIO_EVENT_EXPLOSION, e->b.x, e->b.y);
                     game_on_enemy_destroyed(g, e->b.x, e->b.y, e->b.vx, e->b.vy, 100);
                 }
                 continue;
@@ -2053,6 +2068,7 @@ static void update_minefields(game_state* g, float dt) {
                     const float kill_vx = m->b.vx;
                     const float kill_vy = m->b.vy;
                     explode_mine(g, m, b->b.vx, b->b.vy);
+                    game_push_audio_event(g, GAME_AUDIO_EVENT_EXPLOSION, kill_x, kill_y);
                     game_on_enemy_destroyed(g, kill_x, kill_y, kill_vx, kill_vy, 120);
                 }
                 break;
@@ -2433,7 +2449,29 @@ static void explode_mine(game_state* g, mine* m, float impact_vx, float impact_v
 }
 
 static void game_push_audio_event(game_state* g, game_audio_event_type type, float x, float y) {
-    if (!g || g->audio_event_count < 0 || g->audio_event_count >= MAX_AUDIO_EVENTS) {
+    if (!g || g->audio_event_count < 0) {
+        return;
+    }
+    if (g->audio_event_count >= MAX_AUDIO_EVENTS) {
+        const int incoming_priority = game_audio_event_priority(type);
+        int replace_index = -1;
+        int replace_priority = incoming_priority;
+        for (int i = 0; i < MAX_AUDIO_EVENTS; ++i) {
+            const int existing_priority = game_audio_event_priority(g->audio_events[i].type);
+            if (existing_priority < replace_priority) {
+                replace_index = i;
+                replace_priority = existing_priority;
+                if (replace_priority == 1) {
+                    break;
+                }
+            }
+        }
+        if (replace_index < 0) {
+            return;
+        }
+        g->audio_events[replace_index].type = type;
+        g->audio_events[replace_index].x = x;
+        g->audio_events[replace_index].y = y;
         return;
     }
     game_audio_event* e = &g->audio_events[g->audio_event_count++];

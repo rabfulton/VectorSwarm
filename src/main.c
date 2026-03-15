@@ -2126,13 +2126,31 @@ static void trigger_fire_test(app* a) {
     atomic_fetch_add_explicit(&a->pending_fire_events, 1u, memory_order_acq_rel);
 }
 
+static float audio_wrap_delta(float a, float b, float period) {
+    float d;
+    if (period <= 0.0f) {
+        return a - b;
+    }
+    d = fmodf(a - b, period);
+    if (d > period * 0.5f) {
+        d -= period;
+    } else if (d < -period * 0.5f) {
+        d += period;
+    }
+    return d;
+}
+
 static void audio_spatial_params_from_world(const app* a, float event_x, float event_y, float* out_pan, float* out_gain) {
     if (!a || !out_pan || !out_gain) {
         return;
     }
 
-    const float dx = event_x - a->game.player.b.x;
+    float dx = event_x - a->game.player.b.x;
     const float dy = event_y - a->game.player.b.y;
+    if (a->game.render_style == LEVEL_RENDER_CYLINDER) {
+        const float period = fmaxf(a->game.world_w * 2.4f, 1.0f);
+        dx = audio_wrap_delta(event_x, a->game.player.b.x, period);
+    }
     const float pan_ref = fmaxf(a->game.world_w * 0.45f, 1.0f);
     const float near_r = fmaxf(fminf(a->game.world_w, a->game.world_h) * 0.10f, 1.0f);
     const float far_r = fmaxf(fmaxf(a->game.world_w, a->game.world_h) * 1.20f, near_r + 1.0f);
