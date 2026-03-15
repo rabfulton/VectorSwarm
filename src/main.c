@@ -903,6 +903,7 @@ static float repeatf(float v, float period) {
 
 static void set_tty_message(app* a, const char* msg);
 static void set_tty_level_intro_message(app* a);
+static int sync_structure_tile_resources_after_state_change(app* a, const char* context);
 
 static int env_flag_enabled(const char* name) {
     const char* v = getenv(name);
@@ -1100,6 +1101,7 @@ static void menu_open_screen(app* a, int screen, int return_screen) {
         a->level_editor.entry_active = 0;
         SDL_StopTextInput();
     }
+    (void)sync_structure_tile_resources_after_state_change(a, "menu open");
 }
 
 static void menu_back_screen(app* a) {
@@ -1119,6 +1121,7 @@ static void menu_back_screen(app* a) {
         a->level_editor.entry_active = 0;
         SDL_StopTextInput();
     }
+    (void)sync_structure_tile_resources_after_state_change(a, "menu back");
 }
 
 static int controls_ui_active(const app* a) {
@@ -2688,6 +2691,7 @@ static void destroy_structure_tile_resources(app* a);
 static void unload_structure_tile_pixels(app* a);
 static int sync_structure_tile_resources(app* a, int desired_atlas_id);
 static int sync_structure_tile_resources_for_current_state(app* a);
+static int sync_structure_tile_resources_after_state_change(app* a, const char* context);
 static int wait_for_all_in_flight_frames(app* a);
 static void reset_grid_sim_state(app* a);
 static int create_vg_context(app* a);
@@ -4485,6 +4489,7 @@ static void apply_level_editor_runtime(app* a) {
     if (level_editor_build_level(&a->level_editor, db, &lvl) &&
         game_apply_level_override(&a->game, &lvl, a->level_editor.level_name)) {
         a->level_editor_applied_revision = a->level_editor.edit_revision;
+        (void)sync_structure_tile_resources_after_state_change(a, "level editor apply");
     }
 }
 
@@ -4528,6 +4533,10 @@ static int handle_level_editor_mouse(app* a, int mouse_x, int mouse_y, int mouse
                 }
             }
             a->level_editor_applied_revision = a->level_editor.edit_revision;
+            if (!sync_structure_tile_resources_after_state_change(a, "level editor save")) {
+                set_tty_message(a, "level editor: structure tile sync failed");
+                return action != 0;
+            }
             set_tty_message(a, "level editor: saved");
         } else {
             set_tty_message(a, a->level_editor.status_text[0] ? a->level_editor.status_text : "level editor: save failed");
@@ -4549,6 +4558,10 @@ static int handle_level_editor_mouse(app* a, int mouse_x, int mouse_y, int mouse
                 }
             }
             a->level_editor_applied_revision = a->level_editor.edit_revision;
+            if (!sync_structure_tile_resources_after_state_change(a, "level editor save new")) {
+                set_tty_message(a, "level editor: structure tile sync failed");
+                return action != 0;
+            }
             set_tty_message(a, "level editor: saved new");
         } else {
             set_tty_message(a, a->level_editor.status_text[0] ? a->level_editor.status_text : "level editor: save new failed");
@@ -9290,6 +9303,14 @@ static int sync_structure_tile_resources_for_current_state(app* a) {
     return sync_structure_tile_resources(a, desired_structure_tile_atlas_id(a));
 }
 
+static int sync_structure_tile_resources_after_state_change(app* a, const char* context) {
+    if (!sync_structure_tile_resources_for_current_state(a)) {
+        fprintf(stderr, "render failure: structure tile sync failed after %s\n", context ? context : "state change");
+        return 0;
+    }
+    return 1;
+}
+
 /* Creates a second pipeline that uses the same layout/descriptor as the
    industry pipeline but with the revolver fragment shader.  Must be called
    after create_industry_resources() so industry_layout exists. */
@@ -13184,6 +13205,9 @@ int main(void) {
                 } else if (ev.key.keysym.sym == SDLK_n) {
                     game_cycle_level(&a.game);
                     a.force_clear_frames = 2;
+                    if (!sync_structure_tile_resources_after_state_change(&a, "level cycle")) {
+                        running = 0;
+                    }
                 } else if (ev.key.keysym.sym == SDLK_2) {
                     if (a.menu.current == APP_SCREEN_VIDEO) {
                         menu_back_screen(&a);
@@ -13862,19 +13886,6 @@ int main(void) {
         if (!check_vk(frame_wait_r, "vkWaitForFences")) break;
         if (hitch_trace_enabled || hitch_trace_ring_enabled) {
             hitch_after_frame_wait = SDL_GetPerformanceCounter();
-        }
-
-        {
-            const int desired_structure_atlas_id = desired_structure_tile_atlas_id(&a);
-            const int structure_tiles_need_sync =
-                (desired_structure_atlas_id != a.current_structure_tile_atlas_id) ||
-                (desired_structure_atlas_id != TEXTURE_ATLAS_NONE && !a.use_gpu_structure_tiles);
-            if (structure_tiles_need_sync) {
-                if (!sync_structure_tile_resources(&a, desired_structure_atlas_id)) {
-                    fprintf(stderr, "render failure: could not sync active structure tile atlas\n");
-                    break;
-                }
-            }
         }
 
         if (hitch_trace_enabled || hitch_trace_ring_enabled) {
