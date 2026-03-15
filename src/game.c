@@ -2102,7 +2102,7 @@ static void update_minefields(game_state* g, float dt) {
 }
 
 static float cylinder_period(const game_state* g) {
-    return fmaxf(g->world_w * 2.4f, 1.0f);
+    return fmaxf(1920.0f * gameplay_ui_scale(g) * 2.4f, 1.0f);
 }
 
 static int level_uses_cylinder(const game_state* g) {
@@ -2763,15 +2763,33 @@ void game_set_world_size(game_state* g, float world_w, float world_h) {
     if (!g || world_w <= 0.0f || world_h <= 0.0f) {
         return;
     }
+    const float old_w = g->world_w;
+    const float old_h = g->world_h;
+    const float old_su = gameplay_ui_scale(g);
     g->world_w = world_w;
     g->world_h = world_h;
+    const float new_su = gameplay_ui_scale(g);
+    const float width_scale = (old_w > 1.0e-4f) ? (world_w / old_w) : 1.0f;
     if (g->player.b.y < 0.0f) {
         g->player.b.y = 0.0f;
     }
     if (g->player.b.y > g->world_h) {
         g->player.b.y = g->world_h;
     }
+    if (old_h > 1.0e-4f) {
+        g->player.b.y *= (world_h / old_h);
+    }
+    if (old_su > 1.0e-4f && new_su > 0.0f) {
+        const float speed_scale = new_su / old_su;
+        g->player.b.vx *= speed_scale;
+        g->player.b.vy *= speed_scale;
+        g->player.thrust = 3300.0f * new_su;
+        g->player.max_speed = 760.0f * new_su;
+    }
     g->camera_y = g->world_h * 0.5f;
+    g->camera_x *= width_scale;
+    g->prev_camera_x *= width_scale;
+    g->camera_bias_x *= width_scale;
     g->shield_radius = 52.0f * gameplay_ui_scale(g);
     apply_level_runtime_config(g);
 }

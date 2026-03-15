@@ -7754,7 +7754,8 @@ static vg_result draw_high_plains_drifter_terrain_traditional(
 }
 
 static float cylinder_period(const game_state* g) {
-    return fmaxf(g->world_w * 2.4f, 1.0f);
+    const float su = fmaxf(0.5f, fminf(g->world_w / 1920.0f, g->world_h / 1080.0f));
+    return fmaxf(1920.0f * su * 2.4f, 1.0f);
 }
 
 static vg_vec2 project_cylinder_point(const game_state* g, float x, float y, float* depth01) {
