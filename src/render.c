@@ -10866,7 +10866,18 @@ static vg_result draw_boss_connector_struts(
     return VG_OK;
 }
 
-vg_result render_frame(vg_context* ctx, const game_state* g, const render_metrics* metrics) {
+vg_result render_frame(vg_context* ctx, const game_state* state, const render_metrics* metrics) {
+    const game_state* g = state;
+    game_state interpolated_state;
+    if (!ctx || !state || !metrics) {
+        return VG_ERROR_INVALID_ARGUMENT;
+    }
+    interpolated_state = *state;
+    {
+        const float alpha = clampf(metrics->sim_alpha, 0.0f, 1.0f);
+        interpolated_state.camera_x = lerpf(state->prev_camera_x, state->camera_x, alpha);
+    }
+    g = &interpolated_state;
     const palette_theme pal = get_palette_theme(metrics->palette_mode);
     int enemy_palette_mode = LEVELDEF_ENEMY_PALETTE_DEFAULT;
     {

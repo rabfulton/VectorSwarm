@@ -91,6 +91,7 @@
 #define APP_WIDTH 1280
 #define APP_HEIGHT 720
 #define APP_MAX_SWAPCHAIN_IMAGES 8
+#define APP_FRAME_OVERLAP 1
 #define ACOUSTICS_SCOPE_HISTORY_SAMPLES 8192
 #define GPU_PARTICLE_MAX_INSTANCES (MAX_PARTICLES + 2048u)
 #define FIRE_BG_PARTICLE_CAP 224
@@ -298,6 +299,47 @@ enum acoustics_page_id {
     ACOUSTICS_PAGE_COUNT = 5
 };
 
+typedef struct frame_sync {
+    VkSemaphore image_available;
+    VkSemaphore render_finished;
+    VkFence in_flight;
+} frame_sync;
+
+typedef struct submit_trace {
+    float record_ms;
+    float vg_ms;
+    float post_ms;
+    float end_cmd_ms;
+    float submit_ms;
+    float present_ms;
+} submit_trace;
+
+#define HITCH_TRACE_RING_CAP 512u
+#define HITCH_TRACE_LEVEL_NAME_CAP 64u
+
+typedef struct hitch_trace_frame {
+    float total_ms;
+    float dt_ms;
+    int sim_steps;
+    float sim_ms;
+    float audio_ui_ms;
+    float frame_wait_ms;
+    float structure_tiles_ms;
+    float acquire_ms;
+    float image_wait_ms;
+    float submit_present_ms;
+    submit_trace submit;
+    int menu_screen;
+    char level_name[HITCH_TRACE_LEVEL_NAME_CAP];
+} hitch_trace_frame;
+
+typedef struct hitch_trace_ring {
+    hitch_trace_frame frames[HITCH_TRACE_RING_CAP];
+    uint32_t write_index;
+    uint32_t count;
+    uint32_t dump_count;
+} hitch_trace_ring;
+
 typedef struct app {
     SDL_Window* window;
 
@@ -315,6 +357,7 @@ typedef struct app {
     uint32_t physical_device_vendor_id;
     VkPhysicalDeviceType physical_device_type;
     int gpu_vendor_is_intel;
+    int device_lost;
     char physical_device_name[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE];
 
     VkSwapchainKHR swapchain;
@@ -536,9 +579,9 @@ typedef struct app {
     VkCommandPool command_pool;
     VkCommandBuffer command_buffers[APP_MAX_SWAPCHAIN_IMAGES];
 
-    VkSemaphore image_available;
-    VkSemaphore render_finished;
-    VkFence in_flight;
+    frame_sync frames[APP_FRAME_OVERLAP];
+    VkFence images_in_flight[APP_MAX_SWAPCHAIN_IMAGES];
+    uint32_t current_frame;
 
     vg_context* vg;
     game_state game;
@@ -873,6 +916,85 @@ static int env_flag_enabled(const char* name) {
         return 1;
     }
     return 0;
+}
+
+static float env_float_or_default(const char* name, float fallback) {
+    const char* v = getenv(name);
+    char* end = NULL;
+    if (!v || !v[0]) {
+        return fallback;
+    }
+    const float parsed = strtof(v, &end);
+    if (end == v) {
+        return fallback;
+    }
+    return parsed;
+}
+
+static void hitch_trace_ring_push(hitch_trace_ring* ring, const hitch_trace_frame* frame) {
+    if (!ring || !frame) {
+        return;
+    }
+    ring->frames[ring->write_index] = *frame;
+    ring->write_index = (ring->write_index + 1u) % HITCH_TRACE_RING_CAP;
+    if (ring->count < HITCH_TRACE_RING_CAP) {
+        ring->count++;
+    }
+}
+
+static void hitch_trace_frame_print(FILE* out, const hitch_trace_frame* frame, uint32_t index) {
+    if (!out || !frame) {
+        return;
+    }
+    fprintf(
+        out,
+        "[%u] total=%.2fms dt=%.2fms sim_steps=%d sim=%.2f audio_ui=%.2f frame_wait=%.2f structure_tiles=%.2f acquire=%.2f image_wait=%.2f submit_present=%.2f record=%.2f vg=%.2f post=%.2f end_cmd=%.2f submit=%.2f present=%.2f menu=%d level=%s\n",
+        index,
+        frame->total_ms,
+        frame->dt_ms,
+        frame->sim_steps,
+        frame->sim_ms,
+        frame->audio_ui_ms,
+        frame->frame_wait_ms,
+        frame->structure_tiles_ms,
+        frame->acquire_ms,
+        frame->image_wait_ms,
+        frame->submit_present_ms,
+        frame->submit.record_ms,
+        frame->submit.vg_ms,
+        frame->submit.post_ms,
+        frame->submit.end_cmd_ms,
+        frame->submit.submit_ms,
+        frame->submit.present_ms,
+        frame->menu_screen,
+        frame->level_name
+    );
+}
+
+static void hitch_trace_ring_dump(hitch_trace_ring* ring, const hitch_trace_frame* trigger) {
+    if (!ring || !trigger) {
+        return;
+    }
+
+    char path[256];
+    const uint32_t dump_index = ring->dump_count++;
+    SDL_snprintf(path, sizeof(path), "/tmp/vtype_hitch_%u_%u.log", (unsigned int)SDL_GetTicks(), (unsigned int)dump_index);
+
+    FILE* out = fopen(path, "w");
+    if (!out) {
+        fprintf(stderr, "failed to open hitch trace dump: %s\n", path);
+        return;
+    }
+
+    fprintf(out, "# hitch trace dump trigger_total=%.2fms frames=%u\n", trigger->total_ms, ring->count);
+    const uint32_t start = (ring->write_index + HITCH_TRACE_RING_CAP - ring->count) % HITCH_TRACE_RING_CAP;
+    for (uint32_t i = 0; i < ring->count; ++i) {
+        const uint32_t slot = (start + i) % HITCH_TRACE_RING_CAP;
+        hitch_trace_frame_print(out, &ring->frames[slot], i);
+    }
+    fclose(out);
+
+    fprintf(stderr, "[hitch-dump] wrote %s trigger_total=%.2fms frames=%u\n", path, trigger->total_ms, ring->count);
 }
 
 static const char* k_control_action_labels[CONTROL_ACTION_COUNT] = {
@@ -2565,6 +2687,7 @@ static int create_structure_tile_resources(app* a);
 static void destroy_structure_tile_resources(app* a);
 static void unload_structure_tile_pixels(app* a);
 static int ensure_active_structure_tile_resources(app* a);
+static int wait_for_all_in_flight_frames(app* a);
 static void reset_grid_sim_state(app* a);
 static int create_vg_context(app* a);
 static void set_tty_message(app* a, const char* msg);
@@ -2598,6 +2721,25 @@ static int apply_video_mode(app* a);
 static void map_mouse_to_scene_coords(const app* a, int mouse_x, int mouse_y, float* out_x, float* out_y);
 
 static int audio_spatial_enqueue(app* a, uint8_t type, float pan, float gain);
+
+static int wait_for_all_in_flight_frames(app* a) {
+    if (!a || a->device == VK_NULL_HANDLE || a->device_lost) {
+        return 0;
+    }
+    for (uint32_t i = 0; i < APP_FRAME_OVERLAP; ++i) {
+        VkResult r = vkWaitForFences(a->device, 1, &a->frames[i].in_flight, VK_TRUE, UINT64_MAX);
+        if (r == VK_ERROR_DEVICE_LOST) {
+            a->device_lost = 1;
+        }
+        if (!check_vk(r, "vkWaitForFences(structure tiles)")) {
+            return 0;
+        }
+    }
+    for (uint32_t i = 0; i < APP_MAX_SWAPCHAIN_IMAGES; ++i) {
+        a->images_in_flight[i] = VK_NULL_HANDLE;
+    }
+    return 1;
+}
 
 static void begin_gpu_label(app* a, VkCommandBuffer cmd, const char* name, float r, float g, float b) {
     if (!a || !cmd || !name || !a->pfn_vkCmdBeginDebugUtilsLabelEXT) {
@@ -4914,7 +5056,7 @@ static void clear_scene_color_depth(VkCommandBuffer cmd, VkExtent2D extent) {
 
 static void cleanup(app* a) {
     g_shared_noise_tex_ready = 0;
-    if (a->device != VK_NULL_HANDLE) {
+    if (a->device != VK_NULL_HANDLE && !a->device_lost) {
         vkDeviceWaitIdle(a->device);
     }
     if (a->controls_gamepad) {
@@ -5115,9 +5257,11 @@ static void cleanup(app* a) {
     if (a->present_render_pass) vkDestroyRenderPass(a->device, a->present_render_pass, NULL);
     if (a->swapchain) vkDestroySwapchainKHR(a->device, a->swapchain, NULL);
 
-    if (a->in_flight) vkDestroyFence(a->device, a->in_flight, NULL);
-    if (a->render_finished) vkDestroySemaphore(a->device, a->render_finished, NULL);
-    if (a->image_available) vkDestroySemaphore(a->device, a->image_available, NULL);
+    for (uint32_t i = 0; i < APP_FRAME_OVERLAP; ++i) {
+        if (a->frames[i].in_flight) vkDestroyFence(a->device, a->frames[i].in_flight, NULL);
+        if (a->frames[i].render_finished) vkDestroySemaphore(a->device, a->frames[i].render_finished, NULL);
+        if (a->frames[i].image_available) vkDestroySemaphore(a->device, a->frames[i].image_available, NULL);
+    }
     if (a->command_pool) vkDestroyCommandPool(a->device, a->command_pool, NULL);
     if (a->device) vkDestroyDevice(a->device, NULL);
     if (a->surface) vkDestroySurfaceKHR(a->instance, a->surface, NULL);
@@ -5161,7 +5305,9 @@ static void destroy_render_runtime(app* a) {
     if (!a || a->device == VK_NULL_HANDLE) {
         return;
     }
-    vkDeviceWaitIdle(a->device);
+    if (!a->device_lost) {
+        vkDeviceWaitIdle(a->device);
+    }
 
     if (a->vg) {
         vg_context_destroy(a->vg);
@@ -5657,17 +5803,19 @@ static void destroy_render_runtime(app* a) {
         vkDestroySwapchainKHR(a->device, a->swapchain, NULL);
         a->swapchain = VK_NULL_HANDLE;
     }
-    if (a->in_flight) {
-        vkDestroyFence(a->device, a->in_flight, NULL);
-        a->in_flight = VK_NULL_HANDLE;
-    }
-    if (a->render_finished) {
-        vkDestroySemaphore(a->device, a->render_finished, NULL);
-        a->render_finished = VK_NULL_HANDLE;
-    }
-    if (a->image_available) {
-        vkDestroySemaphore(a->device, a->image_available, NULL);
-        a->image_available = VK_NULL_HANDLE;
+    for (uint32_t i = 0; i < APP_FRAME_OVERLAP; ++i) {
+        if (a->frames[i].in_flight) {
+            vkDestroyFence(a->device, a->frames[i].in_flight, NULL);
+            a->frames[i].in_flight = VK_NULL_HANDLE;
+        }
+        if (a->frames[i].render_finished) {
+            vkDestroySemaphore(a->device, a->frames[i].render_finished, NULL);
+            a->frames[i].render_finished = VK_NULL_HANDLE;
+        }
+        if (a->frames[i].image_available) {
+            vkDestroySemaphore(a->device, a->frames[i].image_available, NULL);
+            a->frames[i].image_available = VK_NULL_HANDLE;
+        }
     }
     if (a->command_pool) {
         vkDestroyCommandPool(a->device, a->command_pool, NULL);
@@ -5675,6 +5823,8 @@ static void destroy_render_runtime(app* a) {
     }
     memset(a->swapchain_images, 0, sizeof(a->swapchain_images));
     memset(a->command_buffers, 0, sizeof(a->command_buffers));
+    memset(a->images_in_flight, 0, sizeof(a->images_in_flight));
+    a->current_frame = 0;
     a->swapchain_image_count = 0;
 }
 
@@ -6306,9 +6456,16 @@ static int create_commands(app* a) {
 static int create_sync(app* a) {
     VkSemaphoreCreateInfo sem = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     VkFenceCreateInfo fence = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, .flags = VK_FENCE_CREATE_SIGNALED_BIT};
-    if (!check_vk(vkCreateSemaphore(a->device, &sem, NULL, &a->image_available), "vkCreateSemaphore(image_available)")) return 0;
-    if (!check_vk(vkCreateSemaphore(a->device, &sem, NULL, &a->render_finished), "vkCreateSemaphore(render_finished)")) return 0;
-    return check_vk(vkCreateFence(a->device, &fence, NULL, &a->in_flight), "vkCreateFence");
+    for (uint32_t i = 0; i < APP_FRAME_OVERLAP; ++i) {
+        if (!check_vk(vkCreateSemaphore(a->device, &sem, NULL, &a->frames[i].image_available), "vkCreateSemaphore(image_available)")) return 0;
+        if (!check_vk(vkCreateSemaphore(a->device, &sem, NULL, &a->frames[i].render_finished), "vkCreateSemaphore(render_finished)")) return 0;
+        if (!check_vk(vkCreateFence(a->device, &fence, NULL, &a->frames[i].in_flight), "vkCreateFence")) return 0;
+    }
+    for (uint32_t i = 0; i < APP_MAX_SWAPCHAIN_IMAGES; ++i) {
+        a->images_in_flight[i] = VK_NULL_HANDLE;
+    }
+    a->current_frame = 0;
+    return 1;
 }
 
 static int create_post_resources(app* a) {
@@ -9102,6 +9259,9 @@ static int ensure_active_structure_tile_resources(app* a) {
             return 1;
         }
     }
+    if (!wait_for_all_in_flight_frames(a)) {
+        return 0;
+    }
     destroy_structure_tile_resources(a);
     unload_structure_tile_pixels(a);
     if (desired_atlas_id == TEXTURE_ATLAS_NONE) {
@@ -9231,7 +9391,7 @@ static int create_vg_context(app* a) {
     desc.api.vulkan.graphics_queue_family = a->graphics_queue_family;
     desc.api.vulkan.render_pass = (void*)a->scene_render_pass;
     desc.api.vulkan.vertex_binding = 0;
-    desc.api.vulkan.max_frames_in_flight = 1;
+    desc.api.vulkan.max_frames_in_flight = APP_FRAME_OVERLAP;
     desc.api.vulkan.raster_samples = (uint32_t)scene_samples(a);
     desc.api.vulkan.has_stencil_attachment = format_has_stencil(a->scene_depth_format) ? 1u : 0u;
     vg_result vr = vg_context_create(&desc, &a->vg);
@@ -11969,7 +12129,25 @@ static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd) {
     }
 }
 
-static int record_submit_present(app* a, uint32_t image_index, float t, float dt, float fps) {
+static int record_submit_present(
+    app* a,
+    frame_sync* frame,
+    uint32_t image_index,
+    float t,
+    float dt,
+    float fps,
+    int* out_submitted,
+    submit_trace* trace
+) {
+    if (out_submitted) {
+        *out_submitted = 0;
+    }
+    if (trace) {
+        memset(trace, 0, sizeof(*trace));
+    }
+    const uint64_t perf_freq = (uint64_t)SDL_GetPerformanceFrequency();
+    const float perf_to_ms = (perf_freq > 0u) ? (1000.0f / (float)perf_freq) : 0.0f;
+    const uint64_t t0 = SDL_GetPerformanceCounter();
 
     VkCommandBuffer cmd = a->command_buffers[image_index];
     if (!check_vk(vkResetCommandBuffer(cmd, 0), "vkResetCommandBuffer")) return 0;
@@ -12049,8 +12227,8 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
     };
     vkCmdBeginRenderPass(cmd, &scene_rp, VK_SUBPASS_CONTENTS_INLINE);
 
-    vg_frame_desc frame = {.width = a->swapchain_extent.width, .height = a->swapchain_extent.height, .delta_time_s = dt, .command_buffer = (void*)cmd};
-    vg_result vr = vg_begin_frame(a->vg, &frame);
+    vg_frame_desc vg_frame = {.width = a->swapchain_extent.width, .height = a->swapchain_extent.height, .delta_time_s = dt, .command_buffer = (void*)cmd};
+    vg_result vr = vg_begin_frame(a->vg, &vg_frame);
     if (vr != VG_OK) {
         fprintf(stderr, "VG failure: vg_begin_frame -> %s (%d)\n", vg_result_string(vr), (int)vr);
         return 0;
@@ -12065,6 +12243,7 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
     render_metrics metrics = {
         .fps = fps,
         .dt = dt,
+        .sim_alpha = clampf(a->sim_accum_s / fmaxf(a->sim_fixed_dt_s, 1.0e-6f), 0.0f, 1.0f),
         .show_fps = a->show_fps_counter,
         .ui_time_s = (float)SDL_GetTicks() * 0.001f,
         .force_clear = (a->force_clear_frames > 0) ? 1 : 0,
@@ -12549,12 +12728,14 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
     if (a->force_clear_frames > 0) {
         a->force_clear_frames--;
     }
+    const uint64_t t_before_vg_end = SDL_GetPerformanceCounter();
     vr = vg_end_frame(a->vg);
     if (vr != VG_OK) {
         fprintf(stderr, "VG failure: vg_end_frame -> %s (%d)\n", vg_result_string(vr), (int)vr);
         return 0;
     }
     vkCmdEndRenderPass(cmd);
+    const uint64_t t_after_scene = SDL_GetPerformanceCounter();
 
     VkClearValue bloom_clear = {.color = {{0.0f, 0.0f, 0.0f, 1.0f}}};
     VkRenderPassBeginInfo bloom_rp = {
@@ -12642,33 +12823,56 @@ static int record_submit_present(app* a, uint32_t image_index, float t, float dt
     vkCmdPushConstants(cmd, a->post_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(comp_pc), &comp_pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRenderPass(cmd);
+    const uint64_t t_after_post = SDL_GetPerformanceCounter();
 
     if (!check_vk(vkEndCommandBuffer(cmd), "vkEndCommandBuffer")) return 0;
-    if (!check_vk(vkResetFences(a->device, 1, &a->in_flight), "vkResetFences")) return 0;
+    const uint64_t t_after_end_cmd = SDL_GetPerformanceCounter();
+    if (!check_vk(vkResetFences(a->device, 1, &frame->in_flight), "vkResetFences")) return 0;
 
     VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSubmitInfo submit = {
         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
         .waitSemaphoreCount = 1,
-        .pWaitSemaphores = &a->image_available,
+        .pWaitSemaphores = &frame->image_available,
         .pWaitDstStageMask = &wait_stage,
         .commandBufferCount = 1,
         .pCommandBuffers = &cmd,
         .signalSemaphoreCount = 1,
-        .pSignalSemaphores = &a->render_finished
+        .pSignalSemaphores = &frame->render_finished
     };
-    VkResult submit_r = vkQueueSubmit(a->graphics_queue, 1, &submit, a->in_flight);
+    const uint64_t t_before_submit = SDL_GetPerformanceCounter();
+    VkResult submit_r = vkQueueSubmit(a->graphics_queue, 1, &submit, frame->in_flight);
+    const uint64_t t_after_submit = SDL_GetPerformanceCounter();
+    if (submit_r == VK_ERROR_DEVICE_LOST) {
+        a->device_lost = 1;
+    }
     if (!check_vk(submit_r, "vkQueueSubmit")) return 0;
+    if (out_submitted) {
+        *out_submitted = 1;
+    }
 
     VkPresentInfoKHR present = {
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
         .waitSemaphoreCount = 1,
-        .pWaitSemaphores = &a->render_finished,
+        .pWaitSemaphores = &frame->render_finished,
         .swapchainCount = 1,
         .pSwapchains = &a->swapchain,
         .pImageIndices = &image_index
     };
+    const uint64_t t_before_present = SDL_GetPerformanceCounter();
     VkResult pr = vkQueuePresentKHR(a->present_queue, &present);
+    const uint64_t t_after_present = SDL_GetPerformanceCounter();
+    if (pr == VK_ERROR_DEVICE_LOST) {
+        a->device_lost = 1;
+    }
+    if (trace) {
+        trace->record_ms = (float)(t_before_vg_end - t0) * perf_to_ms;
+        trace->vg_ms = (float)(t_after_scene - t_before_vg_end) * perf_to_ms;
+        trace->post_ms = (float)(t_after_post - t_after_scene) * perf_to_ms;
+        trace->end_cmd_ms = (float)(t_after_end_cmd - t_after_post) * perf_to_ms;
+        trace->submit_ms = (float)(t_after_submit - t_before_submit) * perf_to_ms;
+        trace->present_ms = (float)(t_after_present - t_before_present) * perf_to_ms;
+    }
     if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR) {
         a->swapchain_needs_recreate = 1;
         return 0;
@@ -12911,8 +13115,23 @@ int main(void) {
     float freq = (float)SDL_GetPerformanceFrequency();
     float fps_smoothed = 60.0f;
     int running = 1;
+    const int hitch_trace_enabled = env_flag_enabled("VTYPE_HITCH_TRACE");
+    const int hitch_trace_ring_enabled = env_flag_enabled("VTYPE_TRACE_RING");
+    const float hitch_trace_ms = env_float_or_default("VTYPE_HITCH_TRACE_MS", 24.0f);
+    const float hitch_trace_trigger_ms = env_float_or_default("VTYPE_TRACE_TRIGGER_MS", hitch_trace_ms);
+    hitch_trace_ring hitch_ring;
+    memset(&hitch_ring, 0, sizeof(hitch_ring));
 
     while (running) {
+        uint64_t hitch_frame_start = 0u;
+        uint64_t hitch_after_sim = 0u;
+        uint64_t hitch_after_audio_ui = 0u;
+        uint64_t hitch_after_frame_wait = 0u;
+        uint64_t hitch_after_structure_tiles = 0u;
+        uint64_t hitch_after_acquire = 0u;
+        uint64_t hitch_after_image_wait = 0u;
+        uint64_t hitch_after_submit_present = 0u;
+        int sim_steps = 0;
         int restart_pressed = 0;
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -13523,6 +13742,9 @@ int main(void) {
             a.acoustics_mixtape_prev_fire = 0;
         }
 
+        if (hitch_trace_enabled || hitch_trace_ring_enabled) {
+            hitch_frame_start = SDL_GetPerformanceCounter();
+        }
         uint64_t now = SDL_GetPerformanceCounter();
         float dt_raw = (float)(now - last) / freq;
         last = now;
@@ -13530,7 +13752,6 @@ int main(void) {
         if (dt_raw > 0.25f) dt_raw = 0.25f;
         if (!controls_ui_active(&a)) {
             const float max_sim_catchup_s = a.sim_fixed_dt_s * (float)a.sim_max_catchup_steps;
-            int sim_steps = 0;
             mod_sync_gameplay_playlist(&a);
             sync_shipyard_weapon_to_game(&a);
             a.sim_accum_s += dt_raw;
@@ -13545,6 +13766,9 @@ int main(void) {
             update_level_start_teletype(&a);
         } else {
             a.sim_accum_s = 0.0f;
+        }
+        if (hitch_trace_enabled || hitch_trace_ring_enabled) {
+            hitch_after_sim = SDL_GetPerformanceCounter();
         }
         if (a.audio_ready) {
             const int thrust_on = (!controls_ui_active(&a)) &&
@@ -13613,16 +13837,30 @@ int main(void) {
 
         float fps_inst = 1.0f / dt_raw;
         fps_smoothed += (fps_inst - fps_smoothed) * 0.10f;
+        if (hitch_trace_enabled || hitch_trace_ring_enabled) {
+            hitch_after_audio_ui = SDL_GetPerformanceCounter();
+        }
 
-        if (!check_vk(vkWaitForFences(a.device, 1, &a.in_flight, VK_TRUE, UINT64_MAX), "vkWaitForFences")) break;
+        frame_sync* frame = &a.frames[a.current_frame];
+        VkResult frame_wait_r = vkWaitForFences(a.device, 1, &frame->in_flight, VK_TRUE, UINT64_MAX);
+        if (frame_wait_r == VK_ERROR_DEVICE_LOST) {
+            a.device_lost = 1;
+        }
+        if (!check_vk(frame_wait_r, "vkWaitForFences")) break;
+        if (hitch_trace_enabled || hitch_trace_ring_enabled) {
+            hitch_after_frame_wait = SDL_GetPerformanceCounter();
+        }
 
         if (!ensure_active_structure_tile_resources(&a)) {
             fprintf(stderr, "render failure: could not load active structure tile atlas\n");
             break;
         }
+        if (hitch_trace_enabled || hitch_trace_ring_enabled) {
+            hitch_after_structure_tiles = SDL_GetPerformanceCounter();
+        }
 
         uint32_t image_index = 0;
-        VkResult ar = vkAcquireNextImageKHR(a.device, a.swapchain, UINT64_MAX, a.image_available, VK_NULL_HANDLE, &image_index);
+        VkResult ar = vkAcquireNextImageKHR(a.device, a.swapchain, UINT64_MAX, frame->image_available, VK_NULL_HANDLE, &image_index);
         if (ar != VK_SUCCESS) {
             if (ar == VK_ERROR_OUT_OF_DATE_KHR || ar == VK_SUBOPTIMAL_KHR) {
                 if (!recreate_render_runtime(&a)) {
@@ -13635,10 +13873,30 @@ int main(void) {
             }
             break;
         }
+        if (hitch_trace_enabled || hitch_trace_ring_enabled) {
+            hitch_after_acquire = SDL_GetPerformanceCounter();
+        }
+        if (a.images_in_flight[image_index] != VK_NULL_HANDLE && a.images_in_flight[image_index] != frame->in_flight) {
+            VkResult image_wait_r = vkWaitForFences(a.device, 1, &a.images_in_flight[image_index], VK_TRUE, UINT64_MAX);
+            if (image_wait_r == VK_ERROR_DEVICE_LOST) {
+                a.device_lost = 1;
+            }
+            if (!check_vk(image_wait_r, "vkWaitForFences(image)")) {
+                break;
+            }
+        }
+        if (hitch_trace_enabled || hitch_trace_ring_enabled) {
+            hitch_after_image_wait = SDL_GetPerformanceCounter();
+        }
 
         float t = (float)SDL_GetTicks() * 0.001f;
         a.swapchain_needs_recreate = 0;
-        if (!record_submit_present(&a, image_index, t, dt_raw, fps_smoothed)) {
+        int submitted = 0;
+        submit_trace submit_trace_data;
+        if (!record_submit_present(&a, frame, image_index, t, dt_raw, fps_smoothed, &submitted, &submit_trace_data)) {
+            if (submitted) {
+                a.images_in_flight[image_index] = frame->in_flight;
+            }
             if (a.swapchain_needs_recreate) {
                 if (!recreate_render_runtime(&a)) {
                     fprintf(stderr, "render failure: swapchain flagged for recreate, but recreate failed\n");
@@ -13648,6 +13906,56 @@ int main(void) {
             }
             fprintf(stderr, "render failure: record_submit_present returned 0\n");
             break;
+        }
+        a.images_in_flight[image_index] = frame->in_flight;
+        a.current_frame = (a.current_frame + 1u) % APP_FRAME_OVERLAP;
+        if (hitch_trace_enabled || hitch_trace_ring_enabled) {
+            hitch_after_submit_present = SDL_GetPerformanceCounter();
+            hitch_trace_frame hitch_frame;
+            memset(&hitch_frame, 0, sizeof(hitch_frame));
+            hitch_frame.total_ms = (float)(hitch_after_submit_present - hitch_frame_start) * 1000.0f / freq;
+            hitch_frame.dt_ms = dt_raw * 1000.0f;
+            hitch_frame.sim_steps = sim_steps;
+            hitch_frame.sim_ms = (float)(hitch_after_sim - hitch_frame_start) * 1000.0f / freq;
+            hitch_frame.audio_ui_ms = (float)(hitch_after_audio_ui - hitch_after_sim) * 1000.0f / freq;
+            hitch_frame.frame_wait_ms = (float)(hitch_after_frame_wait - hitch_after_audio_ui) * 1000.0f / freq;
+            hitch_frame.structure_tiles_ms = (float)(hitch_after_structure_tiles - hitch_after_frame_wait) * 1000.0f / freq;
+            hitch_frame.acquire_ms = (float)(hitch_after_acquire - hitch_after_structure_tiles) * 1000.0f / freq;
+            hitch_frame.image_wait_ms = (float)(hitch_after_image_wait - hitch_after_acquire) * 1000.0f / freq;
+            hitch_frame.submit_present_ms = (float)(hitch_after_submit_present - hitch_after_image_wait) * 1000.0f / freq;
+            hitch_frame.submit = submit_trace_data;
+            hitch_frame.menu_screen = a.menu.current;
+            SDL_strlcpy(hitch_frame.level_name, game_current_level_name(&a.game), sizeof(hitch_frame.level_name));
+            if (hitch_trace_ring_enabled) {
+                hitch_trace_ring_push(&hitch_ring, &hitch_frame);
+            }
+            if (hitch_trace_enabled && hitch_frame.total_ms >= hitch_trace_ms) {
+                fprintf(
+                    stderr,
+                    "[hitch] total=%.2fms dt=%.2fms sim_steps=%d sim=%.2f audio_ui=%.2f frame_wait=%.2f structure_tiles=%.2f acquire=%.2f image_wait=%.2f submit_present=%.2f record=%.2f vg=%.2f post=%.2f end_cmd=%.2f submit=%.2f present=%.2f menu=%d level=%s\n",
+                    hitch_frame.total_ms,
+                    hitch_frame.dt_ms,
+                    hitch_frame.sim_steps,
+                    hitch_frame.sim_ms,
+                    hitch_frame.audio_ui_ms,
+                    hitch_frame.frame_wait_ms,
+                    hitch_frame.structure_tiles_ms,
+                    hitch_frame.acquire_ms,
+                    hitch_frame.image_wait_ms,
+                    hitch_frame.submit_present_ms,
+                    hitch_frame.submit.record_ms,
+                    hitch_frame.submit.vg_ms,
+                    hitch_frame.submit.post_ms,
+                    hitch_frame.submit.end_cmd_ms,
+                    hitch_frame.submit.submit_ms,
+                    hitch_frame.submit.present_ms,
+                    hitch_frame.menu_screen,
+                    hitch_frame.level_name
+                );
+            }
+            if (hitch_trace_ring_enabled && hitch_frame.total_ms >= hitch_trace_trigger_ms) {
+                hitch_trace_ring_dump(&hitch_ring, &hitch_frame);
+            }
         }
     }
 

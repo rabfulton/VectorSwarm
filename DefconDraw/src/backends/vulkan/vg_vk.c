@@ -19,6 +19,8 @@
 #include "line_vert_spv.h"
 #include "line_frag_spv.h"
 #endif
+
+#define VG_VK_INITIAL_FRAME_UPLOAD_BYTES (8u * 1024u * 1024u)
 #endif
 
 typedef struct vg_vk_draw_cmd {
@@ -36,6 +38,11 @@ typedef struct vg_vk_gpu_buffer {
     VkDeviceMemory memory;
     VkDeviceSize size_bytes;
 } vg_vk_gpu_buffer;
+
+typedef struct vg_vk_frame_upload {
+    vg_vk_gpu_buffer vertex_buffer;
+    void* mapped;
+} vg_vk_frame_upload;
 
 typedef struct vg_vk_push_constants {
     float color[4];
@@ -82,9 +89,10 @@ typedef struct vg_vk_backend {
     VkRenderPass render_pass;
     VkCommandBuffer command_buffer;
     uint32_t vertex_binding;
-    uint32_t upload_memory_type_index;
     int gpu_ready;
-    vg_vk_gpu_buffer vertex_buffer;
+    vg_vk_frame_upload* frame_uploads;
+    uint32_t frame_upload_count;
+    uint32_t frame_slot;
 #if VG_HAS_VK_INTERNAL_PIPELINE
     VkPipelineLayout pipeline_layout;
     vg_vk_pipeline_entry pipeline_cache[32];
@@ -265,51 +273,79 @@ static void vg_vk_destroy_gpu_buffer(vg_vk_backend* backend, vg_vk_gpu_buffer* b
     buf->size_bytes = 0;
 }
 
-static vg_result vg_vk_ensure_vertex_buffer(vg_vk_backend* backend, VkDeviceSize required_size) {
-    if (!backend || !backend->gpu_ready) {
+static void vg_vk_destroy_frame_upload(vg_vk_backend* backend, vg_vk_frame_upload* upload) {
+    if (!backend || !upload) {
+        return;
+    }
+    if (upload->mapped && backend->device && upload->vertex_buffer.memory != VK_NULL_HANDLE) {
+        vkUnmapMemory(backend->device, upload->vertex_buffer.memory);
+    }
+    upload->mapped = NULL;
+    vg_vk_destroy_gpu_buffer(backend, &upload->vertex_buffer);
+}
+
+static vg_result vg_vk_create_frame_upload(
+    vg_vk_backend* backend,
+    vg_vk_frame_upload* upload,
+    VkDeviceSize size_bytes
+) {
+    if (!backend || !backend->gpu_ready || !upload) {
         return VG_ERROR_INVALID_ARGUMENT;
     }
-    if (required_size == 0) {
-        required_size = sizeof(vg_vec2);
-    }
-    if (backend->vertex_buffer.size_bytes >= required_size) {
-        return VG_OK;
+    if (size_bytes == 0) {
+        size_bytes = sizeof(vg_vec2);
     }
 
-    vkDeviceWaitIdle(backend->device);
-    vg_vk_destroy_gpu_buffer(backend, &backend->vertex_buffer);
+    vg_vk_destroy_frame_upload(backend, upload);
 
     VkBufferCreateInfo buffer_info = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-        .size = required_size,
+        .size = size_bytes,
         .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE
     };
 
-    if (vkCreateBuffer(backend->device, &buffer_info, NULL, &backend->vertex_buffer.buffer) != VK_SUCCESS) {
+    if (vkCreateBuffer(backend->device, &buffer_info, NULL, &upload->vertex_buffer.buffer) != VK_SUCCESS) {
         return VG_ERROR_BACKEND;
     }
 
     VkMemoryRequirements req = {0};
-    vkGetBufferMemoryRequirements(backend->device, backend->vertex_buffer.buffer, &req);
+    vkGetBufferMemoryRequirements(backend->device, upload->vertex_buffer.buffer, &req);
+
+    VkPhysicalDeviceMemoryProperties props = {0};
+    vkGetPhysicalDeviceMemoryProperties(backend->physical_device, &props);
+    uint32_t memory_type = vg_vk_find_memory_type(
+        &props,
+        req.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+    );
+    if (memory_type == UINT32_MAX) {
+        vg_vk_destroy_gpu_buffer(backend, &upload->vertex_buffer);
+        return VG_ERROR_BACKEND;
+    }
 
     VkMemoryAllocateInfo alloc_info = {
         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
         .allocationSize = req.size,
-        .memoryTypeIndex = backend->upload_memory_type_index
+        .memoryTypeIndex = memory_type
     };
 
-    if (vkAllocateMemory(backend->device, &alloc_info, NULL, &backend->vertex_buffer.memory) != VK_SUCCESS) {
-        vg_vk_destroy_gpu_buffer(backend, &backend->vertex_buffer);
+    if (vkAllocateMemory(backend->device, &alloc_info, NULL, &upload->vertex_buffer.memory) != VK_SUCCESS) {
+        vg_vk_destroy_gpu_buffer(backend, &upload->vertex_buffer);
         return VG_ERROR_BACKEND;
     }
 
-    if (vkBindBufferMemory(backend->device, backend->vertex_buffer.buffer, backend->vertex_buffer.memory, 0) != VK_SUCCESS) {
-        vg_vk_destroy_gpu_buffer(backend, &backend->vertex_buffer);
+    if (vkBindBufferMemory(backend->device, upload->vertex_buffer.buffer, upload->vertex_buffer.memory, 0) != VK_SUCCESS) {
+        vg_vk_destroy_gpu_buffer(backend, &upload->vertex_buffer);
         return VG_ERROR_BACKEND;
     }
 
-    backend->vertex_buffer.size_bytes = req.size;
+    if (vkMapMemory(backend->device, upload->vertex_buffer.memory, 0, req.size, 0, &upload->mapped) != VK_SUCCESS) {
+        vg_vk_destroy_gpu_buffer(backend, &upload->vertex_buffer);
+        return VG_ERROR_BACKEND;
+    }
+
+    upload->vertex_buffer.size_bytes = req.size;
     return VG_OK;
 }
 
@@ -321,19 +357,20 @@ static vg_result vg_vk_upload_vertices(vg_vk_backend* backend) {
         return VG_OK;
     }
 
-    VkDeviceSize bytes = (VkDeviceSize)backend->stroke_vertex_count * (VkDeviceSize)sizeof(vg_vec2);
-    vg_result ensure = vg_vk_ensure_vertex_buffer(backend, bytes);
-    if (ensure != VG_OK) {
-        return ensure;
-    }
-
-    void* mapped = NULL;
-    if (vkMapMemory(backend->device, backend->vertex_buffer.memory, 0, bytes, 0, &mapped) != VK_SUCCESS) {
+    if (!backend->frame_uploads || backend->frame_upload_count == 0u) {
         return VG_ERROR_BACKEND;
     }
 
-    memcpy(mapped, backend->stroke_vertices, (size_t)bytes);
-    vkUnmapMemory(backend->device, backend->vertex_buffer.memory);
+    VkDeviceSize bytes = (VkDeviceSize)backend->stroke_vertex_count * (VkDeviceSize)sizeof(vg_vec2);
+    vg_vk_frame_upload* upload = &backend->frame_uploads[backend->frame_slot];
+    if (upload->mapped == NULL || upload->vertex_buffer.buffer == VK_NULL_HANDLE) {
+        return VG_ERROR_BACKEND;
+    }
+    if (upload->vertex_buffer.size_bytes < bytes) {
+        return VG_ERROR_BACKEND;
+    }
+
+    memcpy(upload->mapped, backend->stroke_vertices, (size_t)bytes);
     return VG_OK;
 }
 
@@ -882,7 +919,7 @@ static vg_result vg_vk_submit_recorded_draws(vg_vk_backend* backend) {
                 backend->command_buffer,
                 backend->vertex_binding,
                 1,
-                &backend->vertex_buffer.buffer,
+                &backend->frame_uploads[backend->frame_slot].vertex_buffer.buffer,
                 &offset
             );
 
@@ -1441,9 +1478,14 @@ static void vg_vk_destroy(vg_context* ctx) {
 #if VG_HAS_VK_INTERNAL_PIPELINE
         vg_vk_destroy_pipelines(backend);
 #endif
-        vg_vk_destroy_gpu_buffer(backend, &backend->vertex_buffer);
+        if (backend->frame_uploads) {
+            for (uint32_t i = 0; i < backend->frame_upload_count; ++i) {
+                vg_vk_destroy_frame_upload(backend, &backend->frame_uploads[i]);
+            }
+        }
     }
 #endif
+    free(backend ? backend->frame_uploads : NULL);
     free(backend->stroke_vertices);
     free(backend->draws);
     free(backend);
@@ -1457,6 +1499,11 @@ static vg_result vg_vk_begin_frame(vg_context* ctx, const vg_frame_desc* frame) 
     }
 
     backend->frame = *frame;
+    if (backend->frame_upload_count > 0u) {
+        backend->frame_slot = (uint32_t)(backend->frame_index % backend->frame_upload_count);
+    } else {
+        backend->frame_slot = 0u;
+    }
     backend->frame_index++;
     backend->stroke_vertex_count = 0;
     backend->draw_count = 0;
@@ -1696,18 +1743,27 @@ vg_result vg_vk_backend_create(vg_context* ctx) {
     backend->vertex_binding = backend->desc.vertex_binding;
 
     if (backend->physical_device != VK_NULL_HANDLE && backend->device != VK_NULL_HANDLE) {
-        VkPhysicalDeviceMemoryProperties props = {0};
-        vkGetPhysicalDeviceMemoryProperties(backend->physical_device, &props);
-
-        uint32_t all_bits = 0xffffffffu;
-        uint32_t memory_type = vg_vk_find_memory_type(
-            &props,
-            all_bits,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
-        );
-        if (memory_type != UINT32_MAX) {
-            backend->upload_memory_type_index = memory_type;
+        backend->frame_upload_count = backend->desc.max_frames_in_flight;
+        backend->frame_uploads = (vg_vk_frame_upload*)calloc((size_t)backend->frame_upload_count, sizeof(*backend->frame_uploads));
+        if (backend->frame_uploads) {
             backend->gpu_ready = 1;
+            for (uint32_t i = 0; i < backend->frame_upload_count; ++i) {
+                vg_result upload_res = vg_vk_create_frame_upload(
+                    backend,
+                    &backend->frame_uploads[i],
+                    (VkDeviceSize)VG_VK_INITIAL_FRAME_UPLOAD_BYTES
+                );
+                if (upload_res != VG_OK) {
+                    for (uint32_t j = 0; j < i; ++j) {
+                        vg_vk_destroy_frame_upload(backend, &backend->frame_uploads[j]);
+                    }
+                    free(backend->frame_uploads);
+                    backend->frame_uploads = NULL;
+                    backend->frame_upload_count = 0u;
+                    backend->gpu_ready = 0;
+                    break;
+                }
+            }
         }
     }
 

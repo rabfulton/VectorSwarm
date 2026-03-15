@@ -55,6 +55,7 @@
 typedef struct render_metrics {
     float fps;
     float dt;
+    float sim_alpha;
     int show_fps;
     float ui_time_s;
     int force_clear;
