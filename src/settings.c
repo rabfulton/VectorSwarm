@@ -209,8 +209,8 @@ int settings_load(app_settings* io, const settings_resolution* resolutions, int 
     if (quality < VIDEO_QUALITY_LOW) {
         quality = VIDEO_QUALITY_LOW;
     }
-    if (quality > VIDEO_QUALITY_HIGH) {
-        quality = VIDEO_QUALITY_HIGH;
+    if (quality > VIDEO_QUALITY_MAX) {
+        quality = VIDEO_QUALITY_MAX;
     }
     io->quality = quality;
     io->controls_use_gamepad = controls_use_gamepad ? 1 : 0;

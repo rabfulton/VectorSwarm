@@ -4242,6 +4242,8 @@ static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render
             quality_label = "QUALITY LOW";
         } else if (metrics->video_menu_quality == VIDEO_QUALITY_MEDIUM) {
             quality_label = "QUALITY MED";
+        } else if (metrics->video_menu_quality == VIDEO_QUALITY_MAX) {
+            quality_label = "QUALITY MAX";
         }
         r = draw_lcars_text_button(ctx, b, quality_label, hover, 1, ui, &pal, &frame, &txt);
         if (r != VG_OK) {

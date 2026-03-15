@@ -816,9 +816,21 @@ typedef struct app {
 } app;
 
 static VkSampleCountFlagBits pick_msaa_samples(app* a) {
-    (void)a;
-    /* DefconDraw Vulkan backend currently builds its internal line pipeline at 1x samples.
-       Keep the scene pass at 1x to avoid render-pass/pipeline sample mismatches. */
+    if (!a || a->physical_device == VK_NULL_HANDLE) {
+        return VK_SAMPLE_COUNT_1_BIT;
+    }
+    VkPhysicalDeviceProperties props;
+    memset(&props, 0, sizeof(props));
+    vkGetPhysicalDeviceProperties(a->physical_device, &props);
+    VkSampleCountFlags counts =
+        props.limits.framebufferColorSampleCounts &
+        props.limits.framebufferDepthSampleCounts;
+    if (counts & VK_SAMPLE_COUNT_4_BIT) {
+        return VK_SAMPLE_COUNT_4_BIT;
+    }
+    if (counts & VK_SAMPLE_COUNT_2_BIT) {
+        return VK_SAMPLE_COUNT_2_BIT;
+    }
     return VK_SAMPLE_COUNT_1_BIT;
 }
 
@@ -826,8 +838,8 @@ static int clamp_video_quality(int quality) {
     if (quality < VIDEO_QUALITY_LOW) {
         return VIDEO_QUALITY_LOW;
     }
-    if (quality > VIDEO_QUALITY_HIGH) {
-        return VIDEO_QUALITY_HIGH;
+    if (quality > VIDEO_QUALITY_MAX) {
+        return VIDEO_QUALITY_MAX;
     }
     return quality;
 }
@@ -836,7 +848,8 @@ static const char* video_quality_label(int quality) {
     switch (clamp_video_quality(quality)) {
         case VIDEO_QUALITY_LOW: return "LOW";
         case VIDEO_QUALITY_MEDIUM: return "MED";
-        default: return "HIGH";
+        case VIDEO_QUALITY_HIGH: return "HIGH";
+        default: return "MAX";
     }
 }
 
@@ -853,7 +866,7 @@ static int video_quality_uses_crt_effects(int quality) {
 }
 
 static int video_quality_uses_barrel(int quality) {
-    return clamp_video_quality(quality) == VIDEO_QUALITY_HIGH;
+    return clamp_video_quality(quality) >= VIDEO_QUALITY_HIGH;
 }
 
 static int video_quality_uses_particle_bloom(int quality) {
@@ -861,11 +874,22 @@ static int video_quality_uses_particle_bloom(int quality) {
 }
 
 static int video_quality_uses_shader_high_quality(int quality) {
-    return clamp_video_quality(quality) == VIDEO_QUALITY_HIGH;
+    return clamp_video_quality(quality) >= VIDEO_QUALITY_HIGH;
 }
 
 static int video_quality_uses_cached_fog_noise(int quality) {
-    return clamp_video_quality(quality) != VIDEO_QUALITY_HIGH;
+    return clamp_video_quality(quality) < VIDEO_QUALITY_HIGH;
+}
+
+static int video_quality_uses_msaa(int quality) {
+    return clamp_video_quality(quality) >= VIDEO_QUALITY_MAX;
+}
+
+static void sync_msaa_state_for_quality(app* a) {
+    if (!a) {
+        return;
+    }
+    a->msaa_enabled = video_quality_uses_msaa(a->video_menu_quality) ? 1 : 0;
 }
 
 static const char* vk_physical_device_type_name(VkPhysicalDeviceType type) {
@@ -1761,6 +1785,7 @@ static int planetarium_quelled_count(const app* a) {
 
 static void map_mouse_to_scene_coords(const app* a, int mouse_x, int mouse_y, float* out_x, float* out_y);
 static float drawable_scale_y(const app* a);
+static int recreate_render_runtime(app* a);
 
 static float norm_range(float v, float lo, float hi) {
     if (hi <= lo) {
@@ -1894,6 +1919,7 @@ static void settings_to_app(app* a, const app_settings* in) {
     a->video_menu_selected = in->selected;
     a->palette_mode = in->palette;
     a->video_menu_quality = clamp_video_quality(in->quality);
+    sync_msaa_state_for_quality(a);
     for (int i = 0; i < VIDEO_MENU_DIAL_COUNT; ++i) {
         a->video_dial_01[i] = clampf(in->video_dial_01[i], 0.0f, 1.0f);
     }
@@ -4074,7 +4100,16 @@ static int handle_video_menu_mouse(app* a, int mouse_x, int mouse_y, int set_val
         };
         if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
             if (set_value) {
+                const int prev_quality = a->video_menu_quality;
+                const VkSampleCountFlagBits prev_samples = scene_samples(a);
                 a->video_menu_quality = (a->video_menu_quality + 1) % VIDEO_QUALITY_COUNT;
+                sync_msaa_state_for_quality(a);
+                if (scene_samples(a) != prev_samples && !recreate_render_runtime(a)) {
+                    a->video_menu_quality = prev_quality;
+                    sync_msaa_state_for_quality(a);
+                    set_tty_message(a, "video quality apply failed");
+                    return 1;
+                }
                 {
                     char msg[64];
                     snprintf(msg, sizeof(msg), "video quality: %s", video_quality_label(a->video_menu_quality));
@@ -13075,7 +13110,7 @@ int main(void) {
     a.video_menu_fullscreen = 0;
     a.video_menu_quality = VIDEO_QUALITY_MEDIUM;
     a.palette_mode = 0;
-    a.msaa_enabled = 1;
+    sync_msaa_state_for_quality(&a);
     a.video_dial_01[0] = 0.472223f; /* bloom strength */
     a.video_dial_01[1] = 0.475000f; /* bloom radius */
     a.video_dial_01[2] = 0.369918f; /* persistence */
@@ -13352,17 +13387,7 @@ int main(void) {
                         announce_planetarium_selection(&a);
                     }
                 } else if (menu_is_screen(&a.menu, APP_SCREEN_VIDEO) && ev.key.keysym.sym == SDLK_a) {
-                    a.msaa_enabled = !a.msaa_enabled;
-                    if (a.msaa_enabled && a.msaa_samples == VK_SAMPLE_COUNT_1_BIT) {
-                        a.msaa_enabled = 0;
-                        set_tty_message(&a, "msaa unavailable");
-                    } else {
-                        set_tty_message(&a, a.msaa_enabled ? "msaa enabled" : "msaa disabled");
-                        if (!recreate_render_runtime(&a)) {
-                            fprintf(stderr, "msaa toggle recreate failed\n");
-                            running = 0;
-                        }
-                    }
+                    set_tty_message(&a, "msaa is part of quality max");
                 } else if (menu_is_screen(&a.menu, APP_SCREEN_VIDEO) && ev.key.keysym.sym == SDLK_UP) {
                     const int count = VIDEO_MENU_RES_COUNT + 1;
                     a.video_menu_selected = (a.video_menu_selected + count - 1) % count;
