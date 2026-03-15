@@ -2313,18 +2313,19 @@ static void trigger_fire_test(app* a) {
     atomic_fetch_add_explicit(&a->pending_fire_events, 1u, memory_order_acq_rel);
 }
 
-static float audio_wrap_delta(float a, float b, float period) {
-    float d;
-    if (period <= 0.0f) {
-        return a - b;
+static float audio_wrap_delta(float x, float center, float period) {
+    if (!(period > 0.0f)) {
+        return x - center;
     }
-    d = fmodf(a - b, period);
-    if (d > period * 0.5f) {
-        d -= period;
-    } else if (d < -period * 0.5f) {
-        d += period;
+    const float half = period * 0.5f;
+    float dx = x - center;
+    while (dx > half) {
+        dx -= period;
     }
-    return d;
+    while (dx < -half) {
+        dx += period;
+    }
+    return dx;
 }
 
 static void audio_spatial_params_from_world(const app* a, float event_x, float event_y, float* out_pan, float* out_gain) {
@@ -2333,10 +2334,26 @@ static void audio_spatial_params_from_world(const app* a, float event_x, float e
     }
 
     float dx = event_x - a->game.player.b.x;
-    const float dy = event_y - a->game.player.b.y;
+    float dy = event_y - a->game.player.b.y;
     if (a->game.render_style == LEVEL_RENDER_CYLINDER) {
-        const float period = fmaxf(a->game.world_w * 2.4f, 1.0f);
-        dx = audio_wrap_delta(event_x, a->game.player.b.x, period);
+        const float su = fmaxf(0.5f, fminf(a->game.world_w / 1920.0f, a->game.world_h / 1080.0f));
+        const float period = fmaxf(1920.0f * su * 2.4f, 1.0f);
+        const float theta = audio_wrap_delta(event_x, a->game.player.b.x, period) / period * 6.28318530718f;
+        const float radius = a->game.world_w * 0.485f;
+        const float lateral = sinf(theta) * radius;
+        const float depth = (1.0f - cosf(theta)) * radius;
+        dx = lateral;
+        dy *= 0.44f + (cosf(theta) * 0.5f + 0.5f) * 0.62f;
+        {
+            const float dist = sqrtf(lateral * lateral + dy * dy + depth * depth);
+            const float near_r = fmaxf(fminf(a->game.world_w, a->game.world_h) * 0.10f, 1.0f);
+            const float far_r = fmaxf(radius * 2.0f, near_r + 1.0f);
+            const float t = clampf((dist - near_r) / (far_r - near_r), 0.0f, 1.0f);
+            const float fade = 1.0f - t;
+            *out_pan = clampf(lateral / fmaxf(radius, 1.0f), -1.0f, 1.0f);
+            *out_gain = fade * fade;
+            return;
+        }
     }
     const float pan_ref = fmaxf(a->game.world_w * 0.45f, 1.0f);
     const float near_r = fmaxf(fminf(a->game.world_w, a->game.world_h) * 0.10f, 1.0f);

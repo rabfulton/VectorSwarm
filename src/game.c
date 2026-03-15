@@ -1611,23 +1611,55 @@ static void update_arc_nodes(game_state* g, float dt) {
                 &sx,
                 &sy
             );
-        const float hear_radius = fmaxf(a->radius * 2.2f, g->world_w * 1.20f);
-        const float full_radius = fmaxf(a->radius * 0.65f, g->world_w * 0.08f);
             const float d = sqrtf(fmaxf(d2_screen, 0.0f));
-        const float near01 = 1.0f - smoothstepf(full_radius, hear_radius, d);
-        const int audible = (near01 > 0.0f);
-        if (audible) {
-            g->lightning_active = 1;
-            if (near01 > g->lightning_audio_gain) {
-                const float gate_x = 0.5f * (a->x + b->x);
-                const float pan = clampf((gate_x - g->player.b.x) / (g->world_w * 0.45f), -1.0f, 1.0f);
-                g->lightning_audio_gain = near01;
-                g->lightning_audio_pan = pan;
+            float near01 = 0.0f;
+            int audible = 0;
+            if (level_uses_cylinder(g)) {
+                const float period = cylinder_period(g);
+                const float half = period * 0.5f;
+                float wrapped_dx = cx - g->player.b.x;
+                while (wrapped_dx > half) {
+                    wrapped_dx -= period;
+                }
+                while (wrapped_dx < -half) {
+                    wrapped_dx += period;
+                }
+                const float dy = cy - g->player.b.y;
+                const float theta = wrapped_dx / period * 6.28318530718f;
+                const float radius = g->world_w * 0.485f;
+                const float lateral = sinf(theta) * radius;
+                const float depth = (1.0f - cosf(theta)) * radius;
+                const float y_scale = 0.44f + (cosf(theta) * 0.5f + 0.5f) * 0.62f;
+                const float dist = sqrtf(lateral * lateral + (dy * y_scale) * (dy * y_scale) + depth * depth);
+                const float hear_radius = fmaxf(a->radius * 2.2f, radius * 2.0f);
+                const float full_radius = fmaxf(a->radius * 0.65f, fminf(g->world_w, g->world_h) * 0.10f);
+                near01 = 1.0f - smoothstepf(full_radius, hear_radius, dist);
+                audible = (near01 > 0.0f);
+                if (audible) {
+                    g->lightning_active = 1;
+                    if (near01 > g->lightning_audio_gain) {
+                        g->lightning_audio_gain = near01;
+                        g->lightning_audio_pan = clampf(lateral / fmaxf(radius, 1.0f), -1.0f, 1.0f);
+                    }
+                }
+            } else {
+                const float hear_radius = fmaxf(a->radius * 2.2f, g->world_w * 1.20f);
+                const float full_radius = fmaxf(a->radius * 0.65f, g->world_w * 0.08f);
+                near01 = 1.0f - smoothstepf(full_radius, hear_radius, d);
+                audible = (near01 > 0.0f);
+                if (audible) {
+                    g->lightning_active = 1;
+                    if (near01 > g->lightning_audio_gain) {
+                        const float gate_x = 0.5f * (a->x + b->x);
+                        const float pan = clampf((gate_x - g->player.b.x) / (g->world_w * 0.45f), -1.0f, 1.0f);
+                        g->lightning_audio_gain = near01;
+                        g->lightning_audio_pan = pan;
+                    }
+                }
             }
-            if (!a->energized_prev) {
+            if (audible && !a->energized_prev) {
                 game_push_audio_event(g, GAME_AUDIO_EVENT_LIGHTNING, 0.5f * (a->x + b->x), 0.5f * (a->y + b->y));
             }
-        }
         }
         a->energized_prev = 1;
         if (d2 > a->radius * a->radius) {

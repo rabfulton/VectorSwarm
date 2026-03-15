@@ -316,14 +316,14 @@ void acoustics_combat_defaults_init(float out_values_01[ACOUST_COMBAT_SLIDER_COU
     out_values_01[ACOUST_COMBAT_ENEMY_RESONANCE] = 0.985629857f;
     out_values_01[ACOUST_COMBAT_ENEMY_SWEEP_ST] = 0.949483037f;
     out_values_01[ACOUST_COMBAT_ENEMY_SWEEP_DECAY] = 0.827205420f;
-    out_values_01[ACOUST_COMBAT_EXP_LEVEL] = 0.58f;
-    out_values_01[ACOUST_COMBAT_EXP_PITCH] = 0.28f;
-    out_values_01[ACOUST_COMBAT_EXP_ATTACK] = 0.07f;
-    out_values_01[ACOUST_COMBAT_EXP_DECAY] = 0.54f;
-    out_values_01[ACOUST_COMBAT_EXP_NOISE] = 0.64f;
-    out_values_01[ACOUST_COMBAT_EXP_FM_DEPTH] = 0.28f;
-    out_values_01[ACOUST_COMBAT_EXP_FM_RATE] = 0.21f;
-    out_values_01[ACOUST_COMBAT_EXP_PANW] = 0.90f;
+    out_values_01[ACOUST_COMBAT_EXP_LEVEL] = 0.997089446f;
+    out_values_01[ACOUST_COMBAT_EXP_PITCH] = 0.994967401f;
+    out_values_01[ACOUST_COMBAT_EXP_ATTACK] = 0.018262336f;
+    out_values_01[ACOUST_COMBAT_EXP_DECAY] = 0.106360920f;
+    out_values_01[ACOUST_COMBAT_EXP_NOISE] = 0.001602437f;
+    out_values_01[ACOUST_COMBAT_EXP_FM_DEPTH] = 0.984738767f;
+    out_values_01[ACOUST_COMBAT_EXP_FM_RATE] = 0.264259249f;
+    out_values_01[ACOUST_COMBAT_EXP_PANW] = 0.835022926f;
 }
 
 void acoustics_equipment_defaults_init(float out_values_01[ACOUST_EQUIP_SLIDER_COUNT]) {
@@ -411,7 +411,7 @@ void acoustics_slot_defaults_view(acoustics_slot_view* v) {
     *v->fire_slot_selected = 0;
     *v->thr_slot_selected = 0;
     *v->enemy_slot_selected = 0;
-    *v->exp_slot_selected = 0;
+    *v->exp_slot_selected = 4;
     *v->shield_slot_selected = 0;
     *v->aux_slot_selected = 0;
     *v->lightning_slot_selected = 0;
@@ -444,6 +444,14 @@ void acoustics_slot_defaults_view(acoustics_slot_view* v) {
     for (int i = 0; i < 8; ++i) {
         v->exp_slots[0][i] = v->combat_value_01[8 + i];
     }
+    v->exp_slots[4][ACOUST_COMBAT_EXP_LEVEL] = 0.997089446f;
+    v->exp_slots[4][ACOUST_COMBAT_EXP_PITCH] = 0.994967401f;
+    v->exp_slots[4][ACOUST_COMBAT_EXP_ATTACK] = 0.018262336f;
+    v->exp_slots[4][ACOUST_COMBAT_EXP_DECAY] = 0.106360920f;
+    v->exp_slots[4][ACOUST_COMBAT_EXP_NOISE] = 0.001602437f;
+    v->exp_slots[4][ACOUST_COMBAT_EXP_FM_DEPTH] = 0.984738767f;
+    v->exp_slots[4][ACOUST_COMBAT_EXP_FM_RATE] = 0.264259249f;
+    v->exp_slots[4][ACOUST_COMBAT_EXP_PANW] = 0.835022926f;
     for (int i = 0; i < 8; ++i) {
         v->shield_slots[0][i] = v->equipment_value_01[i];
     }
@@ -460,6 +468,7 @@ void acoustics_slot_defaults_view(acoustics_slot_view* v) {
     v->thr_slot_defined[0] = 1u;
     v->enemy_slot_defined[0] = 1u;
     v->exp_slot_defined[0] = 1u;
+    v->exp_slot_defined[4] = 1u;
     v->shield_slot_defined[0] = 1u;
     v->aux_slot_defined[0] = 1u;
     v->lightning_slot_defined[0] = 1u;
