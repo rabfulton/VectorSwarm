@@ -2511,13 +2511,18 @@ static vg_result draw_teletype_overlay(
         return VG_OK;
     }
     const float ui = ui_reference_scale(w, h);
-    const vg_rect safe = make_ui_safe_frame(w, h);
+    const vg_rect outer = {
+        w * UI_SAFE_MARGIN,
+        h * UI_SAFE_MARGIN,
+        w * (1.0f - 2.0f * UI_SAFE_MARGIN),
+        h * (1.0f - 2.0f * UI_SAFE_MARGIN)
+    };
 
     char line[256];
     size_t li = 0;
     int row = 0;
-    const float x0 = safe.x + safe.w * 0.015f;
-    const float y0 = safe.y + safe.h - 20.0f * ui;
+    const float x0 = outer.x + 20.0f * ui;
+    const float y0 = outer.y + outer.h - 20.0f * ui;
     const float lh = 20.0f * ui;
 
     for (size_t i = 0;; ++i) {
@@ -2603,6 +2608,12 @@ static vg_result draw_top_meters(
 ) {
     const float ui = ui_reference_scale(g->world_w, g->world_h);
     const vg_rect safe = make_ui_safe_frame(g->world_w, g->world_h);
+    const vg_rect outer = {
+        g->world_w * UI_SAFE_MARGIN,
+        g->world_h * UI_SAFE_MARGIN,
+        g->world_w * (1.0f - 2.0f * UI_SAFE_MARGIN),
+        g->world_h * (1.0f - 2.0f * UI_SAFE_MARGIN)
+    };
 
     vg_ui_meter_style ms;
     ms.frame = *main_s;
@@ -2643,7 +2654,7 @@ static vg_result draw_top_meters(
     const float meter_gap = 26.0f * ui;
     const float y_quota = safe.y + h - top_margin - meter_h;
     const float y_vitality = y_quota + meter_h + meter_gap;
-    const float x_block = safe.x + w - margin_x - meter_w;
+    const float x_block = outer.x + outer.w - margin_x - meter_w;
 
     vg_result r;
     d.rect = (vg_rect){x_block, y_vitality, meter_w, meter_h};
