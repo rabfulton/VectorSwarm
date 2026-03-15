@@ -911,6 +911,11 @@ static VkSurfaceFormatKHR choose_surface_format(const VkSurfaceFormatKHR* format
 
 static VkPresentModeKHR choose_present_mode(const VkPresentModeKHR* modes, uint32_t count) {
     for (uint32_t i = 0; i < count; ++i) {
+        if (modes[i] == VK_PRESENT_MODE_FIFO_KHR) {
+            return modes[i];
+        }
+    }
+    for (uint32_t i = 0; i < count; ++i) {
         if (modes[i] == VK_PRESENT_MODE_MAILBOX_KHR) {
             return modes[i];
         }

@@ -303,6 +303,8 @@ typedef struct frame_sync {
     VkSemaphore image_available;
     VkSemaphore render_finished;
     VkFence in_flight;
+    VkQueryPool gpu_timestamp_query_pool;
+    int gpu_timestamp_pending;
 } frame_sync;
 
 typedef struct submit_trace {
@@ -312,7 +314,24 @@ typedef struct submit_trace {
     float end_cmd_ms;
     float submit_ms;
     float present_ms;
+    float gpu_total_ms;
+    float gpu_scene_ms;
+    float gpu_bloom_ms;
+    float gpu_composite_ms;
+    int gpu_valid;
 } submit_trace;
+
+enum gpu_timestamp_query_id {
+    GPU_TS_FRAME_START = 0,
+    GPU_TS_SCENE_START = 1,
+    GPU_TS_SCENE_END = 2,
+    GPU_TS_BLOOM_START = 3,
+    GPU_TS_BLOOM_END = 4,
+    GPU_TS_COMPOSITE_START = 5,
+    GPU_TS_COMPOSITE_END = 6,
+    GPU_TS_FRAME_END = 7,
+    GPU_TS_COUNT = 8
+};
 
 #define HITCH_TRACE_RING_CAP 512u
 #define HITCH_TRACE_LEVEL_NAME_CAP 64u
@@ -356,7 +375,10 @@ typedef struct app {
     uint32_t present_queue_family;
     uint32_t physical_device_vendor_id;
     VkPhysicalDeviceType physical_device_type;
+    uint32_t physical_device_api_version;
     int gpu_vendor_is_intel;
+    int gpu_timestamps_enabled;
+    float gpu_timestamp_period_ns;
     int device_lost;
     char physical_device_name[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE];
 
@@ -949,7 +971,7 @@ static void hitch_trace_frame_print(FILE* out, const hitch_trace_frame* frame, u
     }
     fprintf(
         out,
-        "[%u] total=%.2fms dt=%.2fms sim_steps=%d sim=%.2f audio_ui=%.2f frame_wait=%.2f structure_tiles=%.2f acquire=%.2f image_wait=%.2f submit_present=%.2f record=%.2f vg=%.2f post=%.2f end_cmd=%.2f submit=%.2f present=%.2f menu=%d level=%s\n",
+        "[%u] total=%.2fms dt=%.2fms sim_steps=%d sim=%.2f audio_ui=%.2f frame_wait=%.2f structure_tiles=%.2f acquire=%.2f image_wait=%.2f submit_present=%.2f record=%.2f vg=%.2f post=%.2f end_cmd=%.2f submit=%.2f present=%.2f gpu_total=%.2f gpu_scene=%.2f gpu_bloom=%.2f gpu_comp=%.2f gpu_valid=%d menu=%d level=%s\n",
         index,
         frame->total_ms,
         frame->dt_ms,
@@ -967,6 +989,11 @@ static void hitch_trace_frame_print(FILE* out, const hitch_trace_frame* frame, u
         frame->submit.end_cmd_ms,
         frame->submit.submit_ms,
         frame->submit.present_ms,
+        frame->submit.gpu_total_ms,
+        frame->submit.gpu_scene_ms,
+        frame->submit.gpu_bloom_ms,
+        frame->submit.gpu_composite_ms,
+        frame->submit.gpu_valid,
         frame->menu_screen,
         frame->level_name
     );
@@ -2692,6 +2719,7 @@ static void unload_structure_tile_pixels(app* a);
 static int sync_structure_tile_resources(app* a, int desired_atlas_id);
 static int sync_structure_tile_resources_for_current_state(app* a);
 static int sync_structure_tile_resources_after_state_change(app* a, const char* context);
+static int collect_gpu_timestamp_trace(app* a, frame_sync* frame, submit_trace* trace);
 static int wait_for_all_in_flight_frames(app* a);
 static void reset_grid_sim_state(app* a);
 static int create_vg_context(app* a);
@@ -2743,6 +2771,40 @@ static int wait_for_all_in_flight_frames(app* a) {
     for (uint32_t i = 0; i < APP_MAX_SWAPCHAIN_IMAGES; ++i) {
         a->images_in_flight[i] = VK_NULL_HANDLE;
     }
+    return 1;
+}
+
+static int collect_gpu_timestamp_trace(app* a, frame_sync* frame, submit_trace* trace) {
+    uint64_t q[GPU_TS_COUNT];
+    const uint64_t flags = VK_QUERY_RESULT_64_BIT;
+    if (!a || !frame || !trace || !a->gpu_timestamps_enabled || frame->gpu_timestamp_query_pool == VK_NULL_HANDLE) {
+        return 1;
+    }
+    if (!frame->gpu_timestamp_pending) {
+        return 1;
+    }
+    memset(q, 0, sizeof(q));
+    VkResult r = vkGetQueryPoolResults(
+        a->device,
+        frame->gpu_timestamp_query_pool,
+        0,
+        GPU_TS_COUNT,
+        sizeof(q),
+        q,
+        sizeof(q[0]),
+        flags);
+    if (r == VK_NOT_READY) {
+        return 1;
+    }
+    if (!check_vk(r, "vkGetQueryPoolResults")) {
+        return 0;
+    }
+    trace->gpu_total_ms = (float)(q[GPU_TS_FRAME_END] - q[GPU_TS_FRAME_START]) * a->gpu_timestamp_period_ns * 1.0e-6f;
+    trace->gpu_scene_ms = (float)(q[GPU_TS_SCENE_END] - q[GPU_TS_SCENE_START]) * a->gpu_timestamp_period_ns * 1.0e-6f;
+    trace->gpu_bloom_ms = (float)(q[GPU_TS_BLOOM_END] - q[GPU_TS_BLOOM_START]) * a->gpu_timestamp_period_ns * 1.0e-6f;
+    trace->gpu_composite_ms = (float)(q[GPU_TS_COMPOSITE_END] - q[GPU_TS_COMPOSITE_START]) * a->gpu_timestamp_period_ns * 1.0e-6f;
+    trace->gpu_valid = 1;
+    frame->gpu_timestamp_pending = 0;
     return 1;
 }
 
@@ -5271,6 +5333,7 @@ static void cleanup(app* a) {
     if (a->swapchain) vkDestroySwapchainKHR(a->device, a->swapchain, NULL);
 
     for (uint32_t i = 0; i < APP_FRAME_OVERLAP; ++i) {
+        if (a->frames[i].gpu_timestamp_query_pool) vkDestroyQueryPool(a->device, a->frames[i].gpu_timestamp_query_pool, NULL);
         if (a->frames[i].in_flight) vkDestroyFence(a->device, a->frames[i].in_flight, NULL);
         if (a->frames[i].render_finished) vkDestroySemaphore(a->device, a->frames[i].render_finished, NULL);
         if (a->frames[i].image_available) vkDestroySemaphore(a->device, a->frames[i].image_available, NULL);
@@ -5819,6 +5882,10 @@ static void destroy_render_runtime(app* a) {
         a->swapchain = VK_NULL_HANDLE;
     }
     for (uint32_t i = 0; i < APP_FRAME_OVERLAP; ++i) {
+        if (a->frames[i].gpu_timestamp_query_pool) {
+            vkDestroyQueryPool(a->device, a->frames[i].gpu_timestamp_query_pool, NULL);
+            a->frames[i].gpu_timestamp_query_pool = VK_NULL_HANDLE;
+        }
         if (a->frames[i].in_flight) {
             vkDestroyFence(a->device, a->frames[i].in_flight, NULL);
             a->frames[i].in_flight = VK_NULL_HANDLE;
@@ -5983,10 +6050,12 @@ static int pick_physical_device(app* a) {
         vkGetPhysicalDeviceQueueFamilyProperties(dev, &qcount, qprops);
         int g = 0, p = 0;
         uint32_t gi = 0, pi = 0;
+        uint32_t graphics_timestamp_valid_bits = 0u;
         for (uint32_t i = 0; i < qcount; ++i) {
             if (qprops[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
                 g = 1;
                 gi = i;
+                graphics_timestamp_valid_bits = qprops[i].timestampValidBits;
             }
             VkBool32 present = VK_FALSE;
             vkGetPhysicalDeviceSurfaceSupportKHR(dev, i, a->surface, &present);
@@ -6005,18 +6074,25 @@ static int pick_physical_device(app* a) {
         a->present_queue_family = pi;
         a->physical_device_vendor_id = props.vendorID;
         a->physical_device_type = props.deviceType;
+        a->physical_device_api_version = props.apiVersion;
+        a->gpu_timestamp_period_ns = props.limits.timestampPeriod;
+        a->gpu_timestamps_enabled =
+            (graphics_timestamp_valid_bits > 0u) &&
+            (props.limits.timestampPeriod > 0.0f) &&
+            (VK_VERSION_MAJOR(props.apiVersion) > 1 || VK_VERSION_MINOR(props.apiVersion) >= 2);
         a->gpu_vendor_is_intel = (props.vendorID == 0x8086u) ? 1 : 0;
         snprintf(a->physical_device_name, sizeof(a->physical_device_name), "%s", props.deviceName);
         a->msaa_samples = pick_msaa_samples(a);
         fprintf(
             stderr,
-            "gpu selected: name=\"%s\" vendor=0x%04x type=%s graphics_q=%u present_q=%u intel=%d\n",
+            "gpu selected: name=\"%s\" vendor=0x%04x type=%s graphics_q=%u present_q=%u intel=%d timestamps=%d\n",
             a->physical_device_name,
             (unsigned)a->physical_device_vendor_id,
             vk_physical_device_type_name(a->physical_device_type),
             gi,
             pi,
-            a->gpu_vendor_is_intel
+            a->gpu_vendor_is_intel,
+            a->gpu_timestamps_enabled
         );
         free(devs);
         return 1;
@@ -6079,13 +6155,24 @@ static VkSurfaceFormatKHR choose_surface_format(const VkSurfaceFormatKHR* format
 }
 
 static VkPresentModeKHR choose_present_mode(const app* a, const VkPresentModeKHR* modes, uint32_t count) {
-    if (a && a->gpu_vendor_is_intel) {
-        return VK_PRESENT_MODE_FIFO_KHR;
+    (void)a;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (modes[i] == VK_PRESENT_MODE_FIFO_KHR) return modes[i];
     }
     for (uint32_t i = 0; i < count; ++i) {
         if (modes[i] == VK_PRESENT_MODE_MAILBOX_KHR) return modes[i];
     }
     return VK_PRESENT_MODE_FIFO_KHR;
+}
+
+static const char* vk_present_mode_name(VkPresentModeKHR mode) {
+    switch (mode) {
+        case VK_PRESENT_MODE_IMMEDIATE_KHR: return "IMMEDIATE";
+        case VK_PRESENT_MODE_MAILBOX_KHR: return "MAILBOX";
+        case VK_PRESENT_MODE_FIFO_KHR: return "FIFO";
+        case VK_PRESENT_MODE_FIFO_RELAXED_KHR: return "FIFO_RELAXED";
+        default: return "UNKNOWN";
+    }
 }
 
 static VkExtent2D clamp_extent_to_caps(VkExtent2D extent, const VkSurfaceCapabilitiesKHR* caps) {
@@ -6175,13 +6262,14 @@ static int create_swapchain(app* a) {
 
     fprintf(
         stderr,
-        "swapchain extent=%ux%u drawable=%dx%d currentExtent=%ux%u\n",
+        "swapchain extent=%ux%u drawable=%dx%d currentExtent=%ux%u presentMode=%s\n",
         extent.width,
         extent.height,
         drawable_w,
         drawable_h,
         caps.currentExtent.width,
-        caps.currentExtent.height
+        caps.currentExtent.height,
+        vk_present_mode_name(mode)
     );
 
     a->swapchain_format = fmt.format;
@@ -6471,10 +6559,19 @@ static int create_commands(app* a) {
 static int create_sync(app* a) {
     VkSemaphoreCreateInfo sem = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     VkFenceCreateInfo fence = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, .flags = VK_FENCE_CREATE_SIGNALED_BIT};
+    VkQueryPoolCreateInfo query_pool = {
+        .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+        .queryType = VK_QUERY_TYPE_TIMESTAMP,
+        .queryCount = GPU_TS_COUNT
+    };
     for (uint32_t i = 0; i < APP_FRAME_OVERLAP; ++i) {
         if (!check_vk(vkCreateSemaphore(a->device, &sem, NULL, &a->frames[i].image_available), "vkCreateSemaphore(image_available)")) return 0;
         if (!check_vk(vkCreateSemaphore(a->device, &sem, NULL, &a->frames[i].render_finished), "vkCreateSemaphore(render_finished)")) return 0;
         if (!check_vk(vkCreateFence(a->device, &fence, NULL, &a->frames[i].in_flight), "vkCreateFence")) return 0;
+        a->frames[i].gpu_timestamp_pending = 0;
+        if (a->gpu_timestamps_enabled) {
+            if (!check_vk(vkCreateQueryPool(a->device, &query_pool, NULL, &a->frames[i].gpu_timestamp_query_pool), "vkCreateQueryPool(gpu timestamps)")) return 0;
+        }
     }
     for (uint32_t i = 0; i < APP_MAX_SWAPCHAIN_IMAGES; ++i) {
         a->images_in_flight[i] = VK_NULL_HANDLE;
@@ -12171,9 +12268,6 @@ static int record_submit_present(
     if (out_submitted) {
         *out_submitted = 0;
     }
-    if (trace) {
-        memset(trace, 0, sizeof(*trace));
-    }
     const uint64_t perf_freq = (uint64_t)SDL_GetPerformanceFrequency();
     const float perf_to_ms = (perf_freq > 0u) ? (1000.0f / (float)perf_freq) : 0.0f;
     const uint64_t t0 = SDL_GetPerformanceCounter();
@@ -12182,6 +12276,10 @@ static int record_submit_present(
     if (!check_vk(vkResetCommandBuffer(cmd, 0), "vkResetCommandBuffer")) return 0;
     VkCommandBufferBeginInfo begin = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     if (!check_vk(vkBeginCommandBuffer(cmd, &begin), "vkBeginCommandBuffer")) return 0;
+    if (a->gpu_timestamps_enabled && frame->gpu_timestamp_query_pool != VK_NULL_HANDLE) {
+        vkCmdResetQueryPool(cmd, frame->gpu_timestamp_query_pool, 0, GPU_TS_COUNT);
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, frame->gpu_timestamp_query_pool, GPU_TS_FRAME_START);
+    }
     {
         const int in_gameplay_scene = menu_is_gameplay(&a->menu);
         const leveldef_level* lvl_bg = game_current_leveldef(&a->game);
@@ -12254,6 +12352,9 @@ static int record_submit_present(
         .clearValueCount = scene_clear_count,
         .pClearValues = scene_clear
     };
+    if (a->gpu_timestamps_enabled && frame->gpu_timestamp_query_pool != VK_NULL_HANDLE) {
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, frame->gpu_timestamp_query_pool, GPU_TS_SCENE_START);
+    }
     vkCmdBeginRenderPass(cmd, &scene_rp, VK_SUBPASS_CONTENTS_INLINE);
 
     vg_frame_desc vg_frame = {.width = a->swapchain_extent.width, .height = a->swapchain_extent.height, .delta_time_s = dt, .command_buffer = (void*)cmd};
@@ -12764,6 +12865,9 @@ static int record_submit_present(
         return 0;
     }
     vkCmdEndRenderPass(cmd);
+    if (a->gpu_timestamps_enabled && frame->gpu_timestamp_query_pool != VK_NULL_HANDLE) {
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, frame->gpu_timestamp_query_pool, GPU_TS_SCENE_END);
+    }
     const uint64_t t_after_scene = SDL_GetPerformanceCounter();
 
     VkClearValue bloom_clear = {.color = {{0.0f, 0.0f, 0.0f, 1.0f}}};
@@ -12775,6 +12879,9 @@ static int record_submit_present(
         .clearValueCount = 1,
         .pClearValues = &bloom_clear
     };
+    if (a->gpu_timestamps_enabled && frame->gpu_timestamp_query_pool != VK_NULL_HANDLE) {
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, frame->gpu_timestamp_query_pool, GPU_TS_BLOOM_START);
+    }
     vkCmdBeginRenderPass(cmd, &bloom_rp, VK_SUBPASS_CONTENTS_INLINE);
     set_viewport_scissor(cmd, a->bloom_w, a->bloom_h);
     vg_crt_profile crt;
@@ -12820,6 +12927,9 @@ static int record_submit_present(
         }
     }
     vkCmdEndRenderPass(cmd);
+    if (a->gpu_timestamps_enabled && frame->gpu_timestamp_query_pool != VK_NULL_HANDLE) {
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, frame->gpu_timestamp_query_pool, GPU_TS_BLOOM_END);
+    }
 
     VkClearValue present_clear = {.color = {{0.0f, 0.0f, 0.0f, 1.0f}}};
     VkRenderPassBeginInfo present_rp = {
@@ -12830,6 +12940,9 @@ static int record_submit_present(
         .clearValueCount = 1,
         .pClearValues = &present_clear
     };
+    if (a->gpu_timestamps_enabled && frame->gpu_timestamp_query_pool != VK_NULL_HANDLE) {
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, frame->gpu_timestamp_query_pool, GPU_TS_COMPOSITE_START);
+    }
     vkCmdBeginRenderPass(cmd, &present_rp, VK_SUBPASS_CONTENTS_INLINE);
     set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->composite_pipeline);
@@ -12852,6 +12965,10 @@ static int record_submit_present(
     vkCmdPushConstants(cmd, a->post_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(comp_pc), &comp_pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRenderPass(cmd);
+    if (a->gpu_timestamps_enabled && frame->gpu_timestamp_query_pool != VK_NULL_HANDLE) {
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, frame->gpu_timestamp_query_pool, GPU_TS_COMPOSITE_END);
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, frame->gpu_timestamp_query_pool, GPU_TS_FRAME_END);
+    }
     const uint64_t t_after_post = SDL_GetPerformanceCounter();
 
     if (!check_vk(vkEndCommandBuffer(cmd), "vkEndCommandBuffer")) return 0;
@@ -12876,6 +12993,9 @@ static int record_submit_present(
         a->device_lost = 1;
     }
     if (!check_vk(submit_r, "vkQueueSubmit")) return 0;
+    if (a->gpu_timestamps_enabled && frame->gpu_timestamp_query_pool != VK_NULL_HANDLE) {
+        frame->gpu_timestamp_pending = 1;
+    }
     if (out_submitted) {
         *out_submitted = 1;
     }
@@ -13884,6 +14004,11 @@ int main(void) {
             a.device_lost = 1;
         }
         if (!check_vk(frame_wait_r, "vkWaitForFences")) break;
+        submit_trace submit_trace_data;
+        memset(&submit_trace_data, 0, sizeof(submit_trace_data));
+        if (!collect_gpu_timestamp_trace(&a, frame, &submit_trace_data)) {
+            break;
+        }
         if (hitch_trace_enabled || hitch_trace_ring_enabled) {
             hitch_after_frame_wait = SDL_GetPerformanceCounter();
         }
@@ -13925,7 +14050,6 @@ int main(void) {
         float t = (float)SDL_GetTicks() * 0.001f;
         a.swapchain_needs_recreate = 0;
         int submitted = 0;
-        submit_trace submit_trace_data;
         if (!record_submit_present(&a, frame, image_index, t, dt_raw, fps_smoothed, &submitted, &submit_trace_data)) {
             if (submitted) {
                 a.images_in_flight[image_index] = frame->in_flight;
@@ -13965,7 +14089,7 @@ int main(void) {
             if (hitch_trace_enabled && hitch_frame.total_ms >= hitch_trace_ms) {
                 fprintf(
                     stderr,
-                    "[hitch] total=%.2fms dt=%.2fms sim_steps=%d sim=%.2f audio_ui=%.2f frame_wait=%.2f structure_tiles=%.2f acquire=%.2f image_wait=%.2f submit_present=%.2f record=%.2f vg=%.2f post=%.2f end_cmd=%.2f submit=%.2f present=%.2f menu=%d level=%s\n",
+                    "[hitch] total=%.2fms dt=%.2fms sim_steps=%d sim=%.2f audio_ui=%.2f frame_wait=%.2f structure_tiles=%.2f acquire=%.2f image_wait=%.2f submit_present=%.2f record=%.2f vg=%.2f post=%.2f end_cmd=%.2f submit=%.2f present=%.2f gpu_total=%.2f gpu_scene=%.2f gpu_bloom=%.2f gpu_comp=%.2f gpu_valid=%d menu=%d level=%s\n",
                     hitch_frame.total_ms,
                     hitch_frame.dt_ms,
                     hitch_frame.sim_steps,
@@ -13982,6 +14106,11 @@ int main(void) {
                     hitch_frame.submit.end_cmd_ms,
                     hitch_frame.submit.submit_ms,
                     hitch_frame.submit.present_ms,
+                    hitch_frame.submit.gpu_total_ms,
+                    hitch_frame.submit.gpu_scene_ms,
+                    hitch_frame.submit.gpu_bloom_ms,
+                    hitch_frame.submit.gpu_composite_ms,
+                    hitch_frame.submit.gpu_valid,
                     hitch_frame.menu_screen,
                     hitch_frame.level_name
                 );
