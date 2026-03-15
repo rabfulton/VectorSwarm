@@ -128,3 +128,65 @@ When enabled, the game prints periodic particle stats to stdout and numpad tunin
 ### Notes
 
 - Priority order for overlapping numpad keys is: fog tuning, then particle tuning, then terrain tuning.
+
+## Hitch Tracing
+
+Frame-pacing hitch tracing is available in two forms:
+
+- live stderr logging for frames above a threshold
+- low-perturbation rolling capture with automatic dump to `/tmp`
+
+### Live Hitch Logging
+
+Enable live hitch prints with:
+
+```bash
+VTYPE_HITCH_TRACE=1 VTYPE_HITCH_TRACE_MS=12 ./build/VectorSwarm
+```
+
+This prints lines like:
+
+```text
+[hitch] total=12.49ms dt=9.05ms sim_steps=1 sim=0.04 audio_ui=0.03 frame_wait=7.31 structure_tiles=0.00 acquire=0.01 image_wait=0.00 submit_present=5.10 record=4.68 vg=0.14 post=0.05 end_cmd=0.01 submit=0.03 present=0.18 gpu_total=1.33 gpu_scene=0.42 gpu_bloom=0.28 gpu_comp=0.62 gpu_valid=1 menu=0 level=level_high_plains_drifter
+```
+
+Important fields:
+
+- `frame_wait`: CPU wait on the current frame fence
+- `acquire`: swapchain image acquire time
+- `record`: CPU command recording before submit
+- `submit`: `vkQueueSubmit`
+- `present`: `vkQueuePresentKHR`
+- `gpu_total`: total measured GPU execution for the frame
+- `gpu_scene`: main scene pass GPU time
+- `gpu_bloom`: bloom pass GPU time
+- `gpu_comp`: composite/present-pass GPU time
+- `gpu_valid`: `1` when timestamp data was collected successfully
+
+### Rolling Trace Dump
+
+Enable low-overhead ring-buffer capture with:
+
+```bash
+VTYPE_TRACE_RING=1 VTYPE_TRACE_TRIGGER_MS=12 ./build/VectorSwarm
+```
+
+When a frame crosses the trigger threshold, the game writes a trace file to `/tmp`, for example:
+
+```text
+[hitch-dump] wrote /tmp/vtype_hitch_123456_0.log trigger_total=28.54ms frames=512
+```
+
+This is the preferred mode when investigating timing-sensitive hitches because it avoids hot-path `fprintf` on every triggered frame.
+
+### Current Present-Mode Note
+
+The renderer now prefers `VK_PRESENT_MODE_FIFO_KHR` by default.
+
+The startup log prints the selected swapchain present mode in the existing swapchain line:
+
+```text
+swapchain extent=... presentMode=FIFO
+```
+
+This matters because mailbox-first selection was observed to produce much worse present-side hitching on at least one target system.

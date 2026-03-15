@@ -330,6 +330,7 @@ void game_on_enemy_destroyed(game_state* g, float x, float y, float vx, float vy
     }
     g->kills += 1;
     g->score += score_delta;
+    game_push_audio_event(g, GAME_AUDIO_EVENT_EXPLOSION, x, y);
     game_try_spawn_powerup_drop(g, x, y, vx, vy);
 }
 

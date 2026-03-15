@@ -6222,7 +6222,10 @@ static int create_swapchain(app* a) {
         /* Some WSI paths report currentExtent in logical units; prefer drawable pixels when valid. */
         extent = drawable_extent;
     }
-    uint32_t image_count = caps.minImageCount + 1;
+    uint32_t image_count = (mode == VK_PRESENT_MODE_FIFO_KHR) ? caps.minImageCount : (caps.minImageCount + 1u);
+    if (image_count < caps.minImageCount) {
+        image_count = caps.minImageCount;
+    }
     if (caps.maxImageCount > 0 && image_count > caps.maxImageCount) image_count = caps.maxImageCount;
     if (image_count > APP_MAX_SWAPCHAIN_IMAGES) image_count = APP_MAX_SWAPCHAIN_IMAGES;
 
@@ -6262,14 +6265,15 @@ static int create_swapchain(app* a) {
 
     fprintf(
         stderr,
-        "swapchain extent=%ux%u drawable=%dx%d currentExtent=%ux%u presentMode=%s\n",
+        "swapchain extent=%ux%u drawable=%dx%d currentExtent=%ux%u presentMode=%s images=%u\n",
         extent.width,
         extent.height,
         drawable_w,
         drawable_h,
         caps.currentExtent.width,
         caps.currentExtent.height,
-        vk_present_mode_name(mode)
+        vk_present_mode_name(mode),
+        image_count
     );
 
     a->swapchain_format = fmt.format;

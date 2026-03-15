@@ -1,5 +1,15 @@
 # Frame Pacing Plan
 
+Status note:
+
+- This document started as an implementation plan.
+- The most important pacing issue was ultimately not solved by two frames in flight.
+- The practical fixes were:
+  - removing blocking/resize behavior from the DefconDraw Vulkan upload path
+  - preferring `VK_PRESENT_MODE_FIFO_KHR`
+  - using `caps.minImageCount` for FIFO swapchains instead of `minImageCount + 1`
+- Two frames in flight were prototyped, but are intentionally not the active shipping path right now. The app currently runs with one frame in flight.
+
 This document captures the implementation plan for improving frame pacing and output smoothness in `v-type` without shifting focus to shader micro-optimization.
 
 The priorities here are:
@@ -24,9 +34,9 @@ and waits that fence every frame before acquiring the next image.
 
 Effect:
 
-- CPU and GPU are hard-serialized.
+- CPU and GPU are more tightly serialized.
 - Any long GPU frame immediately stalls the CPU.
-- Frame pacing becomes more sensitive to transient GPU spikes.
+- This looked like the main structural problem initially, but in practice it was not the dominant shipping hitch source.
 
 Relevant code:
 
@@ -54,6 +64,12 @@ Relevant code:
 - `DefconDraw/src/backends/vulkan/vg_vk.c:vg_vk_ensure_vertex_buffer(...)`
 - `DefconDraw/src/backends/vulkan/vg_vk.c:vg_vk_upload_vertices(...)`
 
+Status:
+
+- Fixed.
+- The backend now uses persistently mapped per-frame upload buffers with fixed steady-state capacity.
+- The old active-path `vkDeviceWaitIdle()` behavior was removed from normal gameplay rendering.
+
 ### 3. No render interpolation
 
 The game sim runs at a fixed step, but rendering uses the latest sim state directly.
@@ -70,6 +86,12 @@ Relevant code:
 - `src/render.h:render_metrics`
 - `src/render.c`
 
+Status:
+
+- Partially fixed.
+- Camera, player, enemies, bullets, enemy bullets, and missiles are now interpolated for rendering.
+- Secondary visuals can still be extended later if needed.
+
 ### 4. Runtime resource work in the frame loop
 
 Some resource validation/loading remains in the steady-state render loop.
@@ -84,9 +106,40 @@ Relevant code:
 - `src/main.c:ensure_active_structure_tile_resources(...)`
 - frame loop call site in `src/main.c`
 
+Status:
+
+- Fixed for the known structure-tile path.
+- Resource sync for structure-tile atlases was moved to explicit transition points instead of running as an unconditional steady-state frame-loop guard.
+
+### 5. Present pacing policy mattered more than expected
+
+The remaining major hitch pattern turned out to be present-side pacing, not scene cost.
+
+Observed behavior from instrumentation:
+
+- scene GPU time stayed low, often around `1-4 ms`
+- some bad hitches were dominated by `vkQueuePresentKHR`
+- the next frame would often inherit the stall as fence wait time
+
+The effective fixes were:
+
+- prefer `VK_PRESENT_MODE_FIFO_KHR` instead of `MAILBOX`
+- when using FIFO, request `caps.minImageCount` instead of `minImageCount + 1`
+
+Reason:
+
+- deeper FIFO buffering increased latency and made pacing less stable for this game
+- this project is not GPU-bound in steady play, so tighter swapchain buffering gave better results
+
 ## Implementation Plan
 
 ## Phase 1: Two Frames In Flight
+
+Current status:
+
+- Implemented experimentally, then backed out as the active mode.
+- The current app configuration remains one frame in flight.
+- Keep this phase deferred until there is a concrete reason to revisit it and the renderer/resource lifetime model is audited again.
 
 Goal:
 
@@ -182,9 +235,13 @@ After Phase 1:
 - game still builds and runs
 - no use-after-submit on command buffers or uploads
 - no visual regressions in gameplay/menu/editor
-- frame pacing should be less sensitive to occasional long GPU frames
+- if re-enabled in the future, frame pacing should be less sensitive to occasional long GPU frames
 
 ## Phase 2: Remove Blocking VG Upload Behavior
+
+Current status:
+
+- Completed for the active Vulkan gameplay path.
 
 Goal:
 
@@ -272,8 +329,13 @@ After Phase 2:
 - no `vkDeviceWaitIdle()` in any steady-state frame submission path
 - no per-frame map/unmap on the `vg` vector upload path
 - vector rendering still matches current output
+- no steady-state gameplay allocations on the active Vulkan vector upload path
 
 ## Phase 3: Add Render Interpolation
+
+Current status:
+
+- Completed for the main moving gameplay objects.
 
 Goal:
 
@@ -343,6 +405,10 @@ After Phase 3:
 
 ## Phase 4: Remove Runtime Resource Creation from Steady-State Loop
 
+Current status:
+
+- Completed for the known structure-tile resource path.
+
 Goal:
 
 - make the steady-state frame loop purely update/record/submit/present
@@ -387,6 +453,11 @@ After Phase 4:
 
 ## Phase 5: Instrument Frame Pacing
 
+Current status:
+
+- Implemented and useful enough to keep.
+- CPU hitch timing, low-perturbation rolling trace capture, and GPU timestamps are now part of the debug toolbox.
+
 Goal:
 
 - verify pacing improvements with data
@@ -426,14 +497,17 @@ Primary success metrics:
 
 ## Suggested Execution Order
 
-Implement in this order:
+What actually worked in practice:
 
 1. Fix VG memory-type selection correctness.
-2. Introduce two frames in flight in app sync/submission path.
-3. Rework VG dynamic uploads to per-frame, persistently mapped buffers.
-4. Add render interpolation.
-5. Remove frame-loop resource creation checks.
-6. Add timing instrumentation for verification.
+2. Rework VG uploads to per-frame, persistently mapped fixed-capacity buffers.
+3. Add render interpolation for the main moving gameplay objects.
+4. Remove steady-state structure-tile resource churn from the frame loop.
+5. Add timing instrumentation and GPU timestamps.
+6. Switch swapchain policy to:
+   - prefer `VK_PRESENT_MODE_FIFO_KHR`
+   - use `caps.minImageCount` for FIFO swapchains
+7. Leave two frames in flight deferred unless future evidence justifies reopening that work.
 
 ## Risk Notes
 
@@ -474,8 +548,11 @@ Mitigation:
 This work is complete when:
 
 - steady-state gameplay has no active-frame `vkDeviceWaitIdle()`
-- the renderer uses two frames in flight safely
 - vector uploads do not map/unmap every frame
 - render interpolation is active for key moving objects
 - no heavyweight resource creation remains in the steady-state frame loop
+- swapchain policy is intentionally documented as:
+  - prefer `VK_PRESENT_MODE_FIFO_KHR`
+  - use `caps.minImageCount` for FIFO
 - frame pacing is measurably more stable, especially in 99th percentile frame time
+- two frames in flight remains an optional future experiment, not a completion requirement
