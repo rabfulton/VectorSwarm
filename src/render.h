@@ -68,6 +68,7 @@ typedef struct render_metrics {
     int menu_screen;
     int video_menu_selected;
     int video_menu_fullscreen;
+    int video_res_count;
     int video_menu_quality;
     int palette_mode;
     float video_dial_01[VIDEO_MENU_DIAL_COUNT];

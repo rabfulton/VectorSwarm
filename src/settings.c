@@ -196,15 +196,12 @@ int settings_load(app_settings* io, const settings_resolution* resolutions, int 
             selected = idx + 1;
         }
     }
-    if (!fullscreen && selected == 0) {
-        selected = default_selected;
-    }
     if (palette < 0 || palette > 2) {
         palette = 0;
     }
 
     io->fullscreen = fullscreen ? 1 : 0;
-    io->selected = io->fullscreen ? 0 : selected;
+    io->selected = selected;
     io->palette = palette;
     if (quality < VIDEO_QUALITY_LOW) {
         quality = VIDEO_QUALITY_LOW;

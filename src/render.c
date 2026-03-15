@@ -4151,7 +4151,7 @@ static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render
     }
     r = draw_text_vector_glow(
         ctx,
-        "UP/DOWN SELECT  ENTER APPLY  ESC BACK",
+        "UP/DOWN SELECT  LEFT/RIGHT FULLSCREEN  ENTER APPLY  ESC BACK",
         (vg_vec2){panel.x + panel.w * 0.04f, panel.y + panel.h - panel.h * 0.15f},
         10.0f * ui,
         0.8f * ui,
@@ -4192,7 +4192,7 @@ static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render
         }
     }
 
-    const int item_count = VIDEO_MENU_RES_COUNT + 1;
+    const int item_count = metrics->video_res_count + 1;
     const float row_h = panel.h * 0.082f;
     const float row_w = panel.w * 0.29f;
     const float row_x = panel.x + panel.w * 0.05f;
@@ -4201,10 +4201,9 @@ static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render
         vg_rect row = {row_x, row_y0 - row_h * (float)i, row_w, row_h * 0.72f};
         char label[64];
         if (i == 0) {
-            snprintf(label, sizeof(label), "FULLSCREEN NATIVE");
+            snprintf(label, sizeof(label), metrics->video_menu_fullscreen ? "FULLSCREEN ON" : "FULLSCREEN OFF");
         } else {
-            const int idx = i - 1;
-            snprintf(label, sizeof(label), "%d x %d", metrics->video_res_w[idx], metrics->video_res_h[idx]);
+            snprintf(label, sizeof(label), "%d x %d", metrics->video_res_w[i - 1], metrics->video_res_h[i - 1]);
         }
         const int hover =
             metrics->mouse_in_window &&
@@ -4215,7 +4214,7 @@ static vg_result draw_video_menu(vg_context* ctx, float w, float h, const render
             row,
             label,
             hover,
-            (metrics->video_menu_selected == i) ? 1 : 0,
+            (i == 0) ? (metrics->video_menu_fullscreen ? 1 : 0) : (metrics->video_menu_selected == i ? 1 : 0),
             ui,
             &pal,
             &frame,

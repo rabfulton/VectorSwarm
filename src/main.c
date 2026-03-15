@@ -122,15 +122,6 @@ typedef struct video_resolution {
     int h;
 } video_resolution;
 
-static const video_resolution k_video_resolutions[VIDEO_MENU_RES_COUNT] = {
-    {1280, 720},
-    {1366, 768},
-    {1600, 900},
-    {1920, 1080},
-    {2560, 1440},
-    {3840, 2160}
-};
-
 #ifndef PATH_MAX
 #define PATH_MAX 4096
 #endif
@@ -707,6 +698,11 @@ typedef struct app {
     int crt_ui_mouse_drag;
     int video_menu_selected;
     int video_menu_fullscreen;
+    int video_custom_resolution_enabled;
+    int video_custom_width;
+    int video_custom_height;
+    video_resolution video_resolutions[VIDEO_MENU_RES_COUNT];
+    int video_resolution_count;
     int video_menu_quality;
     int palette_mode;
     int msaa_enabled;
@@ -815,6 +811,9 @@ typedef struct app {
     level_editor_state level_editor;
     unsigned level_editor_applied_revision;
 } app;
+
+static int video_resolution_index(const app* a, int w, int h);
+static void current_video_mode_dimensions(const app* a, int* out_w, int* out_h);
 
 static VkSampleCountFlagBits pick_msaa_samples(app* a) {
     if (!a || a->physical_device == VK_NULL_HANDLE) {
@@ -1896,12 +1895,7 @@ static void app_to_settings(const app* a, app_settings* out) {
     out->selected = a->video_menu_selected;
     out->palette = a->palette_mode;
     out->quality = clamp_video_quality(a->video_menu_quality);
-    out->width = APP_WIDTH;
-    out->height = APP_HEIGHT;
-    if (out->selected > 0 && out->selected <= VIDEO_MENU_RES_COUNT) {
-        out->width = k_video_resolutions[out->selected - 1].w;
-        out->height = k_video_resolutions[out->selected - 1].h;
-    }
+    current_video_mode_dimensions(a, &out->width, &out->height);
     for (int i = 0; i < VIDEO_MENU_DIAL_COUNT; ++i) {
         out->video_dial_01[i] = clampf(a->video_dial_01[i], 0.0f, 1.0f);
     }
@@ -1918,6 +1912,19 @@ static void settings_to_app(app* a, const app_settings* in) {
     }
     a->video_menu_fullscreen = in->fullscreen ? 1 : 0;
     a->video_menu_selected = in->selected;
+    a->video_custom_resolution_enabled = 0;
+    a->video_custom_width = 0;
+    a->video_custom_height = 0;
+    if (in->width > 0 && in->height > 0) {
+        const int idx = video_resolution_index(a, in->width, in->height);
+        if (idx >= 0) {
+            a->video_menu_selected = idx + 1;
+        } else {
+            a->video_custom_resolution_enabled = 1;
+            a->video_custom_width = in->width;
+            a->video_custom_height = in->height;
+        }
+    }
     a->palette_mode = in->palette;
     a->video_menu_quality = clamp_video_quality(in->quality);
     sync_msaa_state_for_quality(a);
@@ -1948,15 +1955,194 @@ static int load_settings(app* a) {
     app_to_settings(a, &s);
 
     settings_resolution resolutions[VIDEO_MENU_RES_COUNT];
-    for (int i = 0; i < VIDEO_MENU_RES_COUNT; ++i) {
-        resolutions[i].w = k_video_resolutions[i].w;
-        resolutions[i].h = k_video_resolutions[i].h;
+    for (int i = 0; i < a->video_resolution_count; ++i) {
+        resolutions[i].w = a->video_resolutions[i].w;
+        resolutions[i].h = a->video_resolutions[i].h;
     }
-    if (!settings_load(&s, resolutions, VIDEO_MENU_RES_COUNT, 1)) {
+    if (!settings_load(&s, resolutions, a->video_resolution_count, 1)) {
         return 0;
     }
     settings_to_app(a, &s);
+    if (a->video_menu_selected < 1 || a->video_menu_selected > a->video_resolution_count) {
+        a->video_menu_selected = (a->video_resolution_count > 0) ? 1 : 0;
+    }
     return 1;
+}
+
+static int video_resolution_compare_desc(video_resolution a, video_resolution b) {
+    const int64_t area_a = (int64_t)a.w * (int64_t)a.h;
+    const int64_t area_b = (int64_t)b.w * (int64_t)b.h;
+    if (area_a != area_b) {
+        return (area_a > area_b) ? -1 : 1;
+    }
+    if (a.w != b.w) {
+        return (a.w > b.w) ? -1 : 1;
+    }
+    if (a.h != b.h) {
+        return (a.h > b.h) ? -1 : 1;
+    }
+    return 0;
+}
+
+static int video_resolution_index(const app* a, int w, int h) {
+    if (!a || w <= 0 || h <= 0) {
+        return -1;
+    }
+    for (int i = 0; i < a->video_resolution_count; ++i) {
+        if (a->video_resolutions[i].w == w && a->video_resolutions[i].h == h) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int video_resolution_is_widescreen(video_resolution r) {
+    return ((float)r.w / fmaxf((float)r.h, 1.0f)) >= 1.59f;
+}
+
+static int video_resolution_is_preferred(video_resolution r) {
+    return r.h >= 720 && video_resolution_is_widescreen(r);
+}
+
+static void current_video_mode_dimensions(const app* a, int* out_w, int* out_h) {
+    if (!out_w || !out_h) {
+        return;
+    }
+    *out_w = APP_WIDTH;
+    *out_h = APP_HEIGHT;
+    if (!a) {
+        return;
+    }
+    if (a->video_custom_resolution_enabled && a->video_custom_width > 0 && a->video_custom_height > 0) {
+        *out_w = a->video_custom_width;
+        *out_h = a->video_custom_height;
+        return;
+    }
+    if (a->video_menu_selected > 0 && a->video_menu_selected <= a->video_resolution_count) {
+        *out_w = a->video_resolutions[a->video_menu_selected - 1].w;
+        *out_h = a->video_resolutions[a->video_menu_selected - 1].h;
+    }
+}
+
+static void query_video_resolutions(app* a) {
+    if (!a) {
+        return;
+    }
+    a->video_resolution_count = 0;
+
+    const int display_index = 0;
+    const int mode_count = SDL_GetNumDisplayModes(display_index);
+    if (mode_count <= 0) {
+        SDL_DisplayMode desktop;
+        if (SDL_GetDesktopDisplayMode(display_index, &desktop) == 0 && desktop.w > 0 && desktop.h > 0) {
+            a->video_resolutions[0] = (video_resolution){desktop.w, desktop.h};
+            a->video_resolution_count = 1;
+            fprintf(stderr, "warning: no display modes enumerated, using desktop mode %dx%d\n", desktop.w, desktop.h);
+        }
+        return;
+    }
+
+    video_resolution* unique = (video_resolution*)malloc(sizeof(video_resolution) * (size_t)mode_count);
+    if (!unique) {
+        return;
+    }
+    int unique_count = 0;
+
+    for (int i = 0; i < mode_count; ++i) {
+        SDL_DisplayMode mode;
+        if (SDL_GetDisplayMode(display_index, i, &mode) != 0) {
+            continue;
+        }
+        if (mode.w < 640 || mode.h < 480) {
+            continue;
+        }
+        int duplicate = 0;
+        for (int j = 0; j < unique_count; ++j) {
+            if (unique[j].w == mode.w && unique[j].h == mode.h) {
+                duplicate = 1;
+                break;
+            }
+        }
+        if (duplicate) {
+            continue;
+        }
+        unique[unique_count++] = (video_resolution){.w = mode.w, .h = mode.h};
+    }
+
+    for (int i = 0; i < unique_count; ++i) {
+        for (int j = i + 1; j < unique_count; ++j) {
+            if (video_resolution_compare_desc(unique[j], unique[i]) < 0) {
+                const video_resolution tmp = unique[i];
+                unique[i] = unique[j];
+                unique[j] = tmp;
+            }
+        }
+    }
+
+    int preferred_idx[VIDEO_MENU_RES_COUNT * 4];
+    int preferred_count = 0;
+    int widescreen_idx[VIDEO_MENU_RES_COUNT * 4];
+    int widescreen_count = 0;
+    for (int i = 0; i < unique_count; ++i) {
+        if (video_resolution_is_preferred(unique[i])) {
+            if (preferred_count < (int)(sizeof(preferred_idx) / sizeof(preferred_idx[0]))) {
+                preferred_idx[preferred_count++] = i;
+            }
+        } else if (video_resolution_is_widescreen(unique[i])) {
+            if (widescreen_count < (int)(sizeof(widescreen_idx) / sizeof(widescreen_idx[0]))) {
+                widescreen_idx[widescreen_count++] = i;
+            }
+        }
+    }
+
+    const int* source_idx = NULL;
+    int source_count = 0;
+    if (preferred_count > 0) {
+        source_idx = preferred_idx;
+        source_count = preferred_count;
+    } else if (widescreen_count > 0) {
+        source_idx = widescreen_idx;
+        source_count = widescreen_count;
+    } else {
+        source_count = unique_count;
+    }
+
+    if (source_count <= VIDEO_MENU_RES_COUNT) {
+        for (int i = 0; i < source_count; ++i) {
+            const int idx = source_idx ? source_idx[i] : i;
+            a->video_resolutions[i] = unique[idx];
+        }
+        a->video_resolution_count = source_count;
+    } else {
+        const int sample_window = (source_count < 12) ? source_count : 12;
+        int last_pos = -1;
+        for (int i = 0; i < VIDEO_MENU_RES_COUNT; ++i) {
+            const float t = (VIDEO_MENU_RES_COUNT == 1) ? 0.0f : ((float)i / (float)(VIDEO_MENU_RES_COUNT - 1));
+            int pos = (int)lroundf(powf(t, 1.75f) * (float)(sample_window - 1));
+            if (pos <= last_pos) {
+                pos = last_pos + 1;
+            }
+            const int max_pos = sample_window - (VIDEO_MENU_RES_COUNT - i);
+            if (pos > max_pos) {
+                pos = max_pos;
+            }
+            const int idx = source_idx ? source_idx[pos] : pos;
+            a->video_resolutions[i] = unique[idx];
+            last_pos = pos;
+        }
+        a->video_resolution_count = VIDEO_MENU_RES_COUNT;
+    }
+
+    free(unique);
+
+    if (a->video_resolution_count == 0) {
+        SDL_DisplayMode desktop;
+        if (SDL_GetDesktopDisplayMode(display_index, &desktop) == 0 && desktop.w > 0 && desktop.h > 0) {
+            a->video_resolutions[0] = (video_resolution){desktop.w, desktop.h};
+            a->video_resolution_count = 1;
+            fprintf(stderr, "warning: no display modes enumerated, using desktop mode %dx%d\n", desktop.w, desktop.h);
+        }
+    }
 }
 
 static void map_mouse_to_scene_coords(const app* a, int mouse_x, int mouse_y, float* out_x, float* out_y) {
@@ -2796,6 +2982,9 @@ static void reset_terrain_tuning(app* a);
 static void sync_terrain_tuning_text(app* a);
 static int handle_terrain_tuning_key(app* a, SDL_Keycode key);
 static int apply_video_mode(app* a);
+static void query_video_resolutions(app* a);
+static int video_resolution_index(const app* a, int w, int h);
+static void current_video_mode_dimensions(const app* a, int* out_w, int* out_h);
 static void map_mouse_to_scene_coords(const app* a, int mouse_x, int mouse_y, float* out_x, float* out_y);
 
 static int audio_spatial_enqueue(app* a, uint8_t type, float pan, float gain);
@@ -4160,7 +4349,7 @@ static int handle_video_menu_mouse(app* a, int mouse_x, int mouse_y, int set_val
         }
     }
 
-    const int item_count = VIDEO_MENU_RES_COUNT + 1;
+    const int item_count = a->video_resolution_count + 1;
     const float row_h = panel.h * 0.082f;
     const float row_w = panel.w * 0.29f;
     const float row_x = panel.x + panel.w * 0.05f;
@@ -4170,11 +4359,23 @@ static int handle_video_menu_mouse(app* a, int mouse_x, int mouse_y, int set_val
         if (mx >= row.x && mx <= row.x + row.w && my >= row.y && my <= row.y + row.h) {
             if (set_value) {
                 a->video_menu_dial_drag = -1;
-                a->video_menu_selected = i;
-                if (apply_video_mode(a)) {
-                    set_tty_message(a, "display mode applied");
+                if (i == 0) {
+                    a->video_menu_fullscreen = a->video_menu_fullscreen ? 0 : 1;
+                    if (apply_video_mode(a)) {
+                        set_tty_message(a, a->video_menu_fullscreen ? "fullscreen enabled" : "fullscreen disabled");
+                    } else {
+                        set_tty_message(a, "display mode apply failed");
+                    }
                 } else {
-                    set_tty_message(a, "display mode apply failed");
+                    a->video_custom_resolution_enabled = 0;
+                    a->video_custom_width = 0;
+                    a->video_custom_height = 0;
+                    a->video_menu_selected = i;
+                    if (apply_video_mode(a)) {
+                        set_tty_message(a, "display mode applied");
+                    } else {
+                        set_tty_message(a, "display mode apply failed");
+                    }
                 }
             }
             return 1;
@@ -6021,22 +6222,26 @@ static int apply_video_mode(app* a) {
     if (!a || !a->window) {
         return 0;
     }
-    const int selected = a->video_menu_selected;
-    if (selected <= 0) {
-        a->video_menu_fullscreen = 1;
-        if (SDL_SetWindowFullscreen(a->window, SDL_WINDOW_FULLSCREEN_DESKTOP) != 0) {
+    SDL_DisplayMode mode;
+    memset(&mode, 0, sizeof(mode));
+    current_video_mode_dimensions(a, &mode.w, &mode.h);
+    if (mode.w <= 0 || mode.h <= 0) {
+        return 0;
+    }
+
+    if (a->video_menu_fullscreen) {
+        if (SDL_SetWindowDisplayMode(a->window, &mode) != 0) {
+            return 0;
+        }
+        if (SDL_SetWindowFullscreen(a->window, SDL_WINDOW_FULLSCREEN) != 0) {
             return 0;
         }
     } else {
-        const int idx = selected - 1;
-        if (idx < 0 || idx >= VIDEO_MENU_RES_COUNT) {
-            return 0;
-        }
-        a->video_menu_fullscreen = 0;
         if (SDL_SetWindowFullscreen(a->window, 0) != 0) {
             return 0;
         }
-        SDL_SetWindowSize(a->window, k_video_resolutions[idx].w, k_video_resolutions[idx].h);
+        SDL_SetWindowDisplayMode(a->window, NULL);
+        SDL_SetWindowSize(a->window, mode.w, mode.h);
         SDL_SetWindowPosition(a->window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     }
     if (!recreate_render_runtime(a)) {
@@ -12456,6 +12661,7 @@ static int record_submit_present(
         .menu_screen = a->menu.current,
         .video_menu_selected = a->video_menu_selected,
         .video_menu_fullscreen = a->video_menu_fullscreen,
+        .video_res_count = a->video_resolution_count,
         .video_menu_quality = a->video_menu_quality,
         .palette_mode = menu_is_gameplay(&a->menu) ? gameplay_palette_mode(a) : a->palette_mode,
         .acoustics_selected = a->acoustics_selected,
@@ -12619,9 +12825,9 @@ static int record_submit_present(
             metrics.acoustics_thr_slot_defined[i] = a->acoustics_thr_slot_defined[i] ? 1 : 0;
         }
     }
-    for (int i = 0; i < VIDEO_MENU_RES_COUNT; ++i) {
-        metrics.video_res_w[i] = k_video_resolutions[i].w;
-        metrics.video_res_h[i] = k_video_resolutions[i].h;
+    for (int i = 0; i < a->video_resolution_count; ++i) {
+        metrics.video_res_w[i] = a->video_resolutions[i].w;
+        metrics.video_res_h[i] = a->video_resolutions[i].h;
     }
     for (int i = 0; i < PLANETARIUM_MAX_SYSTEMS; ++i) {
         metrics.planetarium_nodes_quelled[i] = app_planetarium_node_quelled(a, i);
@@ -13220,6 +13426,7 @@ int main(void) {
         fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return 1;
     }
+    query_video_resolutions(&a);
     srand((unsigned int)SDL_GetTicks());
     init_teletype_audio(&a);
     a.mod_music_volume_01 = 0.65f;
@@ -13270,18 +13477,25 @@ int main(void) {
 
     int start_w = APP_WIDTH;
     int start_h = APP_HEIGHT;
-    if (a.video_menu_selected > 0 && a.video_menu_selected <= VIDEO_MENU_RES_COUNT) {
-        start_w = k_video_resolutions[a.video_menu_selected - 1].w;
-        start_h = k_video_resolutions[a.video_menu_selected - 1].h;
-    }
+    current_video_mode_dimensions(&a, &start_w, &start_h);
     Uint32 win_flags = SDL_WINDOW_VULKAN | SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI;
     if (a.video_menu_fullscreen) {
-        win_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+        win_flags |= SDL_WINDOW_FULLSCREEN;
     }
     a.window = SDL_CreateWindow("v-type (vulkan + post)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, start_w, start_h, win_flags);
     if (!a.window) {
         cleanup(&a);
         return 1;
+    }
+    if (a.video_menu_fullscreen) {
+        SDL_DisplayMode mode;
+        memset(&mode, 0, sizeof(mode));
+        mode.w = start_w;
+        mode.h = start_h;
+        if (SDL_SetWindowDisplayMode(a.window, &mode) != 0 || SDL_SetWindowFullscreen(a.window, SDL_WINDOW_FULLSCREEN) != 0) {
+            cleanup(&a);
+            return 1;
+        }
     }
     SDL_ShowCursor(SDL_DISABLE);
 
@@ -13425,11 +13639,24 @@ int main(void) {
                 } else if (menu_is_screen(&a.menu, APP_SCREEN_VIDEO) && ev.key.keysym.sym == SDLK_a) {
                     set_tty_message(&a, "msaa is part of quality max");
                 } else if (menu_is_screen(&a.menu, APP_SCREEN_VIDEO) && ev.key.keysym.sym == SDLK_UP) {
-                    const int count = VIDEO_MENU_RES_COUNT + 1;
-                    a.video_menu_selected = (a.video_menu_selected + count - 1) % count;
+                    const int count = a.video_resolution_count;
+                    if (count > 0) {
+                        a.video_custom_resolution_enabled = 0;
+                        a.video_custom_width = 0;
+                        a.video_custom_height = 0;
+                        a.video_menu_selected = ((a.video_menu_selected + count - 2) % count) + 1;
+                    }
                 } else if (menu_is_screen(&a.menu, APP_SCREEN_VIDEO) && ev.key.keysym.sym == SDLK_DOWN) {
-                    const int count = VIDEO_MENU_RES_COUNT + 1;
-                    a.video_menu_selected = (a.video_menu_selected + 1) % count;
+                    const int count = a.video_resolution_count;
+                    if (count > 0) {
+                        a.video_custom_resolution_enabled = 0;
+                        a.video_custom_width = 0;
+                        a.video_custom_height = 0;
+                        a.video_menu_selected = (a.video_menu_selected % count) + 1;
+                    }
+                } else if (menu_is_screen(&a.menu, APP_SCREEN_VIDEO) &&
+                           (ev.key.keysym.sym == SDLK_LEFT || ev.key.keysym.sym == SDLK_RIGHT)) {
+                    a.video_menu_fullscreen = a.video_menu_fullscreen ? 0 : 1;
                 } else if (menu_is_screen(&a.menu, APP_SCREEN_VIDEO) && (ev.key.keysym.sym == SDLK_RETURN || ev.key.keysym.sym == SDLK_KP_ENTER || ev.key.keysym.sym == SDLK_SPACE)) {
                     if (apply_video_mode(&a)) {
                         set_tty_message(&a, "display mode applied");
