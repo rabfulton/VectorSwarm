@@ -132,6 +132,7 @@ static float gameplay_ui_scale(const game_state* g);
 static int level_uses_cylinder(const game_state* g);
 static float cylinder_period(const game_state* g);
 static float wrap_delta(float a, float b, float period);
+static float normalize_cylinder_world_x(const game_state* g, float x);
 static float length2(float x, float y);
 static void normalize2(float* x, float* y);
 static float wrap_angle_rad(float a);
@@ -1322,6 +1323,7 @@ static void emit_missile_explosion(game_state* g, float x, float y, float vx, fl
         return;
     }
     const float su = gameplay_ui_scale(g);
+    const float origin_x = normalize_cylinder_world_x(g, x);
     game_push_audio_event(g, GAME_AUDIO_EVENT_EMP, x, y);
     trigger_emp_visual_at(g, x, y, fminf(g->world_w, g->world_h) * 0.08f);
     for (int i = 0; i < 26; ++i) {
@@ -1332,7 +1334,7 @@ static void emit_missile_explosion(game_state* g, float x, float y, float vx, fl
         const float a = frand01() * 6.2831853f;
         const float spd = (90.0f + frand01() * 320.0f) * su;
         p->type = (frand01() < 0.70f) ? PARTICLE_POINT : PARTICLE_GEOM;
-        p->b.x = x + frands1() * 4.0f * su;
+        p->b.x = origin_x + frands1() * 4.0f * su;
         p->b.y = y + frands1() * 4.0f * su;
         p->b.vx = cosf(a) * spd + vx * 0.2f;
         p->b.vy = sinf(a) * spd + vy * 0.2f;
@@ -2300,6 +2302,13 @@ static float wrap_delta(float a, float b, float period) {
     return d;
 }
 
+static float normalize_cylinder_world_x(const game_state* g, float x) {
+    if (!level_uses_cylinder(g)) {
+        return x;
+    }
+    return g->camera_x + wrap_delta(x, g->camera_x, cylinder_period(g));
+}
+
 static float length2(float x, float y) {
     return sqrtf(x * x + y * y);
 }
@@ -2362,12 +2371,13 @@ static void emit_player_asteroid_explosion(game_state* g) {
         return;
     }
     const float su = gameplay_ui_scale(g);
+    const float origin_x = normalize_cylinder_world_x(g, g->player.b.x);
     game_push_audio_event(g, GAME_AUDIO_EVENT_EXPLOSION, g->player.b.x, g->player.b.y);
     {
         particle* f = alloc_particle(g);
         if (f) {
             f->type = PARTICLE_FLASH;
-            f->b.x = g->player.b.x;
+            f->b.x = origin_x;
             f->b.y = g->player.b.y;
             f->age_s = 0.0f;
             f->life_s = 0.22f;
@@ -2386,7 +2396,7 @@ static void emit_player_asteroid_explosion(game_state* g) {
         const float a = frand01() * 6.2831853f;
         const float spd = (120.0f + frand01() * 420.0f) * su;
         p->type = (frand01() < 0.7f) ? PARTICLE_POINT : PARTICLE_GEOM;
-        p->b.x = g->player.b.x + frands1() * 5.0f * su;
+        p->b.x = origin_x + frands1() * 5.0f * su;
         p->b.y = g->player.b.y + frands1() * 5.0f * su;
         p->b.vx = cosf(a) * spd + g->player.b.vx * 0.25f;
         p->b.vy = sinf(a) * spd + g->player.b.vy * 0.25f;
@@ -3253,6 +3263,8 @@ static void game_update_wave_spawning(game_state* g, float dt) {
 }
 
 static void game_update_particles(game_state* g, float dt) {
+    const int uses_cylinder = level_uses_cylinder(g);
+    const float period = uses_cylinder ? cylinder_period(g) : 0.0f;
     for (size_t i = 0; i < MAX_PARTICLES; ++i) {
         particle* p = &g->particles[i];
         if (!p->active) {
@@ -3265,6 +3277,9 @@ static void game_update_particles(game_state* g, float dt) {
         }
         p->spin += p->spin_rate * dt;
         integrate_body(&p->b, dt);
+        if (uses_cylinder) {
+            p->b.x = g->camera_x + wrap_delta(p->b.x, g->camera_x, period);
+        }
         {
             const float t01 = p->age_s / p->life_s;
             const float inv = 1.0f - t01;
