@@ -8126,107 +8126,92 @@ typedef struct ship_pose {
     float s;
 } ship_pose;
 
-static vg_result draw_ship_hull(vg_context* ctx, ship_pose p, const vg_stroke_style* ship_style) {
-    const vg_vec2 hull[] = {
-        {p.x + p.fx * -36.0f * p.s, p.y - 7.0f * p.s},
-        {p.x + p.fx * -20.0f * p.s, p.y - 13.0f * p.s},
-        {p.x + p.fx * 8.0f * p.s, p.y - 11.0f * p.s},
-        {p.x + p.fx * 26.0f * p.s, p.y - 6.0f * p.s},
-        {p.x + p.fx * 41.0f * p.s, p.y - 1.0f * p.s},
-        {p.x + p.fx * 47.0f * p.s, p.y},
-        {p.x + p.fx * 41.0f * p.s, p.y + 1.0f * p.s},
-        {p.x + p.fx * 26.0f * p.s, p.y + 6.0f * p.s},
-        {p.x + p.fx * 8.0f * p.s, p.y + 11.0f * p.s},
-        {p.x + p.fx * -20.0f * p.s, p.y + 13.0f * p.s},
-        {p.x + p.fx * -36.0f * p.s, p.y + 7.0f * p.s},
-        {p.x + p.fx * -36.0f * p.s, p.y - 7.0f * p.s}
-    };
-    vg_result r = vg_draw_polyline(ctx, hull, sizeof(hull) / sizeof(hull[0]), ship_style, 0);
-    if (r != VG_OK) {
-        return r;
+static vg_result draw_projected_wire_model(
+    vg_context* ctx,
+    const float* positions_xyz,
+    uint32_t vertex_count,
+    const uint32_t* edges,
+    uint32_t edge_count,
+    float screen_x,
+    float screen_y,
+    float draw_scale,
+    float yaw,
+    float pitch,
+    float roll,
+    const vg_stroke_style* style
+) {
+    if (!ctx || !positions_xyz || !edges || !style || vertex_count == 0u || edge_count == 0u) {
+        return VG_OK;
     }
 
-    const vg_vec2 wing_top[] = {
-        {p.x + p.fx * -18.0f * p.s, p.y - 13.0f * p.s},
-        {p.x + p.fx * -5.0f * p.s, p.y - 24.0f * p.s},
-        {p.x + p.fx * 13.0f * p.s, p.y - 13.0f * p.s}
-    };
-    r = vg_draw_polyline(ctx, wing_top, sizeof(wing_top) / sizeof(wing_top[0]), ship_style, 0);
-    if (r != VG_OK) {
-        return r;
+    float min_x = positions_xyz[0], max_x = positions_xyz[0];
+    float min_y = positions_xyz[1], max_y = positions_xyz[1];
+    float min_z = positions_xyz[2], max_z = positions_xyz[2];
+    for (uint32_t i = 1u; i < vertex_count; ++i) {
+        const float x = positions_xyz[i * 3u + 0u];
+        const float y = positions_xyz[i * 3u + 1u];
+        const float z = positions_xyz[i * 3u + 2u];
+        if (x < min_x) min_x = x;
+        if (x > max_x) max_x = x;
+        if (y < min_y) min_y = y;
+        if (y > max_y) max_y = y;
+        if (z < min_z) min_z = z;
+        if (z > max_z) max_z = z;
     }
 
-    const vg_vec2 wing_bot[] = {
-        {p.x + p.fx * -18.0f * p.s, p.y + 13.0f * p.s},
-        {p.x + p.fx * -5.0f * p.s, p.y + 24.0f * p.s},
-        {p.x + p.fx * 13.0f * p.s, p.y + 13.0f * p.s}
-    };
-    r = vg_draw_polyline(ctx, wing_bot, sizeof(wing_bot) / sizeof(wing_bot[0]), ship_style, 0);
-    if (r != VG_OK) {
-        return r;
+    const float cx = 0.5f * (min_x + max_x);
+    const float cy = 0.5f * (min_y + max_y);
+    const float cz = 0.5f * (min_z + max_z);
+    const float ex = fmaxf(0.001f, max_x - min_x);
+    const float ey = fmaxf(0.001f, max_y - min_y);
+    const float ez = fmaxf(0.001f, max_z - min_z);
+    const float model_scale = 1.0f / fmaxf(ex, fmaxf(ey, ez));
+    const float cyaw = cosf(yaw);
+    const float syaw = sinf(yaw);
+    const float cp = cosf(pitch);
+    const float sp = sinf(pitch);
+    const float cr = cosf(roll);
+    const float sr = sinf(roll);
+    const float focal = 1.8f;
+    const float z_bias = 2.9f;
+
+    vg_vec2* screen = (vg_vec2*)malloc(sizeof(vg_vec2) * (size_t)vertex_count);
+    if (!screen) {
+        return VG_ERROR_OUT_OF_MEMORY;
     }
 
-    const vg_vec2 spine[] = {
-        {p.x + p.fx * -26.0f * p.s, p.y},
-        {p.x + p.fx * 43.0f * p.s, p.y}
-    };
-    return vg_draw_polyline(ctx, spine, 2, ship_style, 0);
-}
-
-static vg_result draw_ship_canopy(vg_context* ctx, ship_pose p, const vg_stroke_style* ship_style) {
-    const vg_vec2 canopy[] = {
-        {p.x + p.fx * -8.0f * p.s, p.y - 5.0f * p.s},
-        {p.x + p.fx * 11.0f * p.s, p.y - 3.0f * p.s},
-        {p.x + p.fx * 15.0f * p.s, p.y},
-        {p.x + p.fx * 11.0f * p.s, p.y + 3.0f * p.s},
-        {p.x + p.fx * -8.0f * p.s, p.y + 5.0f * p.s},
-        {p.x + p.fx * -8.0f * p.s, p.y - 5.0f * p.s}
-    };
-    return vg_draw_polyline(ctx, canopy, sizeof(canopy) / sizeof(canopy[0]), ship_style, 0);
-}
-
-static vg_result draw_ship_hardpoints(vg_context* ctx, ship_pose p, const vg_stroke_style* ship_style) {
-    const vg_vec2 top_rail[] = {
-        {p.x + p.fx * -1.0f * p.s, p.y - 16.0f * p.s},
-        {p.x + p.fx * 20.0f * p.s, p.y - 16.0f * p.s}
-    };
-    const vg_vec2 bot_rail[] = {
-        {p.x + p.fx * -1.0f * p.s, p.y + 16.0f * p.s},
-        {p.x + p.fx * 20.0f * p.s, p.y + 16.0f * p.s}
-    };
-    vg_result r = vg_draw_polyline(ctx, top_rail, 2, ship_style, 0);
-    if (r != VG_OK) {
-        return r;
+    for (uint32_t i = 0u; i < vertex_count; ++i) {
+        const float lx = (positions_xyz[i * 3u + 0u] - cx) * model_scale;
+        const float ly = (positions_xyz[i * 3u + 1u] - cy) * model_scale;
+        const float lz = (positions_xyz[i * 3u + 2u] - cz) * model_scale;
+        const float x1 = lx * cyaw - lz * syaw;
+        const float z1 = lx * syaw + lz * cyaw;
+        const float y2 = ly * cp - z1 * sp;
+        const float z2 = ly * sp + z1 * cp;
+        const float xr = x1 * cr - y2 * sr;
+        const float yr = x1 * sr + y2 * cr;
+        const float zr2 = z2 + z_bias;
+        const float invz = (zr2 > 0.1f) ? (1.0f / zr2) : 10.0f;
+        screen[i].x = screen_x + xr * focal * invz * draw_scale;
+        screen[i].y = screen_y + yr * focal * invz * draw_scale;
     }
-    r = vg_draw_polyline(ctx, bot_rail, 2, ship_style, 0);
-    if (r != VG_OK) {
-        return r;
-    }
-    const vg_vec2 nose_gun[] = {
-        {p.x + p.fx * 44.0f * p.s, p.y},
-        {p.x + p.fx * 57.0f * p.s, p.y}
-    };
-    return vg_draw_polyline(ctx, nose_gun, 2, ship_style, 0);
-}
 
-static vg_result draw_ship_pod(vg_context* ctx, ship_pose p, float y_off, const vg_stroke_style* ship_style) {
-    const vg_vec2 pod[] = {
-        {p.x + p.fx * 1.0f * p.s, p.y + y_off - 4.0f * p.s},
-        {p.x + p.fx * 16.0f * p.s, p.y + y_off - 4.0f * p.s},
-        {p.x + p.fx * 23.0f * p.s, p.y + y_off},
-        {p.x + p.fx * 16.0f * p.s, p.y + y_off + 4.0f * p.s},
-        {p.x + p.fx * 1.0f * p.s, p.y + y_off + 4.0f * p.s},
-        {p.x + p.fx * 1.0f * p.s, p.y + y_off - 4.0f * p.s}
-    };
-    vg_result r = vg_draw_polyline(ctx, pod, sizeof(pod) / sizeof(pod[0]), ship_style, 0);
-    if (r != VG_OK) {
-        return r;
+    for (uint32_t i = 0u; i < edge_count; ++i) {
+        const uint32_t i0 = edges[i * 2u + 0u];
+        const uint32_t i1 = edges[i * 2u + 1u];
+        if (i0 >= vertex_count || i1 >= vertex_count) {
+            continue;
+        }
+        const vg_vec2 seg[2] = {screen[i0], screen[i1]};
+        vg_result r = vg_draw_polyline(ctx, seg, 2u, style, 0);
+        if (r != VG_OK) {
+            free(screen);
+            return r;
+        }
     }
-    const vg_vec2 pod_gun[] = {
-        {p.x + p.fx * 23.0f * p.s, p.y + y_off},
-        {p.x + p.fx * 35.0f * p.s, p.y + y_off}
-    };
-    return vg_draw_polyline(ctx, pod_gun, 2, ship_style, 0);
+
+    free(screen);
+    return VG_OK;
 }
 
 static vg_result draw_ship_thruster(vg_context* ctx, ship_pose p, const vg_fill_style* thruster_fill) {
@@ -8240,6 +8225,7 @@ static vg_result draw_ship_thruster(vg_context* ctx, ship_pose p, const vg_fill_
 static vg_result draw_player_ship(
     vg_context* ctx,
     const game_state* g,
+    const render_metrics* metrics,
     const vg_stroke_style* ship_style,
     const vg_fill_style* thruster_fill
 ) {
@@ -8250,30 +8236,32 @@ static vg_result draw_player_ship(
         .fx = (g->player.facing_x < 0.0f) ? -1.0f : 1.0f,
         .s = 0.65f * su
     };
-
-    vg_result r = draw_ship_hull(ctx, p, ship_style);
-    if (r != VG_OK) {
-        return r;
-    }
-    r = draw_ship_canopy(ctx, p, ship_style);
-    if (r != VG_OK) {
-        return r;
-    }
-    r = draw_ship_hardpoints(ctx, p, ship_style);
-    if (r != VG_OK) {
-        return r;
-    }
-    if (g->weapon_level >= 2) {
-        r = draw_ship_pod(ctx, p, -16.0f * p.s, ship_style);
+    if (metrics &&
+        metrics->player_ship_positions_xyz &&
+        metrics->player_ship_edges &&
+        metrics->player_ship_vertex_count > 0u &&
+        metrics->player_ship_edge_count > 0u) {
+        const float deg_to_rad = 0.01745329252f;
+        const float pitch_deg = clampf(-g->player.b.vy / fmaxf(g->player.max_speed, 1.0f) * 34.0f, -34.0f, 34.0f);
+        const float yaw = (p.fx < 0.0f) ? 3.14159265359f : 0.0f;
+        vg_result r = draw_projected_wire_model(
+            ctx,
+            metrics->player_ship_positions_xyz,
+            metrics->player_ship_vertex_count,
+            metrics->player_ship_edges,
+            metrics->player_ship_edge_count,
+            p.x,
+            p.y,
+            130.0f * su,
+            yaw,
+            pitch_deg * deg_to_rad,
+            0.0f,
+            ship_style
+        );
         if (r != VG_OK) {
             return r;
         }
-    }
-    if (g->weapon_level >= 3) {
-        r = draw_ship_pod(ctx, p, 16.0f * p.s, ship_style);
-        if (r != VG_OK) {
-            return r;
-        }
+        return draw_ship_thruster(ctx, p, thruster_fill);
     }
     return draw_ship_thruster(ctx, p, thruster_fill);
 }
@@ -11300,7 +11288,7 @@ vg_result render_frame(vg_context* ctx, const game_state* state, const render_me
                 gp.player.b.y = pp.y;
                 player_depth = d;
             }
-            r = draw_player_ship(ctx, &gp, &ship_style, &thruster_fill);
+            r = draw_player_ship(ctx, &gp, metrics, &ship_style, &thruster_fill);
             if (r != VG_OK) {
                 return r;
             }
@@ -12064,7 +12052,7 @@ skip_legacy_landscape:
     }
 
     if (g->lives > 0) {
-        r = draw_player_ship(ctx, g, &ship_style, &thruster_fill);
+        r = draw_player_ship(ctx, g, metrics, &ship_style, &thruster_fill);
         if (r != VG_OK) {
             (void)vg_transform_pop(ctx);
             return r;

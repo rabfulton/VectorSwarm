@@ -800,6 +800,7 @@ typedef struct app {
     vg_svg_asset* surveillance_svg_asset;
     vg_svg_asset* tape_svg_asset;
     obj_wire_model opening_ship_model;
+    obj_wire_model player_ship_model;
     int opening_menu_selected;
     int opening_prev_up;
     int opening_prev_down;
@@ -4773,6 +4774,18 @@ static void init_planetarium_assets(app* a) {
         }
     }
     {
+        const char* obj_candidates[] = {
+            "assets/models/ship_game.obj",
+            "../assets/models/ship_game.obj",
+            "../../assets/models/ship_game.obj"
+        };
+        for (size_t i = 0; i < sizeof(obj_candidates) / sizeof(obj_candidates[0]); ++i) {
+            if (obj_wire_model_load_file(obj_candidates[i], &a->player_ship_model)) {
+                break;
+            }
+        }
+    }
+    {
         static const char* weapon_names[4] = {"shield.svg", "missile.svg", "emp.svg", "cannon.svg"};
         for (int widx = 0; widx < 4; ++widx) {
             char p0[128];
@@ -5427,6 +5440,7 @@ static void cleanup(app* a) {
         }
     }
     obj_wire_model_destroy(&a->opening_ship_model);
+    obj_wire_model_destroy(&a->player_ship_model);
     SDL_Quit();
 }
 
@@ -12488,6 +12502,10 @@ static int record_submit_present(
         .opening_ship_vertex_count = a->opening_ship_model.vertex_count,
         .opening_ship_edges = a->opening_ship_model.edges,
         .opening_ship_edge_count = a->opening_ship_model.edge_count,
+        .player_ship_positions_xyz = a->player_ship_model.positions_xyz,
+        .player_ship_vertex_count = a->player_ship_model.vertex_count,
+        .player_ship_edges = a->player_ship_model.edges,
+        .player_ship_edge_count = a->player_ship_model.edge_count,
         .opening_ship_yaw_deg = a->opening_ship_yaw_deg,
         .opening_ship_pitch_deg = a->opening_ship_pitch_deg,
         .opening_ship_roll_deg = a->opening_ship_roll_deg,

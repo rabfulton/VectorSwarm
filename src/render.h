@@ -139,6 +139,10 @@ typedef struct render_metrics {
     uint32_t opening_ship_vertex_count;
     const uint32_t* opening_ship_edges;
     uint32_t opening_ship_edge_count;
+    const float* player_ship_positions_xyz;
+    uint32_t player_ship_vertex_count;
+    const uint32_t* player_ship_edges;
+    uint32_t player_ship_edge_count;
     float opening_ship_yaw_deg;
     float opening_ship_pitch_deg;
     float opening_ship_roll_deg;
