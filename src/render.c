@@ -49,6 +49,7 @@ typedef struct wormhole_cache {
 static float repeatf(float v, float period);
 static int wrapi(int i, int n);
 static float lerpf(float a, float b, float t);
+static int level_uses_cylinder_render(const game_state* g);
 static float cylinder_period(const game_state* g);
 static vg_vec2 project_cylinder_point(const game_state* g, float x, float y, float* depth01);
 static vg_result draw_structure_prefab_tile(
@@ -874,6 +875,76 @@ static int wrapi(int i, int n) {
 
 static float lerpf(float a, float b, float t) {
     return a + (b - a) * t;
+}
+
+static float wrap_delta_render(float a, float b, float period) {
+    float d;
+    if (period <= 0.0f) {
+        return a - b;
+    }
+    d = fmodf(a - b, period);
+    if (d > period * 0.5f) {
+        d -= period;
+    } else if (d < -period * 0.5f) {
+        d += period;
+    }
+    return d;
+}
+
+static float lerp_world_x(const game_state* g, float prev_x, float curr_x, float t) {
+    if (level_uses_cylinder_render(g)) {
+        return prev_x + wrap_delta_render(curr_x, prev_x, cylinder_period(g)) * t;
+    }
+    return lerpf(prev_x, curr_x, t);
+}
+
+static void interpolate_body_render(const game_state* g, body* dst, const body* prev, const body* curr, float alpha) {
+    if (!dst || !curr) {
+        return;
+    }
+    if (!prev) {
+        *dst = *curr;
+        return;
+    }
+    *dst = *curr;
+    dst->x = lerp_world_x(g, prev->x, curr->x, alpha);
+    dst->y = lerpf(prev->y, curr->y, alpha);
+}
+
+static void interpolate_enemy_render(enemy* dst, const game_state* g, const enemy* prev, const enemy* curr, float alpha) {
+    if (!dst || !curr) {
+        return;
+    }
+    *dst = *curr;
+    if (!prev || !prev->active || !curr->active) {
+        return;
+    }
+    interpolate_body_render(g, &dst->b, &prev->b, &curr->b, alpha);
+    dst->facing_x = lerpf(prev->facing_x, curr->facing_x, alpha);
+    dst->facing_y = lerpf(prev->facing_y, curr->facing_y, alpha);
+    if (curr->visual_kind == ENEMY_VISUAL_EEL && prev->visual_kind == ENEMY_VISUAL_EEL) {
+        const int spine_n = clampi(curr->eel_spine_count, 0, EEL_SPINE_POINTS);
+        const int prev_spine_n = clampi(prev->eel_spine_count, 0, EEL_SPINE_POINTS);
+        const int interp_n = (spine_n < prev_spine_n) ? spine_n : prev_spine_n;
+        for (int i = 0; i < interp_n; ++i) {
+            dst->eel_spine_x[i] = lerp_world_x(g, prev->eel_spine_x[i], curr->eel_spine_x[i], alpha);
+            dst->eel_spine_y[i] = lerpf(prev->eel_spine_y[i], curr->eel_spine_y[i], alpha);
+        }
+    }
+}
+
+static void interpolate_missile_render(homing_missile* dst, const game_state* g, const homing_missile* prev, const homing_missile* curr, float alpha) {
+    if (!dst || !curr) {
+        return;
+    }
+    *dst = *curr;
+    if (!prev || !prev->active || !curr->active) {
+        return;
+    }
+    interpolate_body_render(g, &dst->b, &prev->b, &curr->b, alpha);
+    dst->heading_rad = lerpf(prev->heading_rad, curr->heading_rad, alpha);
+    dst->forward_x = lerpf(prev->forward_x, curr->forward_x, alpha);
+    dst->forward_y = lerpf(prev->forward_y, curr->forward_y, alpha);
 }
 
 static int level_uses_cylinder_render(const game_state* g) {
@@ -10876,6 +10947,32 @@ vg_result render_frame(vg_context* ctx, const game_state* state, const render_me
     {
         const float alpha = clampf(metrics->sim_alpha, 0.0f, 1.0f);
         interpolated_state.camera_x = lerpf(state->prev_camera_x, state->camera_x, alpha);
+        interpolate_body_render(state, &interpolated_state.player.b, &state->prev_player.b, &state->player.b, alpha);
+        interpolated_state.player.facing_x = lerpf(state->prev_player.facing_x, state->player.facing_x, alpha);
+        for (int i = 0; i < MAX_BULLETS; ++i) {
+            if (!state->bullets[i].active || !state->prev_bullets[i].active) {
+                continue;
+            }
+            interpolate_body_render(state, &interpolated_state.bullets[i].b, &state->prev_bullets[i].b, &state->bullets[i].b, alpha);
+        }
+        for (int i = 0; i < MAX_ENEMY_BULLETS; ++i) {
+            if (!state->enemy_bullets[i].active || !state->prev_enemy_bullets[i].active) {
+                continue;
+            }
+            interpolate_body_render(
+                state,
+                &interpolated_state.enemy_bullets[i].b,
+                &state->prev_enemy_bullets[i].b,
+                &state->enemy_bullets[i].b,
+                alpha
+            );
+        }
+        for (int i = 0; i < MAX_ENEMIES; ++i) {
+            interpolate_enemy_render(&interpolated_state.enemies[i], state, &state->prev_enemies[i], &state->enemies[i], alpha);
+        }
+        for (int i = 0; i < MAX_MISSILES; ++i) {
+            interpolate_missile_render(&interpolated_state.missiles[i], state, &state->prev_missiles[i], &state->missiles[i], alpha);
+        }
     }
     g = &interpolated_state;
     const palette_theme pal = get_palette_theme(metrics->palette_mode);

@@ -2686,7 +2686,8 @@ static int create_revolver_pipeline(app* a);
 static int create_structure_tile_resources(app* a);
 static void destroy_structure_tile_resources(app* a);
 static void unload_structure_tile_pixels(app* a);
-static int ensure_active_structure_tile_resources(app* a);
+static int sync_structure_tile_resources(app* a, int desired_atlas_id);
+static int sync_structure_tile_resources_for_current_state(app* a);
 static int wait_for_all_in_flight_frames(app* a);
 static void reset_grid_sim_state(app* a);
 static int create_vg_context(app* a);
@@ -3269,8 +3270,7 @@ static void scope_history_push(app* a, const float* src, uint32_t count) {
         return;
     }
     if (count >= ACOUSTICS_SCOPE_HISTORY_SAMPLES) {
-        const uint32_t from = count - ACOUSTICS_SCOPE_HISTORY_SAMPLES;
-        memcpy(a->scope_history, src + from, sizeof(float) * ACOUSTICS_SCOPE_HISTORY_SAMPLES);
+        memcpy(a->scope_history, src + (count - ACOUSTICS_SCOPE_HISTORY_SAMPLES), sizeof(float) * ACOUSTICS_SCOPE_HISTORY_SAMPLES);
         return;
     }
     const uint32_t keep = ACOUSTICS_SCOPE_HISTORY_SAMPLES - count;
@@ -5521,6 +5521,8 @@ static void destroy_render_runtime(app* a) {
         vkDestroySampler(a->device, a->structure_tile_sampler, NULL);
         a->structure_tile_sampler = VK_NULL_HANDLE;
     }
+    a->use_gpu_structure_tiles = 0;
+    a->structure_tile_desc_set = VK_NULL_HANDLE;
     if (a->scene_fb) {
         vkDestroyFramebuffer(a->device, a->scene_fb, NULL);
         a->scene_fb = VK_NULL_HANDLE;
@@ -5865,7 +5867,7 @@ static int recreate_render_runtime(app* a) {
     game_set_world_size(&a->game, (float)a->swapchain_extent.width, (float)a->swapchain_extent.height);
     reset_grid_sim_state(a);
     a->force_clear_frames = 2;
-    return 1;
+    return sync_structure_tile_resources_for_current_state(a);
 }
 
 static int apply_video_mode(app* a) {
@@ -9246,8 +9248,7 @@ static int desired_structure_tile_atlas_id(const app* a) {
     return TEXTURE_ATLAS_NONE;
 }
 
-static int ensure_active_structure_tile_resources(app* a) {
-    const int desired_atlas_id = desired_structure_tile_atlas_id(a);
+static int sync_structure_tile_resources(app* a, int desired_atlas_id) {
     if (!a) {
         return 0;
     }
@@ -9280,6 +9281,13 @@ static int ensure_active_structure_tile_resources(app* a) {
         return 0;
     }
     return 1;
+}
+
+static int sync_structure_tile_resources_for_current_state(app* a) {
+    if (!a) {
+        return 0;
+    }
+    return sync_structure_tile_resources(a, desired_structure_tile_atlas_id(a));
 }
 
 /* Creates a second pipeline that uses the same layout/descriptor as the
@@ -13108,6 +13116,11 @@ int main(void) {
     set_tty_level_intro_message(&a);
     snprintf(a.last_level_name_for_tty, sizeof(a.last_level_name_for_tty), "%s", game_current_level_name(&a.game));
     sync_planetarium_marquee(&a);
+    if (!sync_structure_tile_resources_for_current_state(&a)) {
+        fprintf(stderr, "render failure: could not sync initial structure tile atlas\n");
+        cleanup(&a);
+        return 1;
+    }
     vg_text_fx_marquee_set_speed(&a.planetarium_marquee, 70.0f);
     vg_text_fx_marquee_set_gap(&a.planetarium_marquee, 48.0f);
 
@@ -13851,10 +13864,19 @@ int main(void) {
             hitch_after_frame_wait = SDL_GetPerformanceCounter();
         }
 
-        if (!ensure_active_structure_tile_resources(&a)) {
-            fprintf(stderr, "render failure: could not load active structure tile atlas\n");
-            break;
+        {
+            const int desired_structure_atlas_id = desired_structure_tile_atlas_id(&a);
+            const int structure_tiles_need_sync =
+                (desired_structure_atlas_id != a.current_structure_tile_atlas_id) ||
+                (desired_structure_atlas_id != TEXTURE_ATLAS_NONE && !a.use_gpu_structure_tiles);
+            if (structure_tiles_need_sync) {
+                if (!sync_structure_tile_resources(&a, desired_structure_atlas_id)) {
+                    fprintf(stderr, "render failure: could not sync active structure tile atlas\n");
+                    break;
+                }
+            }
         }
+
         if (hitch_trace_enabled || hitch_trace_ring_enabled) {
             hitch_after_structure_tiles = SDL_GetPerformanceCounter();
         }

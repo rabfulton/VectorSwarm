@@ -21,6 +21,9 @@
 #endif
 
 #define VG_VK_INITIAL_FRAME_UPLOAD_BYTES (8u * 1024u * 1024u)
+#define VG_VK_STROKE_VERTEX_CAPACITY (1u << 20)
+#define VG_VK_DRAW_CAPACITY 16384u
+#define VG_VK_PATH_POINT_CAPACITY 32768u
 #endif
 
 typedef struct vg_vk_draw_cmd {
@@ -83,6 +86,9 @@ typedef struct vg_vk_backend {
     uint32_t draw_count;
     uint32_t draw_cap;
 
+    vg_vec2* path_points;
+    uint32_t path_point_cap;
+
 #if VG_HAS_VULKAN
     VkPhysicalDevice physical_device;
     VkDevice device;
@@ -125,43 +131,17 @@ static vg_vk_backend* vg_vk_backend_from(vg_context* ctx) {
 }
 
 static int vg_vk_reserve_vertices(vg_vk_backend* backend, uint32_t extra) {
-    if (backend->stroke_vertex_count + extra <= backend->stroke_vertex_cap) {
-        return 1;
-    }
-
-    uint32_t new_cap = backend->stroke_vertex_cap == 0 ? 1024u : backend->stroke_vertex_cap * 2u;
-    while (new_cap < backend->stroke_vertex_count + extra) {
-        new_cap *= 2u;
-    }
-
-    vg_vec2* next = (vg_vec2*)realloc(backend->stroke_vertices, sizeof(*next) * (size_t)new_cap);
-    if (!next) {
+    if (!backend) {
         return 0;
     }
-
-    backend->stroke_vertices = next;
-    backend->stroke_vertex_cap = new_cap;
-    return 1;
+    return (backend->stroke_vertex_count + extra <= backend->stroke_vertex_cap) ? 1 : 0;
 }
 
 static int vg_vk_reserve_draws(vg_vk_backend* backend, uint32_t extra) {
-    if (backend->draw_count + extra <= backend->draw_cap) {
-        return 1;
-    }
-
-    uint32_t new_cap = backend->draw_cap == 0 ? 64u : backend->draw_cap * 2u;
-    while (new_cap < backend->draw_count + extra) {
-        new_cap *= 2u;
-    }
-
-    vg_vk_draw_cmd* next = (vg_vk_draw_cmd*)realloc(backend->draws, sizeof(*next) * (size_t)new_cap);
-    if (!next) {
+    if (!backend) {
         return 0;
     }
-
-    backend->draws = next;
-    backend->draw_cap = new_cap;
-    return 1;
+    return (backend->draw_count + extra <= backend->draw_cap) ? 1 : 0;
 }
 
 static int vg_vk_style_equal(const vg_stroke_style* a, const vg_stroke_style* b) {
@@ -833,26 +813,19 @@ static vg_result vg_vk_draw_polyline_impl(
     return vg_vk_push_draw(ctx, backend, first_vertex, backend->stroke_vertex_count - first_vertex, style, &style->stencil);
 }
 
-static int vg_vk_append_point(vg_vec2** points, size_t* count, size_t* cap, vg_vec2 p) {
-    if (*count == *cap) {
-        size_t next_cap = *cap == 0 ? 64u : *cap * 2u;
-        vg_vec2* next = (vg_vec2*)realloc(*points, sizeof(*next) * next_cap);
-        if (!next) {
-            return 0;
-        }
-        *points = next;
-        *cap = next_cap;
+static int vg_vk_append_point(vg_vec2* points, size_t* count, size_t cap, vg_vec2 p) {
+    if (!points || !count || *count >= cap) {
+        return 0;
     }
-
-    (*points)[*count] = p;
+    points[*count] = p;
     (*count)++;
     return 1;
 }
 
 static int vg_vk_append_cubic(
-    vg_vec2** points,
+    vg_vec2* points,
     size_t* count,
-    size_t* cap,
+    size_t cap,
     vg_vec2 p0,
     vg_vec2 c0,
     vg_vec2 c1,
@@ -1486,6 +1459,7 @@ static void vg_vk_destroy(vg_context* ctx) {
     }
 #endif
     free(backend ? backend->frame_uploads : NULL);
+    free(backend->path_points);
     free(backend->stroke_vertices);
     free(backend->draws);
     free(backend);
@@ -1583,62 +1557,55 @@ static vg_result vg_vk_draw_path_stroke(vg_context* ctx, const vg_path* path, co
         return VG_ERROR_INVALID_ARGUMENT;
     }
 
-    vg_vec2* points = NULL;
+    vg_vec2* points = backend->path_points;
     size_t count = 0;
-    size_t cap = 0;
+    size_t cap = (size_t)backend->path_point_cap;
+    if (!points || cap == 0u) {
+        return VG_ERROR_OUT_OF_MEMORY;
+    }
     for (size_t i = 0; i < path->count; ++i) {
         vg_path_cmd cmd = path->cmds[i];
         switch (cmd.type) {
             case VG_CMD_MOVE_TO: {
                 vg_result flush = vg_vk_flush_subpath(ctx, backend, &points, &count, style, 0);
                 if (flush != VG_OK) {
-                    free(points);
                     return flush;
                 }
-                if (!vg_vk_append_point(&points, &count, &cap, cmd.p[0])) {
-                    free(points);
+                if (!vg_vk_append_point(points, &count, cap, cmd.p[0])) {
                     return VG_ERROR_OUT_OF_MEMORY;
                 }
                 break;
             }
             case VG_CMD_LINE_TO:
                 if (count == 0u) {
-                    free(points);
                     return VG_ERROR_INVALID_ARGUMENT;
                 }
-                if (!vg_vk_append_point(&points, &count, &cap, cmd.p[0])) {
-                    free(points);
+                if (!vg_vk_append_point(points, &count, cap, cmd.p[0])) {
                     return VG_ERROR_OUT_OF_MEMORY;
                 }
                 break;
             case VG_CMD_CUBIC_TO:
                 if (count == 0u) {
-                    free(points);
                     return VG_ERROR_INVALID_ARGUMENT;
                 }
-                if (!vg_vk_append_cubic(&points, &count, &cap, points[count - 1u], cmd.p[0], cmd.p[1], cmd.p[2])) {
-                    free(points);
+                if (!vg_vk_append_cubic(points, &count, cap, points[count - 1u], cmd.p[0], cmd.p[1], cmd.p[2])) {
                     return VG_ERROR_OUT_OF_MEMORY;
                 }
                 break;
             case VG_CMD_CLOSE: {
                 vg_result flush = vg_vk_flush_subpath(ctx, backend, &points, &count, style, 1);
                 if (flush != VG_OK) {
-                    free(points);
                     return flush;
                 }
                 break;
             }
             default:
-                free(points);
                 return VG_ERROR_INVALID_ARGUMENT;
                 break;
         }
     }
 
-    vg_result out = vg_vk_flush_subpath(ctx, backend, &points, &count, style, 0);
-    free(points);
-    return out;
+    return vg_vk_flush_subpath(ctx, backend, &points, &count, style, 0);
 }
 
 static vg_result vg_vk_draw_polyline(vg_context* ctx, const vg_vec2* points, size_t count, const vg_stroke_style* style, int closed) {
@@ -1735,6 +1702,19 @@ vg_result vg_vk_backend_create(vg_context* ctx) {
     backend->crt = ctx->crt;
     backend->raster_samples = backend->desc.raster_samples;
     backend->has_stencil_attachment = backend->desc.has_stencil_attachment ? 1 : 0;
+    backend->stroke_vertex_cap = VG_VK_STROKE_VERTEX_CAPACITY;
+    backend->draw_cap = VG_VK_DRAW_CAPACITY;
+    backend->path_point_cap = VG_VK_PATH_POINT_CAPACITY;
+    backend->stroke_vertices = (vg_vec2*)calloc((size_t)backend->stroke_vertex_cap, sizeof(*backend->stroke_vertices));
+    backend->draws = (vg_vk_draw_cmd*)calloc((size_t)backend->draw_cap, sizeof(*backend->draws));
+    backend->path_points = (vg_vec2*)calloc((size_t)backend->path_point_cap, sizeof(*backend->path_points));
+    if (!backend->stroke_vertices || !backend->draws || !backend->path_points) {
+        free(backend->path_points);
+        free(backend->stroke_vertices);
+        free(backend->draws);
+        free(backend);
+        return VG_ERROR_OUT_OF_MEMORY;
+    }
 
 #if VG_HAS_VULKAN
     backend->physical_device = (VkPhysicalDevice)backend->desc.physical_device;

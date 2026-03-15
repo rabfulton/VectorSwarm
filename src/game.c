@@ -162,6 +162,7 @@ static void update_missile_system(game_state* g, float dt);
 static void configure_arc_nodes_for_level(game_state* g);
 static void update_arc_nodes(game_state* g, float dt);
 static void game_reset_powerup_state(game_state* g, int clear_pickups);
+static void game_capture_render_prev_state(game_state* g);
 static void game_set_player_dead(game_state* g, int queue_message);
 static void game_update_powerups(game_state* g, float dt);
 static void game_try_spawn_powerup_drop(game_state* g, float x, float y, float vx, float vy);
@@ -195,6 +196,17 @@ static void game_reset_powerup_state(game_state* g, int clear_pickups) {
     }
     memset(g->powerups, 0, sizeof(g->powerups));
     g->powerup_count = 0;
+}
+
+static void game_capture_render_prev_state(game_state* g) {
+    if (!g) {
+        return;
+    }
+    g->prev_player = g->player;
+    memcpy(g->prev_bullets, g->bullets, sizeof(g->prev_bullets));
+    memcpy(g->prev_enemy_bullets, g->enemy_bullets, sizeof(g->prev_enemy_bullets));
+    memcpy(g->prev_enemies, g->enemies, sizeof(g->prev_enemies));
+    memcpy(g->prev_missiles, g->missiles, sizeof(g->prev_missiles));
 }
 
 static powerup_pickup* alloc_powerup_pickup(game_state* g) {
@@ -2219,6 +2231,7 @@ static int set_level_index(game_state* g, int index) {
     g->orbit_decay_timeout = 0;
     apply_level_runtime_config(g);
     g->level_time_remaining_s = level_uses_cylinder(g) ? 120.0f : 0.0f;
+    game_capture_render_prev_state(g);
     return 1;
 }
 
@@ -2704,6 +2717,7 @@ void game_init(game_state* g, float world_w, float world_h) {
         g->stars[i].speed = 50.0f + frand01() * 190.0f;
         g->stars[i].size = 0.9f + frand01() * 1.5f;
     }
+    game_capture_render_prev_state(g);
 }
 
 void game_set_world_size(game_state* g, float world_w, float world_h) {
@@ -3204,6 +3218,7 @@ static void game_update_camera(game_state* g, float dt) {
 void game_update(game_state* g, float dt, const game_input* in) {
     g->t += dt;
     const float su = gameplay_ui_scale(g);
+    game_capture_render_prev_state(g);
 
     game_handle_restart(g, in);
     game_update_stars(g, dt);

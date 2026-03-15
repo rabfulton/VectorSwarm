@@ -534,10 +534,14 @@ typedef struct game_state {
     int render_style; /* enum level_render_style_id */
     int level_theme_palette; /* 0=green,1=amber,2=ice from level config */
     player_state player;
+    player_state prev_player;
     star stars[MAX_STARS];
     bullet bullets[MAX_BULLETS];
+    bullet prev_bullets[MAX_BULLETS];
     enemy_bullet enemy_bullets[MAX_ENEMY_BULLETS];
+    enemy_bullet prev_enemy_bullets[MAX_ENEMY_BULLETS];
     enemy enemies[MAX_ENEMIES];
+    enemy prev_enemies[MAX_ENEMIES];
     particle particles[MAX_PARTICLES];
     enemy_debris debris[MAX_ENEMY_DEBRIS];
     game_audio_event audio_events[MAX_AUDIO_EVENTS];
@@ -569,6 +573,7 @@ typedef struct game_state {
     missile_launcher missile_launchers[MAX_MISSILE_LAUNCHERS];
     int missile_launcher_count;
     homing_missile missiles[MAX_MISSILES];
+    homing_missile prev_missiles[MAX_MISSILES];
     int missile_count;
     arc_node_runtime arc_nodes[MAX_ARC_NODES];
     int arc_node_count;
