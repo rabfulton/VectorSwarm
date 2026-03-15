@@ -8,7 +8,7 @@ layout(set = 0, binding = 0) uniform sampler2D u_industry;
 layout(push_constant) uniform IndustryPC {
     vec4 p0; /* x=viewport_w, y=viewport_h, z=time_s, w=alpha_scale */
     vec4 p1; /* rgb=base_color, w=camera_x */
-    vec4 p2; /* x=world_w, y=world_h, z=tile_aspect, w=reserved */
+    vec4 p2; /* x=world_w, y=world_h, z=tile_aspect, w=parallax_speed */
 } pc;
 
 float sample_alpha(vec2 uv) {
@@ -22,6 +22,7 @@ void main() {
     float y_from_bottom = vh - frag_px.y;
     float cam_x = pc.p1.w;
     float tile_aspect = max(pc.p2.z, 0.1);
+    float parallax_speed = max(pc.p2.w, 0.0);
     float layer_h_px[3] = float[3](vh * 0.24, vh * 0.31, vh * 0.38);
     float layer_parallax[3] = float[3](0.22, 0.44, 0.78);
     /* Far -> near: each nearer layer sits lower, all anchored from screen bottom. */
@@ -37,7 +38,7 @@ void main() {
     for (int i = 2; i >= 0; --i) {
         float h_px = layer_h_px[i];
         float w_px = h_px * tile_aspect;
-        float world_x = cam_x * layer_parallax[i] + (frag_px.x - vw * 0.5);
+        float world_x = cam_x * layer_parallax[i] * parallax_speed + (frag_px.x - vw * 0.5);
         float u01 = fract(world_x / max(w_px, 1.0));
         float v01 = clamp((y_from_bottom - layer_base[i]) / max(h_px, 1.0), 0.0, 1.0);
         float mask = step(layer_base[i], y_from_bottom) * step(y_from_bottom, layer_base[i] + h_px);

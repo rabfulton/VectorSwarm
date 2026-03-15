@@ -393,6 +393,7 @@ typedef struct leveldef_level {
     float forest_godray_strength;
     float forest_root_arch_density;
     float forest_foreground_occluder_alpha;
+    float defender_industry_parallax_speed;
     int render_style; /* enum level_render_style_id */
     int wave_mode;
     int spawn_mode; /* enum leveldef_spawn_mode */

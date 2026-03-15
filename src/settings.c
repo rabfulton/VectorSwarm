@@ -202,6 +202,8 @@ int settings_load(app_settings* io, const settings_resolution* resolutions, int 
 
     io->fullscreen = fullscreen ? 1 : 0;
     io->selected = selected;
+    io->width = width;
+    io->height = height;
     io->palette = palette;
     if (quality < VIDEO_QUALITY_LOW) {
         quality = VIDEO_QUALITY_LOW;

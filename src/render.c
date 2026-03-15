@@ -7098,6 +7098,7 @@ static vg_result draw_defender_industrial_parallax(
     float w,
     float h,
     float cam_x,
+    float parallax_speed,
     const palette_theme* pal,
     const vg_stroke_style* halo,
     const vg_stroke_style* main
@@ -7112,7 +7113,7 @@ static vg_result draw_defender_industrial_parallax(
     for (int li = 0; li < LAYERS; ++li) {
         const float lf = (float)li / (float)(LAYERS - 1); /* far->near */
         const float depth = lf;
-        const float parallax = 0.14f + depth * 1.52f;
+        const float parallax = (0.14f + depth * 1.52f) * parallax_speed;
         const float module_w = 72.0f + depth * 86.0f;
         /* In this Y-up scene, far layers should sit much higher than near layers. */
         const float depth_inv = (1.0f - depth);
@@ -11894,6 +11895,7 @@ vg_result render_frame(vg_context* ctx, const game_state* state, const render_me
                     g->world_w,
                     g->world_h,
                     g->camera_x,
+                    fmaxf(game_current_leveldef(g) ? game_current_leveldef(g)->defender_industry_parallax_speed : 1.0f, 0.0f),
                     &pal,
                     &land_halo,
                     &land_main

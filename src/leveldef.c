@@ -461,6 +461,7 @@ void leveldef_init_defaults(leveldef_db* db) {
         db->levels[i].forest_godray_strength = 0.30f;
         db->levels[i].forest_root_arch_density = 0.70f;
         db->levels[i].forest_foreground_occluder_alpha = 0.50f;
+        db->levels[i].defender_industry_parallax_speed = 1.0f;
         db->levels[i].wave_mode = -1;
         db->levels[i].render_style = -1;
         db->levels[i].spawn_mode = -1;
@@ -1183,6 +1184,8 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_level->forest_root_arch_density = strtof(v, NULL);
                     } else if (strcmp(k, "forest.foreground_occluder_alpha") == 0) {
                         cur_level->forest_foreground_occluder_alpha = strtof(v, NULL);
+                    } else if (strcmp(k, "defender.industry_parallax_speed") == 0) {
+                        cur_level->defender_industry_parallax_speed = strtof(v, NULL);
                     } else if (strcmp(k, "render_style") == 0) {
                         cur_level->render_style = render_style_from_name(v);
                     } else if (strcmp(k, "wave_mode") == 0) {
@@ -1775,6 +1778,13 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
             l->forest_foreground_occluder_alpha < 0.0f || l->forest_foreground_occluder_alpha > 1.0f || !isfinite(l->forest_foreground_occluder_alpha)) {
             if (log_out) {
                 fprintf(log_out, "leveldef: level %d invalid forest tuning values\n", i);
+            }
+            ok = 0;
+        }
+        if (l->defender_industry_parallax_speed < 0.0f || l->defender_industry_parallax_speed > 8.0f ||
+            !isfinite(l->defender_industry_parallax_speed)) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid defender industry parallax speed\n", i);
             }
             ok = 0;
         }

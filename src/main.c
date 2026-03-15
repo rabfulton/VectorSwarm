@@ -255,7 +255,7 @@ typedef struct grid_sim_sources_ubo {
 typedef struct industry_pc {
     float p0[4]; /* x=viewport_w, y=viewport_h, z=time_s, w=alpha_scale */
     float p1[4]; /* rgb=base_color, w=camera_x */
-    float p2[4]; /* x=world_w, y=world_h, z=tile_aspect, w=reserved */
+    float p2[4]; /* x=world_w, y=world_h, z=tile_aspect, w=parallax_speed */
 } industry_pc;
 
 typedef struct arc_beam_pc {
@@ -12101,6 +12101,7 @@ static void record_gpu_industry(app* a, VkCommandBuffer cmd, float t) {
     pc.p2[0] = a->game.world_w;
     pc.p2[1] = a->game.world_h;
     pc.p2[2] = (float)a->industry_w / fmaxf((float)a->industry_h, 1.0f);
+    pc.p2[3] = fmaxf(game_current_leveldef(&a->game) ? game_current_leveldef(&a->game)->defender_industry_parallax_speed : 1.0f, 0.0f);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->industry_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->industry_layout, 0, 1, &a->industry_desc_set, 0, NULL);
     vkCmdPushConstants(cmd, a->industry_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
