@@ -12928,6 +12928,7 @@ static int record_submit_present(
         metrics.level_editor_marker_e[i] = a->level_editor.markers[i].e;
         metrics.level_editor_marker_f[i] = a->level_editor.markers[i].f;
         metrics.level_editor_marker_g[i] = a->level_editor.markers[i].g;
+        metrics.level_editor_marker_h[i] = a->level_editor.markers[i].h;
     }
     metrics.controls_selected = a->controls_selected;
     metrics.controls_selected_column = a->controls_selected_column;

@@ -57,6 +57,23 @@ static int searchlight_source_from_name(const char* name) {
     return -1;
 }
 
+static int searchlight_style_from_name(const char* name) {
+    char* end = NULL;
+    long v;
+    if (!name) {
+        return -1;
+    }
+    if (strcmp(name, "relic") == 0 || strcmp(name, "classic") == 0 || strcmp(name, "default") == 0) return SEARCHLIGHT_STYLE_RELIC;
+    if (strcmp(name, "docklight") == 0) return SEARCHLIGHT_STYLE_DOCKLIGHT;
+    if (strcmp(name, "lantern") == 0) return SEARCHLIGHT_STYLE_LANTERN;
+    if (strcmp(name, "furnace") == 0) return SEARCHLIGHT_STYLE_FURNACE;
+    if (strcmp(name, "prism") == 0) return SEARCHLIGHT_STYLE_PRISM;
+    if (strcmp(name, "coil") == 0) return SEARCHLIGHT_STYLE_COIL;
+    v = strtol(name, &end, 10);
+    if (end && *end == '\0') return (int)v;
+    return -1;
+}
+
 static int mine_style_from_name(const char* name) {
     char* end = NULL;
     long v;
@@ -602,8 +619,9 @@ static int parse_searchlight(leveldef_level* lvl, const char* value, FILE* log_o
     char buf[512];
     char* tok;
     char* save = NULL;
-    const int expected = 17;
-    char* fields[17];
+    const int expected_min = 17;
+    const int expected_max = 18;
+    char* fields[18];
     int i = 0;
     leveldef_searchlight sl;
 
@@ -615,13 +633,13 @@ static int parse_searchlight(leveldef_level* lvl, const char* value, FILE* log_o
     buf[sizeof(buf) - 1] = '\0';
 
     tok = strtok_r(buf, ",", &save);
-    while (tok && i < expected) {
+    while (tok && i < expected_max) {
         fields[i++] = trim(tok);
         tok = strtok_r(NULL, ",", &save);
     }
-    if (i != expected) {
+    if (tok != NULL || i < expected_min || i > expected_max) {
         if (log_out) {
-            fprintf(log_out, "leveldef: searchlight expects %d fields, got %d\n", expected, i);
+            fprintf(log_out, "leveldef: searchlight expects %d or %d fields, got %d\n", expected_min, expected_max, i);
         }
         return 0;
     }
@@ -636,14 +654,26 @@ static int parse_searchlight(leveldef_level* lvl, const char* value, FILE* log_o
     sl.sweep_phase_deg = strtof(fields[7], NULL);
     sl.sweep_motion = searchlight_motion_from_name(fields[8]);
     sl.source_type = searchlight_source_from_name(fields[9]);
-    sl.source_radius = strtof(fields[10], NULL);
-    sl.clear_grace_s = strtof(fields[11], NULL);
-    sl.fire_interval_s = strtof(fields[12], NULL);
-    sl.projectile_speed = strtof(fields[13], NULL);
-    sl.projectile_ttl_s = strtof(fields[14], NULL);
-    sl.projectile_radius = strtof(fields[15], NULL);
-    sl.aim_jitter_deg = strtof(fields[16], NULL);
-    if (sl.sweep_motion < 0 || sl.source_type < 0) {
+    sl.style = SEARCHLIGHT_STYLE_RELIC;
+    if (i >= 18) {
+        sl.style = searchlight_style_from_name(fields[10]);
+        sl.source_radius = strtof(fields[11], NULL);
+        sl.clear_grace_s = strtof(fields[12], NULL);
+        sl.fire_interval_s = strtof(fields[13], NULL);
+        sl.projectile_speed = strtof(fields[14], NULL);
+        sl.projectile_ttl_s = strtof(fields[15], NULL);
+        sl.projectile_radius = strtof(fields[16], NULL);
+        sl.aim_jitter_deg = strtof(fields[17], NULL);
+    } else {
+        sl.source_radius = strtof(fields[10], NULL);
+        sl.clear_grace_s = strtof(fields[11], NULL);
+        sl.fire_interval_s = strtof(fields[12], NULL);
+        sl.projectile_speed = strtof(fields[13], NULL);
+        sl.projectile_ttl_s = strtof(fields[14], NULL);
+        sl.projectile_radius = strtof(fields[15], NULL);
+        sl.aim_jitter_deg = strtof(fields[16], NULL);
+    }
+    if (sl.sweep_motion < 0 || sl.source_type < 0 || sl.style < SEARCHLIGHT_STYLE_RELIC || sl.style > SEARCHLIGHT_STYLE_COIL) {
         if (log_out) {
             fprintf(log_out, "leveldef: invalid searchlight enum token(s)\n");
         }
@@ -1889,6 +1919,16 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
                 fprintf(log_out, "leveldef: level %d invalid default_boid_profile\n", i);
             }
             ok = 0;
+        }
+        for (int j = 0; j < l->searchlight_count; ++j) {
+            if (l->searchlights[j].style < SEARCHLIGHT_STYLE_RELIC ||
+                l->searchlights[j].style > SEARCHLIGHT_STYLE_COIL) {
+                if (log_out) {
+                    fprintf(log_out, "leveldef: level %d has invalid searchlight style\n", i);
+                }
+                ok = 0;
+                break;
+            }
         }
         if (l->wave_mode == LEVELDEF_WAVES_BOID_ONLY) {
             if (l->boid_cycle_count > 0) {

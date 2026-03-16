@@ -1257,6 +1257,18 @@ static const char* searchlight_source_name(int source) {
     }
 }
 
+static const char* searchlight_style_name(int style) {
+    switch (style) {
+        case SEARCHLIGHT_STYLE_DOCKLIGHT: return "docklight";
+        case SEARCHLIGHT_STYLE_LANTERN: return "lantern";
+        case SEARCHLIGHT_STYLE_FURNACE: return "furnace";
+        case SEARCHLIGHT_STYLE_PRISM: return "prism";
+        case SEARCHLIGHT_STYLE_COIL: return "coil";
+        case SEARCHLIGHT_STYLE_RELIC:
+        default: return "relic";
+    }
+}
+
 static const char* minefield_style_name(int style) {
     switch (style) {
         case MINE_STYLE_INDUSTRIAL: return "industrial";
@@ -1506,6 +1518,7 @@ static int build_level_serialized_text(
         sl.sweep_motion = clampi((int)lroundf(m->g), SEARCHLIGHT_MOTION_LINEAR, SEARCHLIGHT_MOTION_PENDULUM_INV);
         sl.source_type = clampi((int)lroundf(m->e), SEARCHLIGHT_SOURCE_DOME, SEARCHLIGHT_SOURCE_ORB);
         sl.source_radius = (m->f > 0.0f) ? m->f : 14.0f;
+        sl.style = clampi((int)lroundf(m->h), SEARCHLIGHT_STYLE_RELIC, SEARCHLIGHT_STYLE_COIL);
         sl.clear_grace_s = 2.0f;
         sl.fire_interval_s = 0.08f;
         sl.projectile_speed = 900.0f;
@@ -2053,10 +2066,10 @@ static int build_level_serialized_text(
     for (i = 0; i < lvl.searchlight_count; ++i) {
         const leveldef_searchlight* sl = &lvl.searchlights[i];
         if (!appendf(out, out_cap, &used,
-            "searchlight=%.6f,%.6f,%.6f,%.3f,%.3f,%.3f,%.3f,%.3f,%s,%s,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
+            "searchlight=%.6f,%.6f,%.6f,%.3f,%.3f,%.3f,%.3f,%.3f,%s,%s,%s,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
             sl->anchor_x01, sl->anchor_y01, sl->length_h01, sl->half_angle_deg, sl->sweep_center_deg,
             sl->sweep_amplitude_deg, sl->sweep_speed, sl->sweep_phase_deg, searchlight_motion_name(sl->sweep_motion),
-            searchlight_source_name(sl->source_type), sl->source_radius, sl->clear_grace_s, sl->fire_interval_s,
+            searchlight_source_name(sl->source_type), searchlight_style_name(sl->style), sl->source_radius, sl->clear_grace_s, sl->fire_interval_s,
             sl->projectile_speed, sl->projectile_ttl_s, sl->projectile_radius, sl->aim_jitter_deg)) return 0;
     }
     for (i = 0; i < lvl.minefield_count; ++i) {
@@ -2174,7 +2187,7 @@ static int marker_property_count(const level_editor_state* s) {
         return 6; /* event: ORDER,DELAY,DUR,ANGLE,SPEED,DENSITY | spatial: X,Y,DUR,ANGLE,SPEED,DENSITY */
     }
     if (kind == LEVEL_EDITOR_MARKER_SEARCHLIGHT) {
-        return 9;
+        return 10;
     }
     if (kind == LEVEL_EDITOR_MARKER_MINEFIELD) {
         return 4;
@@ -2485,6 +2498,7 @@ static void push_marker(level_editor_state* s, int kind, int track, int order, f
     m->e = wave_default_param_e_for_kind(kind);
     m->f = 0.0f;
     m->g = 0.0f;
+    m->h = 0.0f;
 }
 
 void level_editor_compute_layout(float w, float h, level_editor_layout* out) {
@@ -2748,6 +2762,7 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
             m->e = (float)sl->source_type;
             m->f = sl->source_radius;
             m->g = (float)sl->sweep_motion;
+            m->h = (float)clampi(sl->style, SEARCHLIGHT_STYLE_RELIC, SEARCHLIGHT_STYLE_COIL);
         }
     }
     for (int i = 0; i < lvl->minefield_count; ++i) {
@@ -4085,6 +4100,13 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
                 m->e = (float)src;
             } break;
             case 8: m->f = clampf(m->f + delta * 1.0f, 4.0f, 120.0f); break;
+            case 9: {
+                const int dir = (delta >= 0.0f) ? 1 : -1;
+                const int n = SEARCHLIGHT_STYLE_COIL - SEARCHLIGHT_STYLE_RELIC + 1;
+                int style = clampi((int)lroundf(m->h), SEARCHLIGHT_STYLE_RELIC, SEARCHLIGHT_STYLE_COIL);
+                style = SEARCHLIGHT_STYLE_RELIC + ((style - SEARCHLIGHT_STYLE_RELIC + dir + n) % n);
+                m->h = (float)style;
+            } break;
             default: break;
         }
         mark_editor_dirty(s);

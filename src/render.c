@@ -1387,19 +1387,111 @@ static vg_result draw_searchlights(
     for (int i = 0; i < g->searchlight_count && i < MAX_SEARCHLIGHTS; ++i) {
         const searchlight* sl = &g->searchlights[i];
         const int dome_inverted = (sl->sweep_motion == SEARCHLIGHT_MOTION_PENDULUM_INV);
+        const int style = clampi(sl->style, SEARCHLIGHT_STYLE_RELIC, SEARCHLIGHT_STYLE_COIL);
         if (!sl->active || sl->length <= 1.0f) {
             continue;
+        }
+        const float rr = fmaxf(sl->source_radius, 2.0f);
+        const float emitter_sign = dome_inverted ? -1.0f : 1.0f;
+        const float flicker = 0.5f + 0.5f * sinf(g->t * 8.0f + (float)i * 0.77f);
+        vg_color src_color = enemy_pal->enemy_bullet;
+        vg_color beam_col = enemy_pal->enemy_bullet_halo;
+        vg_color rail_col = enemy_pal->enemy_bullet;
+        float body_len_fac = 0.80f;
+        float body_intensity = 0.14f + 0.06f * intensity_scale;
+        float body_alpha = 0.06f;
+        float tip_alpha = 0.06f;
+        float rail_halo_alpha = 0.52f;
+        float rail_main_alpha = 0.82f;
+        float rail_halo_intensity = 0.78f;
+        float rail_main_intensity = 0.86f;
+        switch (style) {
+            case SEARCHLIGHT_STYLE_DOCKLIGHT:
+                src_color = (vg_color){1.00f, 0.77f, 0.30f, 1.0f};
+                beam_col = (vg_color){1.00f, 0.72f, 0.24f, 1.0f};
+                rail_col = (vg_color){0.96f, 0.86f, 0.56f, 1.0f};
+                body_len_fac = 0.86f;
+                body_alpha = 0.075f;
+                tip_alpha = 0.070f;
+                rail_halo_alpha = 0.58f;
+                rail_main_alpha = 0.88f;
+                rail_halo_intensity = 0.92f;
+                rail_main_intensity = 0.98f;
+                break;
+            case SEARCHLIGHT_STYLE_LANTERN:
+                src_color = (vg_color){0.40f, 1.00f, 0.82f, 1.0f};
+                beam_col = (vg_color){0.36f, 0.98f, 0.84f, 1.0f};
+                rail_col = (vg_color){0.70f, 1.00f, 0.90f, 1.0f};
+                body_len_fac = 0.74f;
+                body_intensity += 0.03f;
+                body_alpha = 0.090f;
+                tip_alpha = 0.085f;
+                rail_halo_alpha = 0.48f;
+                rail_main_alpha = 0.72f;
+                break;
+            case SEARCHLIGHT_STYLE_FURNACE:
+                src_color = (vg_color){1.00f, 0.42f + 0.18f * flicker, 0.10f, 1.0f};
+                beam_col = (vg_color){1.00f, 0.46f + 0.12f * flicker, 0.12f, 1.0f};
+                rail_col = (vg_color){1.00f, 0.78f, 0.34f, 1.0f};
+                body_len_fac = 0.83f;
+                body_intensity += 0.04f * flicker;
+                body_alpha = 0.085f;
+                tip_alpha = 0.078f;
+                rail_halo_alpha = 0.62f;
+                rail_main_alpha = 0.90f;
+                rail_halo_intensity = 0.96f;
+                rail_main_intensity = 1.00f;
+                break;
+            case SEARCHLIGHT_STYLE_PRISM:
+                src_color = (vg_color){0.78f, 0.92f, 1.00f, 1.0f};
+                beam_col = (vg_color){0.72f, 0.90f, 1.00f, 1.0f};
+                rail_col = (vg_color){0.94f, 0.98f, 1.00f, 1.0f};
+                body_len_fac = 0.82f;
+                body_alpha = 0.068f;
+                tip_alpha = 0.066f;
+                rail_halo_alpha = 0.54f;
+                rail_main_alpha = 0.86f;
+                break;
+            case SEARCHLIGHT_STYLE_COIL:
+                src_color = (vg_color){0.36f, 0.86f, 1.00f, 1.0f};
+                beam_col = (vg_color){0.30f, 0.82f, 1.00f, 1.0f};
+                rail_col = (vg_color){0.70f, 0.96f, 1.00f, 1.0f};
+                body_len_fac = 0.79f;
+                body_alpha = 0.070f;
+                tip_alpha = 0.062f;
+                rail_halo_alpha = 0.60f;
+                rail_main_alpha = 0.84f;
+                rail_halo_intensity = 0.88f;
+                rail_main_intensity = 0.92f;
+                break;
+            case SEARCHLIGHT_STYLE_RELIC:
+            default:
+                break;
         }
         if (can_stencil) {
             vg_result sr = vg_stencil_clear(ctx, 0u);
             if (sr != VG_OK) {
                 return sr;
             }
-            /* Mark emitter footprint in stencil so beam pixels can be rejected there. */
-            const float rr = fmaxf(sl->source_radius, 2.0f);
             vg_fill_style src_mask = make_fill(0.0f, (vg_color){0.0f, 0.0f, 0.0f, 0.0f}, VG_BLEND_ALPHA);
             src_mask.stencil = vg_stencil_state_make_write_replace(1u, 0xffu);
-            if (sl->source_type == SEARCHLIGHT_SOURCE_ORB) {
+            if (style == SEARCHLIGHT_STYLE_PRISM) {
+                const vg_vec2 diamond[4] = {
+                    {sl->origin_x, sl->origin_y + rr * 1.20f},
+                    {sl->origin_x + rr * 1.15f, sl->origin_y},
+                    {sl->origin_x, sl->origin_y - rr * 1.20f},
+                    {sl->origin_x - rr * 1.15f, sl->origin_y}
+                };
+                vg_result sr2 = vg_fill_convex(ctx, diamond, 4, &src_mask);
+                if (sr2 != VG_OK) {
+                    return sr2;
+                }
+            } else if (style == SEARCHLIGHT_STYLE_COIL) {
+                vg_result sr2 = vg_fill_circle(ctx, (vg_vec2){sl->origin_x, sl->origin_y}, rr * 1.12f, &src_mask, 22);
+                if (sr2 != VG_OK) {
+                    return sr2;
+                }
+            } else if (sl->source_type == SEARCHLIGHT_SOURCE_ORB) {
                 vg_result sr2 = vg_fill_circle(ctx, (vg_vec2){sl->origin_x, sl->origin_y}, rr, &src_mask, 18);
                 if (sr2 != VG_OK) {
                     return sr2;
@@ -1407,7 +1499,7 @@ static vg_result draw_searchlights(
             } else {
                 enum { DOME_SEG = 18 };
                 vg_vec2 dome_fill[DOME_SEG + 2];
-                const float mask_rr = rr + 2.0f; /* Slight overscan to suppress seam glow at emitter origin. */
+                const float mask_rr = rr + 2.0f;
                 dome_fill[0] = (vg_vec2){sl->origin_x, sl->origin_y};
                 for (int k = 0; k <= DOME_SEG; ++k) {
                     const float u = (float)k / (float)DOME_SEG;
@@ -1421,7 +1513,6 @@ static vg_result draw_searchlights(
                 if (sr2 != VG_OK) {
                     return sr2;
                 }
-                /* Seal the dome base edge and emitter point against AA/bloom leakage. */
                 const vg_vec2 base_cap[4] = {
                     {sl->origin_x - mask_rr - 2.0f, sl->origin_y - 2.5f},
                     {sl->origin_x + mask_rr + 2.0f, sl->origin_y - 2.5f},
@@ -1435,8 +1526,6 @@ static vg_result draw_searchlights(
             }
         }
         {
-            const float rr = fmaxf(sl->source_radius, 2.0f);
-            const vg_color src_color = enemy_pal->enemy_bullet;
             const vg_fill_style src_fill = make_fill(
                 0.72f * intensity_scale,
                 (vg_color){src_color.r, src_color.g, src_color.b, 0.95f},
@@ -1448,7 +1537,57 @@ static vg_result draw_searchlights(
                 (vg_color){src_color.r, src_color.g, src_color.b, 0.95f},
                 VG_BLEND_ALPHA
             );
-            if (sl->source_type == SEARCHLIGHT_SOURCE_ORB) {
+            vg_result r = VG_OK;
+            if (style == SEARCHLIGHT_STYLE_PRISM) {
+                const vg_vec2 crystal[4] = {
+                    {sl->origin_x, sl->origin_y + rr * 1.05f},
+                    {sl->origin_x + rr * 0.92f, sl->origin_y},
+                    {sl->origin_x, sl->origin_y - rr * 1.05f},
+                    {sl->origin_x - rr * 0.92f, sl->origin_y}
+                };
+                r = vg_fill_convex(ctx, crystal, 4, &src_fill);
+                if (r != VG_OK) return r;
+                {
+                    vg_stroke_style edge = src_stroke;
+                    edge.width_px *= 1.05f;
+                    r = vg_draw_polyline(ctx, crystal, 4, &edge, 1);
+                    if (r != VG_OK) return r;
+                    const vg_vec2 seam[2] = {
+                        {sl->origin_x, sl->origin_y - rr * 0.92f},
+                        {sl->origin_x, sl->origin_y + rr * 0.92f}
+                    };
+                    r = vg_draw_polyline(ctx, seam, 2, &edge, 0);
+                    if (r != VG_OK) return r;
+                }
+            } else if (style == SEARCHLIGHT_STYLE_COIL) {
+                vg_fill_style core_fill = src_fill;
+                core_fill.intensity *= 1.15f;
+                r = vg_fill_circle(ctx, (vg_vec2){sl->origin_x, sl->origin_y}, rr * 0.48f, &core_fill, 16);
+                if (r != VG_OK) return r;
+                enum { ORB_SEG = 24 };
+                vg_vec2 ring[ORB_SEG + 1];
+                vg_stroke_style ring_stroke = src_stroke;
+                ring_stroke.width_px *= 1.12f;
+                for (int k = 0; k <= ORB_SEG; ++k) {
+                    const float u = (float)k / (float)ORB_SEG;
+                    const float a = u * 6.28318530718f;
+                    ring[k] = (vg_vec2){
+                        sl->origin_x + cosf(a) * rr,
+                        sl->origin_y + sinf(a) * rr
+                    };
+                }
+                r = vg_draw_polyline(ctx, ring, ORB_SEG + 1, &ring_stroke, 1);
+                if (r != VG_OK) return r;
+                for (int k = 0; k < 3; ++k) {
+                    const float a = g->t * 1.4f + (float)k * (6.2831853f / 3.0f);
+                    const vg_vec2 spoke[2] = {
+                        {sl->origin_x + cosf(a) * rr * 0.62f, sl->origin_y + sinf(a) * rr * 0.62f},
+                        {sl->origin_x + cosf(a) * rr, sl->origin_y + sinf(a) * rr}
+                    };
+                    r = vg_draw_polyline(ctx, spoke, 2, &ring_stroke, 0);
+                    if (r != VG_OK) return r;
+                }
+            } else if (sl->source_type == SEARCHLIGHT_SOURCE_ORB) {
                 enum { ORB_SEG = 20 };
                 vg_vec2 orb[ORB_SEG + 1];
                 for (int k = 0; k <= ORB_SEG; ++k) {
@@ -1459,14 +1598,10 @@ static vg_result draw_searchlights(
                         sl->origin_y + sinf(a) * rr
                     };
                 }
-                vg_result r = vg_fill_circle(ctx, (vg_vec2){sl->origin_x, sl->origin_y}, rr, &src_fill, 18);
-                if (r != VG_OK) {
-                    return r;
-                }
+                r = vg_fill_circle(ctx, (vg_vec2){sl->origin_x, sl->origin_y}, rr, &src_fill, 18);
+                if (r != VG_OK) return r;
                 r = vg_draw_polyline(ctx, orb, ORB_SEG + 1, &src_stroke, 1);
-                if (r != VG_OK) {
-                    return r;
-                }
+                if (r != VG_OK) return r;
             } else {
                 enum { DOME_SEG = 18 };
                 vg_vec2 dome_fill[DOME_SEG + 2];
@@ -1482,13 +1617,46 @@ static vg_result draw_searchlights(
                     dome_fill[k + 1] = p;
                     dome_arc[k] = p;
                 }
-                vg_result r = vg_fill_convex(ctx, dome_fill, DOME_SEG + 2, &src_fill);
-                if (r != VG_OK) {
-                    return r;
-                }
+                r = vg_fill_convex(ctx, dome_fill, DOME_SEG + 2, &src_fill);
+                if (r != VG_OK) return r;
                 r = vg_draw_polyline(ctx, dome_arc, DOME_SEG + 1, &src_stroke, 0);
-                if (r != VG_OK) {
-                    return r;
+                if (r != VG_OK) return r;
+                if (style == SEARCHLIGHT_STYLE_DOCKLIGHT || style == SEARCHLIGHT_STYLE_FURNACE) {
+                    vg_stroke_style brace = src_stroke;
+                    brace.width_px *= (style == SEARCHLIGHT_STYLE_DOCKLIGHT) ? 1.30f : 1.15f;
+                    const vg_vec2 base[2] = {
+                        {sl->origin_x - rr * 1.05f, sl->origin_y},
+                        {sl->origin_x + rr * 1.05f, sl->origin_y}
+                    };
+                    r = vg_draw_polyline(ctx, base, 2, &brace, 0);
+                    if (r != VG_OK) return r;
+                    if (style == SEARCHLIGHT_STYLE_DOCKLIGHT) {
+                        const vg_vec2 guard_l[2] = {
+                            {sl->origin_x - rr * 0.70f, sl->origin_y},
+                            {sl->origin_x - rr * 0.18f, sl->origin_y + rr * emitter_sign * 0.70f}
+                        };
+                        const vg_vec2 guard_r[2] = {
+                            {sl->origin_x + rr * 0.70f, sl->origin_y},
+                            {sl->origin_x + rr * 0.18f, sl->origin_y + rr * emitter_sign * 0.70f}
+                        };
+                        r = vg_draw_polyline(ctx, guard_l, 2, &brace, 0);
+                        if (r != VG_OK) return r;
+                        r = vg_draw_polyline(ctx, guard_r, 2, &brace, 0);
+                        if (r != VG_OK) return r;
+                    }
+                } else if (style == SEARCHLIGHT_STYLE_LANTERN) {
+                    vg_stroke_style tendril = src_stroke;
+                    tendril.width_px *= 0.90f;
+                    tendril.color.a *= 0.85f;
+                    for (int k = -1; k <= 1; ++k) {
+                        const float xoff = (float)k * rr * 0.42f;
+                        const vg_vec2 line[2] = {
+                            {sl->origin_x + xoff, sl->origin_y},
+                            {sl->origin_x + xoff * 0.55f, sl->origin_y - emitter_sign * rr * 0.78f}
+                        };
+                        r = vg_draw_polyline(ctx, line, 2, &tendril, 0);
+                        if (r != VG_OK) return r;
+                    }
                 }
             }
         }
@@ -1497,11 +1665,10 @@ static vg_result draw_searchlights(
         const vg_vec2 origin = {sl->origin_x, sl->origin_y};
         const vg_vec2 dir0 = {cosf(a0), sinf(a0)};
         const vg_vec2 dir1 = {cosf(a1), sinf(a1)};
-        const float body_len = sl->length * 0.80f;
-        const vg_color beam_col = enemy_pal->enemy_bullet_halo;
+        const float body_len = sl->length * body_len_fac;
         vg_fill_style body_fill = make_fill(
-            0.14f + 0.06f * intensity_scale,
-            (vg_color){beam_col.r, beam_col.g, beam_col.b, 0.06f},
+            body_intensity,
+            (vg_color){beam_col.r, beam_col.g, beam_col.b, body_alpha},
             VG_BLEND_ADDITIVE
         );
         if (can_stencil) {
@@ -1514,21 +1681,19 @@ static vg_result draw_searchlights(
             {origin.x + dir1.x * body_len, origin.y + dir1.y * body_len}
         };
         vg_result r = vg_fill_convex(ctx, body_tri, 3, &body_fill);
-        if (r != VG_OK) {
-            return r;
-        }
+        if (r != VG_OK) return r;
         for (int s = 0; s < tip_slices; ++s) {
             const float u0 = (float)s / (float)tip_slices;
             const float u1 = (float)(s + 1) / (float)tip_slices;
-            const float t0 = 0.80f + 0.20f * u0;
-            const float t1 = 0.80f + 0.20f * u1;
+            const float t0 = body_len_fac + (1.0f - body_len_fac) * u0;
+            const float t1 = body_len_fac + (1.0f - body_len_fac) * u1;
             const float l0 = sl->length * t0;
             const float l1 = sl->length * t1;
             float fade = 1.0f - u1;
             fade = fade * fade * (3.0f - 2.0f * fade);
             vg_fill_style tip_fill = make_fill(
-                (0.14f + 0.06f * intensity_scale) * fade,
-                (vg_color){beam_col.r, beam_col.g, beam_col.b, 0.06f * fade},
+                body_intensity * fade,
+                (vg_color){beam_col.r, beam_col.g, beam_col.b, tip_alpha * fade},
                 VG_BLEND_ADDITIVE
             );
             if (can_stencil) {
@@ -1542,13 +1707,9 @@ static vg_result draw_searchlights(
             const vg_vec2 tip_tri0[3] = {a, b, c};
             const vg_vec2 tip_tri1[3] = {a, c, d};
             r = vg_fill_convex(ctx, tip_tri0, 3, &tip_fill);
-            if (r != VG_OK) {
-                return r;
-            }
+            if (r != VG_OK) return r;
             r = vg_fill_convex(ctx, tip_tri1, 3, &tip_fill);
-            if (r != VG_OK) {
-                return r;
-            }
+            if (r != VG_OK) return r;
         }
         vg_stroke_style rail_halo = *land_halo;
         vg_stroke_style rail_main = *land_main;
@@ -1560,10 +1721,17 @@ static vg_result draw_searchlights(
         }
         rail_halo.width_px *= 1.18f;
         rail_main.width_px *= 1.06f;
-        rail_halo.intensity *= 0.78f;
-        rail_main.intensity *= 0.86f;
-        rail_halo.color = (vg_color){enemy_pal->enemy_bullet_halo.r, enemy_pal->enemy_bullet_halo.g, enemy_pal->enemy_bullet_halo.b, 0.52f};
-        rail_main.color = (vg_color){enemy_pal->enemy_bullet.r, enemy_pal->enemy_bullet.g, enemy_pal->enemy_bullet.b, 0.82f};
+        if (style == SEARCHLIGHT_STYLE_DOCKLIGHT) {
+            rail_halo.width_px *= 1.10f;
+            rail_main.width_px *= 1.08f;
+        } else if (style == SEARCHLIGHT_STYLE_PRISM) {
+            rail_halo.width_px *= 0.90f;
+            rail_main.width_px *= 0.90f;
+        }
+        rail_halo.intensity *= rail_halo_intensity;
+        rail_main.intensity *= rail_main_intensity;
+        rail_halo.color = (vg_color){beam_col.r, beam_col.g, beam_col.b, rail_halo_alpha};
+        rail_main.color = (vg_color){rail_col.r, rail_col.g, rail_col.b, rail_main_alpha};
         const vg_vec2 left_body[2] = {
             origin,
             {origin.x + dir0.x * body_len, origin.y + dir0.y * body_len}
@@ -1573,26 +1741,18 @@ static vg_result draw_searchlights(
             {origin.x + dir1.x * body_len, origin.y + dir1.y * body_len}
         };
         r = vg_draw_polyline(ctx, left_body, 2, &rail_halo, 0);
-        if (r != VG_OK) {
-            return r;
-        }
+        if (r != VG_OK) return r;
         r = vg_draw_polyline(ctx, left_body, 2, &rail_main, 0);
-        if (r != VG_OK) {
-            return r;
-        }
+        if (r != VG_OK) return r;
         r = vg_draw_polyline(ctx, right_body, 2, &rail_halo, 0);
-        if (r != VG_OK) {
-            return r;
-        }
+        if (r != VG_OK) return r;
         r = vg_draw_polyline(ctx, right_body, 2, &rail_main, 0);
-        if (r != VG_OK) {
-            return r;
-        }
+        if (r != VG_OK) return r;
         for (int s = 0; s < tip_slices; ++s) {
             const float u0 = (float)s / (float)tip_slices;
             const float u1 = (float)(s + 1) / (float)tip_slices;
-            const float t0 = 0.80f + 0.20f * u0;
-            const float t1 = 0.80f + 0.20f * u1;
+            const float t0 = body_len_fac + (1.0f - body_len_fac) * u0;
+            const float t1 = body_len_fac + (1.0f - body_len_fac) * u1;
             const float fade = 1.0f - u1;
             vg_stroke_style lh = rail_halo;
             vg_stroke_style lm = rail_main;
@@ -1609,20 +1769,53 @@ static vg_result draw_searchlights(
                 {origin.x + dir1.x * (sl->length * t1), origin.y + dir1.y * (sl->length * t1)}
             };
             r = vg_draw_polyline(ctx, left_tip, 2, &lh, 0);
-            if (r != VG_OK) {
-                return r;
-            }
+            if (r != VG_OK) return r;
             r = vg_draw_polyline(ctx, left_tip, 2, &lm, 0);
-            if (r != VG_OK) {
-                return r;
-            }
+            if (r != VG_OK) return r;
             r = vg_draw_polyline(ctx, right_tip, 2, &lh, 0);
-            if (r != VG_OK) {
-                return r;
-            }
+            if (r != VG_OK) return r;
             r = vg_draw_polyline(ctx, right_tip, 2, &lm, 0);
-            if (r != VG_OK) {
-                return r;
+            if (r != VG_OK) return r;
+        }
+        if (style == SEARCHLIGHT_STYLE_COIL || style == SEARCHLIGHT_STYLE_PRISM || style == SEARCHLIGHT_STYLE_FURNACE) {
+            vg_stroke_style accent = rail_main;
+            accent.width_px *= (style == SEARCHLIGHT_STYLE_PRISM) ? 0.78f : 0.92f;
+            accent.intensity *= 1.08f;
+            if (style == SEARCHLIGHT_STYLE_COIL) {
+                for (int band = 1; band <= 3; ++band) {
+                    const float t = 0.16f + 0.18f * (float)band + 0.03f * sinf(g->t * 2.5f + (float)band);
+                    const vg_vec2 band_line[2] = {
+                        {origin.x + (dir0.x + dir1.x) * 0.5f * (sl->length * t), origin.y + (dir0.y + dir1.y) * 0.5f * (sl->length * t)},
+                        {origin.x + (dir0.x + dir1.x) * 0.5f * (sl->length * (t + 0.01f)), origin.y + (dir0.y + dir1.y) * 0.5f * (sl->length * (t + 0.01f))}
+                    };
+                    r = vg_draw_polyline(ctx, band_line, 2, &accent, 0);
+                    if (r != VG_OK) return r;
+                }
+            } else {
+                const vg_vec2 centerline[2] = {
+                    origin,
+                    {origin.x + (dir0.x + dir1.x) * 0.5f * (sl->length * 0.92f),
+                     origin.y + (dir0.y + dir1.y) * 0.5f * (sl->length * 0.92f)}
+                };
+                r = vg_draw_polyline(ctx, centerline, 2, &accent, 0);
+                if (r != VG_OK) return r;
+                if (style == SEARCHLIGHT_STYLE_PRISM) {
+                    vg_stroke_style split = accent;
+                    split.width_px *= 0.85f;
+                    split.color.a *= 0.72f;
+                    const vg_vec2 split_l[2] = {
+                        {origin.x + dir0.x * (rr * 0.15f), origin.y + dir0.y * (rr * 0.15f)},
+                        {origin.x + dir0.x * (sl->length * 0.65f), origin.y + dir0.y * (sl->length * 0.65f)}
+                    };
+                    const vg_vec2 split_r[2] = {
+                        {origin.x + dir1.x * (rr * 0.15f), origin.y + dir1.y * (rr * 0.15f)},
+                        {origin.x + dir1.x * (sl->length * 0.65f), origin.y + dir1.y * (sl->length * 0.65f)}
+                    };
+                    r = vg_draw_polyline(ctx, split_l, 2, &split, 0);
+                    if (r != VG_OK) return r;
+                    r = vg_draw_polyline(ctx, split_r, 2, &split, 0);
+                    if (r != VG_OK) return r;
+                }
             }
         }
     }
@@ -5099,6 +5292,16 @@ static const char* editor_searchlight_source_name(float v) {
     return "DOME";
 }
 
+static const char* editor_searchlight_style_name(float v) {
+    const int style = clampi((int)lroundf(v), SEARCHLIGHT_STYLE_RELIC, SEARCHLIGHT_STYLE_COIL);
+    if (style == SEARCHLIGHT_STYLE_DOCKLIGHT) return "DOCKLIGHT";
+    if (style == SEARCHLIGHT_STYLE_LANTERN) return "LANTERN";
+    if (style == SEARCHLIGHT_STYLE_FURNACE) return "FURNACE";
+    if (style == SEARCHLIGHT_STYLE_PRISM) return "PRISM";
+    if (style == SEARCHLIGHT_STYLE_COIL) return "COIL";
+    return "RELIC";
+}
+
 static const char* editor_mine_style_name(float v) {
     const int style = clampi((int)lroundf(v), MINE_STYLE_CLASSIC, MINE_STYLE_INDUSTRIAL);
     if (style == MINE_STYLE_INDUSTRIAL) return "INDUSTRIAL";
@@ -5232,6 +5435,7 @@ static int editor_marker_properties_text(
         if (n < cap) { out_labels[n] = "TYPE"; snprintf(out_values[n], 32, "%s", editor_searchlight_motion_name(metrics->level_editor_marker_g[sel])); n++; }
         if (n < cap) { out_labels[n] = "SOURCE"; snprintf(out_values[n], 32, "%s", editor_searchlight_source_name(metrics->level_editor_marker_e[sel])); n++; }
         if (n < cap) { out_labels[n] = "SIZE"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_marker_f[sel]); n++; }
+        if (n < cap) { out_labels[n] = "STYLE"; snprintf(out_values[n], 32, "%s", editor_searchlight_style_name(metrics->level_editor_marker_h[sel])); n++; }
         return n;
     }
     if (kind == 0) {

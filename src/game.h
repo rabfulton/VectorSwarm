@@ -236,6 +236,15 @@ typedef enum searchlight_source_type {
     SEARCHLIGHT_SOURCE_ORB = 1
 } searchlight_source_type;
 
+typedef enum searchlight_style_id {
+    SEARCHLIGHT_STYLE_RELIC = 0,
+    SEARCHLIGHT_STYLE_DOCKLIGHT = 1,
+    SEARCHLIGHT_STYLE_LANTERN = 2,
+    SEARCHLIGHT_STYLE_FURNACE = 3,
+    SEARCHLIGHT_STYLE_PRISM = 4,
+    SEARCHLIGHT_STYLE_COIL = 5
+} searchlight_style_id;
+
 typedef enum mine_style_id {
     MINE_STYLE_CLASSIC = 0,
     MINE_STYLE_ANEMONE = 1,
@@ -254,6 +263,7 @@ typedef struct searchlight {
     float sweep_phase;
     int sweep_motion; /* enum searchlight_motion_type */
     int source_type; /* enum searchlight_source_type */
+    int style; /* enum searchlight_style_id */
     float source_radius;
     float clear_grace_s;
     float damage_interval_s;

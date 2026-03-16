@@ -903,6 +903,7 @@ static void configure_searchlights_for_level(game_state* g) {
         sl->sweep_phase = deg_to_rad(d->sweep_phase_deg);
         sl->sweep_motion = d->sweep_motion;
         sl->source_type = d->source_type;
+        sl->style = clampi(d->style, SEARCHLIGHT_STYLE_RELIC, SEARCHLIGHT_STYLE_COIL);
         sl->source_radius = d->source_radius;
         sl->clear_grace_s = d->clear_grace_s;
         sl->damage_interval_s = fmaxf(d->fire_interval_s, 0.005f);

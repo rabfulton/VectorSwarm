@@ -51,6 +51,7 @@ typedef struct level_editor_marker {
     float e;
     float f;
     float g;
+    float h;
 } level_editor_marker;
 
 typedef struct level_editor_layout {

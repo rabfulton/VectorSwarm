@@ -137,6 +137,7 @@ typedef struct leveldef_searchlight {
     float sweep_phase_deg;
     int sweep_motion;
     int source_type;
+    int style; /* enum searchlight_style_id */
     float source_radius;
     float clear_grace_s;
     float fire_interval_s;
