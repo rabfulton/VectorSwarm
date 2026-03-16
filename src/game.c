@@ -2017,7 +2017,7 @@ static void configure_minefields_for_level(game_state* g) {
                 m->angle = frand01() * 6.2831853f;
                 m->spin_rate = frands1() * (0.8f + frand01() * 2.4f);
                 m->hp = 10;
-                m->style = clampi(mf->style, MINE_STYLE_CLASSIC, MINE_STYLE_ANEMONE);
+                m->style = clampi(mf->style, MINE_STYLE_CLASSIC, MINE_STYLE_INDUSTRIAL);
                 placed = 1;
                 break;
             }

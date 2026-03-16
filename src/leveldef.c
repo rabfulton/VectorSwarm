@@ -71,6 +71,11 @@ static int mine_style_from_name(const char* name) {
         strcmp(name, "underwater") == 0) {
         return MINE_STYLE_ANEMONE;
     }
+    if (strcmp(name, "industrial") == 0 ||
+        strcmp(name, "factory") == 0 ||
+        strcmp(name, "mechanical") == 0) {
+        return MINE_STYLE_INDUSTRIAL;
+    }
     v = strtol(name, &end, 10);
     if (end && *end == '\0') {
         return (int)v;
@@ -675,9 +680,9 @@ static int parse_minefield(leveldef_level* lvl, const char* value, FILE* log_out
         }
         return 0;
     }
-    if (mf.style < MINE_STYLE_CLASSIC || mf.style > MINE_STYLE_ANEMONE) {
+    if (mf.style < MINE_STYLE_CLASSIC || mf.style > MINE_STYLE_INDUSTRIAL) {
         if (log_out) {
-            fprintf(log_out, "leveldef: minefield style must be CLASSIC or ANEMONE\n");
+            fprintf(log_out, "leveldef: minefield style must be CLASSIC, ANEMONE, or INDUSTRIAL\n");
         }
         return 0;
     }
@@ -1990,7 +1995,7 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
             if (mf->count <= 0 ||
                 mf->anchor_x01 < 0.0f ||
                 mf->anchor_y01 < 0.0f || mf->anchor_y01 > 1.0f ||
-                mf->style < MINE_STYLE_CLASSIC || mf->style > MINE_STYLE_ANEMONE) {
+                mf->style < MINE_STYLE_CLASSIC || mf->style > MINE_STYLE_INDUSTRIAL) {
                 if (log_out) {
                     fprintf(log_out, "leveldef: level %d invalid minefield entry\n", i);
                 }

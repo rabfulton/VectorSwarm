@@ -238,7 +238,8 @@ typedef enum searchlight_source_type {
 
 typedef enum mine_style_id {
     MINE_STYLE_CLASSIC = 0,
-    MINE_STYLE_ANEMONE = 1
+    MINE_STYLE_ANEMONE = 1,
+    MINE_STYLE_INDUSTRIAL = 2
 } mine_style_id;
 
 typedef struct searchlight {

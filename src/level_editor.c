@@ -1259,6 +1259,7 @@ static const char* searchlight_source_name(int source) {
 
 static const char* minefield_style_name(int style) {
     switch (style) {
+        case MINE_STYLE_INDUSTRIAL: return "industrial";
         case MINE_STYLE_ANEMONE: return "anemone";
         case MINE_STYLE_CLASSIC:
         default: return "classic";
@@ -1522,7 +1523,7 @@ static int build_level_serialized_text(
         mf.anchor_x01 = m->x01 * level_len;
         mf.anchor_y01 = m->y01;
         mf.count = (int)lroundf(fmaxf(m->a, 1.0f));
-        mf.style = clampi((int)lroundf(m->b), MINE_STYLE_CLASSIC, MINE_STYLE_ANEMONE);
+        mf.style = clampi((int)lroundf(m->b), MINE_STYLE_CLASSIC, MINE_STYLE_INDUSTRIAL);
         lvl.minefields[lvl.minefield_count++] = mf;
     }
     lvl.missile_launcher_count = 0;
@@ -2050,7 +2051,7 @@ static int build_level_serialized_text(
     }
     for (i = 0; i < lvl.minefield_count; ++i) {
         const leveldef_minefield* mf = &lvl.minefields[i];
-        const int style = clampi(mf->style, MINE_STYLE_CLASSIC, MINE_STYLE_ANEMONE);
+        const int style = clampi(mf->style, MINE_STYLE_CLASSIC, MINE_STYLE_INDUSTRIAL);
         if (style == MINE_STYLE_CLASSIC) {
             if (!appendf(
                     out,
@@ -2730,7 +2731,7 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
             mf->anchor_x01 / fmaxf(s->level_length_screens, 1.0f),
             mf->anchor_y01,
             (float)mf->count,
-            (float)clampi(mf->style, MINE_STYLE_CLASSIC, MINE_STYLE_ANEMONE),
+            (float)clampi(mf->style, MINE_STYLE_CLASSIC, MINE_STYLE_INDUSTRIAL),
             0.0f,
             0.0f
         );
@@ -4056,8 +4057,8 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             case 2: m->a = clampf(m->a + delta * 1.0f, 1.0f, 128.0f); break;
             case 3: {
                 const int dir = (delta >= 0.0f) ? 1 : -1;
-                const int n = MINE_STYLE_ANEMONE - MINE_STYLE_CLASSIC + 1;
-                int style = clampi((int)lroundf(m->b), MINE_STYLE_CLASSIC, MINE_STYLE_ANEMONE);
+                const int n = MINE_STYLE_INDUSTRIAL - MINE_STYLE_CLASSIC + 1;
+                int style = clampi((int)lroundf(m->b), MINE_STYLE_CLASSIC, MINE_STYLE_INDUSTRIAL);
                 style = MINE_STYLE_CLASSIC + ((style - MINE_STYLE_CLASSIC + dir + n) % n);
                 m->b = (float)style;
             } break;

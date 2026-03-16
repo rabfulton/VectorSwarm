@@ -1899,7 +1899,7 @@ static vg_result draw_minefields(
             }
         }
 
-        const int style = clampi(m->style, MINE_STYLE_CLASSIC, MINE_STYLE_ANEMONE);
+        const int style = clampi(m->style, MINE_STYLE_CLASSIC, MINE_STYLE_INDUSTRIAL);
         if (style == MINE_STYLE_ANEMONE) {
             const float dx = g->player.b.x - m->b.x;
             const float dy = g->player.b.y - m->b.y;
@@ -2018,6 +2018,119 @@ static vg_result draw_minefields(
             );
             if (vr != VG_OK) {
                 return vr;
+            }
+        } else if (style == MINE_STYLE_INDUSTRIAL) {
+            enum {
+                INDUSTRIAL_OUTER_POINTS = 9,
+                INDUSTRIAL_INNER_POINTS = 9,
+                INDUSTRIAL_BRACES = 4,
+                INDUSTRIAL_PANELS = 4,
+                INDUSTRIAL_POLYLINES = 2 + INDUSTRIAL_BRACES + INDUSTRIAL_PANELS
+            };
+            const float c = cosf(m->angle);
+            const float s = sinf(m->angle);
+            const float r = m->radius;
+            const float pulse = 0.5f + 0.5f * sinf(t_s * 4.6f + m->angle * 0.85f);
+            vg_stroke_style ind_halo = *land_halo;
+            vg_stroke_style ind_main = *land_main;
+            ind_halo.width_px *= 1.22f;
+            ind_main.width_px *= 1.10f;
+            ind_halo.intensity *= 0.92f + 0.18f * pulse;
+            ind_main.intensity *= 1.05f + 0.25f * pulse;
+            ind_halo.color = (vg_color){0.96f, 0.60f, 0.18f, 0.36f + 0.10f * pulse};
+            ind_main.color = (vg_color){0.98f, 0.78f, 0.30f, 0.92f};
+
+            vg_fill_style shell_fill = make_fill(
+                0.84f,
+                (vg_color){0.11f, 0.13f, 0.15f, 0.74f},
+                VG_BLEND_ALPHA
+            );
+            vg_fill_style core_fill = make_fill(
+                0.92f,
+                (vg_color){0.28f + 0.22f * pulse, 0.20f + 0.12f * pulse, 0.08f, 0.68f + 0.10f * pulse},
+                VG_BLEND_ALPHA
+            );
+            vg_fill_style bolt_fill = make_fill(
+                0.88f,
+                (vg_color){0.92f, 0.74f, 0.26f, 0.92f},
+                VG_BLEND_ALPHA
+            );
+
+            vg_vec2 outer[INDUSTRIAL_OUTER_POINTS];
+            vg_vec2 inner[INDUSTRIAL_INNER_POINTS];
+            vg_vec2 braces[INDUSTRIAL_BRACES][2];
+            vg_vec2 panels[INDUSTRIAL_PANELS][3];
+            vg_polyline_view lines[INDUSTRIAL_POLYLINES];
+            for (int k = 0; k < 8; ++k) {
+                const float a = ((float)k / 8.0f) * 6.2831853f + 0.3926990817f;
+                const float ca = cosf(a);
+                const float sa = sinf(a);
+                const float outer_r = r * ((k & 1) ? 0.90f : 1.08f);
+                const float inner_r = r * ((k & 1) ? 0.42f : 0.54f);
+                const float opx = ca * outer_r;
+                const float opy = sa * outer_r;
+                const float ipx = ca * inner_r;
+                const float ipy = sa * inner_r;
+                outer[k].x = m->b.x + opx * c - opy * s;
+                outer[k].y = m->b.y + opx * s + opy * c;
+                inner[k].x = m->b.x + ipx * c - ipy * s;
+                inner[k].y = m->b.y + ipx * s + ipy * c;
+            }
+            outer[8] = outer[0];
+            inner[8] = inner[0];
+            for (int k = 0; k < INDUSTRIAL_BRACES; ++k) {
+                const int idx = k * 2;
+                braces[k][0] = inner[idx];
+                braces[k][1] = outer[idx];
+            }
+            for (int k = 0; k < INDUSTRIAL_PANELS; ++k) {
+                const int idx = k * 2;
+                const int idx1 = (idx + 1) % 8;
+                const int idx2 = (idx + 2) % 8;
+                panels[k][0] = outer[idx];
+                panels[k][1] = outer[idx1];
+                panels[k][2] = outer[idx2];
+            }
+
+            {
+                vg_result vr = vg_fill_convex(ctx, outer, 8, &shell_fill);
+                if (vr != VG_OK) {
+                    return vr;
+                }
+                vr = vg_fill_convex(ctx, inner, 8, &core_fill);
+                if (vr != VG_OK) {
+                    return vr;
+                }
+            }
+
+            lines[0] = (vg_polyline_view){.points = outer, .count = INDUSTRIAL_OUTER_POINTS, .closed = 0};
+            lines[1] = (vg_polyline_view){.points = inner, .count = INDUSTRIAL_INNER_POINTS, .closed = 0};
+            for (int k = 0; k < INDUSTRIAL_BRACES; ++k) {
+                lines[2 + k] = (vg_polyline_view){.points = braces[k], .count = 2u, .closed = 0};
+            }
+            for (int k = 0; k < INDUSTRIAL_PANELS; ++k) {
+                lines[2 + INDUSTRIAL_BRACES + k] = (vg_polyline_view){.points = panels[k], .count = 3u, .closed = 0};
+            }
+
+            {
+                vg_result vr = vg_draw_polylines(ctx, lines, INDUSTRIAL_POLYLINES, &ind_halo);
+                if (vr != VG_OK) {
+                    return vr;
+                }
+                vr = vg_draw_polylines(ctx, lines, INDUSTRIAL_POLYLINES, &ind_main);
+                if (vr != VG_OK) {
+                    return vr;
+                }
+            }
+
+            for (int k = 0; k < 4; ++k) {
+                const float a = ((float)k / 4.0f) * 6.2831853f + 0.7853981634f + m->angle;
+                const float bx = m->b.x + cosf(a) * r * 0.74f;
+                const float by = m->b.y + sinf(a) * r * 0.74f;
+                vg_result vr = vg_fill_circle(ctx, (vg_vec2){bx, by}, r * 0.11f, &bolt_fill, 10);
+                if (vr != VG_OK) {
+                    return vr;
+                }
             }
         } else {
             vg_vec2 hex[7];
@@ -4880,7 +4993,8 @@ static const char* editor_searchlight_source_name(float v) {
 }
 
 static const char* editor_mine_style_name(float v) {
-    const int style = clampi((int)lroundf(v), MINE_STYLE_CLASSIC, MINE_STYLE_ANEMONE);
+    const int style = clampi((int)lroundf(v), MINE_STYLE_CLASSIC, MINE_STYLE_INDUSTRIAL);
+    if (style == MINE_STYLE_INDUSTRIAL) return "INDUSTRIAL";
     if (style == MINE_STYLE_ANEMONE) return "ANEMONE";
     return "CLASSIC";
 }
