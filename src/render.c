@@ -6143,7 +6143,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb12 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
-                snprintf(row, sizeof(row), "EVENT WAVE FAC %.2f", metrics->level_editor_event_wave_spawn_timeout_factor);
+                snprintf(row, sizeof(row), "EV ADV TIME    %.2f", metrics->level_editor_event_wave_spawn_timeout_factor);
                 r = draw_ui_button_shaded(ctx, rb12, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_EVENT_WAVE_TIMEOUT) ? 1 : 0);
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;

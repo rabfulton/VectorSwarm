@@ -3837,7 +3837,7 @@ const char* level_editor_selected_property_name(const level_editor_state* s) {
         "TEX W UNITS",
         "TEX H UNITS",
         "LENGTH",
-        "EVENT WAVE FAC",
+        "EV ADV TIME",
         "POWERUP DROP"
     };
     if (!s) {
