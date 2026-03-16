@@ -164,6 +164,7 @@ typedef struct leveldef_missile_launcher {
     float missile_ttl_s;
     float hit_radius;
     float blast_radius;
+    int style; /* enum missile_style_id */
 } leveldef_missile_launcher;
 
 typedef struct leveldef_arc_node {

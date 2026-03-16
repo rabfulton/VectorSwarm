@@ -83,6 +83,28 @@ static int mine_style_from_name(const char* name) {
     return -1;
 }
 
+static int missile_style_from_name(const char* name) {
+    char* end = NULL;
+    long v;
+    if (!name) {
+        return -1;
+    }
+    if (strcmp(name, "relic") == 0 || strcmp(name, "classic") == 0 || strcmp(name, "default") == 0) {
+        return MISSILE_STYLE_RELIC;
+    }
+    if (strcmp(name, "smokestack") == 0 || strcmp(name, "industrial") == 0 || strcmp(name, "factory") == 0) {
+        return MISSILE_STYLE_SMOKESTACK;
+    }
+    if (strcmp(name, "reef") == 0 || strcmp(name, "underwater") == 0 || strcmp(name, "bio") == 0) {
+        return MISSILE_STYLE_REEF;
+    }
+    v = strtol(name, &end, 10);
+    if (end && *end == '\0') {
+        return (int)v;
+    }
+    return -1;
+}
+
 static int kamikaze_style_from_name(const char* name) {
     char* end = NULL;
     long v;
@@ -694,8 +716,9 @@ static int parse_missile_launcher(leveldef_level* lvl, const char* value, FILE* 
     char buf[320];
     char* tok;
     char* save = NULL;
-    const int expected = 10;
-    char* fields[10];
+    const int expected_min = 10;
+    const int expected_max = 11;
+    char* fields[11];
     int i = 0;
     leveldef_missile_launcher ml;
 
@@ -707,13 +730,13 @@ static int parse_missile_launcher(leveldef_level* lvl, const char* value, FILE* 
     buf[sizeof(buf) - 1] = '\0';
 
     tok = strtok_r(buf, ",", &save);
-    while (tok && i < expected) {
+    while (tok && i < expected_max) {
         fields[i++] = trim(tok);
         tok = strtok_r(NULL, ",", &save);
     }
-    if (i != expected) {
+    if (tok != NULL || i < expected_min || i > expected_max) {
         if (log_out) {
-            fprintf(log_out, "leveldef: missile_launcher expects %d fields, got %d\n", expected, i);
+            fprintf(log_out, "leveldef: missile_launcher expects %d or %d fields, got %d\n", expected_min, expected_max, i);
         }
         return 0;
     }
@@ -728,9 +751,19 @@ static int parse_missile_launcher(leveldef_level* lvl, const char* value, FILE* 
     ml.missile_ttl_s = strtof(fields[7], NULL);
     ml.hit_radius = strtof(fields[8], NULL);
     ml.blast_radius = strtof(fields[9], NULL);
+    ml.style = MISSILE_STYLE_RELIC;
+    if (i >= 11) {
+        ml.style = missile_style_from_name(fields[10]);
+    }
     if (ml.count <= 0) {
         if (log_out) {
             fprintf(log_out, "leveldef: missile_launcher count must be > 0\n");
+        }
+        return 0;
+    }
+    if (ml.style < MISSILE_STYLE_RELIC || ml.style > MISSILE_STYLE_REEF) {
+        if (log_out) {
+            fprintf(log_out, "leveldef: missile_launcher style must be RELIC, SMOKESTACK, or REEF\n");
         }
         return 0;
     }
@@ -2020,7 +2053,8 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
                 ml->missile_turn_rate_deg <= 0.0f ||
                 ml->missile_ttl_s <= 0.0f ||
                 ml->hit_radius <= 0.0f ||
-                ml->blast_radius < 0.0f) {
+                ml->blast_radius < 0.0f ||
+                ml->style < MISSILE_STYLE_RELIC || ml->style > MISSILE_STYLE_REEF) {
                 if (log_out) {
                     fprintf(log_out, "leveldef: level %d invalid missile_launcher entry\n", i);
                 }

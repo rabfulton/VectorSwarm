@@ -1266,6 +1266,15 @@ static const char* minefield_style_name(int style) {
     }
 }
 
+static const char* missile_style_name(int style) {
+    switch (style) {
+        case MISSILE_STYLE_SMOKESTACK: return "smokestack";
+        case MISSILE_STYLE_REEF: return "reef";
+        case MISSILE_STYLE_RELIC:
+        default: return "relic";
+    }
+}
+
 static const char* kamikaze_style_name(int style) {
     switch (style) {
         case KAMIKAZE_STYLE_PHOENIX: return "phoenix";
@@ -1544,6 +1553,7 @@ static int build_level_serialized_text(
         ml.spacing = fmaxf(m->b, 0.0f);
         ml.activation_range = fmaxf(m->c, 10.0f);
         ml.missile_ttl_s = fmaxf(m->d, 0.20f);
+        ml.style = clampi((int)lroundf(m->e), MISSILE_STYLE_RELIC, MISSILE_STYLE_REEF);
         lvl.missile_launchers[lvl.missile_launcher_count++] = ml;
         missile_n += 1;
     }
@@ -2075,21 +2085,41 @@ static int build_level_serialized_text(
     }
     for (i = 0; i < lvl.missile_launcher_count; ++i) {
         const leveldef_missile_launcher* ml = &lvl.missile_launchers[i];
-        if (!appendf(
-                out,
-                out_cap,
-                &used,
-                "missile_launcher=%.6f,%.6f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
-                ml->anchor_x01,
-                ml->anchor_y01,
-                ml->count,
-                ml->spacing,
-                ml->activation_range,
-                ml->missile_speed,
-                ml->missile_turn_rate_deg,
-                ml->missile_ttl_s,
-                ml->hit_radius,
-                ml->blast_radius)) return 0;
+        const int style = clampi(ml->style, MISSILE_STYLE_RELIC, MISSILE_STYLE_REEF);
+        if (style == MISSILE_STYLE_RELIC) {
+            if (!appendf(
+                    out,
+                    out_cap,
+                    &used,
+                    "missile_launcher=%.6f,%.6f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
+                    ml->anchor_x01,
+                    ml->anchor_y01,
+                    ml->count,
+                    ml->spacing,
+                    ml->activation_range,
+                    ml->missile_speed,
+                    ml->missile_turn_rate_deg,
+                    ml->missile_ttl_s,
+                    ml->hit_radius,
+                    ml->blast_radius)) return 0;
+        } else {
+            if (!appendf(
+                    out,
+                    out_cap,
+                    &used,
+                    "missile_launcher=%.6f,%.6f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%s\n",
+                    ml->anchor_x01,
+                    ml->anchor_y01,
+                    ml->count,
+                    ml->spacing,
+                    ml->activation_range,
+                    ml->missile_speed,
+                    ml->missile_turn_rate_deg,
+                    ml->missile_ttl_s,
+                    ml->hit_radius,
+                    ml->blast_radius,
+                    missile_style_name(style))) return 0;
+        }
     }
     for (i = 0; i < lvl.arc_node_count; ++i) {
         const leveldef_arc_node* an = &lvl.arc_nodes[i];
@@ -2150,7 +2180,7 @@ static int marker_property_count(const level_editor_state* s) {
         return 4;
     }
     if (kind == LEVEL_EDITOR_MARKER_MISSILE) {
-        return 6;
+        return 7;
     }
     if (kind == LEVEL_EDITOR_MARKER_ARC_NODE) {
         return 7;
@@ -2737,6 +2767,7 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
         );
     }
     for (int i = 0; i < lvl->missile_launcher_count; ++i) {
+        const int before = s->marker_count;
         const leveldef_missile_launcher* ml = &lvl->missile_launchers[i];
         push_marker(
             s,
@@ -2751,6 +2782,9 @@ static void build_markers(level_editor_state* s, const leveldef_db* db, int styl
             ml->activation_range,
             ml->missile_ttl_s
         );
+        if (s->marker_count > before) {
+            s->markers[s->marker_count - 1].e = (float)clampi(ml->style, MISSILE_STYLE_RELIC, MISSILE_STYLE_REEF);
+        }
     }
     for (int i = 0; i < lvl->arc_node_count; ++i) {
         const leveldef_arc_node* an = &lvl->arc_nodes[i];
@@ -3231,6 +3265,9 @@ static void add_marker_at_view(
         added = 1;
     } else if (kind == LEVEL_EDITOR_MARKER_MISSILE) {
         push_marker(s, LEVEL_EDITOR_MARKER_MISSILE, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, x01, y01, 6.0f, 64.0f, 760.0f, 3.6f);
+        if (s->marker_count > before_count) {
+            s->markers[s->marker_count - 1].e = (float)MISSILE_STYLE_RELIC;
+        }
         added = 1;
     } else if (kind == LEVEL_EDITOR_MARKER_ARC_NODE) {
         push_marker(s, LEVEL_EDITOR_MARKER_ARC_NODE, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, x01, y01, 2.4f, 0.8f, 40.0f, 1800.0f);
@@ -3308,6 +3345,9 @@ static void add_spatial_marker_at_x01(level_editor_state* s, int kind, float x01
         added = 1;
     } else if (kind == LEVEL_EDITOR_MARKER_MISSILE) {
         push_marker(s, LEVEL_EDITOR_MARKER_MISSILE, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, xx, yy, 6.0f, 64.0f, 760.0f, 3.6f);
+        if (s->marker_count > before_count) {
+            s->markers[s->marker_count - 1].e = (float)MISSILE_STYLE_RELIC;
+        }
         added = 1;
     } else if (kind == LEVEL_EDITOR_MARKER_ARC_NODE) {
         push_marker(s, LEVEL_EDITOR_MARKER_ARC_NODE, LEVEL_EDITOR_TRACK_SPATIAL, 1, 0.0f, xx, yy, 2.4f, 0.8f, 40.0f, 1800.0f);
@@ -4075,6 +4115,13 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             case 3: m->b = clampf(m->b + delta * 5.0f, 0.0f, 400.0f); break;
             case 4: m->c = clampf(m->c + delta * 10.0f, 20.0f, 2500.0f); break;
             case 5: m->d = clampf(m->d + delta * 0.1f, 0.20f, 30.0f); break;
+            case 6: {
+                const int dir = (delta >= 0.0f) ? 1 : -1;
+                const int n = MISSILE_STYLE_REEF - MISSILE_STYLE_RELIC + 1;
+                int style = clampi((int)lroundf(m->e), MISSILE_STYLE_RELIC, MISSILE_STYLE_REEF);
+                style = MISSILE_STYLE_RELIC + ((style - MISSILE_STYLE_RELIC + dir + n) % n);
+                m->e = (float)style;
+            } break;
             default: break;
         }
         mark_editor_dirty(s);

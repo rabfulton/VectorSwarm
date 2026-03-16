@@ -2500,6 +2500,136 @@ static vg_result draw_level_structures(
     return VG_OK;
 }
 
+static vg_result draw_missile_shape(
+    vg_context* ctx,
+    float cx,
+    float cy,
+    float heading_rad,
+    float radius,
+    int style,
+    const vg_stroke_style* halo_s,
+    const vg_stroke_style* main_s,
+    const vg_fill_style* fill_s
+) {
+    const float c = cosf(heading_rad);
+    const float s = sinf(heading_rad);
+    const float fx = c;
+    const float fy = s;
+    const float rx = -s;
+    const float ry = c;
+    const int style_id = clampi(style, MISSILE_STYLE_RELIC, MISSILE_STYLE_REEF);
+    if (style_id == MISSILE_STYLE_SMOKESTACK) {
+        const float len = radius * 1.72f;
+        const float half_w = radius * 0.64f;
+        const float tail = radius * 0.92f;
+        const float body_tail = radius * 0.42f;
+        const vg_vec2 hull[7] = {
+            {cx + fx * len, cy + fy * len},
+            {cx + fx * (radius * 0.48f) + rx * (half_w * 0.86f), cy + fy * (radius * 0.48f) + ry * (half_w * 0.86f)},
+            {cx - fx * body_tail + rx * half_w, cy - fy * body_tail + ry * half_w},
+            {cx - fx * tail + rx * (half_w * 1.18f), cy - fy * tail + ry * (half_w * 1.18f)},
+            {cx - fx * tail - rx * (half_w * 1.18f), cy - fy * tail - ry * (half_w * 1.18f)},
+            {cx - fx * body_tail - rx * half_w, cy - fy * body_tail - ry * half_w},
+            {cx + fx * (radius * 0.48f) - rx * (half_w * 0.86f), cy + fy * (radius * 0.48f) - ry * (half_w * 0.86f)}
+        };
+        const vg_vec2 hull_closed[8] = {hull[0], hull[1], hull[2], hull[3], hull[4], hull[5], hull[6], hull[0]};
+        const vg_vec2 brace0[2] = {
+            {cx + fx * (radius * 0.32f) + rx * (half_w * 0.72f), cy + fy * (radius * 0.32f) + ry * (half_w * 0.72f)},
+            {cx - fx * (radius * 0.18f) - rx * (half_w * 0.72f), cy - fy * (radius * 0.18f) - ry * (half_w * 0.72f)}
+        };
+        const vg_vec2 brace1[2] = {
+            {cx + fx * (radius * 0.32f) - rx * (half_w * 0.72f), cy + fy * (radius * 0.32f) - ry * (half_w * 0.72f)},
+            {cx - fx * (radius * 0.18f) + rx * (half_w * 0.72f), cy - fy * (radius * 0.18f) + ry * (half_w * 0.72f)}
+        };
+        const vg_vec2 band0[2] = {
+            {cx - fx * (radius * 0.04f) + rx * (half_w * 0.88f), cy - fy * (radius * 0.04f) + ry * (half_w * 0.88f)},
+            {cx - fx * (radius * 0.04f) - rx * (half_w * 0.88f), cy - fy * (radius * 0.04f) - ry * (half_w * 0.88f)}
+        };
+        const vg_vec2 exhaust[4] = {
+            {cx - fx * tail + rx * (half_w * 0.42f), cy - fy * tail + ry * (half_w * 0.42f)},
+            {cx - fx * (tail + radius * 0.46f) + rx * (half_w * 0.22f), cy - fy * (tail + radius * 0.46f) + ry * (half_w * 0.22f)},
+            {cx - fx * (tail + radius * 0.46f) - rx * (half_w * 0.22f), cy - fy * (tail + radius * 0.46f) - ry * (half_w * 0.22f)},
+            {cx - fx * tail - rx * (half_w * 0.42f), cy - fy * tail - ry * (half_w * 0.42f)}
+        };
+        vg_polyline_view lines[4] = {
+            {.points = hull_closed, .count = 8u, .closed = 0},
+            {.points = brace0, .count = 2u, .closed = 0},
+            {.points = brace1, .count = 2u, .closed = 0},
+            {.points = band0, .count = 2u, .closed = 0}
+        };
+        vg_result r = vg_fill_convex(ctx, hull, 7, fill_s);
+        if (r != VG_OK) return r;
+        r = vg_fill_convex(ctx, exhaust, 4, fill_s);
+        if (r != VG_OK) return r;
+        r = vg_draw_polylines(ctx, lines, 4, halo_s);
+        if (r != VG_OK) return r;
+        return vg_draw_polylines(ctx, lines, 4, main_s);
+    }
+    if (style_id == MISSILE_STYLE_REEF) {
+        const float len = radius * 1.58f;
+        const float body_w = radius * 0.78f;
+        const float tail = radius * 0.86f;
+        const vg_vec2 body[6] = {
+            {cx + fx * len, cy + fy * len},
+            {cx + fx * (radius * 0.36f) + rx * body_w, cy + fy * (radius * 0.36f) + ry * body_w},
+            {cx - fx * (radius * 0.18f) + rx * (body_w * 0.72f), cy - fy * (radius * 0.18f) + ry * (body_w * 0.72f)},
+            {cx - fx * tail, cy - fy * tail},
+            {cx - fx * (radius * 0.18f) - rx * (body_w * 0.72f), cy - fy * (radius * 0.18f) - ry * (body_w * 0.72f)},
+            {cx + fx * (radius * 0.36f) - rx * body_w, cy + fy * (radius * 0.36f) - ry * body_w}
+        };
+        const vg_vec2 body_closed[7] = {body[0], body[1], body[2], body[3], body[4], body[5], body[0]};
+        const vg_vec2 fin_l[4] = {
+            body[1],
+            {cx + fx * (radius * 0.08f) + rx * (body_w * 1.36f), cy + fy * (radius * 0.08f) + ry * (body_w * 1.36f)},
+            {cx - fx * (radius * 0.38f) + rx * (body_w * 0.94f), cy - fy * (radius * 0.38f) + ry * (body_w * 0.94f)},
+            body[2]
+        };
+        const vg_vec2 fin_r[4] = {
+            body[5],
+            {cx + fx * (radius * 0.08f) - rx * (body_w * 1.36f), cy + fy * (radius * 0.08f) - ry * (body_w * 1.36f)},
+            {cx - fx * (radius * 0.38f) - rx * (body_w * 0.94f), cy - fy * (radius * 0.38f) - ry * (body_w * 0.94f)},
+            body[4]
+        };
+        const vg_vec2 spine[3] = {
+            {cx + fx * (radius * 0.92f), cy + fy * (radius * 0.92f)},
+            {cx + fx * (radius * 0.16f), cy + fy * (radius * 0.16f)},
+            {cx - fx * (radius * 0.54f), cy - fy * (radius * 0.54f)}
+        };
+        vg_polyline_view lines[4] = {
+            {.points = body_closed, .count = 7u, .closed = 0},
+            {.points = fin_l, .count = 4u, .closed = 1},
+            {.points = fin_r, .count = 4u, .closed = 1},
+            {.points = spine, .count = 3u, .closed = 0}
+        };
+        vg_result r = vg_fill_convex(ctx, body, 6, fill_s);
+        if (r != VG_OK) return r;
+        r = vg_fill_convex(ctx, fin_l, 4, fill_s);
+        if (r != VG_OK) return r;
+        r = vg_fill_convex(ctx, fin_r, 4, fill_s);
+        if (r != VG_OK) return r;
+        r = vg_draw_polylines(ctx, lines, 4, halo_s);
+        if (r != VG_OK) return r;
+        return vg_draw_polylines(ctx, lines, 4, main_s);
+    }
+    {
+        const float len = radius * 1.6f;
+        const float half_w = radius * 0.68f;
+        const float notch = radius * 0.46f;
+        const vg_vec2 shape[5] = {
+            {cx + fx * len, cy + fy * len},
+            {cx - fx * len * 0.56f - rx * half_w, cy - fy * len * 0.56f - ry * half_w},
+            {cx - fx * notch, cy - fy * notch},
+            {cx - fx * len * 0.56f + rx * half_w, cy - fy * len * 0.56f + ry * half_w},
+            {cx + fx * len, cy + fy * len}
+        };
+        vg_result r = vg_fill_convex(ctx, shape, 4, fill_s);
+        if (r != VG_OK) return r;
+        r = vg_draw_polyline(ctx, shape, 5, halo_s, 1);
+        if (r != VG_OK) return r;
+        return vg_draw_polyline(ctx, shape, 5, main_s, 1);
+    }
+}
+
 static vg_result draw_missile_system(
     vg_context* ctx,
     const game_state* g,
@@ -2541,18 +2671,9 @@ static vg_result draw_missile_system(
                 const float slot = (float)k - half;
                 const float x = ml->anchor_x + slot * ml->spacing;
                 const float y = ml->anchor_y;
-                const vg_vec2 shape[5] = {
-                    {x, y + 14.0f},
-                    {x - 8.5f, y - 8.0f},
-                    {x - 3.8f, y - 2.2f},
-                    {x + 8.5f, y - 8.0f},
-                    {x, y + 14.0f}
-                };
-                vg_result r = vg_fill_convex(ctx, shape, 4, &l_fill);
-                if (r != VG_OK) return r;
-                r = vg_draw_polyline(ctx, shape, 5, &l_halo, 1);
-                if (r != VG_OK) return r;
-                r = vg_draw_polyline(ctx, shape, 5, &l_main, 1);
+                vg_result r = draw_missile_shape(
+                    ctx, x, y, 1.57079632679f, 10.0f, ml->style, &l_halo, &l_main, &l_fill
+                );
                 if (r != VG_OK) return r;
             }
         }
@@ -2574,23 +2695,9 @@ static vg_result draw_missile_system(
             m_main.color = (vg_color){enemy_pal->enemy_bullet.r, enemy_pal->enemy_bullet.g, enemy_pal->enemy_bullet.b, 1.0f};
             m_fill.color = (vg_color){enemy_pal->enemy.r * 0.35f, enemy_pal->enemy.g * 0.35f, enemy_pal->enemy.b * 0.35f, 0.48f};
         }
-        const float c = cosf(m->heading_rad);
-        const float s = sinf(m->heading_rad);
-        const float len = m->radius * 1.6f;
-        const float half_w = m->radius * 0.68f;
-        const float notch = m->radius * 0.46f;
-        const vg_vec2 shape[5] = {
-            {m->b.x + c * len, m->b.y + s * len},
-            {m->b.x - c * len * 0.56f - s * half_w, m->b.y - s * len * 0.56f + c * half_w},
-            {m->b.x - c * notch, m->b.y - s * notch},
-            {m->b.x - c * len * 0.56f + s * half_w, m->b.y - s * len * 0.56f - c * half_w},
-            {m->b.x + c * len, m->b.y + s * len}
-        };
-        vg_result r = vg_fill_convex(ctx, shape, 4, &m_fill);
-        if (r != VG_OK) return r;
-        r = vg_draw_polyline(ctx, shape, 5, &m_halo, 1);
-        if (r != VG_OK) return r;
-        r = vg_draw_polyline(ctx, shape, 5, &m_main, 1);
+        vg_result r = draw_missile_shape(
+            ctx, m->b.x, m->b.y, m->heading_rad, m->radius, m->style, &m_halo, &m_main, &m_fill
+        );
         if (r != VG_OK) return r;
     }
     return VG_OK;
@@ -4999,6 +5106,13 @@ static const char* editor_mine_style_name(float v) {
     return "CLASSIC";
 }
 
+static const char* editor_missile_style_name(float v) {
+    const int style = clampi((int)lroundf(v), MISSILE_STYLE_RELIC, MISSILE_STYLE_REEF);
+    if (style == MISSILE_STYLE_SMOKESTACK) return "SMOKESTACK";
+    if (style == MISSILE_STYLE_REEF) return "REEF";
+    return "RELIC";
+}
+
 static const char* editor_kamikaze_style_name(int style) {
     style = clampi(style, KAMIKAZE_STYLE_CLASSIC, KAMIKAZE_STYLE_PHOENIX);
     if (style == KAMIKAZE_STYLE_PHOENIX) return "PHOENIX";
@@ -5154,6 +5268,7 @@ static int editor_marker_properties_text(
         if (n < cap) { out_labels[n] = "SPACING"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_marker_b[sel]); n++; }
         if (n < cap) { out_labels[n] = "ACT RANGE"; snprintf(out_values[n], 32, "%.1f", metrics->level_editor_marker_c[sel]); n++; }
         if (n < cap) { out_labels[n] = "TTL S"; snprintf(out_values[n], 32, "%.2f", metrics->level_editor_marker_d[sel]); n++; }
+        if (n < cap) { out_labels[n] = "STYLE"; snprintf(out_values[n], 32, "%s", editor_missile_style_name(metrics->level_editor_marker_e[sel])); n++; }
         return n;
     }
     if (kind == 13) {

@@ -1517,6 +1517,7 @@ static void configure_missile_launchers_for_level(game_state* g) {
         ml->missile_ttl_s = fmaxf(d->missile_ttl_s, 0.1f);
         ml->hit_radius = fmaxf(d->hit_radius, 1.0f);
         ml->blast_radius = fmaxf(d->blast_radius, ml->hit_radius);
+        ml->style = clampi(d->style, MISSILE_STYLE_RELIC, MISSILE_STYLE_REEF);
         (void)game_find_noncolliding_spawn(
             g,
             &ml->anchor_x,
@@ -1699,6 +1700,7 @@ static void spawn_enemy_missile_one(game_state* g, missile_launcher* ml) {
     m->blast_radius = ml->blast_radius * su;
     m->radius = 10.0f * su;
     m->trail_emit_accum = 0.0f;
+    m->style = ml->style;
     m->b.vx = cosf(m->heading_rad) * m->speed;
     m->b.vy = sinf(m->heading_rad) * m->speed;
     ml->launched_count += 1;
@@ -1746,6 +1748,7 @@ int game_spawn_enemy_missile(
     m->blast_radius = fmaxf(blast_radius, m->hit_radius);
     m->radius = 10.0f * su;
     m->trail_emit_accum = 0.0f;
+    m->style = MISSILE_STYLE_RELIC;
     m->b.vx = dir_x * m->speed;
     m->b.vy = dir_y * m->speed;
     m->b.ax = 0.0f;
@@ -1785,6 +1788,7 @@ static void spawn_player_missile(game_state* g) {
     m->forward_x = forward_x;
     m->forward_y = forward_y;
     m->trail_emit_accum = 0.0f;
+    m->style = MISSILE_STYLE_RELIC;
     m->b.vx = forward_x * (130.0f * su);
     m->b.vy = 0.0f;
     g->alt_weapon_ammo[PLAYER_ALT_WEAPON_MISSILE] -= 1;

@@ -337,6 +337,12 @@ typedef enum missile_owner_type {
     MISSILE_OWNER_PLAYER = 1
 } missile_owner_type;
 
+typedef enum missile_style_id {
+    MISSILE_STYLE_RELIC = 0,
+    MISSILE_STYLE_SMOKESTACK = 1,
+    MISSILE_STYLE_REEF = 2
+} missile_style_id;
+
 typedef struct missile_launcher {
     int active;
     int triggered;
@@ -354,6 +360,7 @@ typedef struct missile_launcher {
     float missile_ttl_s;
     float hit_radius;
     float blast_radius;
+    int style; /* enum missile_style_id */
 } missile_launcher;
 
 typedef struct homing_missile {
@@ -371,6 +378,7 @@ typedef struct homing_missile {
     float forward_x;
     float forward_y;
     float trail_emit_accum;
+    int style; /* enum missile_style_id */
 } homing_missile;
 
 typedef enum powerup_type {
