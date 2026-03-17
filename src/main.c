@@ -630,6 +630,7 @@ typedef struct app {
     atomic_uint pending_aux_tests;
     atomic_uint pending_lightning_tests;
     atomic_int thrust_gate;
+    atomic_uint thruster_cutoff_mod_u16;
     atomic_int shield_gate;
     atomic_int lightning_gate;
     atomic_uint lightning_gain_u16;
@@ -3699,6 +3700,7 @@ static void audio_callback(void* userdata, Uint8* stream, int len) {
     uint32_t lightning_tests = atomic_exchange_explicit(&a->pending_lightning_tests, 0u, memory_order_acq_rel);
     const int weapon_level = atomic_load_explicit(&a->audio_weapon_level, memory_order_acquire);
     const int thrust_gate = atomic_load_explicit(&a->thrust_gate, memory_order_acquire);
+    const uint32_t thruster_cutoff_mod_u16 = atomic_load_explicit(&a->thruster_cutoff_mod_u16, memory_order_acquire);
     const int shield_gate = atomic_load_explicit(&a->shield_gate, memory_order_acquire);
     const int lightning_gate = atomic_load_explicit(&a->lightning_gate, memory_order_acquire);
     const uint32_t lightning_gain_u16 = atomic_load_explicit(&a->lightning_gain_u16, memory_order_acquire);
@@ -3730,6 +3732,13 @@ static void audio_callback(void* userdata, Uint8* stream, int len) {
     } else if (!thruster_effective_gate && a->thruster_note_on) {
         wtp_note_off(&a->thruster_synth, a->thruster_note_id);
         a->thruster_note_on = 0;
+    }
+    {
+        const float base_cutoff = acoustics_value_to_display(ACOUST_THR_CUTOFF, a->acoustics_value_01[ACOUST_THR_CUTOFF]);
+        const float resonance = acoustics_value_to_display(ACOUST_THR_RESONANCE, a->acoustics_value_01[ACOUST_THR_RESONANCE]);
+        const float mod01 = clampf((float)thruster_cutoff_mod_u16 / 65535.0f, 0.0f, 1.0f);
+        const float cutoff = base_cutoff * (1.0f + 0.22f * mod01);
+        wtp_set_filter(&a->thruster_synth, cutoff, resonance);
     }
 
     for (uint32_t i = 0; i < fire_events; ++i) {
@@ -4153,6 +4162,7 @@ static void init_teletype_audio(app* a) {
         atomic_store_explicit(&a->pending_aux_tests, 0u, memory_order_release);
         atomic_store_explicit(&a->pending_lightning_tests, 0u, memory_order_release);
         atomic_store_explicit(&a->thrust_gate, 0, memory_order_release);
+        atomic_store_explicit(&a->thruster_cutoff_mod_u16, 0u, memory_order_release);
         atomic_store_explicit(&a->shield_gate, 0, memory_order_release);
         atomic_store_explicit(&a->lightning_gate, 0, memory_order_release);
         atomic_store_explicit(&a->lightning_gain_u16, 0u, memory_order_release);
@@ -14241,7 +14251,20 @@ int main(void) {
         if (a.audio_ready) {
             const int thrust_on = (!controls_ui_active(&a)) &&
                                   (in.left || in.right || in.up || in.down) && (a.game.lives > 0);
+            const float speed01 = clampf(
+                sqrtf(a.game.player.b.vx * a.game.player.b.vx + a.game.player.b.vy * a.game.player.b.vy) /
+                    fmaxf(a.game.player.max_speed, 1.0f),
+                0.0f,
+                1.0f
+            );
+            const float height01 = clampf(a.game.player.b.y / fmaxf(a.game.world_h, 1.0f), 0.0f, 1.0f);
+            const float thruster_cutoff_mod01 = clampf(speed01 * 0.58f + height01 * 0.42f, 0.0f, 1.0f);
             atomic_store_explicit(&a.thrust_gate, thrust_on ? 1 : 0, memory_order_release);
+            atomic_store_explicit(
+                &a.thruster_cutoff_mod_u16,
+                (uint32_t)clampf(thruster_cutoff_mod01 * 65535.0f, 0.0f, 65535.0f),
+                memory_order_release
+            );
             atomic_store_explicit(&a.shield_gate, a.game.shield_active ? 1 : 0, memory_order_release);
             atomic_store_explicit(&a.lightning_gate, a.game.lightning_active ? 1 : 0, memory_order_release);
             {
