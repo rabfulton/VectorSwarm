@@ -6446,6 +6446,10 @@ static void update_gpu_sphere_particle_instances(app* a) {
         a->sphere_particle_dynamic_count = 0u;
         return;
     }
+    /* Particle-sphere ejections are currently disabled; the active backdrop is
+     * the static shell only. */
+    a->sphere_particle_dynamic_count = 0u;
+    return;
 
     ensure_sphere_particle_seeds();
     if (!a->sphere_cme_initialized || a->game.t < a->sphere_cme_last_t) {

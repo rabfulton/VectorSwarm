@@ -152,6 +152,7 @@ static int wave_pattern_from_name(const char* name) {
     if (strcmp(name, "swarm_fish") == 0 || strcmp(name, "boid_fish") == 0) return LEVELDEF_WAVE_SWARM_FISH;
     if (strcmp(name, "swarm_firefly") == 0 || strcmp(name, "boid_firefly") == 0) return LEVELDEF_WAVE_SWARM_FIREFLY;
     if (strcmp(name, "swarm_bird") == 0 || strcmp(name, "boid_bird") == 0) return LEVELDEF_WAVE_SWARM_BIRD;
+    if (strcmp(name, "swarm_orbital") == 0 || strcmp(name, "boid_orbital") == 0 || strcmp(name, "orbital") == 0) return LEVELDEF_WAVE_SWARM_ORBITAL;
     if (strcmp(name, "kamikaze") == 0) return LEVELDEF_WAVE_KAMIKAZE;
     if (strcmp(name, "asteroid") == 0 || strcmp(name, "asteroid_storm") == 0) return LEVELDEF_WAVE_ASTEROID_STORM;
     return -1;
@@ -167,6 +168,7 @@ static int event_kind_from_name(const char* name) {
     if (strcmp(name, "swarm_fish") == 0 || strcmp(name, "boid_fish") == 0) return LEVELDEF_EVENT_WAVE_SWARM_FISH;
     if (strcmp(name, "swarm_firefly") == 0 || strcmp(name, "boid_firefly") == 0) return LEVELDEF_EVENT_WAVE_SWARM_FIREFLY;
     if (strcmp(name, "swarm_bird") == 0 || strcmp(name, "boid_bird") == 0) return LEVELDEF_EVENT_WAVE_SWARM_BIRD;
+    if (strcmp(name, "swarm_orbital") == 0 || strcmp(name, "boid_orbital") == 0 || strcmp(name, "orbital") == 0) return LEVELDEF_EVENT_WAVE_SWARM_ORBITAL;
     if (strcmp(name, "kamikaze") == 0) return LEVELDEF_EVENT_WAVE_KAMIKAZE;
     if (strcmp(name, "asteroid") == 0 || strcmp(name, "asteroid_storm") == 0) return LEVELDEF_EVENT_ASTEROID_STORM;
     return -1;
@@ -193,6 +195,7 @@ static int curated_kind_from_name(const char* name) {
     if (strcmp(name, "boid_fish") == 0 || strcmp(name, "swarm_fish") == 0) return 10;
     if (strcmp(name, "boid_firefly") == 0 || strcmp(name, "swarm_firefly") == 0) return 11;
     if (strcmp(name, "boid_bird") == 0 || strcmp(name, "swarm_bird") == 0) return 12;
+    if (strcmp(name, "boid_orbital") == 0 || strcmp(name, "swarm_orbital") == 0 || strcmp(name, "orbital") == 0) return 18;
     if (strcmp(name, "jelly_swarm") == 0 || strcmp(name, "jelly") == 0) return 15;
     if (strcmp(name, "manta_wing") == 0 || strcmp(name, "manta") == 0 || strcmp(name, "manta_ray") == 0) return 16;
     if (strcmp(name, "eel_swarm") == 0 || strcmp(name, "eel") == 0 || strcmp(name, "electric_eel") == 0) return 17;
@@ -201,14 +204,15 @@ static int curated_kind_from_name(const char* name) {
 }
 
 static int curated_kind_is_regular_boid(int kind) {
-    return (kind == 5 || kind == 10 || kind == 11 || kind == 12);
+    return (kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 18);
 }
 
 static int event_kind_is_boid(int kind) {
     return kind == LEVELDEF_EVENT_WAVE_SWARM ||
            kind == LEVELDEF_EVENT_WAVE_SWARM_FISH ||
            kind == LEVELDEF_EVENT_WAVE_SWARM_FIREFLY ||
-           kind == LEVELDEF_EVENT_WAVE_SWARM_BIRD;
+           kind == LEVELDEF_EVENT_WAVE_SWARM_BIRD ||
+           kind == LEVELDEF_EVENT_WAVE_SWARM_ORBITAL;
 }
 
 static int boid_style_from_name(const char* name) {
@@ -2040,7 +2044,7 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
         if (l->event_count > 0) {
             int j;
             for (j = 0; j < l->event_count; ++j) {
-                if (l->events[j].kind < 0 || l->events[j].kind > LEVELDEF_EVENT_WAVE_SWARM_BIRD || l->events[j].order <= 0 || l->events[j].delay_s < 0.0f) {
+                if (l->events[j].kind < 0 || l->events[j].kind > LEVELDEF_EVENT_WAVE_SWARM_ORBITAL || l->events[j].order <= 0 || l->events[j].delay_s < 0.0f) {
                     if (log_out) {
                         fprintf(log_out, "leveldef: level %d has invalid event entry\n", i);
                     }

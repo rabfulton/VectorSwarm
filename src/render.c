@@ -5539,6 +5539,7 @@ static const char* level_editor_marker_name(int kind) {
         case 10: return "SWARM FISH";
         case 11: return "SWARM FIREFLY";
         case 12: return "SWARM BIRD";
+        case 18: return "SWARM ORBITAL";
         case 15: return "JELLY SWARM";
         case 16: return "MANTA WING";
         case 17: return "EEL SWARM";
@@ -5581,7 +5582,7 @@ static vg_color level_editor_marker_color(const palette_theme* pal, int kind) {
     if (kind == 20) {
         return (vg_color){1.0f, 0.56f, 0.18f, 1.0f};
     }
-    if (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 15 || kind == 16 || kind == 17) {
+    if (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 15 || kind == 16 || kind == 17 || kind == 18) {
         return (vg_color){1.0f, 0.26f, 0.26f, 1.0f};
     }
     return pal->secondary;

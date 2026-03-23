@@ -3594,6 +3594,8 @@ static void game_update_wave_spawning(game_state* g, float dt) {
                     one.wave_cycle[0] = LEVELDEF_WAVE_SWARM_FIREFLY;
                 } else if (ev_kind == LEVELDEF_EVENT_WAVE_SWARM_BIRD) {
                     one.wave_cycle[0] = LEVELDEF_WAVE_SWARM_BIRD;
+                } else if (ev_kind == LEVELDEF_EVENT_WAVE_SWARM_ORBITAL) {
+                    one.wave_cycle[0] = LEVELDEF_WAVE_SWARM_ORBITAL;
                 } else {
                     one.wave_cycle[0] = LEVELDEF_WAVE_KAMIKAZE;
                 }

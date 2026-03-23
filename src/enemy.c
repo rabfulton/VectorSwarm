@@ -69,7 +69,8 @@ enum {
     SWARM_FAMILY_GENERIC = 0,
     SWARM_FAMILY_FIREFLY = 1,
     SWARM_FAMILY_FISH = 2,
-    SWARM_FAMILY_BIRD = 3
+    SWARM_FAMILY_BIRD = 3,
+    SWARM_FAMILY_ORBITAL = 4
 };
 
 static void apply_boid_visual_style(enemy* e, int style, int wave_id, int slot_index);
@@ -1550,6 +1551,161 @@ static void spawn_wave_v_formation(game_state* g, const leveldef_db* db, const l
     }
 }
 
+static enemy_v3 sphere_orbital_position(enemy_v3 u, enemy_v3 v, float phase) {
+    return enemy_v3_norm(
+        enemy_v3_add(
+            enemy_v3_scale(u, cosf(phase)),
+            enemy_v3_scale(v, sinf(phase))
+        )
+    );
+}
+
+static enemy_v3 sphere_orbital_tangent(enemy_v3 u, enemy_v3 v, float phase) {
+    return enemy_v3_norm(
+        enemy_v3_add(
+            enemy_v3_scale(u, -sinf(phase)),
+            enemy_v3_scale(v, cosf(phase))
+        )
+    );
+}
+
+static void spawn_wave_orbital_sphere(
+    game_state* g,
+    const leveldef_db* db,
+    int wave_id,
+    int boid_style,
+    int desired_count,
+    float base_speed,
+    float fire_range,
+    float size_scale,
+    float su
+) {
+    const enemy_v3 front_local = quat_conjugate_rotate_enemy_v3(g->sphere_visual_q, enemy_v3_make(0.0f, 0.0f, 1.0f));
+    const enemy_v3 back_local = enemy_v3_scale(front_local, -1.0f);
+    const float surface_r = sphere_surface_radius(g);
+    enemy_v3 back_x;
+    enemy_v3 back_y;
+    int free_slots;
+    int track_count;
+    int spawned = 0;
+
+    if (!g || !db || !level_uses_sphere_enemy(g)) {
+        return;
+    }
+
+    desired_count = (desired_count > 0) ? desired_count : 10;
+    if (desired_count < 4) {
+        desired_count = 4;
+    }
+    if (desired_count > 15) {
+        desired_count = 15;
+    }
+    base_speed = (base_speed > 1.0f) ? base_speed : (260.0f * su);
+    fire_range = (fire_range > 1.0f) ? fire_range : (g->world_w * 0.36f);
+    size_scale = clampf((size_scale > 0.0f) ? size_scale : 1.0f, 0.45f, 2.40f);
+
+    free_slots = enemy_free_slot_count(g);
+    if (free_slots <= 0) {
+        return;
+    }
+    if (desired_count > free_slots) {
+        desired_count = free_slots;
+    }
+
+    sphere_build_basis(back_local, &back_x, &back_y);
+    track_count = clampi((desired_count + 4) / 5, 1, 3);
+    if (track_count > desired_count) {
+        track_count = desired_count;
+    }
+
+    for (int track = 0; track < track_count && spawned < desired_count; ++track) {
+        const int tracks_left = track_count - track;
+        int per_track = (desired_count - spawned + tracks_left - 1) / tracks_left;
+        const float offset_ang = frand01() * 6.2831853f;
+        const float offset_rad = 0.05f + frand01() * 0.18f;
+        const float tangent_ang = frand01() * 6.2831853f;
+        const float spacing = frand_range(0.12f, 0.18f);
+        const float center_phase = frand_range(-0.18f, 0.18f);
+        const float shell = 0.08f + frand01() * 0.08f;
+        const float shell_scale = 1.0f + shell;
+        const float angular_speed_mag = (base_speed / fmaxf(surface_r * shell_scale, 1.0f)) * frand_range(0.80f, 1.25f);
+        const float angular_speed = (((wave_id + track) & 1) != 0) ? -angular_speed_mag : angular_speed_mag;
+        enemy_v3 orbit_u;
+        enemy_v3 orbit_v;
+        enemy_v3 orbit_tx;
+        enemy_v3 orbit_ty;
+
+        if (per_track < 4 && desired_count >= 4) {
+            per_track = 4;
+        }
+        if (per_track > 5) {
+            per_track = 5;
+        }
+
+        orbit_u = enemy_v3_norm(
+            enemy_v3_add(
+                back_local,
+                enemy_v3_add(
+                    enemy_v3_scale(back_x, cosf(offset_ang) * offset_rad),
+                    enemy_v3_scale(back_y, sinf(offset_ang) * offset_rad)
+                )
+            )
+        );
+        sphere_build_basis(orbit_u, &orbit_tx, &orbit_ty);
+        orbit_v = enemy_v3_norm(
+            enemy_v3_add(
+                enemy_v3_scale(orbit_tx, cosf(tangent_ang)),
+                enemy_v3_scale(orbit_ty, sinf(tangent_ang))
+            )
+        );
+
+        for (int i = 0; i < per_track && spawned < desired_count; ++i, ++spawned) {
+            enemy* e = spawn_enemy_common(g, su);
+            const float slot_phase = center_phase + ((float)i - 0.5f * (float)(per_track - 1)) * spacing;
+            enemy_v3 pos;
+            enemy_v3 tangent;
+            enemy_v3 vel;
+            if (!e) {
+                return;
+            }
+            e->archetype = ENEMY_ARCH_SWARM;
+            e->state = ENEMY_STATE_SWARM;
+            enemy_assign_combat_loadout(g, e, db);
+            e->wave_id = wave_id;
+            e->slot_index = spawned;
+            apply_boid_visual_style(e, boid_style, wave_id, spawned);
+            e->swarm_family = SWARM_FAMILY_ORBITAL;
+            e->sphere_shell = shell + frands1() * 0.01f;
+            e->orbital_u_x = orbit_u.x;
+            e->orbital_u_y = orbit_u.y;
+            e->orbital_u_z = orbit_u.z;
+            e->orbital_v_x = orbit_v.x;
+            e->orbital_v_y = orbit_v.y;
+            e->orbital_v_z = orbit_v.z;
+            e->orbital_phase = slot_phase;
+            e->orbital_speed = angular_speed;
+            e->orbital_fire_range = fire_range;
+            e->radius *= size_scale * frand_range(0.92f, 1.08f);
+            e->max_speed = fabsf(angular_speed) * surface_r * shell_scale;
+            e->swarm_min_speed = e->max_speed;
+            e->armed = 1;
+            e->fire_prob = 1.0f;
+            e->weapon_id = ENEMY_WEAPON_PULSE;
+            e->fire_cooldown_s = frand_range(0.12f, 0.80f);
+            pos = sphere_orbital_position(orbit_u, orbit_v, slot_phase);
+            tangent = sphere_orbital_tangent(orbit_u, orbit_v, slot_phase);
+            vel = enemy_v3_scale(tangent, angular_speed * surface_r * shell_scale);
+            e->sphere_pos_x = pos.x;
+            e->sphere_pos_y = pos.y;
+            e->sphere_pos_z = pos.z;
+            e->sphere_vel_x = vel.x;
+            e->sphere_vel_y = vel.y;
+            e->sphere_vel_z = vel.z;
+            enemy_project_sphere_state(g, e);
+        }
+    }
+}
+
 static void spawn_wave_swarm_profile_sphere(
     game_state* g,
     const leveldef_db* db,
@@ -1994,6 +2150,24 @@ void enemy_spawn_curated_enemy(
     if (count > 24) {
         count = 24;
     }
+    if (ce->kind == 18) {
+        if (!level_uses_sphere_enemy(g)) {
+            fprintf(stderr, "enemy: orbital curated wave requires sphere gameplay mode\n");
+            return;
+        }
+        spawn_wave_orbital_sphere(
+            g,
+            db,
+            wave_id,
+            boid_style_from_value(ce->d),
+            count,
+            ((ce->b > 0.0f) ? ce->b : 260.0f) * su,
+            ((ce->c > 0.0f) ? ce->c : 480.0f) * su,
+            boid_size_scale_from_value(ce->e),
+            su
+        );
+        return;
+    }
     if (ce->kind == 5 || ce->kind == 10 || ce->kind == 11 || ce->kind == 12 || ce->kind == 15 || ce->kind == 17) {
         const int profile_id = resolve_boid_profile_by_variant(db, lvl, ce->kind);
         const leveldef_boid_profile* p = leveldef_get_boid_profile(db, profile_id);
@@ -2246,15 +2420,28 @@ void enemy_spawn_next_wave(
     bidirectional_spawns = (lvl->render_style == LEVEL_RENDER_CYLINDER && lvl->bidirectional_spawns != 0) ? 1 : 0;
 
     if (uses_sphere) {
+        int pattern = LEVELDEF_WAVE_SWARM;
         int profile_id = lvl->default_boid_profile;
-        const leveldef_boid_profile* profile;
+        const leveldef_boid_profile* profile = NULL;
         if (lvl->wave_mode == LEVELDEF_WAVES_BOID_ONLY) {
-            if (lvl->boid_cycle_count <= 0) {
+            if (lvl->wave_cycle_count > 0) {
+                pattern = lvl->wave_cycle[g->wave_index % lvl->wave_cycle_count];
+            } else if (lvl->boid_cycle_count > 0) {
+                profile_id = lvl->boid_cycle[g->wave_index % lvl->boid_cycle_count];
+            } else {
                 return;
             }
-            profile_id = lvl->boid_cycle[g->wave_index % lvl->boid_cycle_count];
         } else if (lvl->wave_mode == LEVELDEF_WAVES_NORMAL && lvl->wave_cycle_count > 0) {
-            const int pattern = lvl->wave_cycle[g->wave_index % lvl->wave_cycle_count];
+            pattern = lvl->wave_cycle[g->wave_index % lvl->wave_cycle_count];
+        }
+        if (pattern == LEVELDEF_WAVE_SWARM_ORBITAL) {
+            announce_wave(g, "orbital sentry ring");
+            spawn_wave_orbital_sphere(g, db, wave_id, lvl->default_boid_style, 10, 260.0f * su, g->world_w * 0.36f, 1.0f, su);
+            g->wave_index += 1;
+            g->wave_cooldown_s = lvl->wave_cooldown_between_s;
+            return;
+        }
+        if (pattern != LEVELDEF_WAVE_SWARM || lvl->wave_mode == LEVELDEF_WAVES_NORMAL) {
             profile_id = resolve_boid_profile_by_variant(db, lvl, pattern);
         }
         if (profile_id < 0) {
@@ -2313,6 +2500,8 @@ void enemy_spawn_next_wave(
                 announce_wave(g, "curated manta ray");
             } else if (ce->kind == 17) {
                 announce_wave(g, "curated electric eels");
+            } else if (ce->kind == 18) {
+                announce_wave(g, "curated orbital sentries");
             } else if (ce->kind == 20) {
                 const char* boss_name = boss_name_for_id((int)lroundf(ce->a));
                 if (boss_name) {
@@ -2359,6 +2548,13 @@ void enemy_spawn_next_wave(
                     const int wave_id_2 = ++g->wave_id_alloc;
                     spawn_wave_swarm_profile(g, db, wave_id_2, profile_id, lvl->default_boid_style, -dir, bidirectional_spawns, su);
                 }
+            }
+        } else if (pattern == LEVELDEF_WAVE_SWARM_ORBITAL) {
+            if (!uses_sphere) {
+                fprintf(stderr, "enemy: orbital swarm wave requires sphere gameplay mode\n");
+            } else {
+                announce_wave(g, "orbital sentry ring");
+                spawn_wave_orbital_sphere(g, db, wave_id, lvl->default_boid_style, 10, 260.0f * su, g->world_w * 0.36f, 1.0f, su);
             }
         } else if (pattern == LEVELDEF_WAVE_ASTEROID_STORM) {
             announce_wave(g, "asteroid storm");
@@ -3026,6 +3222,9 @@ static void enemy_try_fire(game_state* g, enemy* e, float dt, float su, const le
         const enemy_v3 player_local = quat_conjugate_rotate_enemy_v3(g->sphere_visual_q, enemy_v3_make(0.0f, 0.0f, 1.0f));
         const enemy_v3 to_player = enemy_v3_proj_tangent(enemy_v3_sub(player_local, pos), pos);
         const float dist = enemy_v3_len(to_player) * sphere_surface_radius(g);
+        const float fire_range = (e->swarm_family == SWARM_FAMILY_ORBITAL && e->orbital_fire_range > 1.0f)
+            ? e->orbital_fire_range
+            : (g->world_w * 0.95f);
         if (!e->sphere_visible || e->visual_kind == ENEMY_VISUAL_EEL || e->visual_kind == ENEMY_VISUAL_MANTA) {
             return;
         }
@@ -3040,11 +3239,11 @@ static void enemy_try_fire(game_state* g, enemy* e, float dt, float su, const le
         if (e->fire_cooldown_s > 0.0f) {
             return;
         }
-        if (dist > g->world_w * 0.95f) {
+        if (dist > fire_range) {
             enemy_reset_fire_cooldown(w, &t, e);
             return;
         }
-        if (e->archetype == ENEMY_ARCH_SWARM) {
+        if (e->archetype == ENEMY_ARCH_SWARM && e->swarm_family != SWARM_FAMILY_ORBITAL) {
             const float p_fire = clampf(e->fire_prob, 0.0f, 1.0f);
             if (frand01() > p_fire) {
                 enemy_reset_fire_cooldown(w, &t, e);
@@ -3828,6 +4027,34 @@ static void update_enemy_kamikaze(game_state* g, enemy* e, float dt, int uses_cy
     }
 }
 
+static void update_enemy_orbital_sphere(game_state* g, enemy* e, float dt) {
+    const enemy_v3 orbit_u = enemy_v3_make(e->orbital_u_x, e->orbital_u_y, e->orbital_u_z);
+    const enemy_v3 orbit_v = enemy_v3_make(e->orbital_v_x, e->orbital_v_y, e->orbital_v_z);
+    const float shell_scale = 1.0f + e->sphere_shell;
+    const float surface_r = sphere_surface_radius(g) * shell_scale;
+    enemy_v3 pos;
+    enemy_v3 tangent;
+    enemy_v3 vel;
+
+    e->orbital_phase = fmodf(e->orbital_phase + e->orbital_speed * dt, 6.2831853f);
+    if (e->orbital_phase < 0.0f) {
+        e->orbital_phase += 6.2831853f;
+    }
+
+    pos = sphere_orbital_position(orbit_u, orbit_v, e->orbital_phase);
+    tangent = sphere_orbital_tangent(orbit_u, orbit_v, e->orbital_phase);
+    vel = enemy_v3_scale(tangent, e->orbital_speed * surface_r);
+
+    e->sphere_pos_x = pos.x;
+    e->sphere_pos_y = pos.y;
+    e->sphere_pos_z = pos.z;
+    e->sphere_vel_x = vel.x;
+    e->sphere_vel_y = vel.y;
+    e->sphere_vel_z = vel.z;
+    enemy_project_sphere_state(g, e);
+    e->ai_timer_s += dt;
+}
+
 static void update_enemy_swarm_sphere(game_state* g, enemy* e, float dt, float su) {
     enemy_v3 pos = enemy_v3_make(e->sphere_pos_x, e->sphere_pos_y, e->sphere_pos_z);
     enemy_v3 vel = enemy_v3_make(e->sphere_vel_x, e->sphere_vel_y, e->sphere_vel_z);
@@ -3844,6 +4071,11 @@ static void update_enemy_swarm_sphere(game_state* g, enemy* e, float dt, float s
     const float sep_ang = sep_r / fmaxf(surface_r, 1.0f);
     const float ali_ang = ali_r / fmaxf(surface_r, 1.0f);
     const float coh_ang = coh_r / fmaxf(surface_r, 1.0f);
+
+    if (e->swarm_family == SWARM_FAMILY_ORBITAL) {
+        update_enemy_orbital_sphere(g, e, dt);
+        return;
+    }
 
     for (size_t i = 0; i < MAX_ENEMIES; ++i) {
         const enemy* o = &g->enemies[i];

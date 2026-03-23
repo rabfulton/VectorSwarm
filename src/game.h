@@ -189,6 +189,15 @@ typedef struct enemy {
     float swarm_min_speed;
     float swarm_turn_rate_rad;
     int swarm_family;
+    float orbital_u_x;
+    float orbital_u_y;
+    float orbital_u_z;
+    float orbital_v_x;
+    float orbital_v_y;
+    float orbital_v_z;
+    float orbital_phase;
+    float orbital_speed;
+    float orbital_fire_range;
     float facing_x;
     float facing_y;
     float kamikaze_tail;
