@@ -34,6 +34,7 @@ static int level_style_from_name(const char* name) {
     if (strcmp(name, "FOG_OF_WAR") == 0) return LEVEL_STYLE_FOG_OF_WAR;
     if (strcmp(name, "BLANK") == 0) return LEVEL_STYLE_BLANK;
     if (strcmp(name, "REVOLVER") == 0) return LEVEL_STYLE_REVOLVER;
+    if (strcmp(name, "SPHERE_WEB") == 0) return LEVEL_STYLE_SPHERE_WEB;
     return -1;
 }
 
@@ -203,6 +204,33 @@ static int curated_kind_is_regular_boid(int kind) {
     return (kind == 5 || kind == 10 || kind == 11 || kind == 12);
 }
 
+static int event_kind_is_boid(int kind) {
+    return kind == LEVELDEF_EVENT_WAVE_SWARM ||
+           kind == LEVELDEF_EVENT_WAVE_SWARM_FISH ||
+           kind == LEVELDEF_EVENT_WAVE_SWARM_FIREFLY ||
+           kind == LEVELDEF_EVENT_WAVE_SWARM_BIRD;
+}
+
+static int boid_style_from_name(const char* name) {
+    int style;
+    if (!name) {
+        return BOID_STYLE_CLASSIC;
+    }
+    if (strcmp(name, "classic") == 0) return BOID_STYLE_CLASSIC;
+    if (strcmp(name, "razor") == 0) return BOID_STYLE_RAZOR;
+    if (strcmp(name, "lantern") == 0) return BOID_STYLE_LANTERN;
+    if (strcmp(name, "shard") == 0) return BOID_STYLE_SHARD;
+    if (strcmp(name, "wraith") == 0) return BOID_STYLE_WRAITH;
+    style = (int)strtol(name, NULL, 10);
+    if (style < BOID_STYLE_CLASSIC) {
+        style = BOID_STYLE_CLASSIC;
+    }
+    if (style > BOID_STYLE_WRAITH) {
+        style = BOID_STYLE_WRAITH;
+    }
+    return style;
+}
+
 static int render_style_from_name(const char* name) {
     if (!name) {
         return -1;
@@ -213,6 +241,7 @@ static int render_style_from_name(const char* name) {
     if (strcmp(name, "drifter_shaded") == 0) return LEVEL_RENDER_DRIFTER_SHADED;
     if (strcmp(name, "fog") == 0) return LEVEL_RENDER_FOG;
     if (strcmp(name, "blank") == 0) return LEVEL_RENDER_BLANK;
+    if (strcmp(name, "sphere") == 0) return LEVEL_RENDER_SPHERE;
     return -1;
 }
 
@@ -510,6 +539,7 @@ void leveldef_init_defaults(leveldef_db* db) {
         db->levels[i].render_style = -1;
         db->levels[i].spawn_mode = -1;
         db->levels[i].default_boid_profile = -1;
+        db->levels[i].default_boid_style = BOID_STYLE_CLASSIC;
         db->levels[i].powerup_drop_chance = 0.12f;
         db->levels[i].powerup_double_shot_r = 0.90f;
         db->levels[i].powerup_double_shot_g = 0.95f;
@@ -562,6 +592,7 @@ void leveldef_init_defaults(leveldef_db* db) {
         b->spawn_mode = LEVELDEF_SPAWN_SEQUENCED_CLEAR;
         b->spawn_interval_s = 2.0f;
         b->default_boid_profile = 0;
+        b->default_boid_style = BOID_STYLE_CLASSIC;
         b->wave_cooldown_initial_s = 0.65f;
         b->wave_cooldown_between_s = 2.0f;
         b->event_wave_spawn_timeout_factor = 0.0f;
@@ -991,7 +1022,7 @@ static int parse_event_entry(leveldef_level* lvl, const char* value, FILE* log_o
     char buf[192];
     char* tok;
     char* save = NULL;
-    char* fields[3];
+    char* fields[4];
     int i = 0;
     leveldef_event_entry ev;
     if (!lvl || !value || lvl->event_count >= LEVELDEF_MAX_EVENTS) {
@@ -1001,20 +1032,30 @@ static int parse_event_entry(leveldef_level* lvl, const char* value, FILE* log_o
     strncpy(buf, value, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = '\0';
     tok = strtok_r(buf, ",", &save);
-    while (tok && i < 3) {
+    while (tok && i < 4) {
         fields[i++] = trim(tok);
         tok = strtok_r(NULL, ",", &save);
     }
-    if (i != 2 && i != 3) {
+    if (i != 2 && i != 3 && i != 4) {
         if (log_out) {
-            fprintf(log_out, "leveldef: event expects 2 or 3 fields, got %d\n", i);
+            fprintf(log_out, "leveldef: event expects 2, 3 or 4 fields, got %d\n", i);
         }
         return 0;
     }
     ev.kind = event_kind_from_name(fields[0]);
-    if (i == 3) {
+    ev.style = BOID_STYLE_CLASSIC;
+    if (i >= 3) {
         ev.order = (int)strtol(fields[1], NULL, 10);
         ev.delay_s = strtof(fields[2], NULL);
+        if (i == 4) {
+            if (!event_kind_is_boid(ev.kind)) {
+                if (log_out) {
+                    fprintf(log_out, "leveldef: style field is only valid for boid events\n");
+                }
+                return 0;
+            }
+            ev.style = boid_style_from_name(fields[3]);
+        }
     } else {
         ev.order = lvl->event_count + 1;
         ev.delay_s = strtof(fields[1], NULL);
@@ -1920,6 +1961,12 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
             }
             ok = 0;
         }
+        if (l->default_boid_style < BOID_STYLE_CLASSIC || l->default_boid_style > BOID_STYLE_WRAITH) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid default_boid_style\n", i);
+            }
+            ok = 0;
+        }
         for (int j = 0; j < l->searchlight_count; ++j) {
             if (l->searchlights[j].style < SEARCHLIGHT_STYLE_RELIC ||
                 l->searchlights[j].style > SEARCHLIGHT_STYLE_COIL) {
@@ -1995,6 +2042,14 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
                 if (l->events[j].kind < 0 || l->events[j].kind > LEVELDEF_EVENT_WAVE_SWARM_BIRD || l->events[j].order <= 0 || l->events[j].delay_s < 0.0f) {
                     if (log_out) {
                         fprintf(log_out, "leveldef: level %d has invalid event entry\n", i);
+                    }
+                    ok = 0;
+                    break;
+                }
+                if (event_kind_is_boid(l->events[j].kind) &&
+                    (l->events[j].style < BOID_STYLE_CLASSIC || l->events[j].style > BOID_STYLE_WRAITH)) {
+                    if (log_out) {
+                        fprintf(log_out, "leveldef: level %d has invalid boid event style\n", i);
                     }
                     ok = 0;
                     break;

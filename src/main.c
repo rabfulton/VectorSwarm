@@ -99,7 +99,7 @@
 #define UNDERWATER_NOISE_TEX_SIZE 256
 #define TERRAIN_ROWS 24
 #define TERRAIN_COLS 98
-#define RADAR_GPU_MAX_VERTS 4096
+#define RADAR_GPU_MAX_VERTS 65536
 #define GRID_STATE_W 160
 #define GRID_STATE_H 90
 #define GRID_SIM_MAX_SOURCES 32
@@ -239,6 +239,9 @@ typedef struct grid_pc {
     float p2[4];      /* rgb=dim_color, w=intensity */
     float p3[4];      /* rgb=bright_color, w=line_boost */
     float p4[4];      /* x=camera_x, y=camera_y, z=world_w, w=world_h */
+    float p5[4];      /* x=mode(0=flat,1=sphere), y=sphere_radius_px, z=seed_count, w=line_px */
+    float p6[4];      /* sphere orientation quaternion wxyz */
+    float p7[4];      /* x=spring_distort_px, y=time_s, z=reserved, w=reserved */
 } grid_pc;
 
 typedef struct grid_sim_pc {
@@ -588,6 +591,12 @@ typedef struct app {
     int grid_tuning_enabled; /* VTYPE_GRID_TUNING */
     int grid_tuning_show;
     char grid_tuning_text[256];
+    int sphere_debug_src_count;
+    float sphere_debug_src_amp;
+    float sphere_debug_scroll_speed;
+    uint32_t sphere_debug_line_count;
+    uint32_t sphere_debug_tri_count;
+    int sphere_debug_show;
 
     VkCommandPool command_pool;
     VkCommandBuffer command_buffers[APP_MAX_SWAPCHAIN_IMAGES];
@@ -1303,10 +1312,54 @@ static void sync_grid_tuning_text(app* a) {
 }
 
 static void print_grid_tuning(const app* a) {
+    FILE* logf = NULL;
     if (!a) {
         return;
     }
-    printf(
+    logf = fopen("build/sphere_debug.log", "a");
+    if (a->game.render_style == LEVEL_RENDER_SPHERE) {
+        sphere_render_debug_stats dbg;
+        render_get_sphere_debug_stats(&dbg);
+        fprintf(
+            stderr,
+            "[sphere_dbg] seg=%d nodes=%d d1=%d d2=%d d3=%d d4p=%d gap=%.8f disp=%.6f vel=%.6f imp=%.6f line=%u tri=%u\n",
+            dbg.segment_count,
+            dbg.node_count,
+            dbg.degree1_count,
+            dbg.degree2_count,
+            dbg.degree3_count,
+            dbg.degree4p_count,
+            dbg.max_quantized_merge_gap,
+            dbg.spring_peak_disp,
+            dbg.spring_peak_vel,
+            dbg.spring_impulse,
+            a->sphere_debug_line_count,
+            a->sphere_debug_tri_count
+        );
+        fflush(stderr);
+        if (logf) {
+            fprintf(
+                logf,
+                "[sphere_dbg] seg=%d nodes=%d d1=%d d2=%d d3=%d d4p=%d gap=%.8f disp=%.6f vel=%.6f imp=%.6f line=%u tri=%u\n",
+                dbg.segment_count,
+                dbg.node_count,
+                dbg.degree1_count,
+                dbg.degree2_count,
+                dbg.degree3_count,
+                dbg.degree4p_count,
+                dbg.max_quantized_merge_gap,
+                dbg.spring_peak_disp,
+                dbg.spring_peak_vel,
+                dbg.spring_impulse,
+                a->sphere_debug_line_count,
+                a->sphere_debug_tri_count
+            );
+            fclose(logf);
+        }
+        return;
+    }
+    fprintf(
+        stderr,
         "[grid_tune] hz=%.6ff spring_k=%.6ff neighbor=%.6ff damping=%.6ff impulse=%.6ff max_disp=%.6ff max_vel=%.6ff eps=%.6ff distort=%.6ff strain=%.6ff line=%.6ff\n",
         a->grid_sim_hz,
         a->grid_sim_spring_k,
@@ -1320,7 +1373,39 @@ static void print_grid_tuning(const app* a) {
         a->grid_render_strain_gain,
         a->grid_line_boost
     );
-    fflush(stdout);
+    fflush(stderr);
+    if (logf) {
+        fprintf(
+            logf,
+            "[grid_tune] hz=%.6ff spring_k=%.6ff neighbor=%.6ff damping=%.6ff impulse=%.6ff max_disp=%.6ff max_vel=%.6ff eps=%.6ff distort=%.6ff strain=%.6ff line=%.6ff\n",
+            a->grid_sim_hz,
+            a->grid_sim_spring_k,
+            a->grid_sim_neighbor_coupling,
+            a->grid_sim_damping,
+            a->grid_sim_impulse_gain,
+            a->grid_sim_max_disp_px,
+            a->grid_sim_max_vel_px_s,
+            a->grid_sim_epsilon,
+            a->grid_render_distort_gain,
+            a->grid_render_strain_gain,
+            a->grid_line_boost
+        );
+        fclose(logf);
+    }
+}
+
+static int handle_sphere_debug_key(app* a, SDL_Keycode key) {
+    if (!a || !menu_is_gameplay(&a->menu) || a->game.render_style != LEVEL_RENDER_SPHERE) {
+        return 0;
+    }
+    switch (key) {
+        case SDLK_F9:
+            print_grid_tuning(a);
+            set_tty_message(a, "sphere debug dumped to stderr + build/sphere_debug.log");
+            return 1;
+        default:
+            return 0;
+    }
 }
 
 static int handle_grid_tuning_key(app* a, SDL_Keycode key) {
@@ -1329,7 +1414,9 @@ static int handle_grid_tuning_key(app* a, SDL_Keycode key) {
     }
     {
         const leveldef_level* lvl = game_current_leveldef(&a->game);
-        if (!lvl || lvl->background_style != LEVELDEF_BACKGROUND_GRID) {
+        if (!lvl ||
+            (lvl->background_style != LEVELDEF_BACKGROUND_GRID &&
+             a->game.render_style != LEVEL_RENDER_SPHERE)) {
             return 0;
         }
     }
@@ -1356,7 +1443,7 @@ static int handle_grid_tuning_key(app* a, SDL_Keycode key) {
             break;
         case SDLK_KP_ENTER:
             print_grid_tuning(a);
-            set_tty_message(a, "grid tuning dumped to stdout");
+            set_tty_message(a, "grid tuning dumped to stderr + build/sphere_debug.log");
             break;
         default:
             handled = 0;
@@ -1383,6 +1470,11 @@ static void reset_grid_sim_state(app* a) {
     a->grid_sim_accum_s = 0.0f;
     a->grid_prev_camera_x = 0.0f;
     a->grid_prev_camera_y = 0.0f;
+    a->sphere_debug_src_count = 0;
+    a->sphere_debug_src_amp = 0.0f;
+    a->sphere_debug_scroll_speed = 0.0f;
+    a->sphere_debug_line_count = 0u;
+    a->sphere_debug_tri_count = 0u;
 }
 
 static void print_fog_tuning(const app* a) {
@@ -6227,9 +6319,9 @@ static int recreate_render_runtime(app* a) {
         !create_underwater_resources(a) ||
         !create_particle_resources(a) ||
         !create_wormhole_resources(a) ||
+        !create_grid_resources(a) ||
         !create_radar_resources(a) ||
         !create_fog_resources(a) ||
-        !create_grid_resources(a) ||
         !create_arc_beam_resources(a) ||
         !create_industry_resources(a) ||
         !create_revolver_pipeline(a) ||
@@ -7487,6 +7579,21 @@ static void update_gpu_radar_vertices(app* a) {
     if (!a || !a->radar_line_vertex_map || !a->radar_tri_vertex_map) {
         return;
     }
+    if (a->game.render_style == LEVEL_RENDER_SPHERE) {
+        {
+            wormhole_line_vertex* out = (wormhole_line_vertex*)a->radar_line_vertex_map;
+            const size_t n = render_build_sphere_gpu_lines(&a->game, out, (size_t)RADAR_GPU_MAX_VERTS);
+            a->radar_line_vertex_count = (uint32_t)((n > (size_t)UINT32_MAX) ? (size_t)UINT32_MAX : n);
+            a->sphere_debug_line_count = a->radar_line_vertex_count;
+        }
+        {
+            wormhole_line_vertex* out = (wormhole_line_vertex*)a->radar_tri_vertex_map;
+            const size_t n = render_build_sphere_gpu_tris(&a->game, out, (size_t)RADAR_GPU_MAX_VERTS);
+            a->radar_tri_vertex_count = (uint32_t)((n > (size_t)UINT32_MAX) ? (size_t)UINT32_MAX : n);
+            a->sphere_debug_tri_count = a->radar_tri_vertex_count;
+        }
+        return;
+    }
     {
         wormhole_line_vertex* out = (wormhole_line_vertex*)a->radar_line_vertex_map;
         const size_t n = render_build_enemy_radar_gpu_lines(&a->game, out, (size_t)RADAR_GPU_MAX_VERTS);
@@ -7685,6 +7792,9 @@ static int create_radar_resources(app* a) {
     if (!a) {
         return 0;
     }
+    if (!a->grid_state_desc_layout) {
+        return 0;
+    }
 
     const VkDeviceSize vbuf_size = (VkDeviceSize)RADAR_GPU_MAX_VERTS * sizeof(wormhole_line_vertex);
     if (!create_buffer(
@@ -7715,6 +7825,8 @@ static int create_radar_resources(app* a) {
     };
     VkPipelineLayoutCreateInfo pli = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = &a->grid_state_desc_layout,
         .pushConstantRangeCount = 1,
         .pPushConstantRanges = &pc
     };
@@ -11063,20 +11175,31 @@ static void record_gpu_radar(app* a, VkCommandBuffer cmd) {
     (void)a;
     (void)cmd;
 #else
+    const int sphere_mode = a && a->game.render_style == LEVEL_RENDER_SPHERE;
     if (!a || !cmd || !a->use_gpu_radar ||
-        a->game.level_style != LEVEL_STYLE_ENEMY_RADAR ||
-        !a->radar_pipeline || !a->radar_fill_pipeline ||
+        (!sphere_mode && a->game.level_style != LEVEL_STYLE_ENEMY_RADAR) ||
+        !a->radar_pipeline ||
         !a->radar_line_vertex_buffer || !a->radar_tri_vertex_buffer ||
         !a->radar_layout) {
         return;
     }
 
     update_gpu_radar_vertices(a);
-    if (a->radar_line_vertex_count < 2u && a->radar_tri_vertex_count < 3u) {
+    if (a->radar_line_vertex_count < 2u && (!sphere_mode && a->radar_tri_vertex_count < 3u)) {
         return;
     }
 
     set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    vkCmdBindDescriptorSets(
+        cmd,
+        VK_PIPELINE_BIND_POINT_GRAPHICS,
+        a->radar_layout,
+        0,
+        1,
+        &a->grid_state_desc_set[a->grid_state_curr],
+        0,
+        NULL
+    );
 
     wormhole_line_pc pc;
     memset(&pc, 0, sizeof(pc));
@@ -11107,17 +11230,18 @@ static void record_gpu_radar(app* a, VkCommandBuffer cmd) {
     }
 
     VkDeviceSize off = 0;
-    /* Sweep fan fill (wedge trail) first. */
+    /* Sweep fan fill for radar, join caps for sphere. */
     if (a->radar_tri_vertex_count >= 3u) {
         vkCmdBindVertexBuffers(cmd, 0, 1, &a->radar_tri_vertex_buffer, &off);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->radar_fill_pipeline);
         pc.color[0] = primary_dim[0];
         pc.color[1] = primary_dim[1];
         pc.color[2] = primary_dim[2];
-        pc.color[3] = 0.16f;
-        pc.params[2] = 0.70f;
+        pc.color[3] = sphere_mode ? 0.54f : 0.16f;
+        pc.params[2] = sphere_mode ? 1.15f : 0.70f;
         pc.offset[0] = 0.0f;
         pc.offset[1] = 0.0f;
+        pc.offset[2] = 0.0f;
         vkCmdPushConstants(cmd, a->radar_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
         vkCmdDraw(cmd, a->radar_tri_vertex_count, 1, 0, 0);
     }
@@ -11127,11 +11251,12 @@ static void record_gpu_radar(app* a, VkCommandBuffer cmd) {
     pc.color[0] = primary_dim[0];
     pc.color[1] = primary_dim[1];
     pc.color[2] = primary_dim[2];
-    pc.color[3] = 0.24f;
-    pc.params[2] = 0.82f;
+        pc.color[3] = sphere_mode ? 0.40f : 0.24f;
+        pc.params[2] = sphere_mode ? 1.28f : 0.82f;
     for (int i = 0; i < 5; ++i) {
         pc.offset[0] = taps[i][0] * px;
         pc.offset[1] = taps[i][1] * px;
+            pc.offset[2] = 0.0f;
         vkCmdPushConstants(cmd, a->radar_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
         vkCmdDraw(cmd, a->radar_line_vertex_count, 1, 0, 0);
     }
@@ -11139,10 +11264,11 @@ static void record_gpu_radar(app* a, VkCommandBuffer cmd) {
     pc.color[0] = primary[0];
     pc.color[1] = primary[1];
     pc.color[2] = primary[2];
-    pc.color[3] = 0.80f;
-    pc.params[2] = 1.12f;
+    pc.color[3] = sphere_mode ? 1.00f : 0.80f;
+    pc.params[2] = sphere_mode ? 1.62f : 1.12f;
     pc.offset[0] = 0.0f;
     pc.offset[1] = 0.0f;
+    pc.offset[2] = 0.0f;
     vkCmdPushConstants(cmd, a->radar_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
     vkCmdDraw(cmd, a->radar_line_vertex_count, 1, 0, 0);
 #endif
@@ -11754,6 +11880,7 @@ static void record_gpu_underwater_kelp(app* a, VkCommandBuffer cmd, float t) {
 
 static int gather_grid_sim_sources(const app* a, float out_src[GRID_SIM_MAX_SOURCES][4]) {
     int n = 0;
+    float sphere_amp = 0.0f;
     if (!a || !out_src) {
         return 0;
     }
@@ -11773,6 +11900,20 @@ static int gather_grid_sim_sources(const app* a, float out_src[GRID_SIM_MAX_SOUR
     out_src[n][2] = 52.0f;
     out_src[n][3] = fmaxf(world_h * 0.18f, 90.0f);
     n++;
+
+    if (a->game.render_style == LEVEL_RENDER_SPHERE && n < GRID_SIM_MAX_SOURCES) {
+        const float sdx = a->game.sphere_scroll_dx;
+        const float sdy = a->game.sphere_scroll_dy;
+        const float speed = sqrtf(sdx * sdx + sdy * sdy);
+        if (speed > 0.15f) {
+            out_src[n][0] = (float)a->swapchain_extent.width * 0.5f - sdx * 2.2f;
+            out_src[n][1] = viewport_h * 0.5f + sdy * 2.2f;
+            out_src[n][2] = clampf(110.0f + speed * 9.0f, 110.0f, 320.0f);
+            out_src[n][3] = fmaxf(world_h * 0.22f, 120.0f);
+            sphere_amp = out_src[n][2];
+            n++;
+        }
+    }
 
     if (a->game.emp_effect_active && n < GRID_SIM_MAX_SOURCES) {
         const float u = clampf(
@@ -11854,6 +11995,11 @@ static int gather_grid_sim_sources(const app* a, float out_src[GRID_SIM_MAX_SOUR
         out_src[n][3] = fmaxf(p->size * 20.0f, world_h * 0.22f);
         n++;
     }
+    ((app*)a)->sphere_debug_src_count = n;
+    ((app*)a)->sphere_debug_src_amp = sphere_amp;
+    ((app*)a)->sphere_debug_scroll_speed =
+        sqrtf(a->game.sphere_scroll_dx * a->game.sphere_scroll_dx +
+              a->game.sphere_scroll_dy * a->game.sphere_scroll_dy);
     return n;
 }
 
@@ -11962,7 +12108,8 @@ static void record_gpu_grid(app* a, VkCommandBuffer cmd) {
         return;
     }
     const leveldef_level* lvl = game_current_leveldef(&a->game);
-    if (!lvl || lvl->background_style != LEVELDEF_BACKGROUND_GRID) {
+    const int sphere_mode = (a->game.render_style == LEVEL_RENDER_SPHERE);
+    if (!lvl || (!sphere_mode && lvl->background_style != LEVELDEF_BACKGROUND_GRID)) {
         return;
     }
 
@@ -12003,6 +12150,29 @@ static void record_gpu_grid(app* a, VkCommandBuffer cmd) {
     }
     pc.p2[3] = 1.0f;
     pc.p3[3] = a->grid_line_boost;
+    pc.p5[0] = 0.0f;
+    pc.p5[1] = 0.0f;
+    pc.p5[2] = 0.0f;
+    pc.p5[3] = 0.0f;
+    pc.p6[0] = 1.0f;
+    pc.p6[1] = 0.0f;
+    pc.p6[2] = 0.0f;
+    pc.p6[3] = 0.0f;
+    pc.p7[0] = a->grid_render_distort_gain;
+    pc.p7[1] = a->game.t;
+    pc.p7[2] = 0.0f;
+    pc.p7[3] = 0.0f;
+    if (a->game.render_style == LEVEL_RENDER_SPHERE) {
+        pc.p5[0] = 1.0f;
+        pc.p5[1] = a->game.world_h * (8.0f / 9.0f);
+        pc.p5[2] = 2048.0f;
+        pc.p5[3] = 0.35f;
+        pc.p6[0] = a->game.sphere_visual_q[0];
+        pc.p6[1] = a->game.sphere_visual_q[1];
+        pc.p6[2] = a->game.sphere_visual_q[2];
+        pc.p6[3] = a->game.sphere_visual_q[3];
+        pc.p7[0] = 1.0f;
+    }
 
     set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->grid_pipeline);
@@ -12587,8 +12757,9 @@ static int record_submit_present(
     {
         const int in_gameplay_scene = menu_is_gameplay(&a->menu);
         const leveldef_level* lvl_bg = game_current_leveldef(&a->game);
-        const int use_gpu_grid = (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_GRID) ? 1 : 0;
-        if (in_gameplay_scene && use_gpu_grid) {
+        const int use_gpu_grid_sim =
+            (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_GRID) ? 1 : 0;
+        if (in_gameplay_scene && use_gpu_grid_sim) {
             record_gpu_grid_sim(a, cmd, dt);
         } else {
             reset_grid_sim_state(a);
@@ -12668,12 +12839,13 @@ static int record_submit_present(
         return 0;
     }
     const leveldef_level* lvl_tune = game_current_leveldef(&a->game);
+    sync_grid_tuning_text(a);
     const int show_grid_tune =
-        a->grid_tuning_enabled &&
-        a->grid_tuning_show &&
-        menu_is_gameplay(&a->menu) &&
-        lvl_tune &&
-        lvl_tune->background_style == LEVELDEF_BACKGROUND_GRID;
+        (a->grid_tuning_enabled &&
+         a->grid_tuning_show &&
+         menu_is_gameplay(&a->menu) &&
+         lvl_tune &&
+         lvl_tune->background_style == LEVELDEF_BACKGROUND_GRID);
     render_metrics metrics = {
         .fps = fps,
         .dt = dt,
@@ -12961,7 +13133,7 @@ static int record_submit_present(
             (a->game.level_style == LEVEL_STYLE_EVENT_HORIZON);
         const int use_gpu_radar =
             a->use_gpu_radar &&
-            (a->game.level_style == LEVEL_STYLE_ENEMY_RADAR);
+            ((a->game.level_style == LEVEL_STYLE_ENEMY_RADAR) || (a->game.render_style == LEVEL_RENDER_SPHERE));
         const int use_gpu_arc =
             a->use_gpu_arc &&
             (a->game.render_style != LEVEL_RENDER_CYLINDER) &&
@@ -12973,7 +13145,10 @@ static int record_submit_present(
         const int use_gpu_fire = (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_FIRE) ? 1 : 0;
         const int use_gpu_ice = (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_ICE) ? 1 : 0;
         const int use_gpu_forest = (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_FOREST) ? 1 : 0;
-        const int use_gpu_grid = (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_GRID) ? 1 : 0;
+        const int use_gpu_grid =
+            (lvl_bg &&
+             lvl_bg->background_style == LEVELDEF_BACKGROUND_GRID &&
+             a->game.render_style != LEVEL_RENDER_SPHERE) ? 1 : 0;
         const int use_gpu_industry = a->use_gpu_industry && (a->game.render_style == LEVEL_RENDER_DEFENDER);
         const int use_gpu_revolver = a->use_gpu_revolver && (a->game.level_style == LEVEL_STYLE_REVOLVER);
         const int need_mid_scene_gpu = (use_gpu_terrain || use_gpu_wormhole || use_gpu_radar || use_gpu_revolver || use_gpu_arc || use_gpu_grid);
@@ -13358,6 +13533,7 @@ int main(void) {
     a.fog_tuning_show = 1;
     a.grid_tuning_enabled = env_flag_enabled("VTYPE_GRID_TUNING");
     a.grid_tuning_show = 1;
+    a.sphere_debug_show = 1;
     a.particle_tuning_enabled = env_flag_enabled("VTYPE_PARTICLE_TRACE");
     a.particle_tuning_show = 1;
     a.particle_bloom_enabled = 1;
@@ -13543,9 +13719,9 @@ int main(void) {
         !create_underwater_resources(&a) ||
         !create_particle_resources(&a) ||
         !create_wormhole_resources(&a) ||
+        !create_grid_resources(&a) ||
         !create_radar_resources(&a) ||
         !create_fog_resources(&a) ||
-        !create_grid_resources(&a) ||
         !create_arc_beam_resources(&a) ||
         !create_vg_context(&a)) {
         cleanup(&a);
@@ -13917,6 +14093,10 @@ int main(void) {
                     a.show_crt_ui = !a.show_crt_ui;
                 } else if (ev.key.keysym.sym == SDLK_r) {
                     restart_pressed = 1;
+                } else if (menu_is_gameplay(&a.menu) &&
+                           a.game.render_style == LEVEL_RENDER_SPHERE &&
+                           handle_sphere_debug_key(&a, ev.key.keysym.sym)) {
+                    /* handled by sphere debug controls */
                 } else if (a.grid_tuning_enabled &&
                            menu_is_gameplay(&a.menu) &&
                            handle_grid_tuning_key(&a, ev.key.keysym.sym)) {

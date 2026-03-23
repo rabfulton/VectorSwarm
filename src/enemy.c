@@ -59,6 +59,19 @@ typedef struct enemy_fire_tuning {
     float spread_scale;
 } enemy_fire_tuning;
 
+typedef struct enemy_v3 {
+    float x;
+    float y;
+    float z;
+} enemy_v3;
+
+enum {
+    SWARM_FAMILY_GENERIC = 0,
+    SWARM_FAMILY_FIREFLY = 1,
+    SWARM_FAMILY_FISH = 2,
+    SWARM_FAMILY_BIRD = 3
+};
+
 static void apply_boid_visual_style(enemy* e, int style, int wave_id, int slot_index);
 static void announce_wave(game_state* g, const char* wave_name);
 static int enemy_free_slot_count(const game_state* g);
@@ -68,6 +81,9 @@ static void spawn_curated_boss_controller(
     const leveldef_curated_enemy* ce,
     float su
 );
+static int level_uses_sphere_enemy(const game_state* g);
+static void enemy_project_sphere_state(const game_state* g, enemy* e);
+static int boid_family_from_profile(const leveldef_boid_profile* p);
 
 static float frand01(void) {
     return (float)rand() / (float)RAND_MAX;
@@ -150,6 +166,105 @@ static void normalize2(float* x, float* y) {
     }
 }
 
+static enemy_v3 enemy_v3_make(float x, float y, float z) {
+    enemy_v3 v;
+    v.x = x;
+    v.y = y;
+    v.z = z;
+    return v;
+}
+
+static enemy_v3 enemy_v3_add(enemy_v3 a, enemy_v3 b) {
+    return enemy_v3_make(a.x + b.x, a.y + b.y, a.z + b.z);
+}
+
+static enemy_v3 enemy_v3_sub(enemy_v3 a, enemy_v3 b) {
+    return enemy_v3_make(a.x - b.x, a.y - b.y, a.z - b.z);
+}
+
+static enemy_v3 enemy_v3_scale(enemy_v3 a, float s) {
+    return enemy_v3_make(a.x * s, a.y * s, a.z * s);
+}
+
+static float enemy_v3_dot(enemy_v3 a, enemy_v3 b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+static enemy_v3 enemy_v3_cross(enemy_v3 a, enemy_v3 b) {
+    return enemy_v3_make(
+        a.y * b.z - a.z * b.y,
+        a.z * b.x - a.x * b.z,
+        a.x * b.y - a.y * b.x
+    );
+}
+
+static float enemy_v3_len(enemy_v3 a) {
+    return sqrtf(enemy_v3_dot(a, a));
+}
+
+static enemy_v3 enemy_v3_norm(enemy_v3 a) {
+    const float l = enemy_v3_len(a);
+    if (l > 1.0e-5f) {
+        return enemy_v3_scale(a, 1.0f / l);
+    }
+    return enemy_v3_make(0.0f, 0.0f, 1.0f);
+}
+
+static enemy_v3 enemy_v3_proj_tangent(enemy_v3 v, enemy_v3 n) {
+    return enemy_v3_sub(v, enemy_v3_scale(n, enemy_v3_dot(v, n)));
+}
+
+static enemy_v3 quat_rotate_enemy_v3(const float q[4], enemy_v3 v) {
+    const float w = q[0];
+    const enemy_v3 u = enemy_v3_make(q[1], q[2], q[3]);
+    const enemy_v3 uv = enemy_v3_cross(u, v);
+    const enemy_v3 uuv = enemy_v3_cross(u, uv);
+    return enemy_v3_add(v, enemy_v3_add(enemy_v3_scale(uv, 2.0f * w), enemy_v3_scale(uuv, 2.0f)));
+}
+
+static enemy_v3 quat_conjugate_rotate_enemy_v3(const float q[4], enemy_v3 v) {
+    const float qc[4] = {q[0], -q[1], -q[2], -q[3]};
+    return quat_rotate_enemy_v3(qc, v);
+}
+
+static float sphere_surface_radius(const game_state* g) {
+    if (!g) {
+        return 1.0f;
+    }
+    return g->world_h * (8.0f / 9.0f);
+}
+
+static void sphere_build_basis(enemy_v3 n, enemy_v3* out_tx, enemy_v3* out_ty) {
+    enemy_v3 up = enemy_v3_make(0.0f, 1.0f, 0.0f);
+    enemy_v3 tx;
+    if (fabsf(enemy_v3_dot(n, up)) > 0.92f) {
+        up = enemy_v3_make(1.0f, 0.0f, 0.0f);
+    }
+    tx = enemy_v3_norm(enemy_v3_cross(up, n));
+    if (out_tx) {
+        *out_tx = tx;
+    }
+    if (out_ty) {
+        *out_ty = enemy_v3_norm(enemy_v3_cross(n, tx));
+    }
+}
+
+static int boid_family_from_profile(const leveldef_boid_profile* p) {
+    if (!p) {
+        return SWARM_FAMILY_GENERIC;
+    }
+    if (strcmp(p->name, "FIREFLY") == 0) {
+        return SWARM_FAMILY_FIREFLY;
+    }
+    if (strcmp(p->name, "FISH") == 0) {
+        return SWARM_FAMILY_FISH;
+    }
+    if (strcmp(p->name, "BIRD") == 0) {
+        return SWARM_FAMILY_BIRD;
+    }
+    return SWARM_FAMILY_GENERIC;
+}
+
 static void steer_to_velocity(body* b, float target_vx, float target_vy, float accel, float damping) {
     b->ax = (target_vx - b->vx) * accel - b->vx * damping;
     b->ay = (target_vy - b->vy) * accel - b->vy * damping;
@@ -192,6 +307,77 @@ static float dist_sq_level(int uses_cylinder, float period, float ax, float ay, 
     const float dx = wrap_delta(ax, bx, period);
     const float dy = ay - by;
     return dx * dx + dy * dy;
+}
+
+static int level_uses_sphere_enemy(const game_state* g) {
+    return g && g->render_style == LEVEL_RENDER_SPHERE;
+}
+
+static void enemy_project_sphere_state(const game_state* g, enemy* e) {
+    const enemy_v3 center = enemy_v3_make(g->world_w * 0.5f, g->world_h * 0.5f, 0.0f);
+    const enemy_v3 pos_local = enemy_v3_make(e->sphere_pos_x, e->sphere_pos_y, e->sphere_pos_z);
+    const enemy_v3 vel_local = enemy_v3_make(e->sphere_vel_x, e->sphere_vel_y, e->sphere_vel_z);
+    const enemy_v3 pos_view = quat_rotate_enemy_v3(g->sphere_visual_q, pos_local);
+    const float draw_radius = sphere_surface_radius(g) * (1.0f + e->sphere_shell);
+    if (pos_view.z <= 0.0f) {
+        e->sphere_visible = 0;
+        e->sphere_depth = 0.0f;
+        e->b.x = -10000.0f;
+        e->b.y = -10000.0f;
+        return;
+    }
+    e->sphere_visible = 1;
+    e->sphere_depth = clampf(pos_view.z, 0.0f, 1.0f);
+    e->b.x = center.x + pos_view.x * draw_radius;
+    e->b.y = center.y + pos_view.y * draw_radius;
+    {
+        enemy_v3 vel_view = quat_rotate_enemy_v3(g->sphere_visual_q, vel_local);
+        e->b.vx = vel_view.x * draw_radius;
+        e->b.vy = vel_view.y * draw_radius;
+        float fx = vel_view.x;
+        float fy = vel_view.y;
+        normalize2(&fx, &fy);
+        if (length2(fx, fy) <= 1.0e-4f) {
+            fx = (pos_view.x >= 0.0f) ? -1.0f : 1.0f;
+            fy = 0.0f;
+        }
+        e->facing_x = fx;
+        e->facing_y = fy;
+    }
+}
+
+static void enemy_project_sphere_bullet(const game_state* g, enemy_bullet* b) {
+    const enemy_v3 center = enemy_v3_make(g->world_w * 0.5f, g->world_h * 0.5f, 0.0f);
+    const enemy_v3 pos_local = enemy_v3_make(b->sphere_pos_x, b->sphere_pos_y, b->sphere_pos_z);
+    const enemy_v3 vel_local = enemy_v3_make(b->sphere_vel_x, b->sphere_vel_y, b->sphere_vel_z);
+    const enemy_v3 pos_view = quat_rotate_enemy_v3(g->sphere_visual_q, pos_local);
+    const float draw_radius = sphere_surface_radius(g);
+    if (pos_view.z <= 0.0f) {
+        b->sphere_visible = 0;
+        b->b.x = -10000.0f;
+        b->b.y = -10000.0f;
+        b->b.vx = 0.0f;
+        b->b.vy = 0.0f;
+        return;
+    }
+    b->sphere_visible = 1;
+    b->b.x = center.x + pos_view.x * draw_radius;
+    b->b.y = center.y + pos_view.y * draw_radius;
+    {
+        const enemy_v3 vel_view = quat_rotate_enemy_v3(g->sphere_visual_q, vel_local);
+        b->b.vx = vel_view.x * draw_radius;
+        b->b.vy = vel_view.y * draw_radius;
+    }
+}
+
+static enemy_bullet* alloc_enemy_bullet_slot(game_state* g) {
+    for (size_t i = 0; i < MAX_ENEMY_BULLETS; ++i) {
+        if (g->enemy_bullets[i].active) {
+            continue;
+        }
+        return &g->enemy_bullets[i];
+    }
+    return NULL;
 }
 
 static float wrap_angle_pi(float a) {
@@ -1003,23 +1189,21 @@ static enemy_bullet* spawn_enemy_bullet(
     float ttl_s,
     float radius
 ) {
-    for (size_t i = 0; i < MAX_ENEMY_BULLETS; ++i) {
-        if (g->enemy_bullets[i].active) {
-            continue;
-        }
-        enemy_bullet* b = &g->enemy_bullets[i];
-        b->active = 1;
-        b->ttl_s = ttl_s;
-        b->radius = radius;
-        b->b.x = e->b.x + dir_x * (e->radius + 8.0f);
-        b->b.y = e->b.y + dir_y * (e->radius + 8.0f);
-        b->b.vx = dir_x * speed + e->b.vx * 0.22f;
-        b->b.vy = dir_y * speed + e->b.vy * 0.22f;
-        b->b.ax = 0.0f;
-        b->b.ay = 0.0f;
-        return b;
+    enemy_bullet* b = alloc_enemy_bullet_slot(g);
+    if (!b) {
+        return NULL;
     }
-    return NULL;
+    b->active = 1;
+    b->ttl_s = ttl_s;
+    b->radius = radius;
+    b->sphere_visible = 0;
+    b->b.ax = 0.0f;
+    b->b.ay = 0.0f;
+    b->b.x = e->b.x + dir_x * (e->radius + 8.0f);
+    b->b.y = e->b.y + dir_y * (e->radius + 8.0f);
+    b->b.vx = dir_x * speed + e->b.vx * 0.22f;
+    b->b.vy = dir_y * speed + e->b.vy * 0.22f;
+    return b;
 }
 
 static void enemy_reset_fire_cooldown(const enemy_weapon_def* w, const enemy_fire_tuning* t, enemy* e) {
@@ -1364,6 +1548,85 @@ static void spawn_wave_v_formation(game_state* g, const leveldef_db* db, const l
     }
 }
 
+static void spawn_wave_swarm_profile_sphere(
+    game_state* g,
+    const leveldef_db* db,
+    int wave_id,
+    int profile_id,
+    int boid_style,
+    float su
+) {
+    const leveldef_boid_profile* p = leveldef_get_boid_profile(db, profile_id);
+    const enemy_v3 front_local = quat_conjugate_rotate_enemy_v3(g->sphere_visual_q, enemy_v3_make(0.0f, 0.0f, 1.0f));
+    enemy_v3 spawn_center;
+    enemy_v3 basis_x;
+    enemy_v3 basis_y;
+    if (!p) {
+        return;
+    }
+    spawn_center = enemy_v3_scale(front_local, -1.0f);
+    sphere_build_basis(spawn_center, &basis_x, &basis_y);
+    for (int i = 0; i < p->count; ++i) {
+        enemy* e = spawn_enemy_common(g, su);
+        float ang;
+        float radial;
+        enemy_v3 offset;
+        enemy_v3 pos;
+        enemy_v3 goal_tangent;
+        float base_speed;
+        if (!e) {
+            break;
+        }
+        e->archetype = ENEMY_ARCH_SWARM;
+        e->state = ENEMY_STATE_SWARM;
+        enemy_assign_combat_loadout(g, e, db);
+        e->wave_id = wave_id;
+        e->slot_index = i;
+        apply_boid_visual_style(e, boid_style, wave_id, i);
+        ang = frand01() * 6.2831853f;
+        radial = 0.16f + 0.38f * sqrtf(frand01());
+        offset = enemy_v3_add(
+            enemy_v3_scale(basis_x, cosf(ang) * radial),
+            enemy_v3_scale(basis_y, sinf(ang) * radial)
+        );
+        pos = enemy_v3_norm(enemy_v3_add(spawn_center, offset));
+        e->sphere_pos_x = pos.x;
+        e->sphere_pos_y = pos.y;
+        e->sphere_pos_z = pos.z;
+        e->sphere_shell = 0.01f + frand01() * 0.04f;
+        goal_tangent = enemy_v3_proj_tangent(front_local, pos);
+        goal_tangent = enemy_v3_norm(goal_tangent);
+        base_speed = p->min_speed * su + frand01() * (p->max_speed - p->min_speed) * su * 0.30f;
+        e->sphere_vel_x = goal_tangent.x * base_speed;
+        e->sphere_vel_y = goal_tangent.y * base_speed;
+        e->sphere_vel_z = goal_tangent.z * base_speed;
+        e->b.vx = 0.0f;
+        e->b.vy = 0.0f;
+        e->home_y = g->world_h * 0.5f;
+        e->max_speed = p->max_speed * su;
+        e->accel = p->accel;
+        e->swarm_family = boid_family_from_profile(p);
+        e->radius = (p->radius_min + frand01() * (p->radius_max - p->radius_min)) * su;
+        e->swarm_sep_w = p->sep_w;
+        e->swarm_ali_w = p->ali_w;
+        e->swarm_coh_w = p->coh_w;
+        e->swarm_avoid_w = p->avoid_w;
+        e->swarm_goal_w = p->goal_w;
+        e->swarm_sep_r = p->sep_r * su;
+        e->swarm_ali_r = p->ali_r * su;
+        e->swarm_coh_r = p->coh_r * su;
+        e->swarm_goal_amp = p->goal_amp * su;
+        e->swarm_goal_freq = p->goal_freq;
+        e->swarm_goal_dir = ((wave_id & 1) != 0) ? -1.0f : 1.0f;
+        e->swarm_wander_w = p->wander_w;
+        e->swarm_wander_freq = p->wander_freq;
+        e->swarm_drag = p->steer_drag;
+        e->swarm_min_speed = p->min_speed * su;
+        e->swarm_turn_rate_rad = p->max_turn_rate_deg * (3.14159265359f / 180.0f);
+        enemy_project_sphere_state(g, e);
+    }
+}
+
 static void spawn_wave_swarm_profile(
     game_state* g,
     const leveldef_db* db,
@@ -1376,6 +1639,10 @@ static void spawn_wave_swarm_profile(
 ) {
     const leveldef_boid_profile* p = leveldef_get_boid_profile(db, profile_id);
     if (!p) {
+        return;
+    }
+    if (level_uses_sphere_enemy(g)) {
+        spawn_wave_swarm_profile_sphere(g, db, wave_id, profile_id, boid_style, su);
         return;
     }
     for (int i = 0; i < p->count; ++i) {
@@ -1400,6 +1667,7 @@ static void spawn_wave_swarm_profile(
         e->home_y = g->world_h * p->spawn_y01;
         e->max_speed = p->max_speed * su;
         e->accel = p->accel;
+        e->swarm_family = boid_family_from_profile(p);
         e->radius = (p->radius_min + frand01() * (p->radius_max - p->radius_min)) * su;
         e->swarm_sep_w = p->sep_w;
         e->swarm_ali_w = p->ali_w;
@@ -1969,10 +2237,34 @@ void enemy_spawn_next_wave(
 ) {
     const int wave_id = ++g->wave_id_alloc;
     int bidirectional_spawns;
+    const int uses_sphere = level_uses_sphere_enemy(g);
     if (!g || !db || !lvl) {
         return;
     }
     bidirectional_spawns = (lvl->render_style == LEVEL_RENDER_CYLINDER && lvl->bidirectional_spawns != 0) ? 1 : 0;
+
+    if (uses_sphere) {
+        int profile_id = lvl->default_boid_profile;
+        const leveldef_boid_profile* profile;
+        if (lvl->wave_mode == LEVELDEF_WAVES_BOID_ONLY) {
+            if (lvl->boid_cycle_count <= 0) {
+                return;
+            }
+            profile_id = lvl->boid_cycle[g->wave_index % lvl->boid_cycle_count];
+        } else if (lvl->wave_mode == LEVELDEF_WAVES_NORMAL && lvl->wave_cycle_count > 0) {
+            const int pattern = lvl->wave_cycle[g->wave_index % lvl->wave_cycle_count];
+            profile_id = resolve_boid_profile_by_variant(db, lvl, pattern);
+        }
+        if (profile_id < 0) {
+            profile_id = 0;
+        }
+        profile = leveldef_get_boid_profile(db, profile_id);
+        announce_wave(g, profile ? profile->wave_name : "sphere swarm");
+        spawn_wave_swarm_profile(g, db, wave_id, profile_id, lvl->default_boid_style, 1.0f, 0, su);
+        g->wave_index += 1;
+        g->wave_cooldown_s = lvl->wave_cooldown_between_s;
+        return;
+    }
 
     if (lvl->wave_mode == LEVELDEF_WAVES_BOID_ONLY) {
         if (lvl->boid_cycle_count <= 0) {
@@ -1987,10 +2279,10 @@ void enemy_spawn_next_wave(
             announce_wave(g, p->wave_name);
             {
                 const float dir = bidirectional_spawns ? ((frand01() < 0.5f) ? -1.0f : 1.0f) : 1.0f;
-                spawn_wave_swarm_profile(g, db, wave_id, profile_id, BOID_STYLE_CLASSIC, dir, bidirectional_spawns, su);
+                spawn_wave_swarm_profile(g, db, wave_id, profile_id, lvl->default_boid_style, dir, bidirectional_spawns, su);
                 if (bidirectional_spawns && g->wave_index >= 4 && frand01() < lvl->cylinder_double_swarm_chance) {
                     const int wave_id_2 = ++g->wave_id_alloc;
-                    spawn_wave_swarm_profile(g, db, wave_id_2, profile_id, BOID_STYLE_CLASSIC, -dir, bidirectional_spawns, su);
+                    spawn_wave_swarm_profile(g, db, wave_id_2, profile_id, lvl->default_boid_style, -dir, bidirectional_spawns, su);
                 }
             }
         }
@@ -2060,10 +2352,10 @@ void enemy_spawn_next_wave(
             announce_wave(g, wave_name);
             {
                 const float dir = bidirectional_spawns ? ((frand01() < 0.5f) ? -1.0f : 1.0f) : 1.0f;
-                spawn_wave_swarm_profile(g, db, wave_id, profile_id, BOID_STYLE_CLASSIC, dir, bidirectional_spawns, su);
+                spawn_wave_swarm_profile(g, db, wave_id, profile_id, lvl->default_boid_style, dir, bidirectional_spawns, su);
                 if (bidirectional_spawns && g->wave_index >= 4 && frand01() < lvl->cylinder_double_swarm_chance) {
                     const int wave_id_2 = ++g->wave_id_alloc;
-                    spawn_wave_swarm_profile(g, db, wave_id_2, profile_id, BOID_STYLE_CLASSIC, -dir, bidirectional_spawns, su);
+                    spawn_wave_swarm_profile(g, db, wave_id_2, profile_id, lvl->default_boid_style, -dir, bidirectional_spawns, su);
                 }
             }
         } else if (pattern == LEVELDEF_WAVE_ASTEROID_STORM) {
@@ -2078,6 +2370,78 @@ void enemy_spawn_next_wave(
 }
 
 static void enemy_fire_projectiles(game_state* g, const enemy* e, const enemy_weapon_def* w, const enemy_fire_tuning* t, int uses_cylinder, float period) {
+    if (level_uses_sphere_enemy(g)) {
+        const enemy_v3 pos = enemy_v3_make(e->sphere_pos_x, e->sphere_pos_y, e->sphere_pos_z);
+        const enemy_v3 player_local = quat_conjugate_rotate_enemy_v3(g->sphere_visual_q, enemy_v3_make(0.0f, 0.0f, 1.0f));
+        enemy_v3 base = enemy_v3_proj_tangent(enemy_v3_sub(player_local, pos), pos);
+        enemy_v3 basis_y;
+        const int count = (w->projectiles_per_shot < 1) ? 1 : w->projectiles_per_shot;
+        const float spread_rad = (w->spread_deg * t->spread_scale) * (3.14159265359f / 180.0f);
+        int spawned = 0;
+        if (enemy_v3_len(base) <= 1.0e-5f) {
+            return;
+        }
+        base = enemy_v3_norm(base);
+        basis_y = enemy_v3_norm(enemy_v3_cross(pos, base));
+        {
+            const float err_rad = frands1() * t->aim_error_deg * (3.14159265359f / 180.0f);
+            const enemy_v3 aim = enemy_v3_norm(
+                enemy_v3_add(
+                    enemy_v3_scale(base, cosf(err_rad)),
+                    enemy_v3_scale(basis_y, sinf(err_rad))
+                )
+            );
+            for (int i = 0; i < count; ++i) {
+                float offset = 0.0f;
+                if (count > 1) {
+                    const float u = (float)i / (float)(count - 1);
+                    offset = (u - 0.5f) * spread_rad;
+                }
+                {
+                    const enemy_v3 dir = enemy_v3_norm(
+                        enemy_v3_add(
+                            enemy_v3_scale(aim, cosf(offset)),
+                            enemy_v3_scale(basis_y, sinf(offset))
+                        )
+                    );
+                    enemy_bullet* b = alloc_enemy_bullet_slot(g);
+                    if (!b) {
+                        continue;
+                    }
+                    b->active = 1;
+                    b->ttl_s = w->projectile_ttl_s;
+                    b->radius = w->projectile_radius;
+                    {
+                        const float surface_r = sphere_surface_radius(g);
+                        const enemy_v3 muzzle = enemy_v3_norm(
+                            enemy_v3_add(
+                                pos,
+                                enemy_v3_scale(dir, (e->radius + 8.0f) / fmaxf(surface_r, 1.0f))
+                            )
+                        );
+                        const enemy_v3 tangent_vel = enemy_v3_scale(
+                            enemy_v3_proj_tangent(dir, muzzle),
+                            w->projectile_speed * t->projectile_speed_scale
+                        );
+                        b->sphere_pos_x = muzzle.x;
+                        b->sphere_pos_y = muzzle.y;
+                        b->sphere_pos_z = muzzle.z;
+                        b->sphere_vel_x = tangent_vel.x;
+                        b->sphere_vel_y = tangent_vel.y;
+                        b->sphere_vel_z = tangent_vel.z;
+                        b->b.ax = 0.0f;
+                        b->b.ay = 0.0f;
+                        enemy_project_sphere_bullet(g, b);
+                        spawned = 1;
+                    }
+                }
+            }
+        }
+        if (spawned) {
+            game_push_audio_event(g, GAME_AUDIO_EVENT_ENEMY_FIRE, e->b.x, e->b.y);
+        }
+        return;
+    }
     const float aim_lead = w->aim_lead_s;
     const float tx = g->player.b.x + g->player.b.vx * aim_lead;
     const float ty = g->player.b.y + g->player.b.vy * aim_lead;
@@ -2654,6 +3018,42 @@ static void enemy_try_fire(game_state* g, enemy* e, float dt, float su, const le
     }
     if (e->missile_cooldown_s > 0.0f) {
         e->missile_cooldown_s -= dt;
+    }
+    if (level_uses_sphere_enemy(g)) {
+        const enemy_v3 pos = enemy_v3_make(e->sphere_pos_x, e->sphere_pos_y, e->sphere_pos_z);
+        const enemy_v3 player_local = quat_conjugate_rotate_enemy_v3(g->sphere_visual_q, enemy_v3_make(0.0f, 0.0f, 1.0f));
+        const enemy_v3 to_player = enemy_v3_proj_tangent(enemy_v3_sub(player_local, pos), pos);
+        const float dist = enemy_v3_len(to_player) * sphere_surface_radius(g);
+        if (!e->sphere_visible || e->visual_kind == ENEMY_VISUAL_EEL || e->visual_kind == ENEMY_VISUAL_MANTA) {
+            return;
+        }
+        if (e->burst_shots_left > 0 && e->burst_gap_timer_s <= 0.0f) {
+            enemy_fire_projectiles(g, e, w, &t, uses_cylinder, period);
+            e->burst_shots_left -= 1;
+            if (e->burst_shots_left > 0) {
+                e->burst_gap_timer_s = w->burst_gap_s;
+            }
+            return;
+        }
+        if (e->fire_cooldown_s > 0.0f) {
+            return;
+        }
+        if (dist > g->world_w * 0.95f) {
+            enemy_reset_fire_cooldown(w, &t, e);
+            return;
+        }
+        if (e->archetype == ENEMY_ARCH_SWARM) {
+            const float p_fire = clampf(e->fire_prob, 0.0f, 1.0f);
+            if (frand01() > p_fire) {
+                enemy_reset_fire_cooldown(w, &t, e);
+                return;
+            }
+        }
+        enemy_fire_projectiles(g, e, w, &t, uses_cylinder, period);
+        e->burst_shots_left = w->burst_count - 1;
+        e->burst_gap_timer_s = (e->burst_shots_left > 0) ? w->burst_gap_s : 0.0f;
+        enemy_reset_fire_cooldown(w, &t, e);
+        return;
     }
     if (e->visual_kind == ENEMY_VISUAL_EEL) {
         const float range = (e->eel_weapon_range > 1.0f) ? e->eel_weapon_range : fmaxf(100.0f * su, g->world_w * 0.20f);
@@ -3426,7 +3826,302 @@ static void update_enemy_kamikaze(game_state* g, enemy* e, float dt, int uses_cy
     }
 }
 
+static void update_enemy_swarm_sphere(game_state* g, enemy* e, float dt, float su) {
+    enemy_v3 pos = enemy_v3_make(e->sphere_pos_x, e->sphere_pos_y, e->sphere_pos_z);
+    enemy_v3 vel = enemy_v3_make(e->sphere_vel_x, e->sphere_vel_y, e->sphere_vel_z);
+    const enemy_v3 front_local = quat_conjugate_rotate_enemy_v3(g->sphere_visual_q, enemy_v3_make(0.0f, 0.0f, 1.0f));
+    enemy_v3 sep = enemy_v3_make(0.0f, 0.0f, 0.0f);
+    enemy_v3 ali = enemy_v3_make(0.0f, 0.0f, 0.0f);
+    enemy_v3 coh = enemy_v3_make(0.0f, 0.0f, 0.0f);
+    int ali_n = 0;
+    int coh_n = 0;
+    float surface_r = sphere_surface_radius(g) * (1.0f + e->sphere_shell);
+    float sep_r = (e->swarm_sep_r > 1.0f) ? e->swarm_sep_r : (70.0f * su);
+    float ali_r = (e->swarm_ali_r > 1.0f) ? e->swarm_ali_r : (180.0f * su);
+    float coh_r = (e->swarm_coh_r > 1.0f) ? e->swarm_coh_r : (220.0f * su);
+    const float sep_ang = sep_r / fmaxf(surface_r, 1.0f);
+    const float ali_ang = ali_r / fmaxf(surface_r, 1.0f);
+    const float coh_ang = coh_r / fmaxf(surface_r, 1.0f);
+
+    for (size_t i = 0; i < MAX_ENEMIES; ++i) {
+        const enemy* o = &g->enemies[i];
+        enemy_v3 op;
+        enemy_v3 ov;
+        enemy_v3 delta;
+        float chord;
+        if (!o->active || o == e || o->archetype != ENEMY_ARCH_SWARM) {
+            continue;
+        }
+        op = enemy_v3_make(o->sphere_pos_x, o->sphere_pos_y, o->sphere_pos_z);
+        ov = enemy_v3_make(o->sphere_vel_x, o->sphere_vel_y, o->sphere_vel_z);
+        delta = enemy_v3_sub(op, pos);
+        chord = enemy_v3_len(delta);
+        if (chord < 1.0e-4f) {
+            continue;
+        }
+        if (chord < sep_ang) {
+            sep = enemy_v3_sub(sep, enemy_v3_scale(delta, 1.0f / fmaxf(chord * chord, 1.0e-4f)));
+        }
+        if (chord < ali_ang) {
+            ali = enemy_v3_add(ali, ov);
+            ali_n += 1;
+        }
+        if (chord < coh_ang) {
+            coh = enemy_v3_add(coh, op);
+            coh_n += 1;
+        }
+    }
+
+    if (ali_n > 0) {
+        ali = enemy_v3_scale(ali, 1.0f / (float)ali_n);
+        ali = enemy_v3_proj_tangent(enemy_v3_sub(ali, vel), pos);
+    }
+    if (coh_n > 0) {
+        coh = enemy_v3_scale(coh, 1.0f / (float)coh_n);
+        coh = enemy_v3_proj_tangent(enemy_v3_sub(coh, pos), pos);
+    }
+    sep = enemy_v3_proj_tangent(sep, pos);
+
+    {
+        enemy_v3 front_basis_x;
+        enemy_v3 front_basis_y;
+        enemy_v3 target;
+        enemy_v3 goal;
+        enemy_v3 goal_raw;
+        enemy_v3 lane_dir;
+        enemy_v3 player_avoid;
+        enemy_v3 desired;
+        enemy_v3 current_dir;
+        enemy_v3 out_dir;
+        enemy_v3 steer_basis_x;
+        enemy_v3 steer_basis_y;
+        enemy_v3 wander_basis_x;
+        enemy_v3 wander_basis_y;
+        enemy_v3 wander;
+        float wander_phase;
+        float goal_phase;
+        float goal_y_phase;
+        float lane_sweep;
+        float lane_x;
+        float lane_y;
+        float lane_base;
+        float lane_gain;
+        float goal_amp_ang;
+        float max_speed;
+        float min_speed;
+        float speed;
+        float frontness;
+        float schooling;
+        float skittish;
+        float cohesion_boost;
+        float alignment_boost;
+        float separation_scale;
+        float lane_follow_boost;
+        float momentum_boost;
+        float avoidance_boost;
+        float goal_dampen_near_player;
+        float goal_dir;
+        float goal_dist;
+        float close_player;
+        float avoid_player_w;
+        float cur_speed;
+        float desired_u;
+        float desired_v;
+        float current_u;
+        float current_v;
+        float desired_a;
+        float current_a;
+        float out_a;
+        float max_turn;
+        float max_da;
+        float da;
+        float cruise_speed;
+        float speed_gain;
+        float blend;
+        sphere_build_basis(front_local, &front_basis_x, &front_basis_y);
+        schooling = clampf((e->swarm_ali_w + e->swarm_coh_w - e->swarm_wander_w * 0.45f) / 2.4f, 0.0f, 1.0f);
+        skittish = clampf((e->swarm_wander_w * 1.15f + e->swarm_sep_w - e->swarm_ali_w * 0.35f) / 2.7f, 0.0f, 1.0f);
+        cohesion_boost = 1.0f;
+        alignment_boost = 1.0f;
+        separation_scale = 1.0f;
+        lane_follow_boost = 1.0f;
+        momentum_boost = 1.0f;
+        avoidance_boost = 1.0f;
+        goal_dampen_near_player = 0.48f;
+        if (e->swarm_family == SWARM_FAMILY_FISH) {
+            schooling = clampf(schooling + 0.22f, 0.0f, 1.0f);
+            skittish = clampf(skittish - 0.18f, 0.0f, 1.0f);
+            cohesion_boost = 1.45f;
+            alignment_boost = 1.35f;
+            separation_scale = 0.72f;
+            lane_follow_boost = 1.18f;
+            momentum_boost = 1.22f;
+            goal_dampen_near_player = 0.28f;
+        } else if (e->swarm_family == SWARM_FAMILY_BIRD) {
+            schooling = clampf(schooling + 0.16f, 0.0f, 1.0f);
+            skittish = clampf(skittish - 0.08f, 0.0f, 1.0f);
+            cohesion_boost = 1.22f;
+            alignment_boost = 1.52f;
+            separation_scale = 0.78f;
+            lane_follow_boost = 1.34f;
+            momentum_boost = 1.34f;
+            goal_dampen_near_player = 0.22f;
+        } else if (e->swarm_family == SWARM_FAMILY_FIREFLY) {
+            skittish = clampf(skittish + 0.24f, 0.0f, 1.0f);
+            separation_scale = 0.90f;
+            avoidance_boost = 1.38f;
+            goal_dampen_near_player = 0.72f;
+        }
+        goal_dir = (e->swarm_goal_dir < 0.0f) ? -1.0f : 1.0f;
+        goal_phase = e->ai_timer_s * (0.34f + 0.16f * hash01_u32(e->visual_seed ^ 0x5a1u)) + (float)e->slot_index * 0.23f + (float)(e->wave_id & 15) * 0.31f;
+        goal_y_phase = e->ai_timer_s * fmaxf(e->swarm_goal_freq, 0.08f) + e->visual_phase + (float)e->slot_index * 0.17f;
+        lane_sweep = sinf(goal_phase);
+        lane_base = lerpf(0.14f, 0.34f, schooling);
+        lane_gain = lerpf(0.08f, 0.28f, schooling);
+        goal_amp_ang = clampf(((e->swarm_goal_amp > 1.0f) ? e->swarm_goal_amp : (80.0f * su)) / fmaxf(surface_r, 1.0f), 0.04f, 0.22f);
+        lane_x = goal_dir * (lane_base + lane_gain * lane_sweep);
+        lane_y = sinf(goal_y_phase) * goal_amp_ang;
+        if (skittish > 0.65f) {
+            lane_x *= 0.55f;
+            lane_y *= 1.45f;
+        }
+        target = enemy_v3_norm(
+            enemy_v3_add(
+                front_local,
+                enemy_v3_add(
+                    enemy_v3_scale(front_basis_x, lane_x),
+                    enemy_v3_scale(front_basis_y, lane_y)
+                )
+            )
+        );
+        goal_raw = enemy_v3_proj_tangent(enemy_v3_sub(target, pos), pos);
+        goal_dist = enemy_v3_len(goal_raw) * surface_r;
+        lane_dir = enemy_v3_add(
+            enemy_v3_scale(front_basis_x, goal_dir * (0.85f + 0.35f * fabsf(cosf(goal_phase)))),
+            enemy_v3_scale(front_basis_y, cosf(goal_y_phase) * (0.18f + 0.24f * skittish))
+        );
+        lane_dir = enemy_v3_proj_tangent(lane_dir, pos);
+        if (enemy_v3_len(lane_dir) <= 1.0e-5f) {
+            lane_dir = enemy_v3_proj_tangent(front_basis_x, pos);
+        }
+        lane_dir = enemy_v3_norm(lane_dir);
+        goal = goal_raw;
+        if (goal_dist <= fmaxf(24.0f * su, e->radius * 2.5f)) {
+            goal = enemy_v3_add(goal, enemy_v3_scale(lane_dir, lerpf(0.85f, 1.55f, schooling)));
+        }
+        goal = enemy_v3_norm(goal);
+        frontness = clampf(enemy_v3_dot(pos, front_local), -1.0f, 1.0f);
+        player_avoid = enemy_v3_make(0.0f, 0.0f, 0.0f);
+        avoid_player_w = 0.0f;
+        {
+            const enemy_v3 to_player = enemy_v3_proj_tangent(enemy_v3_sub(front_local, pos), pos);
+            const float d = enemy_v3_len(to_player) * surface_r;
+            const float avoid_r = fmaxf(lerpf(150.0f, 235.0f, skittish) * su, e->radius * 8.5f);
+            if (d < avoid_r && d > 1.0e-4f) {
+                enemy_v3 away = enemy_v3_scale(to_player, -1.0f / fmaxf(enemy_v3_len(to_player), 1.0e-5f));
+                enemy_v3 side = enemy_v3_norm(enemy_v3_cross(pos, away));
+                const float side_sign = ((e->slot_index ^ e->wave_id) & 1) ? -1.0f : 1.0f;
+                const float urgency = 1.0f - clampf(d / fmaxf(avoid_r, 1.0f), 0.0f, 1.0f);
+                player_avoid = enemy_v3_add(
+                    enemy_v3_scale(away, 2.0f + skittish * 2.3f + urgency * 3.2f),
+                    enemy_v3_scale(side, side_sign * urgency * (1.4f + skittish * 2.6f))
+                );
+                avoid_player_w = urgency;
+            }
+        }
+        close_player = avoid_player_w;
+        sphere_build_basis(pos, &wander_basis_x, &wander_basis_y);
+        sphere_build_basis(pos, &steer_basis_x, &steer_basis_y);
+        wander_phase = e->ai_timer_s * fmaxf(e->swarm_wander_freq, 0.05f) + e->visual_phase;
+        wander = enemy_v3_add(
+            enemy_v3_scale(wander_basis_x, cosf(wander_phase)),
+            enemy_v3_scale(wander_basis_y, sinf(wander_phase * 1.13f))
+        );
+        desired = enemy_v3_make(0.0f, 0.0f, 0.0f);
+        desired = enemy_v3_add(desired, enemy_v3_scale(sep, e->swarm_sep_w * separation_scale * (1.05f + skittish * 0.28f + close_player * 0.78f)));
+        desired = enemy_v3_add(desired, enemy_v3_scale(ali, e->swarm_ali_w * alignment_boost * (0.95f + schooling * 0.55f)));
+        desired = enemy_v3_add(desired, enemy_v3_scale(coh, e->swarm_coh_w * cohesion_boost * (0.95f + schooling * 0.65f)));
+        desired = enemy_v3_add(desired, enemy_v3_scale(goal, e->swarm_goal_w * lerpf(1.7f, 2.7f, schooling) * (1.0f - goal_dampen_near_player * close_player)));
+        desired = enemy_v3_add(desired, enemy_v3_scale(lane_dir, lane_follow_boost * lerpf(0.45f, 1.45f, schooling)));
+        desired = enemy_v3_add(desired, enemy_v3_scale(player_avoid, avoidance_boost * (2.6f + skittish * 3.2f + avoid_player_w * 4.2f)));
+        desired = enemy_v3_add(desired, enemy_v3_scale(wander, e->swarm_wander_w * lerpf(0.50f, 1.05f, skittish)));
+        current_dir = enemy_v3_proj_tangent(vel, pos);
+        if (enemy_v3_len(current_dir) <= 1.0e-5f) {
+            current_dir = lane_dir;
+        } else {
+            current_dir = enemy_v3_norm(current_dir);
+        }
+        desired = enemy_v3_add(desired, enemy_v3_scale(current_dir, momentum_boost * lerpf(0.90f, 1.75f, schooling) * (1.0f - 0.35f * close_player)));
+        desired = enemy_v3_proj_tangent(desired, pos);
+        if (enemy_v3_len(desired) <= 1.0e-5f) {
+            desired = goal;
+        }
+        desired = enemy_v3_norm(desired);
+        max_speed = fmaxf(e->max_speed, 40.0f * su);
+        min_speed = (e->swarm_min_speed > 1.0f) ? e->swarm_min_speed : fmaxf(26.0f * su, max_speed * 0.24f);
+        min_speed = fmaxf(min_speed, max_speed * lerpf(0.60f, 0.74f, schooling));
+        speed = enemy_v3_len(vel);
+        cur_speed = clampf(fmaxf(speed, min_speed), min_speed, max_speed);
+        current_u = enemy_v3_dot(current_dir, steer_basis_x);
+        current_v = enemy_v3_dot(current_dir, steer_basis_y);
+        desired_u = enemy_v3_dot(desired, steer_basis_x);
+        desired_v = enemy_v3_dot(desired, steer_basis_y);
+        if (fabsf(current_u) + fabsf(current_v) <= 1.0e-5f) {
+            current_u = 1.0f;
+            current_v = 0.0f;
+        }
+        if (fabsf(desired_u) + fabsf(desired_v) <= 1.0e-5f) {
+            desired_u = current_u;
+            desired_v = current_v;
+        }
+        current_a = atan2f(current_v, current_u);
+        desired_a = atan2f(desired_v, desired_u);
+        out_a = desired_a;
+        max_turn = (e->swarm_turn_rate_rad > 1.0e-4f)
+            ? e->swarm_turn_rate_rad
+            : (120.0f * (3.14159265359f / 180.0f));
+        max_turn *= lerpf(0.72f, 0.98f, schooling) * lerpf(0.90f, 1.10f, skittish);
+        if (dt > 1.0e-5f && max_turn > 1.0e-4f) {
+            max_da = max_turn * dt;
+            da = wrap_angle_pi(desired_a - current_a);
+            if (da > max_da) da = max_da;
+            if (da < -max_da) da = -max_da;
+            out_a = current_a + da;
+        }
+        out_dir = enemy_v3_add(
+            enemy_v3_scale(steer_basis_x, cosf(out_a)),
+            enemy_v3_scale(steer_basis_y, sinf(out_a))
+        );
+        out_dir = enemy_v3_norm(out_dir);
+        cruise_speed = max_speed * (0.76f + 0.08f * frontness + 0.12f * schooling);
+        speed_gain = 1.0f + avoid_player_w * (0.12f + 0.26f * skittish);
+        cruise_speed = clampf(cruise_speed * speed_gain, min_speed, max_speed);
+        blend = 1.0f - expf(-fmaxf(e->accel, 1.0f) * 1.8f * dt);
+        cur_speed = lerpf(cur_speed, cruise_speed, blend);
+        vel = enemy_v3_scale(out_dir, clampf(cur_speed, min_speed, max_speed));
+    }
+
+    pos = enemy_v3_add(pos, enemy_v3_scale(vel, dt / fmaxf(surface_r, 1.0f)));
+    pos = enemy_v3_norm(pos);
+    vel = enemy_v3_proj_tangent(vel, pos);
+
+    e->sphere_pos_x = pos.x;
+    e->sphere_pos_y = pos.y;
+    e->sphere_pos_z = pos.z;
+    e->sphere_vel_x = vel.x;
+    e->sphere_vel_y = vel.y;
+    e->sphere_vel_z = vel.z;
+    e->b.vx = vel.x;
+    e->b.vy = vel.y;
+    enemy_project_sphere_state(g, e);
+    e->ai_timer_s += dt;
+}
+
 static void update_enemy_swarm(game_state* g, enemy* e, float dt, int uses_cylinder, float period, float su) {
+    if (level_uses_sphere_enemy(g)) {
+        update_enemy_swarm_sphere(g, e, dt, su);
+        return;
+    }
     float sep_x = 0.0f, sep_y = 0.0f, ali_x = 0.0f, ali_y = 0.0f, coh_x = 0.0f, coh_y = 0.0f;
     int ali_n = 0, coh_n = 0;
     float sep_r = (e->swarm_sep_r > 1.0f) ? e->swarm_sep_r : (70.0f * su);
@@ -3891,6 +4586,7 @@ void enemy_update_system(
     float period
 ) {
     int player_hit_this_frame = 0;
+    const int uses_sphere = level_uses_sphere_enemy(g);
     if (!g || !db) {
         return;
     }
@@ -3926,15 +4622,15 @@ void enemy_update_system(
                 e->emp_push_ay = 0.0f;
             }
         }
-        if (!boss_managed) {
+        if (!boss_managed && !uses_sphere) {
             integrate_body(&e->b, dt);
         }
-        if (!boss_managed && e->visual_kind == ENEMY_VISUAL_MANTA) {
+        if (!boss_managed && !uses_sphere && e->visual_kind == ENEMY_VISUAL_MANTA) {
             e->b.y = e->home_y;
             e->b.vy = 0.0f;
             e->b.ay = 0.0f;
         }
-        if (!boss_managed && !uses_cylinder) {
+        if (!boss_managed && !uses_cylinder && !uses_sphere) {
             if (e->archetype != ENEMY_ARCH_SWARM) {
                 float avoid_x = 0.0f;
                 float avoid_y = 0.0f;
@@ -4000,7 +4696,7 @@ void enemy_update_system(
                 }
             }
         }
-        if (!boss_managed) {
+        if (!boss_managed && !uses_sphere) {
             float v = length2(e->b.vx, e->b.vy);
             float speed_cap = e->max_speed;
             if (e->archetype == ENEMY_ARCH_KAMIKAZE &&
@@ -4046,18 +4742,18 @@ void enemy_update_system(
             }
         }
 
-        if (!boss_managed && e->visual_kind == ENEMY_VISUAL_MANTA) {
+        if (!boss_managed && !uses_sphere && e->visual_kind == ENEMY_VISUAL_MANTA) {
             emit_manta_turbulence(g, e, dt, su, uses_cylinder, period);
         }
 
-        if (!boss_managed && !uses_cylinder && e->b.x < g->camera_x - g->world_w * 0.72f) {
+        if (!boss_managed && !uses_cylinder && !uses_sphere && e->b.x < g->camera_x - g->world_w * 0.72f) {
             if (e->archetype == ENEMY_ARCH_FORMATION && e->visual_kind != ENEMY_VISUAL_MANTA) {
                 e->state = ENEMY_STATE_BREAK_ATTACK;
                 e->ai_timer_s = 0.0f;
                 e->break_delay_s = 1.0f + frand01() * 1.3f;
             }
         }
-        if (!boss_managed && e->b.y < 26.0f * su) {
+        if (!boss_managed && !uses_sphere && e->b.y < 26.0f * su) {
             const float edge = 26.0f * su;
             e->b.y = edge;
             if (e->archetype == ENEMY_ARCH_KAMIKAZE) {
@@ -4075,7 +4771,7 @@ void enemy_update_system(
                 e->b.vy = 0.0f;
             }
         }
-        if (!boss_managed && e->b.y > g->world_h - 26.0f * su) {
+        if (!boss_managed && !uses_sphere && e->b.y > g->world_h - 26.0f * su) {
             const float edge = g->world_h - 26.0f * su;
             e->b.y = edge;
             if (e->archetype == ENEMY_ARCH_KAMIKAZE) {
@@ -4093,12 +4789,16 @@ void enemy_update_system(
                 e->b.vy = 0.0f;
             }
         }
+        if (uses_sphere && !boss_managed) {
+            enemy_project_sphere_state(g, e);
+        }
         if (g->lives > 0) {
             if (g->shield_active) {
                 (void)shield_deflect_body(g, &e->b, e->radius, 580.0f * su, uses_cylinder, period);
             }
             const float hit_r = e->radius + 14.0f * su;
             if (!g->shield_active &&
+                (!uses_sphere || e->sphere_visible) &&
                 boss_enemy_has_contact_damage(g, (int)i) &&
                 !player_hit_this_frame &&
                 dist_sq_level(uses_cylinder, period, e->b.x, e->b.y, g->player.b.x, g->player.b.y) <= hit_r * hit_r) {
@@ -4126,26 +4826,50 @@ void enemy_update_system(
         if (!b->active) {
             continue;
         }
-        const float prev_x = b->b.x;
-        const float prev_y = b->b.y;
-        integrate_body(&b->b, dt);
-        b->ttl_s -= dt;
-        if (b->ttl_s <= 0.0f) {
-            b->active = 0;
-            continue;
-        }
-        if (uses_cylinder) {
-            if (fabsf(wrap_delta(b->b.x, g->player.b.x, period)) > period * 0.55f) {
+        if (uses_sphere) {
+            enemy_v3 pos = enemy_v3_make(b->sphere_pos_x, b->sphere_pos_y, b->sphere_pos_z);
+            enemy_v3 vel = enemy_v3_make(b->sphere_vel_x, b->sphere_vel_y, b->sphere_vel_z);
+            const float surface_r = sphere_surface_radius(g);
+            pos = enemy_v3_add(pos, enemy_v3_scale(vel, dt / fmaxf(surface_r, 1.0f)));
+            pos = enemy_v3_norm(pos);
+            vel = enemy_v3_proj_tangent(vel, pos);
+            b->sphere_pos_x = pos.x;
+            b->sphere_pos_y = pos.y;
+            b->sphere_pos_z = pos.z;
+            b->sphere_vel_x = vel.x;
+            b->sphere_vel_y = vel.y;
+            b->sphere_vel_z = vel.z;
+            enemy_project_sphere_bullet(g, b);
+            b->ttl_s -= dt;
+            if (b->ttl_s <= 0.0f) {
                 b->active = 0;
                 continue;
             }
-        } else if (fabsf(b->b.x - g->camera_x) > g->world_w * 1.35f) {
-            b->active = 0;
-            continue;
-        }
-        if (!uses_cylinder && game_structure_segment_blocked(g, prev_x, prev_y, b->b.x, b->b.y, b->radius)) {
-            b->active = 0;
-            continue;
+            if (!b->sphere_visible) {
+                continue;
+            }
+        } else {
+            const float prev_x = b->b.x;
+            const float prev_y = b->b.y;
+            integrate_body(&b->b, dt);
+            b->ttl_s -= dt;
+            if (b->ttl_s <= 0.0f) {
+                b->active = 0;
+                continue;
+            }
+            if (uses_cylinder) {
+                if (fabsf(wrap_delta(b->b.x, g->player.b.x, period)) > period * 0.55f) {
+                    b->active = 0;
+                    continue;
+                }
+            } else if (fabsf(b->b.x - g->camera_x) > g->world_w * 1.35f) {
+                b->active = 0;
+                continue;
+            }
+            if (!uses_cylinder && game_structure_segment_blocked(g, prev_x, prev_y, b->b.x, b->b.y, b->radius)) {
+                b->active = 0;
+                continue;
+            }
         }
         if (g->shield_active) {
             if (shield_deflect_body(g, &b->b, b->radius + 2.0f * su, 760.0f * su, uses_cylinder, period)) {
@@ -4172,6 +4896,9 @@ void enemy_update_system(
                 continue;
             }
             if (!boss_enemy_is_damageable(g, (int)ei)) {
+                continue;
+            }
+            if (uses_sphere && !g->enemies[ei].sphere_visible) {
                 continue;
             }
             if (dist_sq_level(uses_cylinder, period, g->bullets[bi].b.x, g->bullets[bi].b.y, g->enemies[ei].b.x, g->enemies[ei].b.y) <=

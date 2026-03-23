@@ -40,7 +40,8 @@ enum level_style_id {
     LEVEL_STYLE_FOG_OF_WAR = 6,
     LEVEL_STYLE_BLANK = 7,
     LEVEL_STYLE_REVOLVER = 8,
-    LEVEL_STYLE_COUNT = 9
+    LEVEL_STYLE_SPHERE_WEB = 9,
+    LEVEL_STYLE_COUNT = 10
 };
 
 enum level_render_style_id {
@@ -49,7 +50,8 @@ enum level_render_style_id {
     LEVEL_RENDER_DRIFTER = 2,
     LEVEL_RENDER_DRIFTER_SHADED = 3,
     LEVEL_RENDER_FOG = 4,
-    LEVEL_RENDER_BLANK = 5
+    LEVEL_RENDER_BLANK = 5,
+    LEVEL_RENDER_SPHERE = 6
 };
 
 enum enemy_visual_kind {
@@ -127,6 +129,13 @@ typedef struct player_state {
 typedef struct bullet {
     int active;
     body b;
+    float sphere_pos_x;
+    float sphere_pos_y;
+    float sphere_pos_z;
+    float sphere_vel_x;
+    float sphere_vel_y;
+    float sphere_vel_z;
+    int sphere_visible;
     float spawn_x;
     float ttl_s;
 } bullet;
@@ -141,6 +150,15 @@ typedef enum player_alt_weapon_id {
 typedef struct enemy {
     int active;
     body b;
+    float sphere_pos_x;
+    float sphere_pos_y;
+    float sphere_pos_z;
+    float sphere_vel_x;
+    float sphere_vel_y;
+    float sphere_vel_z;
+    float sphere_shell;
+    int sphere_visible;
+    float sphere_depth;
     float radius;
     int archetype;
     int state;
@@ -169,6 +187,7 @@ typedef struct enemy {
     float swarm_drag;
     float swarm_min_speed;
     float swarm_turn_rate_rad;
+    int swarm_family;
     float facing_x;
     float facing_y;
     float kamikaze_tail;
@@ -220,6 +239,13 @@ typedef struct enemy {
 typedef struct enemy_bullet {
     int active;
     body b;
+    float sphere_pos_x;
+    float sphere_pos_y;
+    float sphere_pos_z;
+    float sphere_vel_x;
+    float sphere_vel_y;
+    float sphere_vel_z;
+    int sphere_visible;
     float ttl_s;
     float radius;
 } enemy_bullet;
@@ -404,6 +430,13 @@ typedef struct powerup_pickup {
     int active;
     int type; /* enum powerup_type */
     body b;
+    float sphere_pos_x;
+    float sphere_pos_y;
+    float sphere_pos_z;
+    float sphere_vel_x;
+    float sphere_vel_y;
+    float sphere_vel_z;
+    int sphere_visible;
     float ttl_s;
     float radius;
     float spin;
@@ -545,6 +578,12 @@ typedef struct game_state {
     float camera_vx;
     float camera_vy;
     float camera_bias_x;
+    float sphere_target_q[4];
+    float sphere_visual_q[4];
+    float sphere_scroll_dx;
+    float sphere_scroll_dy;
+    float sphere_move_dir_x;
+    float sphere_move_dir_y;
     int level_style; /* enum level_style_id */
     int level_index;
     char current_level_name[64];

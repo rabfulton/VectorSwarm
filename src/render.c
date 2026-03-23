@@ -27,6 +27,8 @@ typedef struct v3 {
     float z;
 } v3;
 
+typedef struct palette_theme palette_theme;
+
 
 /* Event Horizon wormhole mesh is static; cache it to avoid per-frame recompute. */
 #define WORMHOLE_VN 84
@@ -50,8 +52,15 @@ static float repeatf(float v, float period);
 static int wrapi(int i, int n);
 static float lerpf(float a, float b, float t);
 static int level_uses_cylinder_render(const game_state* g);
+static int level_uses_sphere_render(const game_state* g);
 static float cylinder_period(const game_state* g);
 static vg_vec2 project_cylinder_point(const game_state* g, float x, float y, float* depth01);
+static vg_result draw_sphere_web(
+    vg_context* ctx,
+    const game_state* g,
+    const vg_stroke_style* land_halo,
+    const vg_stroke_style* land_main
+);
 static vg_result draw_structure_prefab_tile(
     vg_context* ctx,
     int prefab_id,
@@ -108,6 +117,241 @@ static float clampf(float v, float lo, float hi) {
     if (v < lo) return lo;
     if (v > hi) return hi;
     return v;
+}
+
+static v3 v3_norm_safe(v3 p) {
+    const float n2 = p.x * p.x + p.y * p.y + p.z * p.z;
+    if (n2 <= 1.0e-12f) {
+        return (v3){0.0f, 0.0f, 1.0f};
+    }
+    const float inv = 1.0f / sqrtf(n2);
+    return (v3){p.x * inv, p.y * inv, p.z * inv};
+}
+
+static v3 v3_sub(v3 a, v3 b) {
+    return (v3){a.x - b.x, a.y - b.y, a.z - b.z};
+}
+
+static float v3_len_sq(v3 v) {
+    return v.x * v.x + v.y * v.y + v.z * v.z;
+}
+
+static v3 quat_rotate_v3(const float q[4], v3 v) {
+    const float w = q[0];
+    const float x = q[1];
+    const float y = q[2];
+    const float z = q[3];
+    const v3 qv = {x, y, z};
+    const v3 uv = {
+        qv.y * v.z - qv.z * v.y,
+        qv.z * v.x - qv.x * v.z,
+        qv.x * v.y - qv.y * v.x
+    };
+    const v3 uuv = {
+        qv.y * uv.z - qv.z * uv.y,
+        qv.z * uv.x - qv.x * uv.z,
+        qv.x * uv.y - qv.y * uv.x
+    };
+    return (v3){
+        v.x + 2.0f * (w * uv.x + uuv.x),
+        v.y + 2.0f * (w * uv.y + uuv.y),
+        v.z + 2.0f * (w * uv.z + uuv.z)
+    };
+}
+
+static v3 quat_conjugate_rotate_v3(const float q[4], v3 v) {
+    const float qc[4] = {q[0], -q[1], -q[2], -q[3]};
+    return quat_rotate_v3(qc, v);
+}
+
+static v3 sphere_cube_point(int face, float u, float v) {
+    switch (face) {
+        case 0: return v3_norm_safe((v3){ 1.0f,    v,   -u});
+        case 1: return v3_norm_safe((v3){-1.0f,    v,    u});
+        case 2: return v3_norm_safe((v3){   u,  1.0f,   -v});
+        case 3: return v3_norm_safe((v3){   u, -1.0f,    v});
+        case 4: return v3_norm_safe((v3){   u,    v,  1.0f});
+        default:return v3_norm_safe((v3){  -u,    v, -1.0f});
+    }
+}
+
+static void sphere_init_fibonacci_seeds(v3* seeds, int seed_count) {
+    const float golden_angle = 2.39996323f;
+    if (!seeds || seed_count <= 0) {
+        return;
+    }
+    for (int i = 0; i < seed_count; ++i) {
+        const float u = ((float)i + 0.5f) / (float)seed_count;
+        const float y = 1.0f - 2.0f * u;
+        const float rr = sqrtf(fmaxf(0.0f, 1.0f - y * y));
+        const float phi = golden_angle * (float)i;
+        seeds[i] = (v3){cosf(phi) * rr, y, sinf(phi) * rr};
+    }
+}
+
+static int sphere_best_seed_id(v3 p, const v3* seeds, int seed_count) {
+    int best = 0;
+    float best_dot = -1.0e9f;
+    if (!seeds || seed_count <= 0) {
+        return 0;
+    }
+    for (int i = 0; i < seed_count; ++i) {
+        const float d = p.x * seeds[i].x + p.y * seeds[i].y + p.z * seeds[i].z;
+        if (d > best_dot) {
+            best_dot = d;
+            best = i;
+        }
+    }
+    return best;
+}
+
+static int sphere_seed_id(v3 p) {
+    enum { SEED_COUNT = 56 };
+    static int init = 0;
+    static v3 seeds[SEED_COUNT];
+    if (!init) {
+        sphere_init_fibonacci_seeds(seeds, SEED_COUNT);
+        init = 1;
+    }
+    return sphere_best_seed_id(p, seeds, SEED_COUNT);
+}
+
+static v3 sphere_find_border_point(
+    int face,
+    float u0,
+    float v0,
+    float u1,
+    float v1,
+    int id0,
+    int id1,
+    const v3* seeds,
+    int seed_count
+) {
+    float a = 0.0f;
+    float b = 1.0f;
+    const v3 s0 = seeds[id0];
+    const v3 s1 = seeds[id1];
+    v3 p0;
+    v3 p1;
+    float d0;
+    float d1;
+    if (!seeds || seed_count <= 0 || id0 == id1) {
+        return sphere_cube_point(face, 0.5f * (u0 + u1), 0.5f * (v0 + v1));
+    }
+    p0 = sphere_cube_point(face, u0, v0);
+    p1 = sphere_cube_point(face, u1, v1);
+    d0 = p0.x * (s0.x - s1.x) + p0.y * (s0.y - s1.y) + p0.z * (s0.z - s1.z);
+    d1 = p1.x * (s0.x - s1.x) + p1.y * (s0.y - s1.y) + p1.z * (s0.z - s1.z);
+    if (fabsf(d0) <= 1.0e-7f) {
+        return p0;
+    }
+    if (fabsf(d1) <= 1.0e-7f) {
+        return p1;
+    }
+    for (int it = 0; it < 10; ++it) {
+        const float m = 0.5f * (a + b);
+        const float um = u0 + (u1 - u0) * m;
+        const float vm = v0 + (v1 - v0) * m;
+        const v3 pm = sphere_cube_point(face, um, vm);
+        const float dm = pm.x * (s0.x - s1.x) + pm.y * (s0.y - s1.y) + pm.z * (s0.z - s1.z);
+        if ((d0 < 0.0f && dm < 0.0f) || (d0 > 0.0f && dm > 0.0f)) {
+            a = m;
+        } else {
+            b = m;
+        }
+    }
+    return sphere_cube_point(face, u0 + (u1 - u0) * b, v0 + (v1 - v0) * b);
+}
+
+typedef struct sphere_debug_node_entry {
+    int used;
+    int qx;
+    int qy;
+    int qz;
+    int degree;
+    v3 sample;
+} sphere_debug_node_entry;
+
+static sphere_render_debug_stats g_sphere_debug_stats;
+
+static uint32_t sphere_debug_hash3(int x, int y, int z) {
+    uint32_t h = 2166136261u;
+    h = (h ^ (uint32_t)x) * 16777619u;
+    h = (h ^ (uint32_t)y) * 16777619u;
+    h = (h ^ (uint32_t)z) * 16777619u;
+    return h;
+}
+
+static void sphere_debug_rebuild_stats(const v3* a, const v3* b, size_t seg_count) {
+    enum { HASH_CAP = 131071, QUANT = 10000 };
+    sphere_debug_node_entry* table;
+    if (!a || !b) {
+        memset(&g_sphere_debug_stats, 0, sizeof(g_sphere_debug_stats));
+        return;
+    }
+    table = (sphere_debug_node_entry*)calloc(HASH_CAP, sizeof(*table));
+    if (!table) {
+        memset(&g_sphere_debug_stats, 0, sizeof(g_sphere_debug_stats));
+        g_sphere_debug_stats.cache_valid = 1;
+        g_sphere_debug_stats.segment_count = (int)seg_count;
+        return;
+    }
+
+    memset(&g_sphere_debug_stats, 0, sizeof(g_sphere_debug_stats));
+    g_sphere_debug_stats.cache_valid = 1;
+    g_sphere_debug_stats.segment_count = (int)seg_count;
+
+    for (size_t i = 0; i < seg_count; ++i) {
+        const v3 pts[2] = {a[i], b[i]};
+        for (int k = 0; k < 2; ++k) {
+            const int qx = (int)lroundf(pts[k].x * (float)QUANT);
+            const int qy = (int)lroundf(pts[k].y * (float)QUANT);
+            const int qz = (int)lroundf(pts[k].z * (float)QUANT);
+            uint32_t slot = sphere_debug_hash3(qx, qy, qz) % HASH_CAP;
+            for (;;) {
+                sphere_debug_node_entry* e = &table[slot];
+                if (!e->used) {
+                    e->used = 1;
+                    e->qx = qx;
+                    e->qy = qy;
+                    e->qz = qz;
+                    e->degree = 1;
+                    e->sample = pts[k];
+                    g_sphere_debug_stats.node_count += 1;
+                    break;
+                }
+                if (e->qx == qx && e->qy == qy && e->qz == qz) {
+                    const float dx = pts[k].x - e->sample.x;
+                    const float dy = pts[k].y - e->sample.y;
+                    const float dz = pts[k].z - e->sample.z;
+                    const float gap = sqrtf(dx * dx + dy * dy + dz * dz);
+                    if (gap > g_sphere_debug_stats.max_quantized_merge_gap) {
+                        g_sphere_debug_stats.max_quantized_merge_gap = gap;
+                    }
+                    e->degree += 1;
+                    break;
+                }
+                slot = (slot + 1u) % HASH_CAP;
+            }
+        }
+    }
+
+    for (int i = 0; i < HASH_CAP; ++i) {
+        const sphere_debug_node_entry* e = &table[i];
+        if (!e->used) {
+            continue;
+        }
+        if (e->degree <= 1) {
+            g_sphere_debug_stats.degree1_count += 1;
+        } else if (e->degree == 2) {
+            g_sphere_debug_stats.degree2_count += 1;
+        } else if (e->degree == 3) {
+            g_sphere_debug_stats.degree3_count += 1;
+        } else {
+            g_sphere_debug_stats.degree4p_count += 1;
+        }
+    }
+    free(table);
 }
 
 static int eel_arc_pulse_is_on(const eel_arc_effect* arc) {
@@ -851,6 +1095,333 @@ size_t render_build_enemy_radar_gpu_tris(const game_state* g, wormhole_line_vert
     return count;
 }
 
+typedef struct sphere_ico_face {
+    uint16_t v[3];
+} sphere_ico_face;
+
+typedef struct sphere_midpoint_entry {
+    int used;
+    uint16_t a;
+    uint16_t b;
+    uint16_t mid;
+} sphere_midpoint_entry;
+
+typedef struct sphere_face_edge_entry {
+    int used;
+    uint16_t a;
+    uint16_t b;
+    uint16_t face;
+} sphere_face_edge_entry;
+
+typedef struct sphere_graph_cache {
+    int valid;
+    int node_count;
+    int segment_count;
+    float last_t;
+    v3 base_pos[5120];
+    float disp[5120];
+    float vel[5120];
+    uint16_t neighbors[5120][3];
+    uint8_t neighbor_count[5120];
+    uint16_t seg_a[7680];
+    uint16_t seg_b[7680];
+} sphere_graph_cache;
+
+static sphere_graph_cache g_sphere_graph_cache;
+
+static v3 v3_add(v3 a, v3 b) {
+    return (v3){a.x + b.x, a.y + b.y, a.z + b.z};
+}
+
+static v3 v3_scale(v3 a, float s) {
+    return (v3){a.x * s, a.y * s, a.z * s};
+}
+
+static v3 v3_cross(v3 a, v3 b) {
+    return (v3){
+        a.y * b.z - a.z * b.y,
+        a.z * b.x - a.x * b.z,
+        a.x * b.y - a.y * b.x
+    };
+}
+
+static void sphere_node_tangent_basis(v3 n, v3* t0, v3* t1) {
+    const v3 up = (fabsf(n.y) < 0.85f) ? (v3){0.0f, 1.0f, 0.0f} : (v3){1.0f, 0.0f, 0.0f};
+    const v3 a = v3_norm_safe(v3_cross(up, n));
+    const v3 b = v3_norm_safe(v3_cross(n, a));
+    if (t0) *t0 = a;
+    if (t1) *t1 = b;
+}
+
+static uint32_t sphere_edge_hash_u16(uint16_t a, uint16_t b) {
+    return ((uint32_t)a * 73856093u) ^ ((uint32_t)b * 19349663u);
+}
+
+static uint16_t sphere_midpoint_vertex(
+    v3* verts,
+    int* vert_count,
+    sphere_midpoint_entry* table,
+    int table_cap,
+    uint16_t a,
+    uint16_t b
+) {
+    uint16_t lo = a;
+    uint16_t hi = b;
+    if (lo > hi) {
+        const uint16_t tmp = lo;
+        lo = hi;
+        hi = tmp;
+    }
+    uint32_t slot = sphere_edge_hash_u16(lo, hi) % (uint32_t)table_cap;
+    for (;;) {
+        sphere_midpoint_entry* e = &table[slot];
+        if (!e->used) {
+            const v3 mid = v3_norm_safe(v3_scale(v3_add(verts[lo], verts[hi]), 0.5f));
+            e->used = 1;
+            e->a = lo;
+            e->b = hi;
+            e->mid = (uint16_t)(*vert_count);
+            verts[*vert_count] = mid;
+            *vert_count += 1;
+            return e->mid;
+        }
+        if (e->a == lo && e->b == hi) {
+            return e->mid;
+        }
+        slot = (slot + 1u) % (uint32_t)table_cap;
+    }
+}
+
+static void sphere_graph_reset_sim(sphere_graph_cache* cache) {
+    if (!cache) {
+        return;
+    }
+    memset(cache->disp, 0, sizeof(cache->disp));
+    memset(cache->vel, 0, sizeof(cache->vel));
+    cache->last_t = 0.0f;
+    g_sphere_debug_stats.spring_peak_disp = 0.0f;
+    g_sphere_debug_stats.spring_peak_vel = 0.0f;
+    g_sphere_debug_stats.spring_impulse = 0.0f;
+}
+
+static void sphere_graph_build(sphere_graph_cache* cache) {
+    enum {
+        SUBDIV = 4,
+        MAX_VERTS = 2562,
+        MAX_FACES = 5120,
+        MID_HASH_CAP = 16384,
+        EDGE_HASH_CAP = 32768
+    };
+    static const float X = 0.5257311121191336f;
+    static const float Z = 0.85065080835204f;
+    static const v3 k_verts[12] = {
+        {-X, 0.0f, Z}, {X, 0.0f, Z}, {-X, 0.0f, -Z}, {X, 0.0f, -Z},
+        {0.0f, Z, X}, {0.0f, Z, -X}, {0.0f, -Z, X}, {0.0f, -Z, -X},
+        {Z, X, 0.0f}, {-Z, X, 0.0f}, {Z, -X, 0.0f}, {-Z, -X, 0.0f}
+    };
+    static const uint16_t k_faces[20][3] = {
+        {0, 4, 1}, {0, 9, 4}, {9, 5, 4}, {4, 5, 8}, {4, 8, 1},
+        {8, 10, 1}, {8, 3, 10}, {5, 3, 8}, {5, 2, 3}, {2, 7, 3},
+        {7, 10, 3}, {7, 6, 10}, {7, 11, 6}, {11, 0, 6}, {0, 1, 6},
+        {6, 1, 10}, {9, 0, 11}, {9, 11, 2}, {9, 2, 5}, {7, 2, 11}
+    };
+    v3 verts[MAX_VERTS];
+    sphere_ico_face faces[MAX_FACES];
+    sphere_ico_face next_faces[MAX_FACES];
+    int vert_count = 12;
+    int face_count = 20;
+    if (!cache) {
+        return;
+    }
+    memset(cache, 0, sizeof(*cache));
+    for (int i = 0; i < 12; ++i) {
+        verts[i] = v3_norm_safe(k_verts[i]);
+    }
+    for (int i = 0; i < 20; ++i) {
+        faces[i].v[0] = k_faces[i][0];
+        faces[i].v[1] = k_faces[i][1];
+        faces[i].v[2] = k_faces[i][2];
+    }
+    for (int step = 0; step < SUBDIV; ++step) {
+        sphere_midpoint_entry mids[MID_HASH_CAP];
+        int next_count = 0;
+        memset(mids, 0, sizeof(mids));
+        for (int i = 0; i < face_count; ++i) {
+            const uint16_t a = faces[i].v[0];
+            const uint16_t b = faces[i].v[1];
+            const uint16_t c = faces[i].v[2];
+            const uint16_t ab = sphere_midpoint_vertex(verts, &vert_count, mids, MID_HASH_CAP, a, b);
+            const uint16_t bc = sphere_midpoint_vertex(verts, &vert_count, mids, MID_HASH_CAP, b, c);
+            const uint16_t ca = sphere_midpoint_vertex(verts, &vert_count, mids, MID_HASH_CAP, c, a);
+            next_faces[next_count++] = (sphere_ico_face){{a, ab, ca}};
+            next_faces[next_count++] = (sphere_ico_face){{b, bc, ab}};
+            next_faces[next_count++] = (sphere_ico_face){{c, ca, bc}};
+            next_faces[next_count++] = (sphere_ico_face){{ab, bc, ca}};
+        }
+        memcpy(faces, next_faces, (size_t)next_count * sizeof(next_faces[0]));
+        face_count = next_count;
+    }
+
+    cache->node_count = face_count;
+    for (int i = 0; i < face_count; ++i) {
+        const v3 c = v3_norm_safe(v3_scale(
+            v3_add(v3_add(verts[faces[i].v[0]], verts[faces[i].v[1]]), verts[faces[i].v[2]]),
+            1.0f / 3.0f
+        ));
+        v3 t0, t1;
+        const float j0 = hash01_u32((uint32_t)(0x9e3779b9u ^ (uint32_t)i * 0x45d9f3bu)) - 0.5f;
+        const float j1 = hash01_u32((uint32_t)(0x85ebca6bu ^ (uint32_t)i * 0x27d4eb2du)) - 0.5f;
+        sphere_node_tangent_basis(c, &t0, &t1);
+        cache->base_pos[i] = v3_norm_safe(v3_add(c, v3_add(v3_scale(t0, j0 * 0.026f), v3_scale(t1, j1 * 0.026f))));
+    }
+    {
+        sphere_face_edge_entry edges[EDGE_HASH_CAP];
+        memset(edges, 0, sizeof(edges));
+        for (int i = 0; i < face_count; ++i) {
+            for (int e = 0; e < 3; ++e) {
+                uint16_t a = faces[i].v[e];
+                uint16_t b = faces[i].v[(e + 1) % 3];
+                if (a > b) {
+                    const uint16_t tmp = a;
+                    a = b;
+                    b = tmp;
+                }
+                uint32_t slot = sphere_edge_hash_u16(a, b) % EDGE_HASH_CAP;
+                for (;;) {
+                    sphere_face_edge_entry* entry = &edges[slot];
+                    if (!entry->used) {
+                        entry->used = 1;
+                        entry->a = a;
+                        entry->b = b;
+                        entry->face = (uint16_t)i;
+                        break;
+                    }
+                    if (entry->a == a && entry->b == b) {
+                        const uint16_t other = entry->face;
+                        if (cache->segment_count < 7680) {
+                            cache->seg_a[cache->segment_count] = other;
+                            cache->seg_b[cache->segment_count] = (uint16_t)i;
+                            cache->segment_count += 1;
+                        }
+                        if (cache->neighbor_count[i] < 3u) {
+                            cache->neighbors[i][cache->neighbor_count[i]++] = other;
+                        }
+                        if (cache->neighbor_count[other] < 3u) {
+                            cache->neighbors[other][cache->neighbor_count[other]++] = (uint16_t)i;
+                        }
+                        break;
+                    }
+                    slot = (slot + 1u) % EDGE_HASH_CAP;
+                }
+            }
+        }
+    }
+    {
+        v3 a[7680];
+        v3 b[7680];
+        for (int i = 0; i < cache->segment_count; ++i) {
+            a[i] = cache->base_pos[cache->seg_a[i]];
+            b[i] = cache->base_pos[cache->seg_b[i]];
+        }
+        sphere_debug_rebuild_stats(a, b, (size_t)cache->segment_count);
+    }
+    cache->valid = 1;
+    sphere_graph_reset_sim(cache);
+}
+
+static void sphere_graph_step(sphere_graph_cache* cache, const game_state* g) {
+    if (!cache || !cache->valid || !g) {
+        return;
+    }
+    const float speed = sqrtf(g->sphere_scroll_dx * g->sphere_scroll_dx + g->sphere_scroll_dy * g->sphere_scroll_dy);
+    cache->last_t = g->t;
+    memset(cache->disp, 0, (size_t)cache->node_count * sizeof(cache->disp[0]));
+    memset(cache->vel, 0, (size_t)cache->node_count * sizeof(cache->vel[0]));
+    g_sphere_debug_stats.spring_peak_disp = 0.0f;
+    g_sphere_debug_stats.spring_peak_vel = 0.0f;
+    g_sphere_debug_stats.spring_impulse = speed;
+}
+
+static v3 sphere_graph_node_position(const sphere_graph_cache* cache, int idx) {
+    return v3_scale(cache->base_pos[idx], 1.0f + cache->disp[idx]);
+}
+
+size_t render_build_sphere_gpu_lines(const game_state* g, wormhole_line_vertex* out, size_t out_cap) {
+    size_t count = 0u;
+    if (!g || !out || out_cap == 0u || g->render_style != LEVEL_RENDER_SPHERE) {
+        return 0u;
+    }
+    if (!g_sphere_graph_cache.valid) {
+        sphere_graph_build(&g_sphere_graph_cache);
+    }
+    sphere_graph_step(&g_sphere_graph_cache, g);
+    const vg_vec2 c = {g->world_w * 0.5f, g->world_h * 0.5f};
+    const float radius = g->world_h * (8.0f / 9.0f);
+    for (int i = 0; i < g_sphere_graph_cache.segment_count && count + 2u <= out_cap; ++i) {
+        const v3 pa = sphere_graph_node_position(&g_sphere_graph_cache, g_sphere_graph_cache.seg_a[i]);
+        const v3 pb = sphere_graph_node_position(&g_sphere_graph_cache, g_sphere_graph_cache.seg_b[i]);
+        const v3 va = quat_rotate_v3(g->sphere_visual_q, pa);
+        const v3 vb = quat_rotate_v3(g->sphere_visual_q, pb);
+        if (va.z <= 0.02f && vb.z <= 0.02f) {
+            continue;
+        }
+        count = wormhole_emit_segment(
+            out,
+            out_cap,
+            count,
+            c.x + va.x * radius,
+            c.y + va.y * radius,
+            c.x + vb.x * radius,
+            c.y + vb.y * radius,
+            clampf(va.z, 0.05f, 0.98f),
+            clampf(vb.z, 0.05f, 0.98f),
+            0.96f
+        );
+    }
+    return count;
+}
+
+size_t render_build_sphere_gpu_tris(const game_state* g, wormhole_line_vertex* out, size_t out_cap) {
+    size_t count = 0u;
+    if (!g || !out || out_cap == 0u || g->render_style != LEVEL_RENDER_SPHERE) {
+        return 0u;
+    }
+    if (!g_sphere_graph_cache.valid) {
+        sphere_graph_build(&g_sphere_graph_cache);
+    }
+    sphere_graph_step(&g_sphere_graph_cache, g);
+    {
+        const vg_vec2 c = {g->world_w * 0.5f, g->world_h * 0.5f};
+        const float radius = g->world_h * (8.0f / 9.0f);
+        const float r = 1.65f;
+        for (int i = 0; i < g_sphere_graph_cache.node_count && count + 6u <= out_cap; ++i) {
+            const v3 p = sphere_graph_node_position(&g_sphere_graph_cache, i);
+            const v3 v = quat_rotate_v3(g->sphere_visual_q, p);
+            const float x = c.x + v.x * radius;
+            const float y = c.y + v.y * radius;
+            const float z = clampf(v.z, 0.05f, 0.98f);
+            const float f = 0.96f;
+            if (v.z <= 0.02f) {
+                continue;
+            }
+            out[count++] = (wormhole_line_vertex){x - r, y, z, f};
+            out[count++] = (wormhole_line_vertex){x, y - r, z, f};
+            out[count++] = (wormhole_line_vertex){x + r, y, z, f};
+            out[count++] = (wormhole_line_vertex){x - r, y, z, f};
+            out[count++] = (wormhole_line_vertex){x + r, y, z, f};
+            out[count++] = (wormhole_line_vertex){x, y + r, z, f};
+        }
+    }
+    return count;
+}
+
+void render_get_sphere_debug_stats(sphere_render_debug_stats* out) {
+    if (!out) {
+        return;
+    }
+    *out = g_sphere_debug_stats;
+}
+
 static float repeatf(float v, float period) {
     if (period <= 0.0f) {
         return v;
@@ -922,6 +1493,7 @@ static void interpolate_enemy_render(enemy* dst, const game_state* g, const enem
     interpolate_body_render(g, &dst->b, &prev->b, &curr->b, alpha);
     dst->facing_x = lerpf(prev->facing_x, curr->facing_x, alpha);
     dst->facing_y = lerpf(prev->facing_y, curr->facing_y, alpha);
+    dst->sphere_depth = lerpf(prev->sphere_depth, curr->sphere_depth, alpha);
     if (curr->visual_kind == ENEMY_VISUAL_EEL && prev->visual_kind == ENEMY_VISUAL_EEL) {
         const int spine_n = clampi(curr->eel_spine_count, 0, EEL_SPINE_POINTS);
         const int prev_spine_n = clampi(prev->eel_spine_count, 0, EEL_SPINE_POINTS);
@@ -931,6 +1503,16 @@ static void interpolate_enemy_render(enemy* dst, const game_state* g, const enem
             dst->eel_spine_y[i] = lerpf(prev->eel_spine_y[i], curr->eel_spine_y[i], alpha);
         }
     }
+}
+
+static float sphere_enemy_render_scale(const game_state* g, const enemy* e) {
+    float depth;
+    (void)g;
+    if (!e) {
+        return 1.0f;
+    }
+    depth = clampf(e->sphere_depth, 0.0f, 1.0f);
+    return lerpf(0.46f, 1.18f, powf(depth, 0.82f));
 }
 
 static void interpolate_missile_render(homing_missile* dst, const game_state* g, const homing_missile* prev, const homing_missile* curr, float alpha) {
@@ -949,6 +1531,113 @@ static void interpolate_missile_render(homing_missile* dst, const game_state* g,
 
 static int level_uses_cylinder_render(const game_state* g) {
     return g && g->render_style == LEVEL_RENDER_CYLINDER;
+}
+
+static int level_uses_sphere_render(const game_state* g) {
+    return g && g->render_style == LEVEL_RENDER_SPHERE;
+}
+
+static vg_result draw_sphere_web(
+    vg_context* ctx,
+    const game_state* g,
+    const vg_stroke_style* land_halo,
+    const vg_stroke_style* land_main
+) {
+    enum { GRID_N = 145 };
+    if (!ctx || !g || !land_halo || !land_main) {
+        return VG_OK;
+    }
+    const vg_vec2 c = {g->world_w * 0.5f, g->world_h * 0.5f};
+    const float radius = g->world_h * (8.0f / 9.0f);
+    const float wobble_amp = radius * 0.0045f;
+    vg_vec2 pts[GRID_N][GRID_N];
+    int ids[GRID_N][GRID_N];
+    uint8_t inside[GRID_N][GRID_N];
+
+    for (int iy = 0; iy < GRID_N; ++iy) {
+        const float ny = -1.0f + 2.0f * ((float)iy / (float)(GRID_N - 1));
+        for (int ix = 0; ix < GRID_N; ++ix) {
+            const float nx = -1.0f + 2.0f * ((float)ix / (float)(GRID_N - 1));
+            const float r2 = nx * nx + ny * ny;
+            if (r2 > 1.0f) {
+                inside[iy][ix] = 0u;
+                ids[iy][ix] = -1;
+                pts[iy][ix] = (vg_vec2){c.x + nx * radius, c.y + ny * radius};
+                continue;
+            }
+            {
+                const float nz = sqrtf(fmaxf(0.0f, 1.0f - r2));
+                const v3 p_view = {nx, ny, nz};
+                const v3 p_local = quat_conjugate_rotate_v3(g->sphere_visual_q, p_view);
+                const float phase0 = g->t * 0.68f + p_local.x * 1.35f + p_local.y * 1.10f + p_local.z * 0.95f;
+                const float phase1 = g->t * 0.41f - p_local.x * 0.74f + p_local.y * 1.22f - p_local.z * 0.58f;
+                const float wobble = 1.0f + (sinf(phase0) * 0.72f + cosf(phase1) * 0.28f) * (wobble_amp / radius);
+                inside[iy][ix] = 1u;
+                ids[iy][ix] = sphere_seed_id(p_local);
+                pts[iy][ix] = (vg_vec2){c.x + p_view.x * radius * wobble, c.y + p_view.y * radius * wobble};
+            }
+        }
+    }
+
+    for (int iy = 0; iy + 1 < GRID_N; ++iy) {
+        for (int ix = 0; ix + 1 < GRID_N; ++ix) {
+            vg_vec2 mids[4];
+            int mid_count = 0;
+            const uint8_t in00 = inside[iy][ix];
+            const uint8_t in10 = inside[iy][ix + 1];
+            const uint8_t in01 = inside[iy + 1][ix];
+            const uint8_t in11 = inside[iy + 1][ix + 1];
+            if (!(in00 || in10 || in01 || in11)) {
+                continue;
+            }
+            if (in00 && in10 && ids[iy][ix] != ids[iy][ix + 1]) {
+                mids[mid_count++] = (vg_vec2){
+                    0.5f * (pts[iy][ix].x + pts[iy][ix + 1].x),
+                    0.5f * (pts[iy][ix].y + pts[iy][ix + 1].y)
+                };
+            }
+            if (in10 && in11 && ids[iy][ix + 1] != ids[iy + 1][ix + 1]) {
+                mids[mid_count++] = (vg_vec2){
+                    0.5f * (pts[iy][ix + 1].x + pts[iy + 1][ix + 1].x),
+                    0.5f * (pts[iy][ix + 1].y + pts[iy + 1][ix + 1].y)
+                };
+            }
+            if (in01 && in11 && ids[iy + 1][ix] != ids[iy + 1][ix + 1]) {
+                mids[mid_count++] = (vg_vec2){
+                    0.5f * (pts[iy + 1][ix].x + pts[iy + 1][ix + 1].x),
+                    0.5f * (pts[iy + 1][ix].y + pts[iy + 1][ix + 1].y)
+                };
+            }
+            if (in00 && in01 && ids[iy][ix] != ids[iy + 1][ix]) {
+                mids[mid_count++] = (vg_vec2){
+                    0.5f * (pts[iy][ix].x + pts[iy + 1][ix].x),
+                    0.5f * (pts[iy][ix].y + pts[iy + 1][ix].y)
+                };
+            }
+            if (mid_count >= 2) {
+                vg_stroke_style halo = *land_halo;
+                vg_stroke_style main = *land_main;
+                const float my = 0.25f * (pts[iy][ix].y + pts[iy][ix + 1].y + pts[iy + 1][ix].y + pts[iy + 1][ix + 1].y);
+                const float vis = clampf(0.40f + 0.60f * (1.0f - fabsf((my - c.y) / fmaxf(radius, 1.0f))), 0.30f, 1.0f);
+                halo.intensity *= 1.06f * vis;
+                main.intensity *= 1.18f * vis;
+                halo.width_px *= 1.22f;
+                main.width_px *= 1.28f;
+                for (int mi = 0; mi + 1 < mid_count; mi += 2) {
+                    const vg_vec2 seg[2] = {mids[mi], mids[mi + 1]};
+                    vg_result r = vg_draw_polyline(ctx, seg, 2, &halo, 0);
+                    if (r != VG_OK) {
+                        return r;
+                    }
+                    r = vg_draw_polyline(ctx, seg, 2, &main, 0);
+                    if (r != VG_OK) {
+                        return r;
+                    }
+                }
+            }
+        }
+    }
+    return VG_OK;
 }
 
 static int level_draws_star_background(const game_state* g) {
@@ -3092,7 +3781,7 @@ static vg_result draw_top_meters(
         return r;
     }
 
-    if (level_uses_cylinder_render(g) && g->level_time_remaining_s > 0.0f) {
+    if ((level_uses_cylinder_render(g) || level_uses_sphere_render(g)) && g->level_time_remaining_s > 0.0f) {
         char timer_txt[32];
         const int secs = (int)ceilf(fmaxf(g->level_time_remaining_s, 0.0f));
         snprintf(timer_txt, sizeof(timer_txt), "TIME %03d", secs);
@@ -5363,6 +6052,7 @@ static const char* editor_render_style_name(int style) {
     if (style == LEVEL_RENDER_DRIFTER_SHADED) return "DRIFTER SHADED";
     if (style == LEVEL_RENDER_FOG) return "FOG";
     if (style == LEVEL_RENDER_BLANK) return "BLANK";
+    if (style == LEVEL_RENDER_SPHERE) return "SPHERE";
     return "DEFENDER";
 }
 
@@ -12306,7 +12996,7 @@ vg_result render_frame(vg_context* ctx, const game_state* state, const render_me
             }
         }
     }
-    if (!foreground_only) {
+    if (!foreground_only && g->render_style != LEVEL_RENDER_SPHERE) {
         r = draw_background_window_mask_overlays(ctx, g, &land_halo, &land_main);
         if (r != VG_OK) {
             return r;
@@ -12330,7 +13020,8 @@ vg_result render_frame(vg_context* ctx, const game_state* state, const render_me
             }
         } else if (g->render_style != LEVEL_RENDER_DRIFTER_SHADED &&
                    g->render_style != LEVEL_RENDER_FOG &&
-                   g->render_style != LEVEL_RENDER_BLANK) {
+                   g->render_style != LEVEL_RENDER_BLANK &&
+                   g->render_style != LEVEL_RENDER_SPHERE) {
             if (g->render_style == LEVEL_RENDER_DEFENDER) {
                 if (metrics->use_gpu_industry) {
                     goto skip_legacy_landscape;
@@ -12566,6 +13257,9 @@ skip_legacy_landscape:
             continue;
         }
         const bullet* b = &g->bullets[i];
+        if (level_uses_sphere_render(g) && !b->sphere_visible) {
+            continue;
+        }
         float ux = b->b.vx;
         float uy = b->b.vy;
         float speed = sqrtf(ux * ux + uy * uy);
@@ -12640,6 +13334,9 @@ skip_legacy_landscape:
             continue;
         }
         const enemy_bullet* b = &g->enemy_bullets[i];
+        if (level_uses_sphere_render(g) && !b->sphere_visible) {
+            continue;
+        }
         float ux = b->b.vx;
         float uy = b->b.vy;
         float speed = sqrtf(ux * ux + uy * uy);
@@ -12850,7 +13547,13 @@ skip_legacy_landscape:
             continue;
         }
         const enemy* e = &g->enemies[i];
-        const float rr = e->radius;
+        float rr = e->radius;
+        if (level_uses_sphere_render(g) && !e->sphere_visible) {
+            continue;
+        }
+        if (level_uses_sphere_render(g)) {
+            rr *= sphere_enemy_render_scale(g, e);
+        }
         if (!rects_intersect(
                 e->b.x - rr,
                 e->b.y - rr,

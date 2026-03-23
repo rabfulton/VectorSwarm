@@ -95,6 +95,7 @@ typedef struct leveldef_event_entry {
     int kind;      /* enum leveldef_event_kind */
     int order;     /* 1-based event order */
     float delay_s; /* delay after previous event ends */
+    int style;     /* boid style for swarm events; otherwise 0 */
 } leveldef_event_entry;
 
 typedef struct leveldef_boid_profile {
@@ -401,6 +402,7 @@ typedef struct leveldef_level {
     int spawn_mode; /* enum leveldef_spawn_mode */
     float spawn_interval_s;
     int default_boid_profile;
+    int default_boid_style;
     float wave_cooldown_initial_s;
     float wave_cooldown_between_s;
     float event_wave_spawn_timeout_factor;

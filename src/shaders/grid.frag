@@ -11,6 +11,9 @@ layout(push_constant) uniform GridPC {
     vec4 p2;      /* rgb=dim_color, w=intensity_scale */
     vec4 p3;      /* rgb=bright_color, w=line_boost */
     vec4 p4;      /* x=camera_x, y=camera_y, z=world_w, w=world_h */
+    vec4 p5;      /* x=mode(0=flat,1=sphere), y=sphere_radius_px, z=seed_count, w=line_px */
+    vec4 p6;      /* sphere orientation quaternion wxyz */
+    vec4 p7;      /* x=spring_distort_px, y=time_s, z=reserved, w=reserved */
 } pc;
 
 vec2 hash22(vec2 p) {
@@ -60,6 +63,42 @@ float voronoi_edge_band(vec2 world, vec2 cell_spacing) {
     return 1.0 - smoothstep(half_w_px, half_w_px + aa_px, edge_px);
 }
 
+vec3 quat_rotate(vec4 q, vec3 v) {
+    float w = q.x;
+    vec3 u = q.yzw;
+    vec3 uv = cross(u, v);
+    vec3 uuv = cross(u, uv);
+    return v + 2.0 * (w * uv + uuv);
+}
+
+vec3 quat_conjugate_rotate(vec4 q, vec3 v) {
+    return quat_rotate(vec4(q.x, -q.y, -q.z, -q.w), v);
+}
+
+float sphere_voronoi_gap(vec3 local_p, int seed_count) {
+    const float golden_angle = 2.39996323;
+    float best = -1.0e9;
+    float second_best = -1.0e9;
+    for (int i = 0; i < 2048; ++i) {
+        if (i >= seed_count) {
+            break;
+        }
+        float u = (float(i) + 0.5) / float(max(seed_count, 1));
+        float y = 1.0 - 2.0 * u;
+        float rr = sqrt(max(0.0, 1.0 - y * y));
+        float phi = golden_angle * float(i);
+        vec3 seed = vec3(cos(phi) * rr, y, sin(phi) * rr);
+        float d = dot(local_p, seed);
+        if (d > best) {
+            second_best = best;
+            best = d;
+        } else if (d > second_best) {
+            second_best = d;
+        }
+    }
+    return best - second_best;
+}
+
 void main() {
     vec2 frag_px = vec2(gl_FragCoord.xy);
     vec2 uv = frag_px / vec2(max(pc.p0.x, 1.0), max(pc.p0.y, 1.0));
@@ -73,6 +112,25 @@ void main() {
     );
 
     float line = voronoi_edge_band(world, vec2(pc.p0.z, pc.p0.w));
+    if (pc.p5.x > 0.5) {
+        vec2 center = vec2(pc.p0.x, pc.p0.y) * 0.5;
+        float sphere_radius = max(pc.p5.y, 1.0);
+        vec2 sphere_xy = vec2(
+            frag_px.x - center.x + disp.x * pc.p7.x,
+            center.y - frag_px.y - disp.y * pc.p7.x
+        ) / sphere_radius;
+        float r2 = dot(sphere_xy, sphere_xy);
+        if (r2 > 1.0) {
+            discard;
+        }
+        vec3 sphere_view = vec3(sphere_xy, sqrt(max(0.0, 1.0 - r2)));
+        vec3 sphere_local = normalize(quat_conjugate_rotate(pc.p6, sphere_view));
+        float gap = sphere_voronoi_gap(sphere_local, int(pc.p5.z + 0.5));
+        float line_px = max(pc.p5.w, 0.05);
+        float threshold = 0.00018 * line_px;
+        float aa = max(fwidth(gap) * 0.55, 0.00006);
+        line = 1.0 - smoothstep(threshold, threshold + aa, gap);
+    }
     if (line <= 0.001) {
         discard;
     }
@@ -81,5 +139,9 @@ void main() {
     strain = max(strain, clamp(length(vel) * pc.p1.y, 0.0, 1.0));
     vec3 col = mix(pc.p2.rgb, pc.p3.rgb, 0.22 + 0.78 * strain);
     float alpha = line * (0.25 + 0.55 * strain) * pc.p2.w * pc.p3.w;
+    if (pc.p5.x > 0.5) {
+        col = mix(pc.p2.rgb, pc.p3.rgb, 0.86 + 0.14 * strain);
+        alpha *= 10.5;
+    }
     out_color = vec4(col, alpha);
 }
