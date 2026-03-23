@@ -947,9 +947,10 @@ int game_structure_segment_blocked(const game_state* g, float x0, float y0, floa
     min_y = fminf(y0, y1) - pad_radius;
     max_x = fmaxf(x0, x1) + pad_radius;
     max_y = fmaxf(y0, y1) + pad_radius;
-    qmin_x = clampi((int)floorf(min_x / fmaxf(unit_w, 1.0e-5f)), 0, LEVELDEF_STRUCTURE_GRID_W - 1);
+    /* Structures span the full scrolling level, so X grid coordinates are not limited to a single screen. */
+    qmin_x = (int)floorf(min_x / fmaxf(unit_w, 1.0e-5f));
     qmin_y = clampi((int)floorf(min_y / fmaxf(unit_h, 1.0e-5f)), 0, LEVELDEF_STRUCTURE_GRID_H - 1);
-    qmax_x = clampi((int)ceilf(max_x / fmaxf(unit_w, 1.0e-5f)), 0, LEVELDEF_STRUCTURE_GRID_W - 1);
+    qmax_x = (int)ceilf(max_x / fmaxf(unit_w, 1.0e-5f));
     qmax_y = clampi((int)ceilf(max_y / fmaxf(unit_h, 1.0e-5f)), 0, LEVELDEF_STRUCTURE_GRID_H - 1);
 
     for (int i = 0; i < lvl->structure_count && i < LEVELDEF_MAX_STRUCTURES; ++i) {
@@ -1617,6 +1618,135 @@ static int find_player_missile_target(
     return found;
 }
 
+static int missile_heading_probe_clear(
+    const game_state* g,
+    const homing_missile* m,
+    float heading_rad,
+    float lookahead
+) {
+    const float dx = cosf(heading_rad) * lookahead;
+    const float dy = sinf(heading_rad) * lookahead;
+    return !game_structure_segment_blocked(g, m->b.x, m->b.y, m->b.x + dx, m->b.y + dy, m->radius);
+}
+
+static float missile_pick_geometry_heading(
+    const game_state* g,
+    const homing_missile* m,
+    float target_x,
+    float target_y
+) {
+    float su;
+    float desired_x;
+    float desired_y;
+    float desired_heading;
+    if (!g || !m) {
+        return 0.0f;
+    }
+    su = gameplay_ui_scale(g);
+
+    desired_x = target_x - m->b.x;
+    desired_y = target_y - m->b.y;
+    if (level_uses_cylinder(g)) {
+        desired_x = wrap_delta(target_x, m->b.x, cylinder_period(g));
+    }
+    if (length2(desired_x, desired_y) <= 1.0e-6f) {
+        desired_x = cosf(m->heading_rad);
+        desired_y = sinf(m->heading_rad);
+    }
+    normalize2(&desired_x, &desired_y);
+    desired_heading = atan2f(desired_y, desired_x);
+
+    if (level_uses_cylinder(g) || level_uses_sphere(g) || g->render_style == LEVEL_RENDER_CYLINDER) {
+        return desired_heading;
+    }
+
+    {
+        const float lookahead = clampf(
+            fmaxf(m->radius * 6.0f, m->speed * 0.22f),
+            36.0f * su,
+            fminf(g->world_w, g->world_h) * 0.18f
+        );
+        float avoid_x = 0.0f;
+        float avoid_y = 0.0f;
+        float biased_x = desired_x;
+        float biased_y = desired_y;
+        int has_avoid = 0;
+        static const float offsets_deg[] = {
+            0.0f,
+            15.0f, -15.0f,
+            30.0f, -30.0f,
+            45.0f, -45.0f,
+            60.0f, -60.0f,
+            75.0f, -75.0f,
+            90.0f, -90.0f,
+            120.0f, -120.0f,
+            150.0f, -150.0f
+        };
+
+        if (missile_heading_probe_clear(g, m, desired_heading, lookahead)) {
+            return desired_heading;
+        }
+
+        game_structure_avoidance_vector(
+            g,
+            m->b.x,
+            m->b.y,
+            fmaxf(6.0f * su, m->radius * 0.95f),
+            fmaxf(m->radius * 3.5f, lookahead * 0.60f),
+            &avoid_x,
+            &avoid_y
+        );
+        if (fabsf(avoid_x) > 1.0e-5f || fabsf(avoid_y) > 1.0e-5f) {
+            normalize2(&avoid_x, &avoid_y);
+            biased_x += avoid_x * 1.85f;
+            biased_y += avoid_y * 1.85f;
+            if (length2(biased_x, biased_y) > 1.0e-6f) {
+                normalize2(&biased_x, &biased_y);
+                has_avoid = 1;
+            } else {
+                biased_x = desired_x;
+                biased_y = desired_y;
+            }
+        }
+
+        {
+            const float seed_headings[2] = {
+                atan2f(biased_y, biased_x),
+                desired_heading
+            };
+            float best_heading = desired_heading;
+            float best_score = -1.0e20f;
+            int found = 0;
+            for (int s = 0; s < 2; ++s) {
+                for (size_t i = 0; i < sizeof(offsets_deg) / sizeof(offsets_deg[0]); ++i) {
+                    const float cand_heading = wrap_angle_rad(seed_headings[s] + deg_to_rad(offsets_deg[i]));
+                    const float cand_x = cosf(cand_heading);
+                    const float cand_y = sinf(cand_heading);
+                    float score;
+                    if (!missile_heading_probe_clear(g, m, cand_heading, lookahead)) {
+                        continue;
+                    }
+                    score = cand_x * desired_x + cand_y * desired_y;
+                    score -= fabsf(wrap_angle_rad(cand_heading - m->heading_rad)) * 0.12f;
+                    if (has_avoid) {
+                        score += (cand_x * avoid_x + cand_y * avoid_y) * 0.40f;
+                    }
+                    if (!found || score > best_score) {
+                        best_score = score;
+                        best_heading = cand_heading;
+                        found = 1;
+                    }
+                }
+            }
+            if (found) {
+                return best_heading;
+            }
+        }
+    }
+
+    return desired_heading;
+}
+
 static void explode_missile(game_state* g, homing_missile* m, int direct_hit) {
     if (!g || !m || !m->active) {
         return;
@@ -2086,12 +2216,7 @@ static void update_missile_system(game_state* g, float dt) {
         }
 
         {
-            float dx = tx - m->b.x;
-            float dy = ty - m->b.y;
-            if (level_uses_cylinder(g)) {
-                dx = wrap_delta(tx, m->b.x, cylinder_period(g));
-            }
-            const float desired = atan2f(dy, dx);
+            const float desired = missile_pick_geometry_heading(g, m, tx, ty);
             const float delta = wrap_angle_rad(desired - m->heading_rad);
             const float max_step = m->turn_rate_rad_s * dt;
             m->heading_rad += clampf(delta, -max_step, max_step);
