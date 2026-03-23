@@ -303,7 +303,7 @@ typedef struct particle_pc {
 
 typedef struct sphere_particle_pc {
     float p0[4]; /* x=viewport_width, y=viewport_height, z=time_s, w=glow_gain */
-    float p1[4]; /* x=core_gain, y=rim_gain, z=twinkle_gain, w=reserved */
+    float p1[4]; /* x=core_gain, y=rim_gain, z=twinkle_gain, w=shell_gain */
     float p2[4]; /* x=center_x, y=center_y, z=sphere_radius_px, w=dpi */
     float p3[4]; /* sphere orientation quaternion wxyz */
     float top[4];
@@ -5985,15 +5985,18 @@ static void build_sphere_particle_static_instances(
             inst.variant = (float)SPHERE_PARTICLE_VARIANT_CORE;
             out[n++] = inst;
 
-            if (n < capacity && ((i % 19) == 0) && s->pocket > 0.58f) {
+            if (n < capacity && ((i % 61) == 0) && s->pocket > 0.72f && inst.height_t > 0.46f) {
                 inst.variant = (float)SPHERE_PARTICLE_VARIANT_HAZE;
                 out[n++] = inst;
             }
-            if (n < capacity && s->dither < 0.06f && s->pocket > 0.50f) {
+            if (n < capacity && s->dither < 0.018f && s->pocket > 0.66f && inst.height_t > 0.52f) {
                 inst.variant = (float)SPHERE_PARTICLE_VARIANT_CLUMP;
                 out[n++] = inst;
             }
-            if (n < capacity && (((uint32_t)i + (uint32_t)(s->seed * 131.0f)) & 3u) == 0u && s->pocket > 0.40f) {
+            if (n < capacity &&
+                (((uint32_t)i + (uint32_t)(s->seed * 131.0f)) & 7u) == 0u &&
+                s->pocket > 0.62f &&
+                inst.height_t > 0.58f) {
                 inst.variant = (float)SPHERE_PARTICLE_VARIANT_CORONA;
                 out[n++] = inst;
             }
@@ -12669,10 +12672,11 @@ static void record_gpu_sphere_particles(app* a, VkCommandBuffer cmd) {
         pc.p0[0] = (float)a->swapchain_extent.width;
         pc.p0[1] = (float)a->swapchain_extent.height;
         pc.p0[2] = a->game.t;
-        pc.p0[3] = 0.92f;
-        pc.p1[0] = 0.96f;
-        pc.p1[1] = 0.84f;
-        pc.p1[2] = 0.44f;
+        pc.p0[3] = 1.03f;
+        pc.p1[0] = 2.50f;
+        pc.p1[1] = 0.74f;
+        pc.p1[2] = 0.34f;
+        pc.p1[3] = 0.50f;
         pc.p2[0] = a->game.world_w * 0.5f;
         pc.p2[1] = a->game.world_h * 0.5f;
         pc.p2[2] = a->game.world_h * (8.0f / 9.0f);
@@ -12716,10 +12720,11 @@ static void record_gpu_sphere_particles_bloom(app* a, VkCommandBuffer cmd) {
         pc.p0[0] = (float)a->swapchain_extent.width;
         pc.p0[1] = (float)a->swapchain_extent.height;
         pc.p0[2] = a->game.t;
-        pc.p0[3] = 0.82f;
-        pc.p1[0] = 0.86f;
-        pc.p1[1] = 0.74f;
-        pc.p1[2] = 0.36f;
+        pc.p0[3] = 1.80f;
+        pc.p1[0] = 1.65f;
+        pc.p1[1] = 0.30f;
+        pc.p1[2] = 0.12f;
+        pc.p1[3] = 0.50f;
         pc.p2[0] = a->game.world_w * 0.5f;
         pc.p2[1] = a->game.world_h * 0.5f;
         pc.p2[2] = a->game.world_h * (8.0f / 9.0f);

@@ -2812,20 +2812,18 @@ static int spawn_bullet_single(game_state* g, float y_offset, float muzzle_speed
         memset(b, 0, sizeof(*b));
         b->active = 1;
         if (level_uses_sphere(g)) {
-            const game_v3 front_local = quat_conjugate_rotate_game_v3(g->sphere_visual_q, game_v3_make(0.0f, 0.0f, 1.0f));
-            const game_v3 right_local = quat_conjugate_rotate_game_v3(g->sphere_visual_q, game_v3_make(1.0f, 0.0f, 0.0f));
-            const game_v3 up_local = quat_conjugate_rotate_game_v3(g->sphere_visual_q, game_v3_make(0.0f, 1.0f, 0.0f));
+            const float cx = g->world_w * 0.5f;
+            const float cy = g->world_h * 0.5f;
+            const float muzzle_x = cx + dir * muzzle_offset * su;
+            const float muzzle_y = cy + y_offset;
+            const float ahead_x = cx + dir * (muzzle_offset + 52.0f) * su;
+            const float ahead_y = muzzle_y;
             game_v3 muzzle;
+            game_v3 ahead;
             game_v3 tangent;
-            muzzle = game_v3_add(
-                front_local,
-                game_v3_add(
-                    game_v3_scale(right_local, (dir * muzzle_offset * su) / fmaxf(sphere_surface_radius(g), 1.0f)),
-                    game_v3_scale(up_local, y_offset / fmaxf(sphere_surface_radius(g), 1.0f))
-                )
-            );
-            muzzle = game_v3_norm(muzzle);
-            tangent = game_v3_proj_tangent(game_v3_scale(right_local, dir), muzzle);
+            muzzle = sphere_local_from_screen_point(g, muzzle_x, muzzle_y);
+            ahead = sphere_local_from_screen_point(g, ahead_x, ahead_y);
+            tangent = game_v3_proj_tangent(game_v3_sub(ahead, muzzle), muzzle);
             tangent = game_v3_norm(tangent);
             b->sphere_pos_x = muzzle.x;
             b->sphere_pos_y = muzzle.y;

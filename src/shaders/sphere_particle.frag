@@ -24,6 +24,8 @@ void main() {
     float r = length(v_uv);
     float alpha = 0.0;
     float intensity = 0.0;
+    float direct_gain = 1.0;
+    float alpha_gain = 1.0;
 
     if (v_kind < 0.5) {
         if (r > 1.14) {
@@ -32,10 +34,12 @@ void main() {
         float core = exp(-7.6 * r * r);
         float halo = exp(-2.4 * r * r);
         float spark = pow(max(0.0, 1.0 - r), 7.5);
-        intensity = core * (0.90 + 2.10 * v_col.a * pc.p1.x) +
-                    halo * (0.10 + 0.34 * pc.p0.w) +
-                    spark * (0.10 + 0.70 * pc.p1.z) * twinkle;
-        alpha = (core * 0.54 + halo * 0.12 + spark * 0.08) * clamp(v_col.a * 1.00, 0.0, 1.0);
+        intensity = core * (0.56 + 1.18 * v_col.a * pc.p1.x) +
+                    halo * (0.04 + 0.12 * pc.p0.w) +
+                    spark * (0.06 + 0.28 * pc.p1.z) * twinkle;
+        alpha = (core * 0.34 + halo * 0.06 + spark * 0.04) * clamp(v_col.a * 0.92, 0.0, 1.0);
+        direct_gain = mix(pc.p1.x, pc.p0.w, 0.35);
+        alpha_gain = mix(pc.p1.x, pc.p0.w, 0.20);
     } else if (v_kind < 1.5) {
         float ellipse = length(vec2(
             v_uv.x * (0.64 - 0.08 * clamp(v_stretch, 0.0, 2.0)),
@@ -46,19 +50,25 @@ void main() {
         }
         float glow = exp(-1.2 * ellipse * ellipse);
         float streak = exp(-4.6 * abs(v_uv.y)) * pow(clamp((v_uv.x + 1.0) * 0.5, 0.0, 1.0), 1.4);
-        intensity = glow * (0.30 + 1.10 * pc.p1.y + 0.60 * v_col.a) +
-                    streak * (0.16 + 0.56 * pc.p1.z) * twinkle;
-        alpha = (glow * 0.12 + streak * 0.05) * clamp(v_col.a * 0.96, 0.0, 1.0);
+        intensity = glow * (0.14 + 0.42 * pc.p1.y + 0.24 * v_col.a) +
+                    streak * (0.08 + 0.20 * pc.p1.z) * twinkle;
+        alpha = (glow * 0.06 + streak * 0.025) * clamp(v_col.a * 0.90, 0.0, 1.0);
+        direct_gain = mix(pc.p1.x, pc.p0.w, 0.65);
+        alpha_gain = mix(pc.p1.x, pc.p0.w, 0.50);
     } else {
         if (r > 1.46) {
             discard;
         }
         float cloud = exp(-0.78 * r * r);
         float inner = exp(-2.2 * r * r);
-        intensity = cloud * (0.16 + 0.72 * pc.p0.w + 0.60 * v_col.a) +
-                    inner * (0.10 + 0.28 * pc.p1.x);
-        alpha = (cloud * 0.08 + inner * 0.03) * clamp(v_col.a * 1.00, 0.0, 1.0);
+        intensity = cloud * (0.08 + 0.28 * pc.p0.w + 0.24 * v_col.a) +
+                    inner * (0.04 + 0.12 * pc.p1.x);
+        alpha = (cloud * 0.04 + inner * 0.015) * clamp(v_col.a * 0.90, 0.0, 1.0);
+        direct_gain = mix(pc.p1.x, pc.p0.w, 0.85);
+        alpha_gain = mix(pc.p1.x, pc.p0.w, 0.70);
     }
 
+    intensity *= direct_gain;
+    alpha *= clamp(alpha_gain, 0.20, 4.00);
     out_color = vec4(v_col.rgb * intensity, clamp(alpha, 0.0, 1.0));
 }

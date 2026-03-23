@@ -14,7 +14,7 @@ layout(location = 4) out float v_stretch;
 
 layout(push_constant) uniform Push {
     vec4 p0; /* x=viewport_width, y=viewport_height, z=time_s, w=glow_gain */
-    vec4 p1; /* x=core_gain, y=rim_gain, z=twinkle_gain, w=reserved */
+    vec4 p1; /* x=core_gain, y=rim_gain, z=twinkle_gain, w=shell_gain */
     vec4 p2; /* x=center_x, y=center_y, z=sphere_radius_px, w=dpi */
     vec4 p3; /* sphere orientation quaternion wxyz */
     vec4 top;
@@ -217,15 +217,15 @@ void main() {
     vec3 pseudo_view = quat_rotate(pc.p3, pseudo_local);
     vec3 light_dir = normalize(vec3(-0.55, 0.42, 0.72));
     float diffuse = clamp(dot(pseudo_view, light_dir) * 0.5 + 0.5, 0.0, 1.0);
-    float shade = clamp(0.08 + 0.92 * pow(diffuse, 1.45), 0.08, 1.0);
+    float shade = clamp(0.08 + 0.92 * pow(diffuse, 1.40), 0.08, 1.0);
     float ridge_mask = smoothstep(
         0.74,
         0.96,
         noise0 * 0.58 + pocket * 0.28 + height_t * 0.14 + max(0.0, noise2 - 0.35) * 0.10
     );
     float ridge_hot = ridge_mask *
-                      smoothstep(0.54, 0.94, diffuse) *
-                      step(dither, 0.06 + ridge_mask * 0.16);
+                      smoothstep(0.62, 0.97, diffuse) *
+                      step(dither, 0.024 + ridge_mask * 0.080);
     vec3 ridge_col = mix(pc.low.rgb, pc.top.rgb, 0.28 + 0.56 * height_t);
 
     vec2 flow = normalize(vec2(
@@ -246,31 +246,31 @@ void main() {
 
     if (variant < 0.5) {
         hidden = hidden || (dither > (0.78 + pocket * 0.10 - lift_t * 0.04 + ridge_hot * 0.05));
-        radius = pc.p2.w * (2.35 + 1.80 * pow(front, 0.32) + 0.62 * pocket + 0.82 * lift_t);
+        radius = pc.p2.w * (2.28 + 1.58 * pow(front, 0.32) + 0.54 * pocket + 0.74 * lift_t);
         size_metric = clamp((radius / max(pc.p2.w, 0.001) - 1.2) / 3.3, 0.0, 1.0);
         base_col = terrain_solar_color(height_t, rough_t);
-        base_col *= (0.16 + 0.60 * shade) * (0.92 + 0.18 * (0.5 + 0.5 * plasma_u));
-        base_col = mix(base_col, ridge_col, ridge_hot * 0.92);
-        alpha = clamp(0.03 + 0.16 * pow(front, 0.58) + 0.08 * pocket + 0.06 * lift_t + ridge_hot * 0.18, 0.03, 0.40);
+        base_col *= (0.15 + 0.66 * shade) * (0.92 + 0.16 * (0.5 + 0.5 * plasma_u));
+        base_col = mix(base_col, ridge_col, ridge_hot * 0.96);
+        alpha = clamp(0.030 + 0.155 * pow(front, 0.58) + 0.064 * pocket + 0.058 * lift_t + ridge_hot * 0.17, 0.030, 0.38);
         stretch = 0.01 + 0.03 * pocket;
         visual_kind = 0.0;
     } else if (variant < 1.5) {
-        radius = pc.p2.w * (5.2 + 4.2 * pocket + 3.2 * horizon + 1.6 * lift_t);
+        radius = pc.p2.w * (3.2 + 2.4 * pocket + 2.0 * horizon + 1.0 * lift_t);
         size_metric = clamp((radius / max(pc.p2.w, 0.001) - 1.5) / 6.4, 0.0, 1.0);
         base_col = mix(terrain_solar_color(height_t, rough_t), pc.top.rgb, 0.06 + 0.08 * smoothstep(0.84, 1.0, height_t));
-        base_col *= (0.08 + 0.36 * shade) * (0.88 + 0.22 * (0.5 + 0.5 * plasma_v));
-        alpha = clamp(0.012 + 0.030 * pocket * (0.24 + 0.76 * front), 0.01, 0.06);
+        base_col *= (0.075 + 0.34 * shade) * (0.86 + 0.12 * (0.5 + 0.5 * plasma_v));
+        alpha = clamp(0.008 + 0.026 * pocket * (0.24 + 0.76 * front), 0.008, 0.050);
         stretch = 0.06 + 0.05 * pocket;
         visual_kind = 2.0;
     } else if (variant < 2.5) {
         float clump = pc.p2.w * (0.8 + 1.8 * pocket);
         screen += vec2(flow.y, -flow.x) * clump * vec2(noise1 - 0.5, noise2 - 0.5) * 1.7;
-        radius = pc.p2.w * (1.46 + 1.18 * pocket + 0.34 * lift_t);
+        radius = pc.p2.w * (1.10 + 0.84 * pocket + 0.20 * lift_t);
         size_metric = clamp((radius / max(pc.p2.w, 0.001) - 0.8) / 2.8, 0.0, 1.0);
         base_col = mix(terrain_solar_color(height_t, rough_t), pc.top.rgb, 0.05);
-        base_col *= (0.12 + 0.44 * shade) * (0.90 + 0.18 * (0.5 + 0.5 * plasma_u * plasma_v));
+        base_col *= (0.10 + 0.38 * shade) * (0.90 + 0.10 * (0.5 + 0.5 * plasma_u * plasma_v));
         base_col = mix(base_col, ridge_col, ridge_hot * 0.32);
-        alpha = clamp(0.03 + 0.07 * pocket, 0.02, 0.12);
+        alpha = clamp(0.020 + 0.050 * pocket, 0.020, 0.078);
         stretch = 0.01;
         visual_kind = 0.0;
     } else if (variant < 3.5) {
@@ -303,15 +303,15 @@ void main() {
                 alpha += pulse * erupt_cluster * 0.16;
             }
         }
-        radius = pc.p2.w * (2.6 + 3.6 * pocket + 5.8 * corona + 1.0 * lift_t + 2.2 * erupt_boost);
+        radius = pc.p2.w * (1.6 + 2.0 * pocket + 3.2 * corona + 0.7 * lift_t + 1.1 * erupt_boost);
         size_metric = clamp((radius / max(pc.p2.w, 0.001) - 1.1) / 6.8, 0.0, 1.0);
         base_col = mix(
             terrain_solar_color(height_t, rough_t),
             pc.top.rgb,
             0.10 + 0.10 * corona + 0.20 * erupt_boost
         );
-        base_col *= 0.18 + 0.52 * shade;
-        alpha = clamp(0.02 + 0.10 * corona * (0.35 + 0.65 * pocket) + 0.08 * erupt_boost, 0.01, 0.18);
+        base_col *= 0.08 + 0.24 * shade;
+        alpha = clamp(0.006 + 0.040 * corona * (0.35 + 0.65 * pocket) + 0.030 * erupt_boost, 0.006, 0.080);
         stretch = 0.42 + 0.58 * corona + erupt_boost * 1.10;
         visual_kind = 1.0;
     }
@@ -327,7 +327,9 @@ void main() {
     }
 
     if (variant < 3.5) {
-        base_col = desaturate_color(base_col, 0.18);
+        base_col = desaturate_color(base_col, 0.36);
+        base_col *= pc.p1.w;
+        alpha *= pc.p1.w;
     }
 
     vec2 axis_n = normalize(axis);
