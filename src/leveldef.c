@@ -242,6 +242,7 @@ static int render_style_from_name(const char* name) {
     if (strcmp(name, "fog") == 0) return LEVEL_RENDER_FOG;
     if (strcmp(name, "blank") == 0) return LEVEL_RENDER_BLANK;
     if (strcmp(name, "sphere") == 0) return LEVEL_RENDER_SPHERE;
+    if (strcmp(name, "sphere_particle") == 0) return LEVEL_RENDER_SPHERE_PARTICLE;
     return -1;
 }
 

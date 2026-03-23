@@ -310,7 +310,9 @@ static float dist_sq_level(int uses_cylinder, float period, float ax, float ay, 
 }
 
 static int level_uses_sphere_enemy(const game_state* g) {
-    return g && g->render_style == LEVEL_RENDER_SPHERE;
+    return g &&
+           (g->render_style == LEVEL_RENDER_SPHERE ||
+            g->render_style == LEVEL_RENDER_SPHERE_PARTICLE);
 }
 
 static void enemy_project_sphere_state(const game_state* g, enemy* e) {

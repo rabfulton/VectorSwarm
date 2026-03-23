@@ -27,6 +27,7 @@
 
 #include <stdint.h>
 #include <math.h>
+#include <float.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -64,6 +65,9 @@
 #include "particle_vert_spv.h"
 #include "particle_frag_spv.h"
 #include "particle_bloom_frag_spv.h"
+#include "sphere_particle_vert_spv.h"
+#include "sphere_particle_frag_spv.h"
+#include "sphere_particle_bloom_frag_spv.h"
 #include "wormhole_line_vert_spv.h"
 #include "wormhole_line_frag_spv.h"
 #include "radar_line_vert_spv.h"
@@ -94,6 +98,11 @@
 #define APP_FRAME_OVERLAP 1
 #define ACOUSTICS_SCOPE_HISTORY_SAMPLES 8192
 #define GPU_PARTICLE_MAX_INSTANCES (MAX_PARTICLES + 2048u)
+#define SPHERE_PARTICLE_MAX_INSTANCES 131072u
+#define SPHERE_PARTICLE_DYNAMIC_MAX_INSTANCES 65536u
+#define SPHERE_PARTICLE_SHELL_SEED_COUNT 32000
+#define SPHERE_CME_EMITTER_CAP 18
+#define SPHERE_CME_PARTICLE_CAP 4096
 #define FIRE_BG_PARTICLE_CAP 224
 #define FOREST_BG_SPORE_CLUSTER_CAP 28
 #define UNDERWATER_NOISE_TEX_SIZE 256
@@ -106,6 +115,14 @@
 #define MAX_MOD_TRACKS 128
 #define UNDERWATER_KELP_RT_DIVISOR 2u
 #define UNDERWATER_KELP_RT_Y_START_NORM 0.38f
+
+enum sphere_particle_variant {
+    SPHERE_PARTICLE_VARIANT_CORE = 0,
+    SPHERE_PARTICLE_VARIANT_HAZE = 1,
+    SPHERE_PARTICLE_VARIANT_CLUMP = 2,
+    SPHERE_PARTICLE_VARIANT_CORONA = 3,
+    SPHERE_PARTICLE_VARIANT_CME = 4
+};
 
 enum control_action_id {
     CONTROL_ACTION_UP = 0,
@@ -169,6 +186,87 @@ typedef struct particle_instance {
     float heat;
 } particle_instance;
 
+typedef struct sphere_particle_instance {
+    float nx;
+    float ny;
+    float nz;
+    float variant;
+    float t0x;
+    float t0y;
+    float t0z;
+    float seed;
+    float t1x;
+    float t1y;
+    float t1z;
+    float noise0;
+    float noise1;
+    float noise2;
+    float pocket;
+    float dither;
+    float shell_base;
+    float height_t;
+    float reserved1;
+    float reserved2;
+} sphere_particle_instance;
+
+typedef struct sphere_cme_emitter {
+    int active;
+    float px;
+    float py;
+    float pz;
+    float t0x;
+    float t0y;
+    float t0z;
+    float t1x;
+    float t1y;
+    float t1z;
+    float seed;
+    float height_t;
+    float strength;
+    float cooldown_s;
+    float erupt_age_s;
+    float erupt_duration_s;
+    float spawn_accum;
+    float quiet_min_s;
+    float quiet_max_s;
+    float arc_bias;
+    int erupting;
+    int mode; /* 0=loop, 1=escape */
+} sphere_cme_emitter;
+
+typedef struct sphere_cme_particle {
+    int active;
+    float px;
+    float py;
+    float pz;
+    float vx;
+    float vy;
+    float vz;
+    float age_s;
+    float life_s;
+    float seed;
+    float size_t;
+    float heat;
+    float alpha;
+    float brightness;
+    float height_t;
+    float fx;
+    float fy;
+    float fz;
+    float sx;
+    float sy;
+    float sz;
+    float tx;
+    float ty;
+    float tz;
+    int mode; /* 0=loop, 1=arch, 2=vent */
+} sphere_cme_particle;
+
+typedef struct sphere_cme_hotspot_candidate {
+    int idx;
+    float score;
+} sphere_cme_hotspot_candidate;
+
 typedef struct fire_bg_particle {
     int active;
     int kind; /* 0=ember, 1=ash */
@@ -202,6 +300,17 @@ typedef struct forest_bg_spore_cluster {
 typedef struct particle_pc {
     float params[4]; /* x=viewport_width, y=viewport_height, z=core_gain, w=trail_gain */
 } particle_pc;
+
+typedef struct sphere_particle_pc {
+    float p0[4]; /* x=viewport_width, y=viewport_height, z=time_s, w=glow_gain */
+    float p1[4]; /* x=core_gain, y=rim_gain, z=twinkle_gain, w=reserved */
+    float p2[4]; /* x=center_x, y=center_y, z=sphere_radius_px, w=dpi */
+    float p3[4]; /* sphere orientation quaternion wxyz */
+    float top[4];
+    float mid[4];
+    float low[4];
+    float rim[4];
+} sphere_particle_pc;
 
 typedef struct wormhole_line_pc {
     float params[4]; /* x=viewport_width, y=viewport_height, z=intensity */
@@ -437,6 +546,9 @@ typedef struct app {
     VkDescriptorSet particle_desc_set;
     VkPipeline particle_pipeline;
     VkPipeline particle_bloom_pipeline;
+    VkPipelineLayout sphere_particle_layout;
+    VkPipeline sphere_particle_pipeline;
+    VkPipeline sphere_particle_bloom_pipeline;
     VkPipelineLayout wormhole_line_layout;
     VkPipeline wormhole_depth_pipeline;
     VkPipeline wormhole_line_pipeline;
@@ -545,6 +657,19 @@ typedef struct app {
     VkDeviceMemory particle_instance_memory;
     void* particle_instance_map;
     uint32_t particle_instance_count;
+    VkBuffer sphere_particle_instance_buffer;
+    VkDeviceMemory sphere_particle_instance_memory;
+    void* sphere_particle_instance_map;
+    uint32_t sphere_particle_instance_count;
+    VkBuffer sphere_particle_dynamic_buffer;
+    VkDeviceMemory sphere_particle_dynamic_memory;
+    void* sphere_particle_dynamic_map;
+    uint32_t sphere_particle_dynamic_count;
+    sphere_cme_emitter sphere_cme_emitters[SPHERE_CME_EMITTER_CAP];
+    sphere_cme_particle sphere_cme_particles[SPHERE_CME_PARTICLE_CAP];
+    int sphere_cme_initialized;
+    float sphere_cme_last_t;
+    uint32_t sphere_cme_rng;
     fire_bg_particle fire_bg_particles[FIRE_BG_PARTICLE_CAP];
     int fire_bg_initialized;
     float fire_bg_last_t;
@@ -1657,6 +1782,15 @@ static int handle_terrain_tuning_key(app* a, SDL_Keycode key) {
 
 static float perlin_fade(float t) {
     return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+}
+
+static float smoothstepf(float edge0, float edge1, float x) {
+    float t;
+    if (edge0 == edge1) {
+        return (x < edge0) ? 0.0f : 1.0f;
+    }
+    t = clampf((x - edge0) / (edge1 - edge0), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
 }
 
 static uint32_t hash_u32(uint32_t x) {
@@ -3068,10 +3202,13 @@ static void set_tty_message(app* a, const char* msg);
 static void update_gpu_high_plains_vertices(app* a);
 static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd);
 static void update_gpu_particle_instances(app* a, int emit_runtime_particles, int emit_level_smoke);
+static void update_gpu_sphere_particle_instances(app* a);
 static void record_gpu_particles(
     app* a, VkCommandBuffer cmd, int emit_runtime_particles, int emit_level_smoke, const VkRect2D* opt_scissor
 );
 static void record_gpu_particles_bloom(app* a, VkCommandBuffer cmd, int emit_runtime_particles, int emit_level_smoke);
+static void record_gpu_sphere_particles(app* a, VkCommandBuffer cmd);
+static void record_gpu_sphere_particles_bloom(app* a, VkCommandBuffer cmd);
 static void record_gpu_wormhole(app* a, VkCommandBuffer cmd);
 static void record_gpu_radar(app* a, VkCommandBuffer cmd);
 static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t);
@@ -5426,6 +5563,1206 @@ static float hash12_cpu(float x, float y) {
     return fractf_local((p3x + p3y) * p3z);
 }
 
+typedef struct sphere_cpu_v3 {
+    float x;
+    float y;
+    float z;
+} sphere_cpu_v3;
+
+typedef struct sphere_particle_seed {
+    sphere_cpu_v3 p;
+    sphere_cpu_v3 t0;
+    sphere_cpu_v3 t1;
+    float seed;
+    float noise0;
+    float noise1;
+    float noise2;
+    float pocket;
+    float dither;
+    float shell_base;
+    float grad_u;
+    float grad_v;
+} sphere_particle_seed;
+
+typedef struct sphere_particle_terrain_sample {
+    float noise0;
+    float noise1;
+    float noise2;
+    float pocket;
+    float shell_base;
+} sphere_particle_terrain_sample;
+
+static sphere_particle_seed g_sphere_particle_seeds[SPHERE_PARTICLE_SHELL_SEED_COUNT];
+static int g_sphere_particle_seeds_ready = 0;
+static float sphere_particle_field_noise(sphere_cpu_v3 p, float phase);
+
+static int render_style_uses_sphere_mode(int render_style) {
+    return render_style == LEVEL_RENDER_SPHERE || render_style == LEVEL_RENDER_SPHERE_PARTICLE;
+}
+
+static int gameplay_uses_particle_sphere(const game_state* g) {
+    return g && g->render_style == LEVEL_RENDER_SPHERE_PARTICLE;
+}
+
+static sphere_cpu_v3 sphere_cpu_v3_make(float x, float y, float z) {
+    sphere_cpu_v3 v;
+    v.x = x;
+    v.y = y;
+    v.z = z;
+    return v;
+}
+
+static sphere_cpu_v3 sphere_cpu_v3_add(sphere_cpu_v3 a, sphere_cpu_v3 b) {
+    return sphere_cpu_v3_make(a.x + b.x, a.y + b.y, a.z + b.z);
+}
+
+static sphere_cpu_v3 sphere_cpu_v3_sub(sphere_cpu_v3 a, sphere_cpu_v3 b) {
+    return sphere_cpu_v3_make(a.x - b.x, a.y - b.y, a.z - b.z);
+}
+
+static sphere_cpu_v3 sphere_cpu_v3_scale(sphere_cpu_v3 v, float s) {
+    return sphere_cpu_v3_make(v.x * s, v.y * s, v.z * s);
+}
+
+static sphere_cpu_v3 sphere_cpu_v3_lerp(sphere_cpu_v3 a, sphere_cpu_v3 b, float t) {
+    return sphere_cpu_v3_make(
+        a.x + (b.x - a.x) * t,
+        a.y + (b.y - a.y) * t,
+        a.z + (b.z - a.z) * t
+    );
+}
+
+static float sphere_cpu_v3_dot(sphere_cpu_v3 a, sphere_cpu_v3 b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+static sphere_cpu_v3 sphere_cpu_v3_cross(sphere_cpu_v3 a, sphere_cpu_v3 b) {
+    return sphere_cpu_v3_make(
+        a.y * b.z - a.z * b.y,
+        a.z * b.x - a.x * b.z,
+        a.x * b.y - a.y * b.x
+    );
+}
+
+static sphere_cpu_v3 sphere_cpu_v3_norm_safe(sphere_cpu_v3 v) {
+    const float len2 = sphere_cpu_v3_dot(v, v);
+    if (len2 <= 1e-12f) {
+        return sphere_cpu_v3_make(0.0f, 0.0f, 1.0f);
+    }
+    return sphere_cpu_v3_scale(v, 1.0f / sqrtf(len2));
+}
+
+static float sphere_cpu_v3_len(sphere_cpu_v3 v) {
+    return sqrtf(sphere_cpu_v3_dot(v, v));
+}
+
+static sphere_cpu_v3 sphere_cpu_v3_nlerp(sphere_cpu_v3 a, sphere_cpu_v3 b, float t) {
+    return sphere_cpu_v3_norm_safe(sphere_cpu_v3_lerp(a, b, t));
+}
+
+static sphere_cpu_v3 sphere_cme_arc_position(
+    sphere_cpu_v3 source_dir,
+    sphere_cpu_v3 target_dir,
+    sphere_cpu_v3 plane_normal,
+    float t,
+    float apex,
+    float width
+) {
+    const float u = smoothstepf(0.0f, 1.0f, clampf(t, 0.0f, 1.0f));
+    const float arch = sinf(u * 3.14159265f);
+    const float reconverge = 1.0f - smoothstepf(0.46f, 1.0f, u);
+    sphere_cpu_v3 base = sphere_cpu_v3_nlerp(source_dir, target_dir, u);
+    sphere_cpu_v3 dir = sphere_cpu_v3_norm_safe(sphere_cpu_v3_add(
+        base,
+        sphere_cpu_v3_scale(plane_normal, width * arch * arch * reconverge)
+    ));
+    return sphere_cpu_v3_scale(dir, 1.0f + apex * powf(arch, 1.2f));
+}
+
+static void sphere_cpu_v3_tangent_basis(sphere_cpu_v3 n, sphere_cpu_v3* t0, sphere_cpu_v3* t1) {
+    const sphere_cpu_v3 up = (fabsf(n.y) < 0.85f)
+        ? sphere_cpu_v3_make(0.0f, 1.0f, 0.0f)
+        : sphere_cpu_v3_make(1.0f, 0.0f, 0.0f);
+    const sphere_cpu_v3 a = sphere_cpu_v3_norm_safe(sphere_cpu_v3_cross(up, n));
+    const sphere_cpu_v3 b = sphere_cpu_v3_norm_safe(sphere_cpu_v3_cross(n, a));
+    if (t0) *t0 = a;
+    if (t1) *t1 = b;
+}
+
+static sphere_cpu_v3 quat_rotate_sphere_cpu_v3(const float q[4], sphere_cpu_v3 v) {
+    const sphere_cpu_v3 qv = sphere_cpu_v3_make(q[1], q[2], q[3]);
+    const sphere_cpu_v3 t = sphere_cpu_v3_scale(sphere_cpu_v3_cross(qv, v), 2.0f);
+    return sphere_cpu_v3_add(v, sphere_cpu_v3_add(sphere_cpu_v3_scale(t, q[0]), sphere_cpu_v3_cross(qv, t)));
+}
+
+static float hash31_cpu(float x, float y, float z) {
+    return fractf_local(sinf(x * 127.1f + y * 311.7f + z * 74.7f) * 43758.5453f);
+}
+
+static float value_noise3_cpu(sphere_cpu_v3 p) {
+    const float fx = floorf(p.x);
+    const float fy = floorf(p.y);
+    const float fz = floorf(p.z);
+    const float tx = p.x - fx;
+    const float ty = p.y - fy;
+    const float tz = p.z - fz;
+    const float sx = tx * tx * (3.0f - 2.0f * tx);
+    const float sy = ty * ty * (3.0f - 2.0f * ty);
+    const float sz = tz * tz * (3.0f - 2.0f * tz);
+    const float v000 = hash31_cpu(fx + 0.0f, fy + 0.0f, fz + 0.0f);
+    const float v100 = hash31_cpu(fx + 1.0f, fy + 0.0f, fz + 0.0f);
+    const float v010 = hash31_cpu(fx + 0.0f, fy + 1.0f, fz + 0.0f);
+    const float v110 = hash31_cpu(fx + 1.0f, fy + 1.0f, fz + 0.0f);
+    const float v001 = hash31_cpu(fx + 0.0f, fy + 0.0f, fz + 1.0f);
+    const float v101 = hash31_cpu(fx + 1.0f, fy + 0.0f, fz + 1.0f);
+    const float v011 = hash31_cpu(fx + 0.0f, fy + 1.0f, fz + 1.0f);
+    const float v111 = hash31_cpu(fx + 1.0f, fy + 1.0f, fz + 1.0f);
+    const float x00 = lerpf(v000, v100, sx);
+    const float x10 = lerpf(v010, v110, sx);
+    const float x01 = lerpf(v001, v101, sx);
+    const float x11 = lerpf(v011, v111, sx);
+    const float y0 = lerpf(x00, x10, sy);
+    const float y1 = lerpf(x01, x11, sy);
+    return lerpf(y0, y1, sz);
+}
+
+static float sphere_particle_ridged_mf_cpu(sphere_cpu_v3 p) {
+    float sum = 0.0f;
+    float amp = 0.72f;
+    float weight = 1.0f;
+    sphere_cpu_v3 q = p;
+
+    for (int octave = 0; octave < 5; ++octave) {
+        const float n = value_noise3_cpu(q) * 2.0f - 1.0f;
+        float ridge = 1.0f - fabsf(n);
+        ridge *= ridge;
+        ridge *= weight;
+        weight = clampf(ridge * 1.8f, 0.0f, 1.0f);
+        sum += ridge * amp;
+        q = sphere_cpu_v3_scale(q, 2.03f);
+        amp *= 0.56f;
+    }
+    return clampf(sum * 1.22f, 0.0f, 1.0f);
+}
+
+static void sphere_particle_worley_cpu(sphere_cpu_v3 p, float freq, float* out_f1, float* out_f2) {
+    const sphere_cpu_v3 q = sphere_cpu_v3_scale(p, freq);
+    const int ix = (int)floorf(q.x);
+    const int iy = (int)floorf(q.y);
+    const int iz = (int)floorf(q.z);
+    float f1 = FLT_MAX;
+    float f2 = FLT_MAX;
+
+    for (int dz = -1; dz <= 1; ++dz) {
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                const float cx = (float)(ix + dx);
+                const float cy = (float)(iy + dy);
+                const float cz = (float)(iz + dz);
+                const sphere_cpu_v3 cell = sphere_cpu_v3_make(
+                    cx + hash31_cpu(cx, cy, cz),
+                    cy + hash31_cpu(cx + 19.0f, cy + 7.0f, cz + 3.0f),
+                    cz + hash31_cpu(cx + 43.0f, cy + 11.0f, cz + 29.0f)
+                );
+                const sphere_cpu_v3 d = sphere_cpu_v3_sub(cell, q);
+                const float dist2 = sphere_cpu_v3_dot(d, d);
+                if (dist2 < f1) {
+                    f2 = f1;
+                    f1 = dist2;
+                } else if (dist2 < f2) {
+                    f2 = dist2;
+                }
+            }
+        }
+    }
+
+    if (out_f1) *out_f1 = sqrtf(f1);
+    if (out_f2) *out_f2 = sqrtf(f2);
+}
+
+static float sphere_particle_terrace_cpu(float x, float steps) {
+    const float s = clampf(x, 0.0f, 1.0f) * steps;
+    const float i = floorf(s);
+    const float f = s - i;
+    const float t = smoothstepf(0.82f, 1.0f, f);
+    return clampf((i + t) / steps, 0.0f, 1.0f);
+}
+
+static sphere_particle_terrain_sample sphere_particle_sample_terrain(sphere_cpu_v3 p, float seed_phase) {
+    sphere_particle_terrain_sample s;
+    float crater_f1_a, crater_f2_a;
+    float crater_f1_b, crater_f2_b;
+    const float ridge = sphere_particle_ridged_mf_cpu(sphere_cpu_v3_scale(p, 3.6f));
+    const float ridge_hi = sphere_particle_ridged_mf_cpu(sphere_cpu_v3_scale(
+        sphere_cpu_v3_make(p.z, p.x, p.y),
+        7.8f
+    ));
+    const float base_soft = sphere_particle_field_noise(p, seed_phase);
+    float crater_ring_a;
+    float crater_ring_b;
+    float crater_fault;
+    float basin;
+    float high_prom;
+    float terrain;
+
+    sphere_particle_worley_cpu(p, 8.5f, &crater_f1_a, &crater_f2_a);
+    sphere_particle_worley_cpu(sphere_cpu_v3_make(p.z, p.x, p.y), 15.0f, &crater_f1_b, &crater_f2_b);
+
+    crater_ring_a = expf(-powf((crater_f1_a - 0.34f) / 0.12f, 2.0f));
+    crater_ring_b = expf(-powf((crater_f1_b - 0.28f) / 0.09f, 2.0f));
+    crater_fault = clampf((crater_f2_a - crater_f1_a) * 2.9f, 0.0f, 1.0f);
+    basin = 1.0f - smoothstepf(0.16f, 0.42f, crater_f1_a);
+    high_prom = smoothstepf(0.66f, 0.92f, ridge * 0.82f + ridge_hi * 0.18f);
+    terrain =
+        ridge * 0.46f +
+        ridge_hi * 0.18f +
+        crater_ring_a * 0.46f +
+        crater_ring_b * 0.28f +
+        crater_fault * 0.14f +
+        base_soft * 0.10f -
+        basin * 0.20f;
+    terrain = sphere_particle_terrace_cpu(clampf(terrain, 0.0f, 1.0f), 7.0f);
+
+    memset(&s, 0, sizeof(s));
+    s.noise0 = ridge;
+    s.noise1 = crater_ring_a;
+    s.noise2 = crater_fault;
+    s.pocket = clampf(
+        high_prom * 0.62f +
+        crater_ring_b * 0.20f +
+        ridge_hi * 0.12f +
+        base_soft * 0.06f,
+        0.0f,
+        1.0f
+    );
+    s.shell_base =
+        terrain * 0.20f +
+        high_prom * 0.11f -
+        basin * 0.07f +
+        crater_fault * 0.04f;
+    return s;
+}
+
+static float sphere_particle_sample_lift(sphere_particle_terrain_sample s) {
+    return s.shell_base * 1.46f +
+           s.pocket * 0.022f +
+           fmaxf(0.0f, s.noise2 - 0.58f) * 0.030f;
+}
+
+static void ensure_sphere_particle_seeds(void) {
+    if (g_sphere_particle_seeds_ready) {
+        return;
+    }
+    {
+        const float golden = 2.39996322972865332f;
+        for (int idx = 0; idx < SPHERE_PARTICLE_SHELL_SEED_COUNT; ++idx) {
+            const float u = ((float)idx + 0.5f) / (float)SPHERE_PARTICLE_SHELL_SEED_COUNT;
+            const float y = 1.0f - 2.0f * u;
+            const float r = sqrtf(fmaxf(0.0f, 1.0f - y * y));
+            const float phi = golden * (float)idx;
+            sphere_cpu_v3 p = sphere_cpu_v3_make(cosf(phi) * r, y, sinf(phi) * r);
+            sphere_cpu_v3 t0;
+            sphere_cpu_v3 t1;
+            const float seed = hash12_cpu((float)idx * 0.443f, 17.0f + (float)idx * 0.071f);
+            const float seed_phase = seed * 0.73f + 0.11f;
+            const float j0 = hash12_cpu((float)idx * 0.173f, 1.913f) - 0.5f;
+            const float j1 = hash12_cpu((float)idx * 0.619f, 7.173f) - 0.5f;
+            sphere_cpu_v3_tangent_basis(p, &t0, &t1);
+            p = sphere_cpu_v3_norm_safe(sphere_cpu_v3_add(
+                p,
+                sphere_cpu_v3_add(
+                    sphere_cpu_v3_scale(t0, j0 * 0.022f),
+                    sphere_cpu_v3_scale(t1, j1 * 0.022f)
+                )
+            ));
+            g_sphere_particle_seeds[idx].p = p;
+            g_sphere_particle_seeds[idx].t0 = t0;
+            g_sphere_particle_seeds[idx].t1 = t1;
+            g_sphere_particle_seeds[idx].seed = seed;
+            {
+                const float grad_eps = 0.028f;
+                const sphere_particle_terrain_sample s = sphere_particle_sample_terrain(p, seed_phase);
+                const float h0 = sphere_particle_sample_lift(s);
+                const sphere_cpu_v3 pu = sphere_cpu_v3_norm_safe(sphere_cpu_v3_add(p, sphere_cpu_v3_scale(t0, grad_eps)));
+                const sphere_cpu_v3 pv = sphere_cpu_v3_norm_safe(sphere_cpu_v3_add(p, sphere_cpu_v3_scale(t1, grad_eps)));
+                const float hu = sphere_particle_sample_lift(sphere_particle_sample_terrain(pu, seed_phase));
+                const float hv = sphere_particle_sample_lift(sphere_particle_sample_terrain(pv, seed_phase));
+
+                g_sphere_particle_seeds[idx].noise0 = s.noise0;
+                g_sphere_particle_seeds[idx].noise1 = s.noise1;
+                g_sphere_particle_seeds[idx].noise2 = s.noise2;
+                g_sphere_particle_seeds[idx].pocket = s.pocket;
+                g_sphere_particle_seeds[idx].shell_base = s.shell_base;
+                g_sphere_particle_seeds[idx].grad_u = clampf((hu - h0) / grad_eps, -1.5f, 1.5f);
+                g_sphere_particle_seeds[idx].grad_v = clampf((hv - h0) / grad_eps, -1.5f, 1.5f);
+            }
+            g_sphere_particle_seeds[idx].dither = fractf_local(
+                seed * 91.73f +
+                g_sphere_particle_seeds[idx].noise1 * 13.41f +
+                g_sphere_particle_seeds[idx].noise2 * 7.19f
+            );
+        }
+    }
+    g_sphere_particle_seeds_ready = 1;
+}
+
+static float sphere_particle_field_noise(sphere_cpu_v3 p, float phase) {
+    const float a = sample_shared_noise_channel(
+        p.x * 0.37f + p.z * 0.19f + 0.5f + phase * 0.013f,
+        p.y * 0.31f - p.x * 0.17f + 0.5f,
+        0
+    );
+    const float b = sample_shared_noise_channel(
+        p.z * 0.41f - p.y * 0.23f + 0.5f,
+        p.x * 0.29f + p.y * 0.37f + 0.5f - phase * 0.011f,
+        1
+    );
+    const float c = sample_shared_noise_channel(
+        p.y * 0.43f + p.z * 0.27f + 0.5f,
+        p.x * 0.47f - p.z * 0.13f + 0.5f + phase * 0.007f,
+        2
+    );
+    return clampf(a * 0.46f + b * 0.34f + c * 0.20f, 0.0f, 1.0f);
+}
+
+static void build_sphere_particle_static_instances(
+    sphere_particle_instance* out,
+    uint32_t capacity,
+    uint32_t* out_count
+) {
+    uint32_t n = 0u;
+    float min_h = FLT_MAX;
+    float max_h = -FLT_MAX;
+    if (out_count) {
+        *out_count = 0u;
+    }
+    ensure_sphere_particle_seeds();
+    if (!out || capacity == 0u || !out_count) {
+        return;
+    }
+
+    for (int i = 0; i < SPHERE_PARTICLE_SHELL_SEED_COUNT; ++i) {
+        const sphere_particle_seed* s = &g_sphere_particle_seeds[i];
+        const float static_shell_lift =
+            s->shell_base * 1.46f +
+            s->pocket * 0.022f +
+            fmaxf(0.0f, s->noise2 - 0.58f) * 0.030f;
+        if (static_shell_lift < min_h) min_h = static_shell_lift;
+        if (static_shell_lift > max_h) max_h = static_shell_lift;
+    }
+
+    {
+        const float inv_h = (max_h > min_h) ? (1.0f / (max_h - min_h)) : 0.0f;
+
+        for (int i = 0; i < SPHERE_PARTICLE_SHELL_SEED_COUNT && n < capacity; ++i) {
+            const sphere_particle_seed* s = &g_sphere_particle_seeds[i];
+            const float static_shell_lift =
+                s->shell_base * 1.46f +
+                s->pocket * 0.022f +
+                fmaxf(0.0f, s->noise2 - 0.58f) * 0.030f;
+            sphere_particle_instance inst;
+            memset(&inst, 0, sizeof(inst));
+            inst.nx = s->p.x;
+            inst.ny = s->p.y;
+            inst.nz = s->p.z;
+            inst.t0x = s->t0.x;
+            inst.t0y = s->t0.y;
+            inst.t0z = s->t0.z;
+            inst.seed = s->seed;
+            inst.t1x = s->t1.x;
+            inst.t1y = s->t1.y;
+            inst.t1z = s->t1.z;
+            inst.noise0 = s->noise0;
+            inst.noise1 = s->noise1;
+            inst.noise2 = s->noise2;
+            inst.pocket = s->pocket;
+            inst.dither = s->dither;
+            inst.shell_base = s->shell_base;
+            inst.height_t = clampf((static_shell_lift - min_h) * inv_h, 0.0f, 1.0f);
+            inst.reserved1 = s->grad_u;
+            inst.reserved2 = s->grad_v;
+
+            inst.variant = (float)SPHERE_PARTICLE_VARIANT_CORE;
+            out[n++] = inst;
+
+            if (n < capacity && ((i % 19) == 0) && s->pocket > 0.58f) {
+                inst.variant = (float)SPHERE_PARTICLE_VARIANT_HAZE;
+                out[n++] = inst;
+            }
+            if (n < capacity && s->dither < 0.06f && s->pocket > 0.50f) {
+                inst.variant = (float)SPHERE_PARTICLE_VARIANT_CLUMP;
+                out[n++] = inst;
+            }
+            if (n < capacity && (((uint32_t)i + (uint32_t)(s->seed * 131.0f)) & 3u) == 0u && s->pocket > 0.40f) {
+                inst.variant = (float)SPHERE_PARTICLE_VARIANT_CORONA;
+                out[n++] = inst;
+            }
+        }
+    }
+    *out_count = n;
+}
+
+static void log_sphere_particle_height_stats(void) {
+    float min_h = FLT_MAX;
+    float max_h = -FLT_MAX;
+    float sum_h = 0.0f;
+    int bins[8] = {0};
+
+    ensure_sphere_particle_seeds();
+    for (int i = 0; i < SPHERE_PARTICLE_SHELL_SEED_COUNT; ++i) {
+        const sphere_particle_seed* s = &g_sphere_particle_seeds[i];
+        const float static_shell_lift =
+            s->shell_base * 1.46f +
+            s->pocket * 0.022f +
+            fmaxf(0.0f, s->noise2 - 0.58f) * 0.030f;
+        const float height_t = clampf((static_shell_lift + 0.035f) / 0.24f, 0.0f, 1.0f);
+        int bin = (int)floorf(height_t * 8.0f);
+        if (bin < 0) bin = 0;
+        if (bin > 7) bin = 7;
+        bins[bin] += 1;
+        if (static_shell_lift < min_h) min_h = static_shell_lift;
+        if (static_shell_lift > max_h) max_h = static_shell_lift;
+        sum_h += static_shell_lift;
+    }
+
+    fprintf(
+        stderr,
+        "[sphere_particle_height] seeds=%d lift[min=%.4f avg=%.4f max=%.4f span=%.4f] "
+        "bins=[%d %d %d %d %d %d %d %d]\n",
+        SPHERE_PARTICLE_SHELL_SEED_COUNT,
+        min_h,
+        sum_h / (float)SPHERE_PARTICLE_SHELL_SEED_COUNT,
+        max_h,
+        max_h - min_h,
+        bins[0], bins[1], bins[2], bins[3], bins[4], bins[5], bins[6], bins[7]
+    );
+}
+
+static int upload_sphere_particle_static_buffer(app* a) {
+    VkBuffer staging = VK_NULL_HANDLE;
+    VkDeviceMemory staging_mem = VK_NULL_HANDLE;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    sphere_particle_instance* cpu_instances = NULL;
+    uint32_t instance_count = 0u;
+    VkDeviceSize bytes;
+    void* mapped = NULL;
+
+    if (!a) {
+        return 0;
+    }
+
+    cpu_instances = (sphere_particle_instance*)malloc(
+        (size_t)SPHERE_PARTICLE_MAX_INSTANCES * sizeof(sphere_particle_instance)
+    );
+    if (!cpu_instances) {
+        return 0;
+    }
+    build_sphere_particle_static_instances(cpu_instances, SPHERE_PARTICLE_MAX_INSTANCES, &instance_count);
+    log_sphere_particle_height_stats();
+    if (instance_count == 0u) {
+        free(cpu_instances);
+        return 0;
+    }
+
+    bytes = (VkDeviceSize)instance_count * sizeof(sphere_particle_instance);
+    if (!create_buffer(
+            a, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &staging, &staging_mem)) {
+        free(cpu_instances);
+        return 0;
+    }
+    if (!check_vk(vkMapMemory(a->device, staging_mem, 0, bytes, 0, &mapped), "vkMapMemory(sphere particle staging)")) {
+        vkDestroyBuffer(a->device, staging, NULL);
+        vkFreeMemory(a->device, staging_mem, NULL);
+        free(cpu_instances);
+        return 0;
+    }
+    memcpy(mapped, cpu_instances, (size_t)bytes);
+    vkUnmapMemory(a->device, staging_mem);
+    free(cpu_instances);
+
+    if (!create_buffer(
+            a, bytes,
+            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            &a->sphere_particle_instance_buffer, &a->sphere_particle_instance_memory)) {
+        vkDestroyBuffer(a->device, staging, NULL);
+        vkFreeMemory(a->device, staging_mem, NULL);
+        return 0;
+    }
+    a->sphere_particle_instance_map = NULL;
+    a->sphere_particle_instance_count = instance_count;
+
+    if (!begin_one_shot_commands(a, &cmd)) {
+        vkDestroyBuffer(a->device, staging, NULL);
+        vkFreeMemory(a->device, staging_mem, NULL);
+        return 0;
+    }
+    {
+        VkBufferCopy copy = {
+            .srcOffset = 0,
+            .dstOffset = 0,
+            .size = bytes
+        };
+        vkCmdCopyBuffer(cmd, staging, a->sphere_particle_instance_buffer, 1, &copy);
+    }
+    if (!end_one_shot_commands(a, &cmd)) {
+        vkDestroyBuffer(a->device, staging, NULL);
+        vkFreeMemory(a->device, staging_mem, NULL);
+        return 0;
+    }
+
+    vkDestroyBuffer(a->device, staging, NULL);
+    vkFreeMemory(a->device, staging_mem, NULL);
+    return 1;
+}
+
+static uint32_t sphere_cme_rand_u32(app* a) {
+    uint32_t x;
+    if (!a) {
+        return 0u;
+    }
+    x = a->sphere_cme_rng;
+    if (x == 0u) {
+        x = 0x51f2d6b3u;
+    }
+    x = hash_u32(x + 0x9e3779b9u + 0x7f4a7c15u);
+    a->sphere_cme_rng = x;
+    return x;
+}
+
+static float sphere_cme_rand01(app* a) {
+    const uint32_t r = sphere_cme_rand_u32(a);
+    return (float)(r & 0x00ffffffu) / 16777215.0f;
+}
+
+static void sphere_cme_clear_runtime(app* a) {
+    if (!a) {
+        return;
+    }
+    memset(a->sphere_cme_emitters, 0, sizeof(a->sphere_cme_emitters));
+    memset(a->sphere_cme_particles, 0, sizeof(a->sphere_cme_particles));
+    a->sphere_cme_initialized = 0;
+    a->sphere_cme_last_t = 0.0f;
+    a->sphere_particle_dynamic_count = 0u;
+}
+
+static float sphere_cme_hotspot_score(const sphere_particle_seed* s, float height_t) {
+    float score;
+    if (!s) {
+        return 0.0f;
+    }
+    score =
+        height_t * 0.46f +
+        s->pocket * 0.24f +
+        s->noise0 * 0.14f +
+        s->noise1 * 0.10f +
+        s->noise2 * 0.06f;
+    return clampf(score, 0.0f, 1.0f);
+}
+
+static void sphere_cme_insert_candidate(
+    sphere_cme_hotspot_candidate* cands,
+    int* count,
+    int cap,
+    int idx,
+    float score
+) {
+    int n;
+    int pos;
+    if (!cands || !count || cap <= 0) {
+        return;
+    }
+
+    n = *count;
+    if (n == cap && score <= cands[n - 1].score) {
+        return;
+    }
+    if (n < cap) {
+        n += 1;
+        *count = n;
+    }
+    pos = n - 1;
+    while (pos > 0 && cands[pos - 1].score < score) {
+        cands[pos] = cands[pos - 1];
+        pos -= 1;
+    }
+    cands[pos].idx = idx;
+    cands[pos].score = score;
+}
+
+static void sphere_cme_begin_eruption(app* a, sphere_cme_emitter* em) {
+    if (!a || !em || !em->active) {
+        return;
+    }
+    em->erupting = 1;
+    em->erupt_age_s = 0.0f;
+    em->erupt_duration_s = 1.8f + em->strength * 2.6f + sphere_cme_rand01(a) * 1.6f;
+    em->spawn_accum = 0.0f;
+}
+
+static void sphere_cme_schedule_quiet(app* a, sphere_cme_emitter* em) {
+    float quiet_span;
+    if (!a || !em || !em->active) {
+        return;
+    }
+    em->erupting = 0;
+    em->erupt_age_s = 0.0f;
+    em->erupt_duration_s = 0.0f;
+    em->spawn_accum = 0.0f;
+    quiet_span = fmaxf(0.0f, em->quiet_max_s - em->quiet_min_s);
+    em->cooldown_s = em->quiet_min_s + quiet_span * sphere_cme_rand01(a);
+}
+
+static float sphere_cme_emitter_rim_preference(const app* a, const sphere_cme_emitter* em) {
+    sphere_cpu_v3 local;
+    sphere_cpu_v3 view;
+    float z;
+    float rim;
+    if (!a || !em || !em->active) {
+        return 0.0f;
+    }
+    local = sphere_cpu_v3_make(em->px, em->py, em->pz);
+    view = quat_rotate_sphere_cpu_v3(a->game.sphere_visual_q, local);
+    z = view.z;
+    if (z <= 0.0f) {
+        return 0.0f;
+    }
+    rim = 1.0f - smoothstepf(0.06f, 0.34f, z);
+    return clampf(rim, 0.0f, 1.0f);
+}
+
+static void sphere_cme_spawn_packet(app* a, const sphere_cme_emitter* em, float erupt_envelope) {
+    sphere_cpu_v3 n;
+    sphere_cpu_v3 t0;
+    sphere_cpu_v3 t1;
+    sphere_cpu_v3 center_dir;
+    sphere_cpu_v3 side_dir;
+    sphere_cpu_v3 packet_target_dir;
+    float phase;
+    float base_radial;
+    float base_tangent;
+    float packet_fan;
+    float lift;
+    int packet_count;
+    int packet_mode;
+
+    if (!a || !em || !em->active || erupt_envelope <= 0.02f) {
+        return;
+    }
+
+    n = sphere_cpu_v3_make(em->px, em->py, em->pz);
+    t0 = sphere_cpu_v3_make(em->t0x, em->t0y, em->t0z);
+    t1 = sphere_cpu_v3_make(em->t1x, em->t1y, em->t1z);
+    phase =
+        em->arc_bias +
+        a->game.t * (0.18f + 0.15f * em->strength) +
+        (sphere_cme_rand01(a) * 2.0f - 1.0f) * (0.26f + 0.34f * erupt_envelope);
+    center_dir = sphere_cpu_v3_norm_safe(sphere_cpu_v3_add(
+        sphere_cpu_v3_scale(t0, cosf(phase)),
+        sphere_cpu_v3_scale(t1, sinf(phase))
+    ));
+    side_dir = sphere_cpu_v3_norm_safe(sphere_cpu_v3_cross(n, center_dir));
+    packet_fan = (0.12f + 0.32f * erupt_envelope) * (0.75f + 0.65f * em->strength);
+    base_radial = (em->mode == 0)
+        ? (0.050f + 0.030f * erupt_envelope + 0.020f * sphere_cme_rand01(a))
+        : (0.070f + 0.034f * erupt_envelope + 0.026f * sphere_cme_rand01(a));
+    base_tangent = (em->mode == 0)
+        ? (0.105f + 0.055f * erupt_envelope + 0.040f * sphere_cme_rand01(a))
+        : (0.060f + 0.034f * erupt_envelope + 0.026f * sphere_cme_rand01(a));
+    lift = 1.003f + em->height_t * 0.010f + erupt_envelope * 0.010f + sphere_cme_rand01(a) * 0.005f;
+    packet_count = 5 + (int)(erupt_envelope * (7.0f + 8.0f * em->strength));
+    if (em->mode != 0) {
+        packet_count += 2;
+    }
+    packet_mode = 2;
+    packet_target_dir = n;
+
+    for (int b = 0; b < packet_count; ++b) {
+        for (int i = 0; i < SPHERE_CME_PARTICLE_CAP; ++i) {
+            sphere_cme_particle* p = &a->sphere_cme_particles[i];
+            sphere_cpu_v3 pos;
+            sphere_cpu_v3 vel;
+            sphere_cpu_v3 tangent_dir;
+            sphere_cpu_v3 field_side;
+            float fan;
+            float curl;
+            float radial_jitter;
+            float tangent_jitter;
+            if (p->active) {
+                continue;
+            }
+
+            fan = (sphere_cme_rand01(a) + sphere_cme_rand01(a) - 1.0f) * packet_fan;
+            curl = (sphere_cme_rand01(a) * 2.0f - 1.0f);
+            radial_jitter = 0.82f + sphere_cme_rand01(a) * 0.45f;
+            tangent_jitter = 0.70f + sphere_cme_rand01(a) * 0.65f;
+            tangent_dir = sphere_cpu_v3_norm_safe(sphere_cpu_v3_add(
+                center_dir,
+                sphere_cpu_v3_add(
+                    sphere_cpu_v3_scale(side_dir, fan),
+                    sphere_cpu_v3_scale(n, curl * 0.04f)
+                )
+            ));
+            field_side = sphere_cpu_v3_norm_safe(sphere_cpu_v3_cross(n, center_dir));
+
+            pos = sphere_cpu_v3_add(
+                sphere_cpu_v3_scale(n, lift),
+                sphere_cpu_v3_add(
+                    sphere_cpu_v3_scale(center_dir, fan * 0.010f * (0.8f + 0.6f * em->strength)),
+                    sphere_cpu_v3_scale(side_dir, curl * 0.008f)
+                )
+            );
+            vel = sphere_cpu_v3_add(
+                sphere_cpu_v3_scale(n, (0.095f + 0.070f * erupt_envelope) * radial_jitter),
+                sphere_cpu_v3_add(
+                    sphere_cpu_v3_scale(center_dir, (0.028f + 0.028f * erupt_envelope) * (sphere_cme_rand01(a) * 2.0f - 1.0f)),
+                    sphere_cpu_v3_scale(side_dir, fan * 0.026f)
+                )
+            );
+
+            p->active = 1;
+            p->px = pos.x;
+            p->py = pos.y;
+            p->pz = pos.z;
+            p->vx = vel.x;
+            p->vy = vel.y;
+            p->vz = vel.z;
+            p->age_s = 0.0f;
+            p->life_s = 1.7f + erupt_envelope * 0.8f + sphere_cme_rand01(a) * 0.55f;
+            p->seed = em->seed + sphere_cme_rand01(a) * 0.53f;
+            p->size_t = clampf(0.14f + 0.42f * sphere_cme_rand01(a) + erupt_envelope * 0.18f, 0.0f, 1.0f);
+            p->heat = clampf(0.38f + em->height_t * 0.15f + erupt_envelope * 0.16f + sphere_cme_rand01(a) * 0.12f, 0.0f, 1.0f);
+            p->alpha = 0.04f + 0.08f * erupt_envelope + sphere_cme_rand01(a) * 0.05f;
+            p->brightness = clampf(
+                0.16f +
+                erupt_envelope * (0.24f + 0.22f * em->strength) +
+                sphere_cme_rand01(a) * 0.10f,
+                0.0f,
+                1.0f
+            );
+            p->height_t = em->height_t;
+            p->fx = n.x;
+            p->fy = n.y;
+            p->fz = n.z;
+            p->sx = field_side.x;
+            p->sy = field_side.y;
+            p->sz = field_side.z;
+            p->tx = packet_target_dir.x;
+            p->ty = packet_target_dir.y;
+            p->tz = packet_target_dir.z;
+            p->mode = packet_mode;
+            break;
+        }
+    }
+}
+
+static void sphere_cme_init_emitters(app* a) {
+    enum { HOTSPOT_CAP = 192, TARGET_EMITTERS = 10 };
+    sphere_cme_hotspot_candidate candidates[HOTSPOT_CAP];
+    int cand_count = 0;
+    int count = 0;
+    if (!a) {
+        return;
+    }
+
+    memset(a->sphere_cme_emitters, 0, sizeof(a->sphere_cme_emitters));
+    memset(a->sphere_cme_particles, 0, sizeof(a->sphere_cme_particles));
+    a->sphere_cme_rng = 0x13579bdfu;
+
+    memset(candidates, 0, sizeof(candidates));
+
+    for (int i = 0; i < SPHERE_PARTICLE_SHELL_SEED_COUNT; ++i) {
+        const sphere_particle_seed* s = &g_sphere_particle_seeds[i];
+        const float static_shell_lift =
+            s->shell_base * 1.46f +
+            s->pocket * 0.022f +
+            fmaxf(0.0f, s->noise2 - 0.58f) * 0.030f;
+        const float height_t = clampf((static_shell_lift + 0.035f) / 0.24f, 0.0f, 1.0f);
+        const float score = sphere_cme_hotspot_score(s, height_t);
+        if (height_t < 0.60f || score < 0.66f) {
+            continue;
+        }
+        sphere_cme_insert_candidate(candidates, &cand_count, HOTSPOT_CAP, i, score);
+    }
+
+    for (int c = 0; c < cand_count && count < SPHERE_CME_EMITTER_CAP && count < TARGET_EMITTERS; ++c) {
+        const sphere_particle_seed* s = &g_sphere_particle_seeds[candidates[c].idx];
+        const float static_shell_lift =
+            s->shell_base * 1.46f +
+            s->pocket * 0.022f +
+            fmaxf(0.0f, s->noise2 - 0.58f) * 0.030f;
+        const float height_t = clampf((static_shell_lift + 0.035f) / 0.24f, 0.0f, 1.0f);
+        const sphere_cpu_v3 p = s->p;
+        sphere_cme_emitter* em;
+        int separated = 1;
+
+        for (int j = 0; j < count; ++j) {
+            const sphere_cme_emitter* prev = &a->sphere_cme_emitters[j];
+            const float dot = p.x * prev->px + p.y * prev->py + p.z * prev->pz;
+            if (dot > 0.956f) {
+                separated = 0;
+                break;
+            }
+        }
+        if (!separated) {
+            continue;
+        }
+
+        em = &a->sphere_cme_emitters[count++];
+        memset(em, 0, sizeof(*em));
+        em->active = 1;
+        em->px = s->p.x;
+        em->py = s->p.y;
+        em->pz = s->p.z;
+        em->t0x = s->t0.x;
+        em->t0y = s->t0.y;
+        em->t0z = s->t0.z;
+        em->t1x = s->t1.x;
+        em->t1y = s->t1.y;
+        em->t1z = s->t1.z;
+        em->seed = s->seed;
+        em->height_t = height_t;
+        em->strength = clampf((candidates[c].score - 0.64f) / 0.30f, 0.0f, 1.0f);
+        em->mode = (height_t > 0.82f && s->noise2 > 0.48f) ? 1 : 0;
+        em->quiet_min_s = 4.5f + (1.0f - em->strength) * 3.0f;
+        em->quiet_max_s = em->quiet_min_s + 4.0f + (1.0f - em->strength) * 3.5f;
+        em->cooldown_s = 0.7f + sphere_cme_rand01(a) * (1.6f + 2.6f * (1.0f - em->strength));
+        em->arc_bias = s->seed * 6.2831853f + s->noise2 * 2.6f + s->noise1 * 1.9f;
+    }
+
+    a->sphere_cme_initialized = 1;
+}
+
+static void update_gpu_sphere_particle_instances(app* a) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+#else
+    if (!a || !a->sphere_particle_dynamic_map) {
+        return;
+    }
+    if (!gameplay_uses_particle_sphere(&a->game)) {
+        a->sphere_particle_dynamic_count = 0u;
+        return;
+    }
+
+    ensure_sphere_particle_seeds();
+    if (!a->sphere_cme_initialized || a->game.t < a->sphere_cme_last_t) {
+        sphere_cme_init_emitters(a);
+        a->sphere_cme_last_t = a->game.t;
+    }
+
+    {
+        float dt = a->game.t - a->sphere_cme_last_t;
+        if (dt < 0.0f) {
+            dt = 0.0f;
+        }
+        if (dt > 0.05f) {
+            dt = 0.05f;
+        }
+        a->sphere_cme_last_t = a->game.t;
+
+        if (dt > 0.0f) {
+            int steps = 1;
+            if (dt > 0.020f) {
+                steps = (int)ceilf(dt / 0.016f);
+                if (steps < 1) steps = 1;
+                if (steps > 4) steps = 4;
+            }
+            for (int step = 0; step < steps; ++step) {
+                const float sdt = dt / (float)steps;
+
+                for (int i = 0; i < SPHERE_CME_EMITTER_CAP; ++i) {
+                    sphere_cme_emitter* em = &a->sphere_cme_emitters[i];
+                    float erupt_t;
+                    float rise;
+                    float decay;
+                    float erupt_envelope;
+                    float packet_rate;
+                    float rim_pref;
+                    if (!em->active) {
+                        continue;
+                    }
+
+                    if (!em->erupting) {
+                        em->cooldown_s -= sdt;
+                        if (em->cooldown_s <= 0.0f) {
+                            rim_pref = sphere_cme_emitter_rim_preference(a, em);
+                            if (rim_pref > 0.18f) {
+                                sphere_cme_begin_eruption(a, em);
+                            }
+                        }
+                        continue;
+                    }
+
+                    em->erupt_age_s += sdt;
+                    erupt_t = clampf(em->erupt_age_s / fmaxf(em->erupt_duration_s, 1.0e-5f), 0.0f, 1.0f);
+                    rise = smoothstepf(0.0f, 0.12f, erupt_t);
+                    decay = 1.0f - smoothstepf(0.46f, 1.0f, erupt_t);
+                    erupt_envelope = clampf(rise * decay, 0.0f, 1.0f);
+                    rim_pref = sphere_cme_emitter_rim_preference(a, em);
+                    packet_rate =
+                        (0.55f + 2.80f * em->strength) *
+                        (0.08f + 0.72f * erupt_envelope) *
+                        (0.25f + 0.75f * rim_pref);
+
+                    em->spawn_accum += packet_rate * sdt;
+                    while (em->spawn_accum >= 1.0f) {
+                        sphere_cme_spawn_packet(a, em, erupt_envelope);
+                        em->spawn_accum -= 1.0f;
+                    }
+
+                    if (em->erupt_age_s >= em->erupt_duration_s) {
+                        sphere_cme_schedule_quiet(a, em);
+                    }
+                }
+
+                for (int i = 0; i < SPHERE_CME_PARTICLE_CAP; ++i) {
+                    sphere_cme_particle* p = &a->sphere_cme_particles[i];
+                    sphere_cpu_v3 pos;
+                    sphere_cpu_v3 vel;
+                    sphere_cpu_v3 n;
+                    sphere_cpu_v3 tangent;
+                    sphere_cpu_v3 side;
+                    sphere_cpu_v3 field_dir;
+                    sphere_cpu_v3 field_side;
+                    sphere_cpu_v3 guided;
+                    sphere_cpu_v3 target_dir;
+                    sphere_cpu_v3 target_tangent;
+                    float dist;
+                    float grav_strength;
+                    float tangent_curl;
+                    float drag;
+                    float plane_pull;
+                    float guide_strength;
+                    float return_strength;
+                    float return_phase;
+                    float target_align;
+                    float life_t;
+                    float excursion_t;
+                    float rise;
+                    float decay;
+                    if (!p->active) {
+                        continue;
+                    }
+
+                    p->age_s += sdt;
+                    if (p->age_s >= p->life_s) {
+                        p->active = 0;
+                        continue;
+                    }
+
+                    pos = sphere_cpu_v3_make(p->px, p->py, p->pz);
+                    vel = sphere_cpu_v3_make(p->vx, p->vy, p->vz);
+                    dist = sphere_cpu_v3_len(pos);
+                    if (dist <= 1.0e-4f) {
+                        p->active = 0;
+                        continue;
+                    }
+
+                    if (p->mode != 2) {
+                        sphere_cpu_v3 source_dir = sphere_cpu_v3_make(p->fx, p->fy, p->fz);
+                        sphere_cpu_v3 target_dir = sphere_cpu_v3_make(p->tx, p->ty, p->tz);
+                        sphere_cpu_v3 plane_normal = sphere_cpu_v3_make(p->sx, p->sy, p->sz);
+                        float life_u = clampf(p->age_s / fmaxf(p->life_s, 1.0e-5f), 0.0f, 1.0f);
+                        float dt_u = 0.018f / fmaxf(p->life_s, 0.25f);
+                        float apex = (p->mode == 0)
+                            ? (0.055f + 0.050f * p->brightness + 0.025f * p->size_t)
+                            : (0.100f + 0.080f * p->brightness + 0.040f * p->size_t);
+                        float width = ((p->seed - floorf(p->seed)) - 0.5f) *
+                                      ((p->mode == 0) ? 0.022f : 0.036f) *
+                                      (0.7f + 0.6f * p->size_t);
+                        sphere_cpu_v3 next_pos;
+                        sphere_cpu_v3 arc_vel;
+                        float target_align_now;
+
+                        pos = sphere_cme_arc_position(source_dir, target_dir, plane_normal, life_u, apex, width);
+                        next_pos = sphere_cme_arc_position(
+                            source_dir,
+                            target_dir,
+                            plane_normal,
+                            clampf(life_u + dt_u, 0.0f, 1.0f),
+                            apex,
+                            width
+                        );
+                        arc_vel = sphere_cpu_v3_scale(
+                            sphere_cpu_v3_sub(next_pos, pos),
+                            1.0f / fmaxf(dt_u * fmaxf(p->life_s, 0.25f), 1.0e-4f)
+                        );
+                        p->px = pos.x;
+                        p->py = pos.y;
+                        p->pz = pos.z;
+                        p->vx = arc_vel.x;
+                        p->vy = arc_vel.y;
+                        p->vz = arc_vel.z;
+
+                        dist = sphere_cpu_v3_len(pos);
+                        target_align_now = sphere_cpu_v3_dot(sphere_cpu_v3_norm_safe(pos), target_dir);
+                        if (life_u >= 0.995f ||
+                            (p->mode == 0 && dist <= 1.010f && target_align_now > 0.992f && life_u > 0.78f) ||
+                            (p->mode == 1 && dist <= 1.014f && target_align_now > 0.989f && life_u > 0.82f)) {
+                            p->active = 0;
+                            continue;
+                        }
+
+                        life_t = life_u;
+                        excursion_t = clampf((dist - 1.0f) / ((p->mode == 0) ? 0.18f : 0.32f), 0.0f, 1.0f);
+                        rise = smoothstepf(0.0f, 0.06f, life_t);
+                        decay = 1.0f - smoothstepf(0.78f, 1.0f, life_t);
+                        p->heat = clampf(0.50f + 0.18f * excursion_t + 0.18f * p->brightness, 0.0f, 1.0f);
+                        p->alpha = clampf((0.10f + 0.18f * p->brightness + 0.08f * excursion_t) * rise * decay, 0.0f, 1.0f);
+                        p->brightness = clampf(p->brightness * 0.998f + excursion_t * 0.006f, 0.0f, 1.0f);
+                        continue;
+                    }
+
+                    n = sphere_cpu_v3_scale(pos, 1.0f / dist);
+                    tangent = sphere_cpu_v3_sub(vel, sphere_cpu_v3_scale(n, sphere_cpu_v3_dot(vel, n)));
+                    tangent = sphere_cpu_v3_norm_safe(tangent);
+                    side = sphere_cpu_v3_norm_safe(sphere_cpu_v3_cross(n, tangent));
+                    field_dir = sphere_cpu_v3_make(p->fx, p->fy, p->fz);
+                    field_side = sphere_cpu_v3_make(p->sx, p->sy, p->sz);
+                    target_dir = sphere_cpu_v3_make(p->tx, p->ty, p->tz);
+                    grav_strength = (p->mode == 0) ? 0.30f : ((p->mode == 2) ? 0.10f : 0.16f);
+                    tangent_curl = (p->mode == 0) ? 0.07f : ((p->mode == 2) ? 0.03f : 0.05f);
+                    drag = (p->mode == 0) ? 0.15f : ((p->mode == 2) ? 0.08f : 0.10f);
+                    plane_pull = (p->mode == 2) ? 0.05f : ((p->mode == 0) ? 0.34f : 0.24f);
+                    guide_strength = (p->mode == 2) ? 0.05f : ((p->mode == 0) ? 0.26f : 0.18f);
+
+                    vel = sphere_cpu_v3_add(vel, sphere_cpu_v3_scale(n, -grav_strength * sdt));
+                    vel = sphere_cpu_v3_add(
+                        vel,
+                        sphere_cpu_v3_scale(field_side, -sphere_cpu_v3_dot(pos, field_side) * plane_pull * sdt)
+                    );
+                    guided = sphere_cpu_v3_sub(field_dir, sphere_cpu_v3_scale(n, sphere_cpu_v3_dot(field_dir, n)));
+                    guided = sphere_cpu_v3_norm_safe(guided);
+                    if (sphere_cpu_v3_dot(tangent, guided) < 0.0f) {
+                        guided = sphere_cpu_v3_scale(guided, -1.0f);
+                    }
+                    if (p->mode == 2) {
+                        guided = sphere_cpu_v3_norm_safe(sphere_cpu_v3_add(
+                            sphere_cpu_v3_scale(guided, 0.28f),
+                            sphere_cpu_v3_scale(n, 0.72f)
+                        ));
+                    }
+                    return_phase = 0.0f;
+                    target_tangent = sphere_cpu_v3_make(0.0f, 0.0f, 0.0f);
+                    if (p->mode != 2) {
+                        return_phase =
+                            smoothstepf(0.22f, 0.72f, excursion_t) *
+                            smoothstepf(0.28f, 0.78f, clampf(p->age_s / fmaxf(p->life_s, 1.0e-5f), 0.0f, 1.0f));
+                        target_tangent = sphere_cpu_v3_sub(target_dir, sphere_cpu_v3_scale(n, sphere_cpu_v3_dot(target_dir, n)));
+                        target_tangent = sphere_cpu_v3_norm_safe(target_tangent);
+                        if (sphere_cpu_v3_dot(guided, target_tangent) < 0.0f) {
+                            target_tangent = sphere_cpu_v3_scale(target_tangent, -1.0f);
+                        }
+                        guided = sphere_cpu_v3_norm_safe(sphere_cpu_v3_add(
+                            sphere_cpu_v3_scale(guided, 1.0f - return_phase),
+                            sphere_cpu_v3_scale(target_tangent, return_phase)
+                        ));
+                    }
+                    vel = sphere_cpu_v3_add(vel, sphere_cpu_v3_scale(guided, guide_strength * (0.7f + 0.3f * p->brightness) * sdt));
+                    if (p->mode != 2) {
+                        return_strength = (p->mode == 0) ? 0.34f : 0.24f;
+                        vel = sphere_cpu_v3_add(
+                            vel,
+                            sphere_cpu_v3_scale(target_tangent, return_phase * return_strength * (0.8f + 0.4f * p->brightness) * sdt)
+                        );
+                    }
+                    vel = sphere_cpu_v3_add(
+                        vel,
+                        sphere_cpu_v3_scale(
+                            side,
+                            (sinf((p->seed * 6.2831853f + p->age_s * (1.7f + p->brightness * 1.2f))) * tangent_curl) * sdt
+                        )
+                    );
+                    vel = sphere_cpu_v3_scale(vel, 1.0f - drag * sdt);
+                    pos = sphere_cpu_v3_add(pos, sphere_cpu_v3_scale(vel, sdt));
+
+                    dist = sphere_cpu_v3_len(pos);
+                    target_align = sphere_cpu_v3_dot(sphere_cpu_v3_norm_safe(pos), target_dir);
+                    if ((p->mode == 0 && dist <= 1.010f && target_align > 0.992f && p->age_s > 0.50f) ||
+                        (p->mode == 1 && dist <= 1.014f && target_align > 0.989f && p->age_s > 0.60f) ||
+                        ((p->mode == 1) && dist >= 1.74f) ||
+                        ((p->mode == 2) && dist >= 1.96f) ||
+                        ((p->mode != 1 && p->mode != 2) && dist >= 1.58f)) {
+                        p->active = 0;
+                        continue;
+                    }
+
+                    p->px = pos.x;
+                    p->py = pos.y;
+                    p->pz = pos.z;
+                    p->vx = vel.x;
+                    p->vy = vel.y;
+                    p->vz = vel.z;
+                    life_t = clampf(p->age_s / fmaxf(p->life_s, 1.0e-5f), 0.0f, 1.0f);
+                    excursion_t = clampf((dist - 1.0f) / ((p->mode == 0) ? 0.18f : 0.32f), 0.0f, 1.0f);
+                    rise = smoothstepf(0.0f, 0.08f, life_t);
+                    decay = 1.0f - smoothstepf(0.48f, 1.0f, life_t);
+                    p->heat = clampf(
+                        p->heat * (0.78f + 0.22f * excursion_t) * (1.0f - 0.24f * life_t) +
+                        excursion_t * 0.12f,
+                        0.0f,
+                        1.0f
+                    );
+                    p->alpha = clampf(
+                        (0.05f + 0.22f * p->brightness + 0.10f * excursion_t) * rise * decay,
+                        0.0f,
+                        1.0f
+                    );
+                    p->brightness = clampf(
+                        p->brightness * (0.992f - 0.050f * sdt) +
+                        excursion_t * 0.012f,
+                        0.0f,
+                        1.0f
+                    );
+                }
+            }
+        }
+    }
+
+    {
+        sphere_particle_instance* out = (sphere_particle_instance*)a->sphere_particle_dynamic_map;
+        uint32_t n = 0u;
+        for (int i = 0; i < SPHERE_CME_PARTICLE_CAP && n < SPHERE_PARTICLE_DYNAMIC_MAX_INSTANCES; ++i) {
+            const sphere_cme_particle* p = &a->sphere_cme_particles[i];
+            sphere_cpu_v3 pos;
+            sphere_cpu_v3 vel;
+            float dist;
+            float excursion_t;
+            float age_t;
+            if (!p->active) {
+                continue;
+            }
+            pos = sphere_cpu_v3_make(p->px, p->py, p->pz);
+            vel = sphere_cpu_v3_norm_safe(sphere_cpu_v3_make(p->vx, p->vy, p->vz));
+            dist = sphere_cpu_v3_len(pos);
+            excursion_t = clampf((dist - 1.0f) / ((p->mode == 0) ? 0.18f : 0.32f), 0.0f, 1.0f);
+            age_t = clampf(p->age_s / fmaxf(p->life_s, 1.0e-5f), 0.0f, 1.0f);
+            memset(&out[n], 0, sizeof(out[n]));
+            out[n].nx = pos.x;
+            out[n].ny = pos.y;
+            out[n].nz = pos.z;
+            out[n].variant = (float)SPHERE_PARTICLE_VARIANT_CME;
+            out[n].t0x = vel.x;
+            out[n].t0y = vel.y;
+            out[n].t0z = vel.z;
+            out[n].seed = p->seed;
+            out[n].noise0 = p->heat;
+            out[n].noise1 = p->size_t;
+            out[n].noise2 = p->brightness;
+            out[n].pocket = p->alpha;
+            out[n].height_t = clampf(0.56f + p->height_t * 0.20f + excursion_t * 0.24f, 0.0f, 1.0f);
+            out[n].reserved1 = age_t;
+            out[n].reserved2 = excursion_t;
+            n += 1u;
+        }
+        a->sphere_particle_dynamic_count = n;
+    }
+#endif
+}
+
 static void build_underwater_lut(underwater_lut_ubo* lut) {
     if (!lut) {
         return;
@@ -5566,6 +6903,8 @@ static void cleanup(app* a) {
     if (a->terrain_line_pipeline) vkDestroyPipeline(a->device, a->terrain_line_pipeline, NULL);
     if (a->particle_pipeline) vkDestroyPipeline(a->device, a->particle_pipeline, NULL);
     if (a->particle_bloom_pipeline) vkDestroyPipeline(a->device, a->particle_bloom_pipeline, NULL);
+    if (a->sphere_particle_pipeline) vkDestroyPipeline(a->device, a->sphere_particle_pipeline, NULL);
+    if (a->sphere_particle_bloom_pipeline) vkDestroyPipeline(a->device, a->sphere_particle_bloom_pipeline, NULL);
     if (a->wormhole_depth_pipeline) vkDestroyPipeline(a->device, a->wormhole_depth_pipeline, NULL);
     if (a->wormhole_line_pipeline) vkDestroyPipeline(a->device, a->wormhole_line_pipeline, NULL);
     if (a->radar_fill_pipeline) vkDestroyPipeline(a->device, a->radar_fill_pipeline, NULL);
@@ -5587,6 +6926,7 @@ static void cleanup(app* a) {
     if (a->post_layout) vkDestroyPipelineLayout(a->device, a->post_layout, NULL);
     if (a->terrain_layout) vkDestroyPipelineLayout(a->device, a->terrain_layout, NULL);
     if (a->particle_layout) vkDestroyPipelineLayout(a->device, a->particle_layout, NULL);
+    if (a->sphere_particle_layout) vkDestroyPipelineLayout(a->device, a->sphere_particle_layout, NULL);
     if (a->wormhole_line_layout) vkDestroyPipelineLayout(a->device, a->wormhole_line_layout, NULL);
     if (a->radar_layout) vkDestroyPipelineLayout(a->device, a->radar_layout, NULL);
     if (a->fog_layout) vkDestroyPipelineLayout(a->device, a->fog_layout, NULL);
@@ -5676,6 +7016,18 @@ static void cleanup(app* a) {
         vkUnmapMemory(a->device, a->particle_instance_memory);
         a->particle_instance_map = NULL;
     }
+    if (a->sphere_particle_instance_map && a->sphere_particle_instance_memory) {
+        vkUnmapMemory(a->device, a->sphere_particle_instance_memory);
+        a->sphere_particle_instance_map = NULL;
+    }
+    if (a->sphere_particle_dynamic_map && a->sphere_particle_dynamic_memory) {
+        vkUnmapMemory(a->device, a->sphere_particle_dynamic_memory);
+        a->sphere_particle_dynamic_map = NULL;
+    }
+    if (a->sphere_particle_dynamic_map && a->sphere_particle_dynamic_memory) {
+        vkUnmapMemory(a->device, a->sphere_particle_dynamic_memory);
+        a->sphere_particle_dynamic_map = NULL;
+    }
     if (a->wormhole_line_vertex_map && a->wormhole_line_vertex_memory) {
         vkUnmapMemory(a->device, a->wormhole_line_vertex_memory);
         a->wormhole_line_vertex_map = NULL;
@@ -5693,6 +7045,8 @@ static void cleanup(app* a) {
         a->radar_tri_vertex_map = NULL;
     }
     if (a->particle_instance_buffer) vkDestroyBuffer(a->device, a->particle_instance_buffer, NULL);
+    if (a->sphere_particle_instance_buffer) vkDestroyBuffer(a->device, a->sphere_particle_instance_buffer, NULL);
+    if (a->sphere_particle_dynamic_buffer) vkDestroyBuffer(a->device, a->sphere_particle_dynamic_buffer, NULL);
     if (a->wormhole_tri_vertex_buffer) vkDestroyBuffer(a->device, a->wormhole_tri_vertex_buffer, NULL);
     if (a->wormhole_line_vertex_buffer) vkDestroyBuffer(a->device, a->wormhole_line_vertex_buffer, NULL);
     if (a->radar_line_vertex_buffer) vkDestroyBuffer(a->device, a->radar_line_vertex_buffer, NULL);
@@ -5701,6 +7055,8 @@ static void cleanup(app* a) {
     if (a->terrain_tri_index_memory) vkFreeMemory(a->device, a->terrain_tri_index_memory, NULL);
     if (a->terrain_wire_vertex_memory) vkFreeMemory(a->device, a->terrain_wire_vertex_memory, NULL);
     if (a->particle_instance_memory) vkFreeMemory(a->device, a->particle_instance_memory, NULL);
+    if (a->sphere_particle_instance_memory) vkFreeMemory(a->device, a->sphere_particle_instance_memory, NULL);
+    if (a->sphere_particle_dynamic_memory) vkFreeMemory(a->device, a->sphere_particle_dynamic_memory, NULL);
     if (a->wormhole_tri_vertex_memory) vkFreeMemory(a->device, a->wormhole_tri_vertex_memory, NULL);
     if (a->wormhole_line_vertex_memory) vkFreeMemory(a->device, a->wormhole_line_vertex_memory, NULL);
     if (a->radar_line_vertex_memory) vkFreeMemory(a->device, a->radar_line_vertex_memory, NULL);
@@ -5800,6 +7156,14 @@ static void destroy_render_runtime(app* a) {
         vkDestroyPipeline(a->device, a->particle_bloom_pipeline, NULL);
         a->particle_bloom_pipeline = VK_NULL_HANDLE;
     }
+    if (a->sphere_particle_pipeline) {
+        vkDestroyPipeline(a->device, a->sphere_particle_pipeline, NULL);
+        a->sphere_particle_pipeline = VK_NULL_HANDLE;
+    }
+    if (a->sphere_particle_bloom_pipeline) {
+        vkDestroyPipeline(a->device, a->sphere_particle_bloom_pipeline, NULL);
+        a->sphere_particle_bloom_pipeline = VK_NULL_HANDLE;
+    }
     if (a->wormhole_depth_pipeline) {
         vkDestroyPipeline(a->device, a->wormhole_depth_pipeline, NULL);
         a->wormhole_depth_pipeline = VK_NULL_HANDLE;
@@ -5879,6 +7243,10 @@ static void destroy_render_runtime(app* a) {
     if (a->particle_layout) {
         vkDestroyPipelineLayout(a->device, a->particle_layout, NULL);
         a->particle_layout = VK_NULL_HANDLE;
+    }
+    if (a->sphere_particle_layout) {
+        vkDestroyPipelineLayout(a->device, a->sphere_particle_layout, NULL);
+        a->sphere_particle_layout = VK_NULL_HANDLE;
     }
     if (a->particle_desc_pool) {
         vkDestroyDescriptorPool(a->device, a->particle_desc_pool, NULL);
@@ -6170,6 +7538,10 @@ static void destroy_render_runtime(app* a) {
         vkUnmapMemory(a->device, a->particle_instance_memory);
         a->particle_instance_map = NULL;
     }
+    if (a->sphere_particle_instance_map && a->sphere_particle_instance_memory) {
+        vkUnmapMemory(a->device, a->sphere_particle_instance_memory);
+        a->sphere_particle_instance_map = NULL;
+    }
     if (a->wormhole_line_vertex_map && a->wormhole_line_vertex_memory) {
         vkUnmapMemory(a->device, a->wormhole_line_vertex_memory);
         a->wormhole_line_vertex_map = NULL;
@@ -6189,6 +7561,14 @@ static void destroy_render_runtime(app* a) {
     if (a->particle_instance_buffer) {
         vkDestroyBuffer(a->device, a->particle_instance_buffer, NULL);
         a->particle_instance_buffer = VK_NULL_HANDLE;
+    }
+    if (a->sphere_particle_instance_buffer) {
+        vkDestroyBuffer(a->device, a->sphere_particle_instance_buffer, NULL);
+        a->sphere_particle_instance_buffer = VK_NULL_HANDLE;
+    }
+    if (a->sphere_particle_dynamic_buffer) {
+        vkDestroyBuffer(a->device, a->sphere_particle_dynamic_buffer, NULL);
+        a->sphere_particle_dynamic_buffer = VK_NULL_HANDLE;
     }
     if (a->wormhole_line_vertex_buffer) {
         vkDestroyBuffer(a->device, a->wormhole_line_vertex_buffer, NULL);
@@ -6221,6 +7601,14 @@ static void destroy_render_runtime(app* a) {
     if (a->particle_instance_memory) {
         vkFreeMemory(a->device, a->particle_instance_memory, NULL);
         a->particle_instance_memory = VK_NULL_HANDLE;
+    }
+    if (a->sphere_particle_instance_memory) {
+        vkFreeMemory(a->device, a->sphere_particle_instance_memory, NULL);
+        a->sphere_particle_instance_memory = VK_NULL_HANDLE;
+    }
+    if (a->sphere_particle_dynamic_memory) {
+        vkFreeMemory(a->device, a->sphere_particle_dynamic_memory, NULL);
+        a->sphere_particle_dynamic_memory = VK_NULL_HANDLE;
     }
     if (a->wormhole_line_vertex_memory) {
         vkFreeMemory(a->device, a->wormhole_line_vertex_memory, NULL);
@@ -7345,6 +8733,23 @@ static int create_particle_resources(app* a) {
         return 0;
     }
     a->particle_instance_count = 0;
+    if (!upload_sphere_particle_static_buffer(a)) {
+        return 0;
+    }
+    {
+        const VkDeviceSize sphere_dyn_size =
+            (VkDeviceSize)SPHERE_PARTICLE_DYNAMIC_MAX_INSTANCES * sizeof(sphere_particle_instance);
+        if (!create_buffer(
+                a, sphere_dyn_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                &a->sphere_particle_dynamic_buffer, &a->sphere_particle_dynamic_memory)) {
+            return 0;
+        }
+        if (!check_vk(vkMapMemory(a->device, a->sphere_particle_dynamic_memory, 0, sphere_dyn_size, 0, &a->sphere_particle_dynamic_map), "vkMapMemory(sphere particle dynamic)")) {
+            return 0;
+        }
+        a->sphere_particle_dynamic_count = 0u;
+    }
 
     VkDescriptorSetLayoutBinding noise_binding = {
         .binding = 0,
@@ -7553,6 +8958,137 @@ static int create_particle_resources(app* a) {
     vkDestroyShaderModule(a->device, fs_bloom, NULL);
     vkDestroyShaderModule(a->device, fs, NULL);
     vkDestroyShaderModule(a->device, vs, NULL);
+
+    {
+        VkPushConstantRange sphere_pc = {
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            .offset = 0,
+            .size = sizeof(sphere_particle_pc)
+        };
+        VkPipelineLayoutCreateInfo sphere_pli = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .setLayoutCount = 1,
+            .pSetLayouts = &a->particle_desc_layout,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &sphere_pc
+        };
+        VkShaderModuleCreateInfo sphere_vs_ci = {
+            .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .codeSize = v_type_sphere_particle_vert_spv_len,
+            .pCode = (const uint32_t*)v_type_sphere_particle_vert_spv
+        };
+        VkShaderModuleCreateInfo sphere_fs_ci = {
+            .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .codeSize = v_type_sphere_particle_frag_spv_len,
+            .pCode = (const uint32_t*)v_type_sphere_particle_frag_spv
+        };
+        VkShaderModuleCreateInfo sphere_fs_bloom_ci = {
+            .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .codeSize = v_type_sphere_particle_bloom_frag_spv_len,
+            .pCode = (const uint32_t*)v_type_sphere_particle_bloom_frag_spv
+        };
+        VkShaderModule sphere_vs = VK_NULL_HANDLE;
+        VkShaderModule sphere_fs = VK_NULL_HANDLE;
+        VkShaderModule sphere_fs_bloom = VK_NULL_HANDLE;
+        VkPipelineShaderStageCreateInfo sphere_stages[2];
+
+        if (!check_vk(vkCreatePipelineLayout(a->device, &sphere_pli, NULL, &a->sphere_particle_layout), "vkCreatePipelineLayout(sphere particles)")) {
+            return 0;
+        }
+        if (!check_vk(vkCreateShaderModule(a->device, &sphere_vs_ci, NULL, &sphere_vs), "vkCreateShaderModule(sphere particle vs)")) {
+            return 0;
+        }
+        if (!check_vk(vkCreateShaderModule(a->device, &sphere_fs_ci, NULL, &sphere_fs), "vkCreateShaderModule(sphere particle fs)")) {
+            vkDestroyShaderModule(a->device, sphere_vs, NULL);
+            return 0;
+        }
+        if (!check_vk(vkCreateShaderModule(a->device, &sphere_fs_bloom_ci, NULL, &sphere_fs_bloom), "vkCreateShaderModule(sphere particle bloom fs)")) {
+            vkDestroyShaderModule(a->device, sphere_fs, NULL);
+            vkDestroyShaderModule(a->device, sphere_vs, NULL);
+            return 0;
+        }
+
+        memset(sphere_stages, 0, sizeof(sphere_stages));
+        sphere_stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        sphere_stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+        sphere_stages[0].module = sphere_vs;
+        sphere_stages[0].pName = "main";
+        sphere_stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        sphere_stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        sphere_stages[1].module = sphere_fs;
+        sphere_stages[1].pName = "main";
+
+        cb_att.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        cb_att.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        cb_att.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        cb_att.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        {
+            VkVertexInputBindingDescription sphere_binding = {
+                .binding = 0,
+                .stride = sizeof(sphere_particle_instance),
+                .inputRate = VK_VERTEX_INPUT_RATE_INSTANCE
+            };
+            VkVertexInputAttributeDescription sphere_attr[5];
+            VkPipelineVertexInputStateCreateInfo sphere_vi;
+
+            memset(sphere_attr, 0, sizeof(sphere_attr));
+            sphere_attr[0].location = 0;
+            sphere_attr[0].binding = 0;
+            sphere_attr[0].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+            sphere_attr[0].offset = 0;
+            sphere_attr[1].location = 1;
+            sphere_attr[1].binding = 0;
+            sphere_attr[1].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+            sphere_attr[1].offset = sizeof(float) * 4;
+            sphere_attr[2].location = 2;
+            sphere_attr[2].binding = 0;
+            sphere_attr[2].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+            sphere_attr[2].offset = sizeof(float) * 8;
+            sphere_attr[3].location = 3;
+            sphere_attr[3].binding = 0;
+            sphere_attr[3].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+            sphere_attr[3].offset = sizeof(float) * 12;
+            sphere_attr[4].location = 4;
+            sphere_attr[4].binding = 0;
+            sphere_attr[4].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+            sphere_attr[4].offset = sizeof(float) * 16;
+
+            memset(&sphere_vi, 0, sizeof(sphere_vi));
+            sphere_vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+            sphere_vi.vertexBindingDescriptionCount = 1;
+            sphere_vi.pVertexBindingDescriptions = &sphere_binding;
+            sphere_vi.vertexAttributeDescriptionCount = 5;
+            sphere_vi.pVertexAttributeDescriptions = sphere_attr;
+
+            gp.stageCount = 2;
+            gp.pStages = sphere_stages;
+            gp.pVertexInputState = &sphere_vi;
+            gp.layout = a->sphere_particle_layout;
+            gp.renderPass = a->scene_render_pass;
+            if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->sphere_particle_pipeline), "vkCreateGraphicsPipelines(sphere particles)")) {
+                vkDestroyShaderModule(a->device, sphere_fs_bloom, NULL);
+                vkDestroyShaderModule(a->device, sphere_fs, NULL);
+                vkDestroyShaderModule(a->device, sphere_vs, NULL);
+                return 0;
+            }
+
+            sphere_stages[1].module = sphere_fs_bloom;
+            cb_att.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            cb_att.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            cb_att.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            cb_att.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            gp.renderPass = a->bloom_render_pass;
+            if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->sphere_particle_bloom_pipeline), "vkCreateGraphicsPipelines(sphere particle bloom)")) {
+                vkDestroyShaderModule(a->device, sphere_fs_bloom, NULL);
+                vkDestroyShaderModule(a->device, sphere_fs, NULL);
+                vkDestroyShaderModule(a->device, sphere_vs, NULL);
+                return 0;
+            }
+        }
+        vkDestroyShaderModule(a->device, sphere_fs_bloom, NULL);
+        vkDestroyShaderModule(a->device, sphere_fs, NULL);
+        vkDestroyShaderModule(a->device, sphere_vs, NULL);
+    }
     return 1;
 #endif
 }
@@ -11019,6 +12555,35 @@ static void update_gpu_particle_instances(app* a, int emit_runtime_particles, in
     }
 }
 
+static void sphere_particle_palette(
+    int palette_mode,
+    float* top_r, float* top_g, float* top_b,
+    float* mid_r, float* mid_g, float* mid_b,
+    float* low_r, float* low_g, float* low_b,
+    float* rim_r, float* rim_g, float* rim_b
+) {
+    if (!top_r || !top_g || !top_b || !mid_r || !mid_g || !mid_b ||
+        !low_r || !low_g || !low_b || !rim_r || !rim_g || !rim_b) {
+        return;
+    }
+    if (palette_mode == 1) {
+        *top_r = 0.46f; *top_g = 0.88f; *top_b = 1.00f;
+        *mid_r = 0.56f; *mid_g = 0.28f; *mid_b = 0.92f;
+        *low_r = 1.00f; *low_g = 0.38f; *low_b = 0.22f;
+        *rim_r = 1.00f; *rim_g = 0.82f; *rim_b = 0.58f;
+    } else if (palette_mode == 2) {
+        *top_r = 0.68f; *top_g = 0.98f; *top_b = 1.00f;
+        *mid_r = 0.44f; *mid_g = 0.54f; *mid_b = 1.00f;
+        *low_r = 0.98f; *low_g = 0.54f; *low_b = 0.92f;
+        *rim_r = 0.94f; *rim_g = 0.99f; *rim_b = 1.00f;
+    } else {
+        *top_r = 0.42f; *top_g = 0.88f; *top_b = 0.96f;
+        *mid_r = 0.50f; *mid_g = 0.24f; *mid_b = 0.84f;
+        *low_r = 1.00f; *low_g = 0.24f; *low_b = 0.50f;
+        *rim_r = 1.00f; *rim_g = 0.92f; *rim_b = 0.72f;
+    }
+}
+
 static void record_gpu_particles(
     app* a, VkCommandBuffer cmd, int emit_runtime_particles, int emit_level_smoke, const VkRect2D* opt_scissor
 ) {
@@ -11077,6 +12642,100 @@ static void record_gpu_particles_bloom(app* a, VkCommandBuffer cmd, int emit_run
     VkDeviceSize off = 0;
     vkCmdBindVertexBuffers(cmd, 0, 1, &a->particle_instance_buffer, &off);
     vkCmdDraw(cmd, 4, a->particle_instance_count, 0, 0);
+#endif
+}
+
+static void record_gpu_sphere_particles(app* a, VkCommandBuffer cmd) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    (void)cmd;
+#else
+    if (!a || !cmd || !a->sphere_particle_pipeline || !a->sphere_particle_instance_buffer || !a->particle_desc_set) {
+        return;
+    }
+    if (a->sphere_particle_instance_count == 0u) {
+        return;
+    }
+    update_gpu_sphere_particle_instances(a);
+    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    {
+        sphere_particle_pc pc;
+        VkDeviceSize off = 0;
+        memset(&pc, 0, sizeof(pc));
+        pc.p0[0] = (float)a->swapchain_extent.width;
+        pc.p0[1] = (float)a->swapchain_extent.height;
+        pc.p0[2] = a->game.t;
+        pc.p0[3] = 0.92f;
+        pc.p1[0] = 0.96f;
+        pc.p1[1] = 0.84f;
+        pc.p1[2] = 0.44f;
+        pc.p2[0] = a->game.world_w * 0.5f;
+        pc.p2[1] = a->game.world_h * 0.5f;
+        pc.p2[2] = a->game.world_h * (8.0f / 9.0f);
+        pc.p2[3] = drawable_scale_y(a);
+        memcpy(pc.p3, a->game.sphere_visual_q, sizeof(pc.p3));
+        pc.top[0] = 0.98f; pc.top[1] = 0.95f; pc.top[2] = 0.86f; pc.top[3] = 1.0f;
+        pc.mid[0] = 0.72f; pc.mid[1] = 0.22f; pc.mid[2] = 0.88f; pc.mid[3] = 1.0f;
+        pc.low[0] = 1.00f; pc.low[1] = 0.42f; pc.low[2] = 0.10f; pc.low[3] = 1.0f;
+        pc.rim[0] = 0.18f; pc.rim[1] = 0.26f; pc.rim[2] = 0.74f; pc.rim[3] = 1.0f;
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->sphere_particle_pipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->sphere_particle_layout, 0, 1, &a->particle_desc_set, 0, NULL);
+        vkCmdPushConstants(cmd, a->sphere_particle_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &a->sphere_particle_instance_buffer, &off);
+        vkCmdDraw(cmd, 4, a->sphere_particle_instance_count, 0, 0);
+        if (a->sphere_particle_dynamic_count > 0u && a->sphere_particle_dynamic_buffer) {
+            off = 0;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &a->sphere_particle_dynamic_buffer, &off);
+            vkCmdDraw(cmd, 4, a->sphere_particle_dynamic_count, 0, 0);
+        }
+    }
+#endif
+}
+
+static void record_gpu_sphere_particles_bloom(app* a, VkCommandBuffer cmd) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    (void)cmd;
+#else
+    if (!a || !cmd || !a->sphere_particle_bloom_pipeline || !a->sphere_particle_instance_buffer || !a->particle_desc_set) {
+        return;
+    }
+    if (a->sphere_particle_instance_count == 0u) {
+        return;
+    }
+    update_gpu_sphere_particle_instances(a);
+    set_viewport_scissor(cmd, a->bloom_w, a->bloom_h);
+    {
+        sphere_particle_pc pc;
+        VkDeviceSize off = 0;
+        memset(&pc, 0, sizeof(pc));
+        pc.p0[0] = (float)a->swapchain_extent.width;
+        pc.p0[1] = (float)a->swapchain_extent.height;
+        pc.p0[2] = a->game.t;
+        pc.p0[3] = 0.82f;
+        pc.p1[0] = 0.86f;
+        pc.p1[1] = 0.74f;
+        pc.p1[2] = 0.36f;
+        pc.p2[0] = a->game.world_w * 0.5f;
+        pc.p2[1] = a->game.world_h * 0.5f;
+        pc.p2[2] = a->game.world_h * (8.0f / 9.0f);
+        pc.p2[3] = drawable_scale_y(a);
+        memcpy(pc.p3, a->game.sphere_visual_q, sizeof(pc.p3));
+        pc.top[0] = 0.98f; pc.top[1] = 0.95f; pc.top[2] = 0.86f; pc.top[3] = 1.0f;
+        pc.mid[0] = 0.72f; pc.mid[1] = 0.22f; pc.mid[2] = 0.88f; pc.mid[3] = 1.0f;
+        pc.low[0] = 1.00f; pc.low[1] = 0.42f; pc.low[2] = 0.10f; pc.low[3] = 1.0f;
+        pc.rim[0] = 0.18f; pc.rim[1] = 0.26f; pc.rim[2] = 0.74f; pc.rim[3] = 1.0f;
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->sphere_particle_bloom_pipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->sphere_particle_layout, 0, 1, &a->particle_desc_set, 0, NULL);
+        vkCmdPushConstants(cmd, a->sphere_particle_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &a->sphere_particle_instance_buffer, &off);
+        vkCmdDraw(cmd, 4, a->sphere_particle_instance_count, 0, 0);
+        if (a->sphere_particle_dynamic_count > 0u && a->sphere_particle_dynamic_buffer) {
+            off = 0;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &a->sphere_particle_dynamic_buffer, &off);
+            vkCmdDraw(cmd, 4, a->sphere_particle_dynamic_count, 0, 0);
+        }
+    }
 #endif
 }
 
@@ -13134,6 +14793,9 @@ static int record_submit_present(
         const int use_gpu_radar =
             a->use_gpu_radar &&
             ((a->game.level_style == LEVEL_STYLE_ENEMY_RADAR) || (a->game.render_style == LEVEL_RENDER_SPHERE));
+        const int use_gpu_sphere_particles =
+            V_TYPE_HAS_TERRAIN_SHADERS &&
+            (a->game.render_style == LEVEL_RENDER_SPHERE_PARTICLE);
         const int use_gpu_arc =
             a->use_gpu_arc &&
             (a->game.render_style != LEVEL_RENDER_CYLINDER) &&
@@ -13148,10 +14810,10 @@ static int record_submit_present(
         const int use_gpu_grid =
             (lvl_bg &&
              lvl_bg->background_style == LEVELDEF_BACKGROUND_GRID &&
-             a->game.render_style != LEVEL_RENDER_SPHERE) ? 1 : 0;
+             !render_style_uses_sphere_mode(a->game.render_style)) ? 1 : 0;
         const int use_gpu_industry = a->use_gpu_industry && (a->game.render_style == LEVEL_RENDER_DEFENDER);
         const int use_gpu_revolver = a->use_gpu_revolver && (a->game.level_style == LEVEL_STYLE_REVOLVER);
-        const int need_mid_scene_gpu = (use_gpu_terrain || use_gpu_wormhole || use_gpu_radar || use_gpu_revolver || use_gpu_arc || use_gpu_grid);
+        const int need_mid_scene_gpu = (use_gpu_terrain || use_gpu_wormhole || use_gpu_radar || use_gpu_sphere_particles || use_gpu_revolver || use_gpu_arc || use_gpu_grid);
         const int split_scene =
             in_gameplay_scene &&
             (need_mid_scene_gpu || use_gpu_fog || use_gpu_underwater || use_gpu_fire || use_gpu_ice || use_gpu_forest || (use_gpu_particles && !a->disable_scene_split));
@@ -13247,6 +14909,9 @@ static int record_submit_present(
             }
             if (use_gpu_radar) {
                 record_gpu_radar(a, cmd);
+            }
+            if (use_gpu_sphere_particles) {
+                record_gpu_sphere_particles(a, cmd);
             }
             if (use_gpu_revolver) {
                 if (use_gpu_particles) {
@@ -13404,6 +15069,9 @@ static int record_submit_present(
     }
     if (menu_is_gameplay(&a->menu)) {
         const leveldef_level* bloom_lvl = game_current_leveldef(&a->game);
+        if (particle_bloom_enabled && a->game.render_style == LEVEL_RENDER_SPHERE_PARTICLE) {
+            record_gpu_sphere_particles_bloom(a, cmd);
+        }
         if (particle_bloom_enabled && bloom_lvl && bloom_lvl->background_style == LEVELDEF_BACKGROUND_FOREST) {
             record_gpu_particles_bloom(a, cmd, 0, 1);
         }

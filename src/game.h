@@ -51,7 +51,8 @@ enum level_render_style_id {
     LEVEL_RENDER_DRIFTER_SHADED = 3,
     LEVEL_RENDER_FOG = 4,
     LEVEL_RENDER_BLANK = 5,
-    LEVEL_RENDER_SPHERE = 6
+    LEVEL_RENDER_SPHERE = 6,
+    LEVEL_RENDER_SPHERE_PARTICLE = 7
 };
 
 enum enemy_visual_kind {

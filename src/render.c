@@ -1534,7 +1534,9 @@ static int level_uses_cylinder_render(const game_state* g) {
 }
 
 static int level_uses_sphere_render(const game_state* g) {
-    return g && g->render_style == LEVEL_RENDER_SPHERE;
+    return g &&
+           (g->render_style == LEVEL_RENDER_SPHERE ||
+            g->render_style == LEVEL_RENDER_SPHERE_PARTICLE);
 }
 
 static vg_result draw_sphere_web(
@@ -6053,6 +6055,7 @@ static const char* editor_render_style_name(int style) {
     if (style == LEVEL_RENDER_FOG) return "FOG";
     if (style == LEVEL_RENDER_BLANK) return "BLANK";
     if (style == LEVEL_RENDER_SPHERE) return "SPHERE";
+    if (style == LEVEL_RENDER_SPHERE_PARTICLE) return "SPHERE PARTICLE";
     return "DEFENDER";
 }
 
@@ -12996,7 +12999,7 @@ vg_result render_frame(vg_context* ctx, const game_state* state, const render_me
             }
         }
     }
-    if (!foreground_only && g->render_style != LEVEL_RENDER_SPHERE) {
+    if (!foreground_only && !level_uses_sphere_render(g)) {
         r = draw_background_window_mask_overlays(ctx, g, &land_halo, &land_main);
         if (r != VG_OK) {
             return r;
@@ -13021,7 +13024,7 @@ vg_result render_frame(vg_context* ctx, const game_state* state, const render_me
         } else if (g->render_style != LEVEL_RENDER_DRIFTER_SHADED &&
                    g->render_style != LEVEL_RENDER_FOG &&
                    g->render_style != LEVEL_RENDER_BLANK &&
-                   g->render_style != LEVEL_RENDER_SPHERE) {
+                   !level_uses_sphere_render(g)) {
             if (g->render_style == LEVEL_RENDER_DEFENDER) {
                 if (metrics->use_gpu_industry) {
                     goto skip_legacy_landscape;

@@ -2365,7 +2365,9 @@ static int level_uses_cylinder(const game_state* g) {
 }
 
 static int level_uses_sphere(const game_state* g) {
-    return g && g->render_style == LEVEL_RENDER_SPHERE;
+    return g &&
+           (g->render_style == LEVEL_RENDER_SPHERE ||
+            g->render_style == LEVEL_RENDER_SPHERE_PARTICLE);
 }
 
 static int level_count_gating_boss_markers(const leveldef_level* lvl) {

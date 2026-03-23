@@ -1178,6 +1178,7 @@ static const char* render_style_name(int render_style) {
         case LEVEL_RENDER_FOG: return "fog";
         case LEVEL_RENDER_BLANK: return "blank";
         case LEVEL_RENDER_SPHERE: return "sphere";
+        case LEVEL_RENDER_SPHERE_PARTICLE: return "sphere_particle";
         default: return "defender";
     }
 }
@@ -1349,6 +1350,7 @@ static const char* render_style_file_base(int render_style) {
         case LEVEL_RENDER_FOG: return "level_fog_of_war";
         case LEVEL_RENDER_BLANK: return "level_blank";
         case LEVEL_RENDER_SPHERE: return "level_sphere_web";
+        case LEVEL_RENDER_SPHERE_PARTICLE: return "level_sphere_particle";
         default: return "level_defender";
     }
 }
@@ -1389,6 +1391,7 @@ static int level_style_from_render_style(int render_style) {
         case LEVEL_RENDER_FOG: return LEVEL_STYLE_FOG_OF_WAR;
         case LEVEL_RENDER_BLANK: return LEVEL_STYLE_BLANK;
         case LEVEL_RENDER_SPHERE: return LEVEL_STYLE_SPHERE_WEB;
+        case LEVEL_RENDER_SPHERE_PARTICLE: return LEVEL_STYLE_SPHERE_WEB;
         default: return LEVEL_STYLE_DEFENDER;
     }
 }
@@ -3980,7 +3983,7 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             } break;
             case LEVEL_EDITOR_LEVEL_PROP_RENDER_STYLE: {
                 const int dir = (delta >= 0.0f) ? 1 : -1;
-                const int n = 7;
+                const int n = 8;
                 int r = s->level_render_style;
                 if (r < 0 || r >= n) {
                     r = LEVEL_RENDER_DEFENDER;
