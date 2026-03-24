@@ -14618,6 +14618,8 @@ static int record_submit_present(
         .level_editor_render_style = a->level_editor.level_render_style,
         .level_editor_theme_palette = a->level_editor.level_theme_palette,
         .level_editor_enemy_palette = a->level_editor.level_enemy_palette,
+        .level_editor_enemy_bullet_skin = a->level_editor.level_enemy_bullet_skin,
+        .level_editor_enemy_bullet_color = a->level_editor.level_enemy_bullet_color,
         .level_editor_background_style = a->level_editor.level_background_style,
         .level_editor_background_mask_style = a->level_editor.level_background_mask_style,
         .level_editor_texture_atlas_id = a->level_editor.level_texture_atlas_id,

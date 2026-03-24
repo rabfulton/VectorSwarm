@@ -98,6 +98,8 @@ typedef struct level_editor_state {
     int level_wave_mode;
     int level_theme_palette;
     int level_enemy_palette;
+    int level_enemy_bullet_skin;
+    int level_enemy_bullet_color;
     int level_background_style;
     int level_background_mask_style;
     int level_texture_atlas_id;
@@ -146,6 +148,8 @@ typedef struct level_editor_state {
     int snapshot_level_wave_mode;
     int snapshot_level_theme_palette;
     int snapshot_level_enemy_palette;
+    int snapshot_level_enemy_bullet_skin;
+    int snapshot_level_enemy_bullet_color;
     int snapshot_level_background_style;
     int snapshot_level_background_mask_style;
     int snapshot_level_texture_atlas_id;
@@ -175,17 +179,19 @@ enum {
     LEVEL_EDITOR_LEVEL_PROP_RENDER_STYLE = 1,
     LEVEL_EDITOR_LEVEL_PROP_THEME = 2,
     LEVEL_EDITOR_LEVEL_PROP_ENEMY_PALETTE = 3,
-    LEVEL_EDITOR_LEVEL_PROP_BACKGROUND = 4,
-    LEVEL_EDITOR_LEVEL_PROP_BG_MASK = 5,
-    LEVEL_EDITOR_LEVEL_PROP_TEXTURE_ATLAS = 6,
-    LEVEL_EDITOR_LEVEL_PROP_TEXTURE_TILE_W = 7,
-    LEVEL_EDITOR_LEVEL_PROP_TEXTURE_TILE_H = 8,
-    LEVEL_EDITOR_LEVEL_PROP_TEXTURE_PANEL_W = 9,
-    LEVEL_EDITOR_LEVEL_PROP_TEXTURE_PANEL_H = 10,
-    LEVEL_EDITOR_LEVEL_PROP_LENGTH = 11,
-    LEVEL_EDITOR_LEVEL_PROP_EVENT_WAVE_TIMEOUT = 12,
-    LEVEL_EDITOR_LEVEL_PROP_POWERUP_DROP = 13,
-    LEVEL_EDITOR_LEVEL_PROP_COUNT = 14
+    LEVEL_EDITOR_LEVEL_PROP_ENEMY_BULLET_SKIN = 4,
+    LEVEL_EDITOR_LEVEL_PROP_ENEMY_BULLET_COLOR = 5,
+    LEVEL_EDITOR_LEVEL_PROP_BACKGROUND = 6,
+    LEVEL_EDITOR_LEVEL_PROP_BG_MASK = 7,
+    LEVEL_EDITOR_LEVEL_PROP_TEXTURE_ATLAS = 8,
+    LEVEL_EDITOR_LEVEL_PROP_TEXTURE_TILE_W = 9,
+    LEVEL_EDITOR_LEVEL_PROP_TEXTURE_TILE_H = 10,
+    LEVEL_EDITOR_LEVEL_PROP_TEXTURE_PANEL_W = 11,
+    LEVEL_EDITOR_LEVEL_PROP_TEXTURE_PANEL_H = 12,
+    LEVEL_EDITOR_LEVEL_PROP_LENGTH = 13,
+    LEVEL_EDITOR_LEVEL_PROP_EVENT_WAVE_TIMEOUT = 14,
+    LEVEL_EDITOR_LEVEL_PROP_POWERUP_DROP = 15,
+    LEVEL_EDITOR_LEVEL_PROP_COUNT = 16
 };
 
 enum {

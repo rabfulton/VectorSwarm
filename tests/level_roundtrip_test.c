@@ -144,6 +144,61 @@ static int write_file_bytes(const char* path, const char* data, size_t size) {
     return n == size;
 }
 
+static int verify_level_file_load_isolated_from_peer_style_values(void) {
+    static const char* file_text =
+        "# isolated level load test\n"
+        "[level BLANK]\n"
+        "render_style=blank\n"
+        "wave_mode=normal\n";
+    char path[] = "/tmp/vtype_level_load_XXXXXX";
+    leveldef_db base_db;
+    leveldef_level loaded;
+    int style = -1;
+    int fd = -1;
+    int ok = 0;
+
+    leveldef_init_defaults(&base_db);
+    base_db.level_present[LEVEL_STYLE_BLANK] = 1;
+    base_db.levels[LEVEL_STYLE_BLANK].render_style = LEVEL_RENDER_BLANK;
+    base_db.levels[LEVEL_STYLE_BLANK].wave_mode = LEVELDEF_WAVES_NORMAL;
+    base_db.levels[LEVEL_STYLE_BLANK].enemy_bullet_skin = LEVELDEF_BULLET_SKIN_ORB;
+    base_db.levels[LEVEL_STYLE_BLANK].enemy_bullet_color = LEVELDEF_ENEMY_BULLET_COLOR_MAGENTA;
+
+    fd = mkstemp(path);
+    if (fd < 0) {
+        fprintf(stderr, "isolated level load: mkstemp failed\n");
+        return 0;
+    }
+    close(fd);
+    if (!write_file_bytes(path, file_text, strlen(file_text))) {
+        fprintf(stderr, "isolated level load: write failed\n");
+        unlink(path);
+        return 0;
+    }
+    if (!leveldef_load_level_file_with_base(&base_db, path, &loaded, &style, stderr)) {
+        fprintf(stderr, "isolated level load: leveldef_load_level_file_with_base failed\n");
+        unlink(path);
+        return 0;
+    }
+    if (style != LEVEL_STYLE_BLANK) {
+        fprintf(stderr, "isolated level load: wrong style %d\n", style);
+        goto cleanup;
+    }
+    if (loaded.enemy_bullet_skin != LEVELDEF_BULLET_SKIN_STREAK) {
+        fprintf(stderr, "isolated level load: enemy_bullet_skin leaked from peer style base\n");
+        goto cleanup;
+    }
+    if (loaded.enemy_bullet_color != LEVELDEF_ENEMY_BULLET_COLOR_PALETTE) {
+        fprintf(stderr, "isolated level load: enemy_bullet_color leaked from peer style base\n");
+        goto cleanup;
+    }
+    ok = 1;
+
+cleanup:
+    unlink(path);
+    return ok;
+}
+
 static int cmp_int(const char* ctx, const char* field, int a, int b) {
     if (a != b) {
         fprintf(stderr, "%s: mismatch %s (%d vs %d)\n", ctx, field, a, b);
@@ -216,6 +271,9 @@ static int compare_levels_semantic(const char* ctx, const leveldef_level* a, con
 
     CMP_FLOAT_FIELD(ctx, a, b, editor_length_screens);
     CMP_INT_FIELD(ctx, a, b, theme_palette);
+    CMP_INT_FIELD(ctx, a, b, enemy_palette);
+    CMP_INT_FIELD(ctx, a, b, enemy_bullet_skin);
+    CMP_INT_FIELD(ctx, a, b, enemy_bullet_color);
     CMP_INT_FIELD(ctx, a, b, background_style);
     CMP_INT_FIELD(ctx, a, b, background_mask_style);
     CMP_FLOAT_FIELD(ctx, a, b, underwater_density);
@@ -802,11 +860,35 @@ static int verify_level_semantic_roundtrip(const leveldef_db* db) {
         goto cleanup;
     }
 
-    editor.selected_marker = -1;
-    editor.selected_property = LEVEL_EDITOR_LEVEL_PROP_POWERUP_DROP;
+    {
+        const int prior_bullet_skin = editor.level_enemy_bullet_skin;
+        const int prior_bullet_color = editor.level_enemy_bullet_color;
+        editor.selected_marker = -1;
+        editor.selected_property = LEVEL_EDITOR_LEVEL_PROP_ENEMY_BULLET_SKIN;
+        level_editor_adjust_selected_property(&editor, 1.0f);
+        editor.selected_property = LEVEL_EDITOR_LEVEL_PROP_ENEMY_BULLET_COLOR;
+        level_editor_adjust_selected_property(&editor, 1.0f);
+        editor.selected_property = LEVEL_EDITOR_LEVEL_PROP_POWERUP_DROP;
+        if (editor.level_enemy_bullet_skin == prior_bullet_skin) {
+            fprintf(stderr, "roundtrip: enemy_bullet_skin did not change after editor adjustment\n");
+            goto cleanup;
+        }
+        if (editor.level_enemy_bullet_color == prior_bullet_color) {
+            fprintf(stderr, "roundtrip: enemy_bullet_color did not change after editor adjustment\n");
+            goto cleanup;
+        }
+    }
     level_editor_adjust_selected_property(&editor, 1.0f);
     if (!level_editor_build_level(&editor, db, &expected_level)) {
         fprintf(stderr, "roundtrip: build expected modified failed\n");
+        goto cleanup;
+    }
+    if (expected_level.enemy_bullet_skin == reloaded_level.enemy_bullet_skin) {
+        fprintf(stderr, "roundtrip: enemy_bullet_skin did not persist into built level after editor adjustment\n");
+        goto cleanup;
+    }
+    if (expected_level.enemy_bullet_color == reloaded_level.enemy_bullet_color) {
+        fprintf(stderr, "roundtrip: enemy_bullet_color did not persist into built level after editor adjustment\n");
         goto cleanup;
     }
     if (expected_level.powerup_drop_chance <= baseline_level.powerup_drop_chance) {
@@ -851,6 +933,9 @@ int main(void) {
     }
     if (!leveldef_load_project_layout(&db, "data/levels", stderr)) {
         fprintf(stderr, "roundtrip: failed to load leveldef db\n");
+        return 1;
+    }
+    if (!verify_level_file_load_isolated_from_peer_style_values()) {
         return 1;
     }
     if (!verify_wave_type_remap_semantics()) {

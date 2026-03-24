@@ -7,6 +7,9 @@ VectorSwarm is an in-development side-scrolling vector space shooter written in 
 ![Event Horizon Level](screenshots/event_horizon.png)
 ![Enemy Radar Level](screenshots/radar.png)
 ![Terrain Level](screenshots/terrain.png)
+![Ice Level](screenshots/ice.png)
+![Web Level](screenshots/web.png)
+![Underwater Level](screenshots/sonar.png)
 
 ## Features
 
@@ -40,8 +43,6 @@ Run:
 This game is still in development. You can use the arrow keys and spacebar/left control to pilot the ship. `n` will load the next level. The number keys `1` through `6` will access various settings screens and `l` will open the level editor. Expect new releases often.
 
 ## AMA with Commander Nick
-### What are the green squiggly lines at the bottom of the screen?
-Space hills. Anymore dumb questions...
 ### Is there any truth to the rumours that this game is a recruitment tool for an intergalactic spaceforce?
 I can neither confirm nor deny that. Enlist at your own risk.
 ### My dad says there's no sound in space, so why do explosions sound so awesome in the game?

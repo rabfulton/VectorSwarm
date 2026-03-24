@@ -6078,6 +6078,32 @@ static const char* editor_enemy_palette_name(int palette) {
     }
 }
 
+static const char* editor_bullet_skin_name(int skin) {
+    switch (clampi(skin, LEVELDEF_BULLET_SKIN_STREAK, LEVELDEF_BULLET_SKIN_CRYSTAL)) {
+        case LEVELDEF_BULLET_SKIN_BOLT: return "BOLT";
+        case LEVELDEF_BULLET_SKIN_ORB: return "ORB";
+        case LEVELDEF_BULLET_SKIN_RING: return "RING";
+        case LEVELDEF_BULLET_SKIN_CRYSTAL: return "CRYSTAL";
+        case LEVELDEF_BULLET_SKIN_STREAK:
+        default:
+            return "STREAK";
+    }
+}
+
+static const char* editor_bullet_color_name(int color) {
+    switch (clampi(color, LEVELDEF_ENEMY_BULLET_COLOR_PALETTE, LEVELDEF_ENEMY_BULLET_COLOR_MAGENTA)) {
+        case LEVELDEF_ENEMY_BULLET_COLOR_RED: return "RED";
+        case LEVELDEF_ENEMY_BULLET_COLOR_AMBER: return "AMBER";
+        case LEVELDEF_ENEMY_BULLET_COLOR_ICE: return "ICE";
+        case LEVELDEF_ENEMY_BULLET_COLOR_TOXIC: return "TOXIC";
+        case LEVELDEF_ENEMY_BULLET_COLOR_WHITE: return "WHITE";
+        case LEVELDEF_ENEMY_BULLET_COLOR_MAGENTA: return "MAGENTA";
+        case LEVELDEF_ENEMY_BULLET_COLOR_PALETTE:
+        default:
+            return "PALETTE";
+    }
+}
+
 static const char* editor_background_style_name(int style) {
     if (style == LEVELDEF_BACKGROUND_NONE) return "NONE";
     if (style == LEVELDEF_BACKGROUND_NEBULA) return "NEBULA";
@@ -7230,53 +7256,63 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb4 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
-                snprintf(row, sizeof(row), "BACKGROUND     %s", editor_background_style_name(metrics->level_editor_background_style));
-                r = draw_ui_button_shaded(ctx, rb4, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_BACKGROUND) ? 1 : 0);
+                snprintf(row, sizeof(row), "BULLET SKIN    %s", editor_bullet_skin_name(metrics->level_editor_enemy_bullet_skin));
+                r = draw_ui_button_shaded(ctx, rb4, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_ENEMY_BULLET_SKIN) ? 1 : 0);
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb5 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
-                snprintf(row, sizeof(row), "BG MASK        %s", editor_background_mask_style_name(metrics->level_editor_background_mask_style));
-                r = draw_ui_button_shaded(ctx, rb5, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_BG_MASK) ? 1 : 0);
+                snprintf(row, sizeof(row), "BULLET COLOR   %s", editor_bullet_color_name(metrics->level_editor_enemy_bullet_color));
+                r = draw_ui_button_shaded(ctx, rb5, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_ENEMY_BULLET_COLOR) ? 1 : 0);
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb6 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
-                snprintf(row, sizeof(row), "ATLAS          %s", texture_atlas_display_name(metrics->level_editor_texture_atlas_id));
-                r = draw_ui_button_shaded(ctx, rb6, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_TEXTURE_ATLAS) ? 1 : 0);
+                snprintf(row, sizeof(row), "BACKGROUND     %s", editor_background_style_name(metrics->level_editor_background_style));
+                r = draw_ui_button_shaded(ctx, rb6, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_BACKGROUND) ? 1 : 0);
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb7 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
-                snprintf(row, sizeof(row), "TILE W        %d", metrics->level_editor_texture_tile_w_px);
-                r = draw_ui_button_shaded(ctx, rb7, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_TEXTURE_TILE_W) ? 1 : 0);
+                snprintf(row, sizeof(row), "BG MASK        %s", editor_background_mask_style_name(metrics->level_editor_background_mask_style));
+                r = draw_ui_button_shaded(ctx, rb7, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_BG_MASK) ? 1 : 0);
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb8 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
-                snprintf(row, sizeof(row), "TILE H        %d", metrics->level_editor_texture_tile_h_px);
-                r = draw_ui_button_shaded(ctx, rb8, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_TEXTURE_TILE_H) ? 1 : 0);
+                snprintf(row, sizeof(row), "ATLAS          %s", texture_atlas_display_name(metrics->level_editor_texture_atlas_id));
+                r = draw_ui_button_shaded(ctx, rb8, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_TEXTURE_ATLAS) ? 1 : 0);
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb9 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
-                snprintf(row, sizeof(row), "TEX W UNITS   %d", metrics->level_editor_texture_panel_w_units);
-                r = draw_ui_button_shaded(ctx, rb9, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_TEXTURE_PANEL_W) ? 1 : 0);
+                snprintf(row, sizeof(row), "TILE W        %d", metrics->level_editor_texture_tile_w_px);
+                r = draw_ui_button_shaded(ctx, rb9, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_TEXTURE_TILE_W) ? 1 : 0);
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb10 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
-                snprintf(row, sizeof(row), "TEX H UNITS   %d", metrics->level_editor_texture_panel_h_units);
-                r = draw_ui_button_shaded(ctx, rb10, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_TEXTURE_PANEL_H) ? 1 : 0);
+                snprintf(row, sizeof(row), "TILE H        %d", metrics->level_editor_texture_tile_h_px);
+                r = draw_ui_button_shaded(ctx, rb10, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_TEXTURE_TILE_H) ? 1 : 0);
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb11 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
-                snprintf(row, sizeof(row), "LENGTH         %.1f", metrics->level_editor_level_length_screens);
-                r = draw_ui_button_shaded(ctx, rb11, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_LENGTH) ? 1 : 0);
+                snprintf(row, sizeof(row), "TEX W UNITS   %d", metrics->level_editor_texture_panel_w_units);
+                r = draw_ui_button_shaded(ctx, rb11, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_TEXTURE_PANEL_W) ? 1 : 0);
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb12 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
-                snprintf(row, sizeof(row), "EV ADV TIME    %.2f", metrics->level_editor_event_wave_spawn_timeout_factor);
-                r = draw_ui_button_shaded(ctx, rb12, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_EVENT_WAVE_TIMEOUT) ? 1 : 0);
+                snprintf(row, sizeof(row), "TEX H UNITS   %d", metrics->level_editor_texture_panel_h_units);
+                r = draw_ui_button_shaded(ctx, rb12, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_TEXTURE_PANEL_H) ? 1 : 0);
                 if (r != VG_OK) return r;
                 ty -= 32.0f * ui;
                 const vg_rect rb13 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
+                snprintf(row, sizeof(row), "LENGTH         %.1f", metrics->level_editor_level_length_screens);
+                r = draw_ui_button_shaded(ctx, rb13, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_LENGTH) ? 1 : 0);
+                if (r != VG_OK) return r;
+                ty -= 32.0f * ui;
+                const vg_rect rb14 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
+                snprintf(row, sizeof(row), "EV ADV TIME    %.2f", metrics->level_editor_event_wave_spawn_timeout_factor);
+                r = draw_ui_button_shaded(ctx, rb14, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_EVENT_WAVE_TIMEOUT) ? 1 : 0);
+                if (r != VG_OK) return r;
+                ty -= 32.0f * ui;
+                const vg_rect rb15 = {tx, ty - 22.0f * ui, props.w - 24.0f * ui, 24.0f * ui};
                 snprintf(row, sizeof(row), "POWERUP DROP   %.2f", metrics->level_editor_powerup_drop_chance);
-                r = draw_ui_button_shaded(ctx, rb13, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_POWERUP_DROP) ? 1 : 0);
+                r = draw_ui_button_shaded(ctx, rb15, row, 10.4f * ui, &frame, &text, (selected_prop == LEVEL_EDITOR_LEVEL_PROP_POWERUP_DROP) ? 1 : 0);
                 if (r != VG_OK) return r;
             }
             ty -= 34.0f * ui;
@@ -12066,6 +12102,350 @@ static vg_result draw_boss_connector_struts(
     return VG_OK;
 }
 
+typedef struct enemy_bullet_draw_points {
+    vg_vec2 tail;
+    vg_vec2 back;
+    vg_vec2 nose;
+    vg_vec2 center;
+} enemy_bullet_draw_points;
+
+static float render_vec2_distance(vg_vec2 a, vg_vec2 b) {
+    const float dx = b.x - a.x;
+    const float dy = b.y - a.y;
+    return sqrtf(dx * dx + dy * dy);
+}
+
+static vg_vec2 render_vec2_lerp(vg_vec2 a, vg_vec2 b, float t) {
+    return (vg_vec2){
+        lerpf(a.x, b.x, t),
+        lerpf(a.y, b.y, t)
+    };
+}
+
+static void build_enemy_bullet_draw_points(const enemy_bullet* b, enemy_bullet_draw_points* out) {
+    float ux;
+    float uy;
+    float speed;
+    const float core_f = 10.5f;
+    const float core_b = 6.2f;
+    float trail;
+    if (!b || !out) {
+        return;
+    }
+    ux = b->b.vx;
+    uy = b->b.vy;
+    speed = sqrtf(ux * ux + uy * uy);
+    if (speed > 1.0e-4f) {
+        ux /= speed;
+        uy /= speed;
+    } else {
+        ux = -1.0f;
+        uy = 0.0f;
+        speed = 0.0f;
+    }
+    trail = 16.0f + clampf(speed * 0.026f, 7.0f, 24.0f);
+    out->tail = (vg_vec2){b->b.x - ux * trail, b->b.y - uy * trail};
+    out->back = (vg_vec2){b->b.x - ux * core_b, b->b.y - uy * core_b};
+    out->nose = (vg_vec2){b->b.x + ux * core_f, b->b.y + uy * core_f};
+    out->center = (vg_vec2){b->b.x, b->b.y};
+}
+
+static vg_result draw_bullet_segment_layers(
+    vg_context* ctx,
+    vg_vec2 a,
+    vg_vec2 b,
+    const vg_stroke_style* halo,
+    const vg_stroke_style* core
+) {
+    const vg_vec2 seg[2] = {a, b};
+    vg_result r = vg_draw_polyline(ctx, seg, 2, halo, 0);
+    if (r != VG_OK) {
+        return r;
+    }
+    return vg_draw_polyline(ctx, seg, 2, core, 0);
+}
+
+static vg_result draw_bullet_polyline_layers(
+    vg_context* ctx,
+    const vg_vec2* pts,
+    size_t count,
+    int closed,
+    const vg_stroke_style* halo,
+    const vg_stroke_style* core
+) {
+    vg_result r = vg_draw_polyline(ctx, pts, count, halo, closed);
+    if (r != VG_OK) {
+        return r;
+    }
+    return vg_draw_polyline(ctx, pts, count, core, closed);
+}
+
+static void build_bullet_ring_polyline(vg_vec2 center, float radius, int segments, vg_vec2* out) {
+    if (!out || segments < 3) {
+        return;
+    }
+    for (int i = 0; i <= segments; ++i) {
+        const float u = (float)i / (float)segments;
+        const float a = u * 6.28318530718f;
+        out[i] = (vg_vec2){
+            center.x + cosf(a) * radius,
+            center.y + sinf(a) * radius
+        };
+    }
+}
+
+static vg_result draw_enemy_bullet_skin(
+    vg_context* ctx,
+    int skin,
+    const enemy_bullet_draw_points* pts,
+    const vg_stroke_style* core_style,
+    const vg_stroke_style* halo_style
+) {
+    float dir_x;
+    float dir_y;
+    float dir_len;
+    float perp_x;
+    float perp_y;
+    float tail_len;
+    float body_len;
+    float orb_r;
+    float ring_r;
+
+    if (!ctx || !pts || !core_style || !halo_style) {
+        return VG_OK;
+    }
+
+    tail_len = render_vec2_distance(pts->tail, pts->back);
+    body_len = render_vec2_distance(pts->back, pts->nose);
+    orb_r = fmaxf(body_len * 0.52f, tail_len * 0.24f);
+    ring_r = fmaxf(body_len * 0.56f, tail_len * 0.26f);
+
+    dir_x = pts->nose.x - pts->back.x;
+    dir_y = pts->nose.y - pts->back.y;
+    dir_len = sqrtf(dir_x * dir_x + dir_y * dir_y);
+    if (dir_len <= 1.0e-4f) {
+        dir_x = pts->nose.x - pts->tail.x;
+        dir_y = pts->nose.y - pts->tail.y;
+        dir_len = sqrtf(dir_x * dir_x + dir_y * dir_y);
+    }
+    if (dir_len <= 1.0e-4f) {
+        dir_x = -1.0f;
+        dir_y = 0.0f;
+        dir_len = 1.0f;
+    }
+    dir_x /= dir_len;
+    dir_y /= dir_len;
+    perp_x = -dir_y;
+    perp_y = dir_x;
+
+    switch (clampi(skin, LEVELDEF_BULLET_SKIN_STREAK, LEVELDEF_BULLET_SKIN_CRYSTAL)) {
+        case LEVELDEF_BULLET_SKIN_BOLT:
+        {
+            vg_stroke_style core = *core_style;
+            vg_stroke_style halo = *halo_style;
+            vg_stroke_style core_tail = core;
+            vg_stroke_style halo_tail = halo;
+            vg_fill_style head_glow = make_fill(halo.intensity * 0.72f, halo.color, VG_BLEND_ADDITIVE);
+            vg_fill_style head_fill = make_fill(core.intensity * 0.82f, core.color, VG_BLEND_ALPHA);
+            const vg_vec2 tail_start = render_vec2_lerp(pts->tail, pts->back, 0.40f);
+            const vg_vec2 body_start = render_vec2_lerp(pts->back, pts->center, 0.28f);
+            const vg_vec2 head_center = render_vec2_lerp(pts->center, pts->nose, 0.18f);
+            const float head_r = fmaxf(body_len * 0.22f, 1.2f);
+            vg_result r;
+
+            core.width_px *= 1.30f;
+            halo.width_px *= 1.18f;
+            core_tail.width_px *= 0.92f;
+            halo_tail.width_px *= 0.86f;
+            core_tail.intensity *= 0.48f;
+            halo_tail.intensity *= 0.52f;
+            core_tail.color.a *= 0.42f;
+            halo_tail.color.a *= 0.42f;
+
+            r = draw_bullet_segment_layers(ctx, tail_start, body_start, &halo_tail, &core_tail);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = draw_bullet_segment_layers(ctx, body_start, pts->nose, &halo, &core);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_fill_circle(ctx, head_center, head_r * 1.55f, &head_glow, 16);
+            if (r != VG_OK) {
+                return r;
+            }
+            return vg_fill_circle(ctx, head_center, head_r, &head_fill, 14);
+        }
+        case LEVELDEF_BULLET_SKIN_ORB:
+        {
+            enum { RING_SEGMENTS = 20 };
+            vg_vec2 ring[RING_SEGMENTS + 1];
+            vg_stroke_style ring_core = *core_style;
+            vg_stroke_style ring_halo = *halo_style;
+            vg_stroke_style tail_core = *core_style;
+            vg_stroke_style tail_halo = *halo_style;
+            vg_fill_style glow = make_fill(halo_style->intensity * 0.82f, halo_style->color, VG_BLEND_ADDITIVE);
+            vg_fill_style fill = make_fill(core_style->intensity * 0.86f, core_style->color, VG_BLEND_ALPHA);
+            vg_result r;
+
+            ring_core.width_px *= 0.86f;
+            ring_halo.width_px *= 0.90f;
+            tail_core.width_px *= 0.68f;
+            tail_halo.width_px *= 0.74f;
+            tail_core.intensity *= 0.34f;
+            tail_halo.intensity *= 0.40f;
+            tail_core.color.a *= 0.30f;
+            tail_halo.color.a *= 0.30f;
+            build_bullet_ring_polyline(pts->center, orb_r * 0.96f, RING_SEGMENTS, ring);
+
+            r = draw_bullet_segment_layers(ctx, pts->tail, pts->back, &tail_halo, &tail_core);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_fill_circle(ctx, pts->center, orb_r * 1.55f, &glow, 20);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_fill_circle(ctx, pts->center, orb_r, &fill, 18);
+            if (r != VG_OK) {
+                return r;
+            }
+            return draw_bullet_polyline_layers(ctx, ring, RING_SEGMENTS + 1, 1, &ring_halo, &ring_core);
+        }
+        case LEVELDEF_BULLET_SKIN_RING:
+        {
+            enum { RING_SEGMENTS = 20 };
+            vg_vec2 ring[RING_SEGMENTS + 1];
+            vg_stroke_style ring_core = *core_style;
+            vg_stroke_style ring_halo = *halo_style;
+            vg_stroke_style tick_core = *core_style;
+            vg_stroke_style tick_halo = *halo_style;
+            vg_fill_style dot = make_fill(core_style->intensity * 0.90f, core_style->color, VG_BLEND_ALPHA);
+            const vg_vec2 tick_start = render_vec2_lerp(pts->tail, pts->back, 0.52f);
+            vg_result r;
+
+            ring_core.width_px *= 1.05f;
+            ring_halo.width_px *= 1.18f;
+            tick_core.width_px *= 0.78f;
+            tick_halo.width_px *= 0.84f;
+            tick_core.intensity *= 0.50f;
+            tick_halo.intensity *= 0.54f;
+            tick_core.color.a *= 0.42f;
+            tick_halo.color.a *= 0.42f;
+            build_bullet_ring_polyline(pts->center, ring_r, RING_SEGMENTS, ring);
+
+            r = draw_bullet_segment_layers(ctx, tick_start, pts->back, &tick_halo, &tick_core);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = draw_bullet_polyline_layers(ctx, ring, RING_SEGMENTS + 1, 1, &ring_halo, &ring_core);
+            if (r != VG_OK) {
+                return r;
+            }
+            return vg_fill_circle(ctx, pts->center, ring_r * 0.24f, &dot, 12);
+        }
+        case LEVELDEF_BULLET_SKIN_CRYSTAL:
+        {
+            const float half_len = fmaxf(body_len * 0.52f, 1.3f);
+            const float half_w = fmaxf(body_len * 0.30f, 0.9f);
+            const vg_vec2 tip = {
+                pts->center.x + dir_x * half_len,
+                pts->center.y + dir_y * half_len
+            };
+            const vg_vec2 tail = {
+                pts->center.x - dir_x * half_len * 0.82f,
+                pts->center.y - dir_y * half_len * 0.82f
+            };
+            const vg_vec2 left = {
+                pts->center.x + perp_x * half_w,
+                pts->center.y + perp_y * half_w
+            };
+            const vg_vec2 right = {
+                pts->center.x - perp_x * half_w,
+                pts->center.y - perp_y * half_w
+            };
+            const vg_vec2 fill_poly[4] = {tip, left, tail, right};
+            const vg_vec2 outline[5] = {tip, left, tail, right, tip};
+            const vg_vec2 seam_pts[2] = {tail, tip};
+            vg_fill_style glow = make_fill(halo_style->intensity * 0.58f, halo_style->color, VG_BLEND_ADDITIVE);
+            vg_fill_style fill = make_fill(core_style->intensity * 0.76f, core_style->color, VG_BLEND_ALPHA);
+            vg_stroke_style seam = *core_style;
+            vg_result r;
+
+            seam.width_px *= 0.70f;
+            seam.intensity *= 0.66f;
+            seam.color.a *= 0.58f;
+            r = vg_fill_convex(ctx, fill_poly, 4, &glow);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = vg_fill_convex(ctx, fill_poly, 4, &fill);
+            if (r != VG_OK) {
+                return r;
+            }
+            r = draw_bullet_polyline_layers(ctx, outline, 5, 1, halo_style, core_style);
+            if (r != VG_OK) {
+                return r;
+            }
+            return vg_draw_polyline(ctx, seam_pts, 2, &seam, 0);
+        }
+        case LEVELDEF_BULLET_SKIN_STREAK:
+        default:
+        {
+            vg_stroke_style core = *core_style;
+            vg_stroke_style halo = *halo_style;
+            vg_stroke_style core_tail = core;
+            vg_stroke_style halo_tail = halo;
+            vg_result r;
+
+            core_tail.intensity *= 0.58f;
+            halo_tail.intensity *= 0.62f;
+            core_tail.color.a *= 0.62f;
+            halo_tail.color.a *= 0.62f;
+            r = draw_bullet_segment_layers(ctx, pts->tail, pts->back, &halo_tail, &core_tail);
+            if (r != VG_OK) {
+                return r;
+            }
+            return draw_bullet_segment_layers(ctx, pts->back, pts->nose, &halo, &core);
+        }
+    }
+}
+
+static void apply_enemy_bullet_color_override(enemy_palette_theme* pal, int color_mode) {
+    if (!pal) {
+        return;
+    }
+    switch (clampi(color_mode, LEVELDEF_ENEMY_BULLET_COLOR_PALETTE, LEVELDEF_ENEMY_BULLET_COLOR_MAGENTA)) {
+        case LEVELDEF_ENEMY_BULLET_COLOR_RED:
+            pal->enemy_bullet = (vg_color){1.0f, 0.36f, 0.36f, 1.0f};
+            pal->enemy_bullet_halo = (vg_color){1.0f, 0.38f, 0.38f, 0.28f};
+            break;
+        case LEVELDEF_ENEMY_BULLET_COLOR_AMBER:
+            pal->enemy_bullet = (vg_color){1.0f, 0.84f, 0.50f, 1.0f};
+            pal->enemy_bullet_halo = (vg_color){1.0f, 0.82f, 0.52f, 0.30f};
+            break;
+        case LEVELDEF_ENEMY_BULLET_COLOR_ICE:
+            pal->enemy_bullet = (vg_color){0.78f, 0.98f, 1.0f, 1.0f};
+            pal->enemy_bullet_halo = (vg_color){0.68f, 0.96f, 1.0f, 0.28f};
+            break;
+        case LEVELDEF_ENEMY_BULLET_COLOR_TOXIC:
+            pal->enemy_bullet = (vg_color){0.84f, 1.0f, 0.50f, 1.0f};
+            pal->enemy_bullet_halo = (vg_color){0.80f, 1.0f, 0.40f, 0.30f};
+            break;
+        case LEVELDEF_ENEMY_BULLET_COLOR_WHITE:
+            pal->enemy_bullet = (vg_color){0.98f, 0.99f, 1.0f, 1.0f};
+            pal->enemy_bullet_halo = (vg_color){0.94f, 0.97f, 1.0f, 0.32f};
+            break;
+        case LEVELDEF_ENEMY_BULLET_COLOR_MAGENTA:
+            pal->enemy_bullet = (vg_color){1.0f, 0.52f, 0.94f, 1.0f};
+            pal->enemy_bullet_halo = (vg_color){1.0f, 0.46f, 0.90f, 0.30f};
+            break;
+        case LEVELDEF_ENEMY_BULLET_COLOR_PALETTE:
+        default:
+            break;
+    }
+}
+
 vg_result render_frame(vg_context* ctx, const game_state* state, const render_metrics* metrics) {
     const game_state* g = state;
     game_state interpolated_state;
@@ -12105,14 +12485,19 @@ vg_result render_frame(vg_context* ctx, const game_state* state, const render_me
     }
     g = &interpolated_state;
     const palette_theme pal = get_palette_theme(metrics->palette_mode);
+    const leveldef_level* current_level = game_current_leveldef(g);
     int enemy_palette_mode = LEVELDEF_ENEMY_PALETTE_DEFAULT;
+    int enemy_bullet_skin_mode = LEVELDEF_BULLET_SKIN_STREAK;
+    int enemy_bullet_color_mode = LEVELDEF_ENEMY_BULLET_COLOR_PALETTE;
     {
-        const leveldef_level* lvl = game_current_leveldef(g);
-        if (lvl) {
-            enemy_palette_mode = clampi(lvl->enemy_palette, LEVELDEF_ENEMY_PALETTE_DEFAULT, LEVELDEF_ENEMY_PALETTE_TOXIC);
+        if (current_level) {
+            enemy_palette_mode = clampi(current_level->enemy_palette, LEVELDEF_ENEMY_PALETTE_DEFAULT, LEVELDEF_ENEMY_PALETTE_TOXIC);
+            enemy_bullet_skin_mode = clampi(current_level->enemy_bullet_skin, LEVELDEF_BULLET_SKIN_STREAK, LEVELDEF_BULLET_SKIN_CRYSTAL);
+            enemy_bullet_color_mode = clampi(current_level->enemy_bullet_color, LEVELDEF_ENEMY_BULLET_COLOR_PALETTE, LEVELDEF_ENEMY_BULLET_COLOR_MAGENTA);
         }
     }
-    const enemy_palette_theme enemy_pal = get_enemy_palette_theme(enemy_palette_mode, g ? g->t : 0.0f);
+    enemy_palette_theme enemy_pal = get_enemy_palette_theme(enemy_palette_mode, g ? g->t : 0.0f);
+    apply_enemy_bullet_color_override(&enemy_pal, enemy_bullet_color_mode);
     vg_crt_profile crt;
     vg_get_crt_profile(ctx, &crt);
     float persistence = crt.persistence_decay;
@@ -12569,35 +12954,22 @@ vg_result render_frame(vg_context* ctx, const game_state* state, const render_me
                 continue;
             }
             const enemy_bullet* b = &g->enemy_bullets[i];
-            float ux = b->b.vx;
-            float uy = b->b.vy;
-            float speed = sqrtf(ux * ux + uy * uy);
-            if (speed > 1.0e-4f) {
-                ux /= speed;
-                uy /= speed;
-            } else {
-                ux = -1.0f;
-                uy = 0.0f;
-                speed = 0.0f;
-            }
-            const float core_f = 10.5f;
-            const float core_b = 6.2f;
-            const float trail = 16.0f + clampf(speed * 0.026f, 7.0f, 24.0f);
-            const float x0w = b->b.x - ux * trail;
-            const float y0w = b->b.y - uy * trail;
-            const float x1w = b->b.x - ux * core_b;
-            const float y1w = b->b.y - uy * core_b;
-            const float x2w = b->b.x + ux * core_f;
-            const float y2w = b->b.y + uy * core_f;
-            float d0 = 0.0f, d1 = 0.0f, d2 = 0.0f;
-            const vg_vec2 p0 = project_cylinder_point(g, x0w, y0w, &d0);
-            const vg_vec2 p1 = project_cylinder_point(g, x1w, y1w, &d1);
-            const vg_vec2 p2 = project_cylinder_point(g, x2w, y2w, &d2);
+            enemy_bullet_draw_points world_pts;
+            enemy_bullet_draw_points proj_pts;
+            float d0 = 0.0f;
+            float d1 = 0.0f;
+            float d2 = 0.0f;
+            float dc = 0.0f;
+            build_enemy_bullet_draw_points(b, &world_pts);
+            proj_pts.tail = project_cylinder_point(g, world_pts.tail.x, world_pts.tail.y, &d0);
+            proj_pts.back = project_cylinder_point(g, world_pts.back.x, world_pts.back.y, &d1);
+            proj_pts.nose = project_cylinder_point(g, world_pts.nose.x, world_pts.nose.y, &d2);
+            proj_pts.center = project_cylinder_point(g, world_pts.center.x, world_pts.center.y, &dc);
             {
-                const float min_x = fminf(p0.x, fminf(p1.x, p2.x));
-                const float min_y = fminf(p0.y, fminf(p1.y, p2.y));
-                const float max_x = fmaxf(p0.x, fmaxf(p1.x, p2.x));
-                const float max_y = fmaxf(p0.y, fmaxf(p1.y, p2.y));
+                const float min_x = fminf(proj_pts.tail.x, fminf(proj_pts.back.x, proj_pts.nose.x));
+                const float min_y = fminf(proj_pts.tail.y, fminf(proj_pts.back.y, proj_pts.nose.y));
+                const float max_x = fmaxf(proj_pts.tail.x, fmaxf(proj_pts.back.x, proj_pts.nose.x));
+                const float max_y = fmaxf(proj_pts.tail.y, fmaxf(proj_pts.back.y, proj_pts.nose.y));
                 if (!rects_intersect(
                         min_x,
                         min_y,
@@ -12610,7 +12982,7 @@ vg_result render_frame(vg_context* ctx, const game_state* state, const render_me
                     continue;
                 }
             }
-            const float depth = (d0 + d1 + d2) * (1.0f / 3.0f);
+            const float depth = (d0 + d1 + d2 + dc) * 0.25f;
             vg_stroke_style core = enemy_bullet_style;
             vg_stroke_style halo = enemy_bullet_halo_style;
             core.width_px *= 0.42f + depth * 0.92f;
@@ -12619,27 +12991,7 @@ vg_result render_frame(vg_context* ctx, const game_state* state, const render_me
             halo.intensity *= 0.28f + depth * 0.86f;
             core.color.a *= 0.30f + depth * 0.78f;
             halo.color.a *= 0.30f + depth * 0.72f;
-            vg_stroke_style core_tail = core;
-            vg_stroke_style halo_tail = halo;
-            core_tail.intensity *= 0.56f;
-            halo_tail.intensity *= 0.60f;
-            core_tail.color.a *= 0.60f;
-            halo_tail.color.a *= 0.60f;
-            const vg_vec2 seg_tail[] = {p0, p1};
-            const vg_vec2 seg_core[] = {p1, p2};
-            r = vg_draw_polyline(ctx, seg_tail, 2, &halo_tail, 0);
-            if (r != VG_OK) {
-                return r;
-            }
-            r = vg_draw_polyline(ctx, seg_tail, 2, &core_tail, 0);
-            if (r != VG_OK) {
-                return r;
-            }
-            r = vg_draw_polyline(ctx, seg_core, 2, &halo, 0);
-            if (r != VG_OK) {
-                return r;
-            }
-            r = vg_draw_polyline(ctx, seg_core, 2, &core, 0);
+            r = draw_enemy_bullet_skin(ctx, enemy_bullet_skin_mode, &proj_pts, &core, &halo);
             if (r != VG_OK) {
                 return r;
             }
@@ -13338,36 +13690,16 @@ skip_legacy_landscape:
             continue;
         }
         const enemy_bullet* b = &g->enemy_bullets[i];
+        enemy_bullet_draw_points pts;
         if (level_uses_sphere_render(g) && !b->sphere_visible) {
             continue;
         }
-        float ux = b->b.vx;
-        float uy = b->b.vy;
-        float speed = sqrtf(ux * ux + uy * uy);
-        if (speed > 1.0e-4f) {
-            ux /= speed;
-            uy /= speed;
-        } else {
-            ux = -1.0f;
-            uy = 0.0f;
-            speed = 0.0f;
-        }
-        const float core_f = 10.5f;
-        const float core_b = 6.2f;
-        const float trail = 16.0f + clampf(speed * 0.026f, 7.0f, 24.0f);
-        const vg_vec2 seg_tail[] = {
-            {b->b.x - ux * trail, b->b.y - uy * trail},
-            {b->b.x - ux * core_b, b->b.y - uy * core_b}
-        };
-        const vg_vec2 seg_core[] = {
-            {b->b.x - ux * core_b, b->b.y - uy * core_b},
-            {b->b.x + ux * core_f, b->b.y + uy * core_f}
-        };
+        build_enemy_bullet_draw_points(b, &pts);
         {
-            const float min_x = fminf(seg_tail[0].x, fminf(seg_tail[1].x, seg_core[1].x));
-            const float min_y = fminf(seg_tail[0].y, fminf(seg_tail[1].y, seg_core[1].y));
-            const float max_x = fmaxf(seg_tail[0].x, fmaxf(seg_tail[1].x, seg_core[1].x));
-            const float max_y = fmaxf(seg_tail[0].y, fmaxf(seg_tail[1].y, seg_core[1].y));
+            const float min_x = fminf(pts.tail.x, fminf(pts.back.x, pts.nose.x));
+            const float min_y = fminf(pts.tail.y, fminf(pts.back.y, pts.nose.y));
+            const float max_x = fmaxf(pts.tail.x, fmaxf(pts.back.x, pts.nose.x));
+            const float max_y = fmaxf(pts.tail.y, fmaxf(pts.back.y, pts.nose.y));
             if (!rects_intersect(
                     min_x,
                     min_y,
@@ -13382,28 +13714,7 @@ skip_legacy_landscape:
         }
         vg_stroke_style core = enemy_bullet_style;
         vg_stroke_style halo = enemy_bullet_halo_style;
-        vg_stroke_style core_tail = core;
-        vg_stroke_style halo_tail = halo;
-        core_tail.intensity *= 0.58f;
-        halo_tail.intensity *= 0.62f;
-        core_tail.color.a *= 0.62f;
-        halo_tail.color.a *= 0.62f;
-        r = vg_draw_polyline(ctx, seg_tail, 2, &halo_tail, 0);
-        if (r != VG_OK) {
-            (void)vg_transform_pop(ctx);
-            return r;
-        }
-        r = vg_draw_polyline(ctx, seg_tail, 2, &core_tail, 0);
-        if (r != VG_OK) {
-            (void)vg_transform_pop(ctx);
-            return r;
-        }
-        r = vg_draw_polyline(ctx, seg_core, 2, &halo, 0);
-        if (r != VG_OK) {
-            (void)vg_transform_pop(ctx);
-            return r;
-        }
-        r = vg_draw_polyline(ctx, seg_core, 2, &core, 0);
+        r = draw_enemy_bullet_skin(ctx, enemy_bullet_skin_mode, &pts, &core, &halo);
         if (r != VG_OK) {
             (void)vg_transform_pop(ctx);
             return r;

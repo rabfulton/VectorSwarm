@@ -98,6 +98,10 @@
 - `drifter_shaded`
 - `fog`
 - `wave_mode` enum: `normal`, `boid_only`, or `curated`
+- `theme_palette` int (`0..2`)
+- `enemy_palette` enum: `default`, `anemone`, `amber`, `ice`, `toxic`
+- `enemy_bullet_skin` enum: `streak`, `bolt`, `orb`, `ring`, `crystal`
+- `enemy_bullet_color` enum: `palette`, `red`, `amber`, `ice`, `toxic`, `white`, `magenta`
 - `background` enum: `stars`, `none`, `nebula`, `grid`, `solid`, `underwater`, `fire`, `ice`, `forest`
 - `texture_atlas` optional string:
 - Runtime-discovered from `assets/images/*tiles*.png`

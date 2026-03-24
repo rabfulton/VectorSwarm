@@ -166,6 +166,8 @@ typedef struct render_metrics {
     int level_editor_render_style;
     int level_editor_theme_palette;
     int level_editor_enemy_palette;
+    int level_editor_enemy_bullet_skin;
+    int level_editor_enemy_bullet_color;
     int level_editor_background_style;
     int level_editor_background_mask_style;
     int level_editor_texture_atlas_id;

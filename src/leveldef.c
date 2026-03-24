@@ -298,6 +298,32 @@ static int enemy_palette_from_name(const char* name) {
     return -1;
 }
 
+static int bullet_skin_from_name(const char* name) {
+    if (!name) {
+        return -1;
+    }
+    if (strcmp(name, "streak") == 0 || strcmp(name, "line") == 0) return LEVELDEF_BULLET_SKIN_STREAK;
+    if (strcmp(name, "bolt") == 0) return LEVELDEF_BULLET_SKIN_BOLT;
+    if (strcmp(name, "orb") == 0 || strcmp(name, "disc") == 0) return LEVELDEF_BULLET_SKIN_ORB;
+    if (strcmp(name, "ring") == 0) return LEVELDEF_BULLET_SKIN_RING;
+    if (strcmp(name, "crystal") == 0) return LEVELDEF_BULLET_SKIN_CRYSTAL;
+    return -1;
+}
+
+static int enemy_bullet_color_from_name(const char* name) {
+    if (!name) {
+        return -1;
+    }
+    if (strcmp(name, "palette") == 0 || strcmp(name, "match_palette") == 0) return LEVELDEF_ENEMY_BULLET_COLOR_PALETTE;
+    if (strcmp(name, "red") == 0) return LEVELDEF_ENEMY_BULLET_COLOR_RED;
+    if (strcmp(name, "amber") == 0) return LEVELDEF_ENEMY_BULLET_COLOR_AMBER;
+    if (strcmp(name, "ice") == 0 || strcmp(name, "cyan") == 0) return LEVELDEF_ENEMY_BULLET_COLOR_ICE;
+    if (strcmp(name, "toxic") == 0 || strcmp(name, "lime") == 0) return LEVELDEF_ENEMY_BULLET_COLOR_TOXIC;
+    if (strcmp(name, "white") == 0) return LEVELDEF_ENEMY_BULLET_COLOR_WHITE;
+    if (strcmp(name, "magenta") == 0 || strcmp(name, "pink") == 0) return LEVELDEF_ENEMY_BULLET_COLOR_MAGENTA;
+    return -1;
+}
+
 static int has_prefix(const char* s, const char* prefix) {
     if (!s || !prefix) return 0;
     while (*prefix) {
@@ -371,6 +397,16 @@ const leveldef_level* leveldef_get_level(const leveldef_db* db, int level_style)
         return NULL;
     }
     return &db->levels[level_style];
+}
+
+static void leveldef_reset_level_slots(leveldef_db* db) {
+    leveldef_db defaults;
+    if (!db) {
+        return;
+    }
+    leveldef_init_defaults(&defaults);
+    memcpy(db->levels, defaults.levels, sizeof(db->levels));
+    memset(db->level_present, 0, sizeof(db->level_present));
 }
 
 static void leveldef_init_builtin_boid_profiles(leveldef_db* db) {
@@ -486,6 +522,8 @@ void leveldef_init_defaults(leveldef_db* db) {
         db->levels[i].editor_length_screens = 12.0f;
         db->levels[i].theme_palette = 0;
         db->levels[i].enemy_palette = LEVELDEF_ENEMY_PALETTE_DEFAULT;
+        db->levels[i].enemy_bullet_skin = LEVELDEF_BULLET_SKIN_STREAK;
+        db->levels[i].enemy_bullet_color = LEVELDEF_ENEMY_BULLET_COLOR_PALETTE;
         db->levels[i].background_style = LEVELDEF_BACKGROUND_STARS;
         db->levels[i].background_mask_style = LEVELDEF_BG_MASK_NONE;
         db->levels[i].texture_atlas_id = TEXTURE_ATLAS_NONE;
@@ -1202,6 +1240,10 @@ static int leveldef_apply_file(leveldef_db* db, const char* path, FILE* log_out)
                         cur_level->texture_panel_h_units = atoi(v);
                     } else if (strcmp(k, "enemy_palette") == 0) {
                         cur_level->enemy_palette = enemy_palette_from_name(v);
+                    } else if (strcmp(k, "enemy_bullet_skin") == 0) {
+                        cur_level->enemy_bullet_skin = bullet_skin_from_name(v);
+                    } else if (strcmp(k, "enemy_bullet_color") == 0) {
+                        cur_level->enemy_bullet_color = enemy_bullet_color_from_name(v);
                     } else if (strcmp(k, "background") == 0) {
                         cur_level->background_style = background_style_from_name(v);
                     } else if (strcmp(k, "background_mask") == 0) {
@@ -1823,6 +1865,18 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
             }
             ok = 0;
         }
+        if (l->enemy_bullet_skin < LEVELDEF_BULLET_SKIN_STREAK || l->enemy_bullet_skin > LEVELDEF_BULLET_SKIN_CRYSTAL) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid enemy_bullet_skin (expected streak|bolt|orb|ring|crystal)\n", i);
+            }
+            ok = 0;
+        }
+        if (l->enemy_bullet_color < LEVELDEF_ENEMY_BULLET_COLOR_PALETTE || l->enemy_bullet_color > LEVELDEF_ENEMY_BULLET_COLOR_MAGENTA) {
+            if (log_out) {
+                fprintf(log_out, "leveldef: level %d invalid enemy_bullet_color (expected palette|red|amber|ice|toxic|white|magenta)\n", i);
+            }
+            ok = 0;
+        }
         if (l->background_style < LEVELDEF_BACKGROUND_STARS || l->background_style > LEVELDEF_BACKGROUND_FOREST) {
             if (log_out) {
                 fprintf(log_out, "leveldef: level %d invalid background (expected stars|none|nebula|grid|solid|underwater|fire|ice|forest)\n", i);
@@ -2336,6 +2390,7 @@ int leveldef_load_level_file_with_base(
     }
 
     tmp = *base_db;
+    leveldef_reset_level_slots(&tmp);
     if (!leveldef_apply_file(&tmp, level_path, log_out)) {
         return 0;
     }

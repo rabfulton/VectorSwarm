@@ -69,6 +69,24 @@ enum leveldef_enemy_palette {
     LEVELDEF_ENEMY_PALETTE_TOXIC = 4
 };
 
+enum leveldef_bullet_skin {
+    LEVELDEF_BULLET_SKIN_STREAK = 0,
+    LEVELDEF_BULLET_SKIN_BOLT = 1,
+    LEVELDEF_BULLET_SKIN_ORB = 2,
+    LEVELDEF_BULLET_SKIN_RING = 3,
+    LEVELDEF_BULLET_SKIN_CRYSTAL = 4
+};
+
+enum leveldef_enemy_bullet_color {
+    LEVELDEF_ENEMY_BULLET_COLOR_PALETTE = 0,
+    LEVELDEF_ENEMY_BULLET_COLOR_RED = 1,
+    LEVELDEF_ENEMY_BULLET_COLOR_AMBER = 2,
+    LEVELDEF_ENEMY_BULLET_COLOR_ICE = 3,
+    LEVELDEF_ENEMY_BULLET_COLOR_TOXIC = 4,
+    LEVELDEF_ENEMY_BULLET_COLOR_WHITE = 5,
+    LEVELDEF_ENEMY_BULLET_COLOR_MAGENTA = 6
+};
+
 enum leveldef_wave_pattern_id {
     LEVELDEF_WAVE_SINE_SNAKE = 0,
     LEVELDEF_WAVE_V_FORMATION = 1,
@@ -345,6 +363,8 @@ typedef struct leveldef_level {
     float editor_length_screens; /* editor/runtime normalization basis for x01-authored objects */
     int theme_palette; /* 0=green, 1=amber, 2=ice */
     int enemy_palette; /* enum leveldef_enemy_palette */
+    int enemy_bullet_skin; /* enum leveldef_bullet_skin */
+    int enemy_bullet_color; /* enum leveldef_enemy_bullet_color */
     int background_style; /* enum leveldef_background_style */
     int background_mask_style; /* enum leveldef_background_mask_style */
     int texture_atlas_id; /* runtime-discovered texture atlas id, or TEXTURE_ATLAS_NONE */

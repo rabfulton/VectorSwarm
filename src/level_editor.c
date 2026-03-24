@@ -844,6 +844,8 @@ static void level_editor_save_snapshot(level_editor_state* s) {
     s->snapshot_level_wave_mode = s->level_wave_mode;
     s->snapshot_level_theme_palette = s->level_theme_palette;
     s->snapshot_level_enemy_palette = s->level_enemy_palette;
+    s->snapshot_level_enemy_bullet_skin = s->level_enemy_bullet_skin;
+    s->snapshot_level_enemy_bullet_color = s->level_enemy_bullet_color;
     s->snapshot_level_background_style = s->level_background_style;
     s->snapshot_level_background_mask_style = s->level_background_mask_style;
     s->snapshot_level_texture_atlas_id = s->level_texture_atlas_id;
@@ -1230,6 +1232,30 @@ static const char* enemy_palette_name(int palette) {
     }
 }
 
+static const char* bullet_skin_name(int skin) {
+    switch (clampi(skin, LEVELDEF_BULLET_SKIN_STREAK, LEVELDEF_BULLET_SKIN_CRYSTAL)) {
+        case LEVELDEF_BULLET_SKIN_BOLT: return "bolt";
+        case LEVELDEF_BULLET_SKIN_ORB: return "orb";
+        case LEVELDEF_BULLET_SKIN_RING: return "ring";
+        case LEVELDEF_BULLET_SKIN_CRYSTAL: return "crystal";
+        case LEVELDEF_BULLET_SKIN_STREAK:
+        default: return "streak";
+    }
+}
+
+static const char* bullet_color_name(int color) {
+    switch (clampi(color, LEVELDEF_ENEMY_BULLET_COLOR_PALETTE, LEVELDEF_ENEMY_BULLET_COLOR_MAGENTA)) {
+        case LEVELDEF_ENEMY_BULLET_COLOR_RED: return "red";
+        case LEVELDEF_ENEMY_BULLET_COLOR_AMBER: return "amber";
+        case LEVELDEF_ENEMY_BULLET_COLOR_ICE: return "ice";
+        case LEVELDEF_ENEMY_BULLET_COLOR_TOXIC: return "toxic";
+        case LEVELDEF_ENEMY_BULLET_COLOR_WHITE: return "white";
+        case LEVELDEF_ENEMY_BULLET_COLOR_MAGENTA: return "magenta";
+        case LEVELDEF_ENEMY_BULLET_COLOR_PALETTE:
+        default: return "palette";
+    }
+}
+
 static const char* background_mask_style_name(int style) {
     switch (style) {
         case LEVELDEF_BG_MASK_TERRAIN: return "terrain";
@@ -1474,6 +1500,8 @@ static int build_level_serialized_text(
     lvl.wave_mode = s->level_wave_mode;
     lvl.theme_palette = s->level_theme_palette;
     lvl.enemy_palette = clampi(s->level_enemy_palette, LEVELDEF_ENEMY_PALETTE_DEFAULT, LEVELDEF_ENEMY_PALETTE_TOXIC);
+    lvl.enemy_bullet_skin = clampi(s->level_enemy_bullet_skin, LEVELDEF_BULLET_SKIN_STREAK, LEVELDEF_BULLET_SKIN_CRYSTAL);
+    lvl.enemy_bullet_color = clampi(s->level_enemy_bullet_color, LEVELDEF_ENEMY_BULLET_COLOR_PALETTE, LEVELDEF_ENEMY_BULLET_COLOR_MAGENTA);
     lvl.background_style = s->level_background_style;
     lvl.background_mask_style = s->level_background_mask_style;
     lvl.texture_atlas_id = s->level_texture_atlas_id;
@@ -1857,6 +1885,8 @@ static int build_level_serialized_text(
     if (!appendf(out, out_cap, &used, "texture_panel_w_units=%d\n", lvl.texture_panel_w_units)) return 0;
     if (!appendf(out, out_cap, &used, "texture_panel_h_units=%d\n", lvl.texture_panel_h_units)) return 0;
     if (!appendf(out, out_cap, &used, "enemy_palette=%s\n", enemy_palette_name(lvl.enemy_palette))) return 0;
+    if (!appendf(out, out_cap, &used, "enemy_bullet_skin=%s\n", bullet_skin_name(lvl.enemy_bullet_skin))) return 0;
+    if (!appendf(out, out_cap, &used, "enemy_bullet_color=%s\n", bullet_color_name(lvl.enemy_bullet_color))) return 0;
     if (!appendf(out, out_cap, &used, "background=%s\n", background_style_name(clampi(lvl.background_style, LEVELDEF_BACKGROUND_STARS, LEVELDEF_BACKGROUND_FOREST)))) return 0;
     if (lvl.background_style == LEVELDEF_BACKGROUND_UNDERWATER) {
         if (!appendf(out, out_cap, &used, "underwater.density=%.3f\n", lvl.underwater_density)) return 0;
@@ -3060,6 +3090,8 @@ void level_editor_init(level_editor_state* s) {
     s->level_wave_mode = LEVELDEF_WAVES_NORMAL;
     s->level_theme_palette = 0;
     s->level_enemy_palette = LEVELDEF_ENEMY_PALETTE_DEFAULT;
+    s->level_enemy_bullet_skin = LEVELDEF_BULLET_SKIN_STREAK;
+    s->level_enemy_bullet_color = LEVELDEF_ENEMY_BULLET_COLOR_PALETTE;
     s->level_background_style = LEVELDEF_BACKGROUND_NONE;
     s->level_background_mask_style = LEVELDEF_BG_MASK_NONE;
     s->level_texture_atlas_id = editor_default_texture_atlas_id();
@@ -3208,6 +3240,8 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
             s->level_wave_mode = lvl->wave_mode;
             s->level_theme_palette = clampi(lvl->theme_palette, 0, 2);
             s->level_enemy_palette = clampi(lvl->enemy_palette, LEVELDEF_ENEMY_PALETTE_DEFAULT, LEVELDEF_ENEMY_PALETTE_TOXIC);
+            s->level_enemy_bullet_skin = clampi(lvl->enemy_bullet_skin, LEVELDEF_BULLET_SKIN_STREAK, LEVELDEF_BULLET_SKIN_CRYSTAL);
+            s->level_enemy_bullet_color = clampi(lvl->enemy_bullet_color, LEVELDEF_ENEMY_BULLET_COLOR_PALETTE, LEVELDEF_ENEMY_BULLET_COLOR_MAGENTA);
             s->level_background_style = clampi(lvl->background_style, LEVELDEF_BACKGROUND_STARS, LEVELDEF_BACKGROUND_FOREST);
             s->level_background_mask_style = clampi(lvl->background_mask_style, LEVELDEF_BG_MASK_NONE, LEVELDEF_BG_MASK_WINDOWS);
             s->level_texture_atlas_id = texture_atlas_get(lvl->texture_atlas_id) ? lvl->texture_atlas_id : editor_default_texture_atlas_id();
@@ -3229,6 +3263,8 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
             level_editor_clamp_curated_tuning(&s->level_curated_combat);
         } else {
             s->level_enemy_palette = LEVELDEF_ENEMY_PALETTE_DEFAULT;
+            s->level_enemy_bullet_skin = LEVELDEF_BULLET_SKIN_STREAK;
+            s->level_enemy_bullet_color = LEVELDEF_ENEMY_BULLET_COLOR_PALETTE;
             s->level_background_style = (s->level_render_style == LEVEL_RENDER_BLANK)
                 ? LEVELDEF_BACKGROUND_NONE
                 : LEVELDEF_BACKGROUND_STARS;
@@ -3950,6 +3986,8 @@ const char* level_editor_selected_property_name(const level_editor_state* s) {
         "RENDER STYLE",
         "THEME",
         "ENEMY PALETTE",
+        "BULLET SKIN",
+        "BULLET COLOR",
         "BACKGROUND",
         "BG MASK",
         "ATLAS",
@@ -4029,6 +4067,22 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
                 int ep = clampi(s->level_enemy_palette, LEVELDEF_ENEMY_PALETTE_DEFAULT, LEVELDEF_ENEMY_PALETTE_TOXIC);
                 ep = LEVELDEF_ENEMY_PALETTE_DEFAULT + ((ep - LEVELDEF_ENEMY_PALETTE_DEFAULT + dir + n) % n);
                 s->level_enemy_palette = ep;
+            } break;
+            case LEVEL_EDITOR_LEVEL_PROP_ENEMY_BULLET_SKIN:
+            {
+                const int dir = (delta >= 0.0f) ? 1 : -1;
+                const int n = LEVELDEF_BULLET_SKIN_CRYSTAL - LEVELDEF_BULLET_SKIN_STREAK + 1;
+                int skin = clampi(s->level_enemy_bullet_skin, LEVELDEF_BULLET_SKIN_STREAK, LEVELDEF_BULLET_SKIN_CRYSTAL);
+                skin = LEVELDEF_BULLET_SKIN_STREAK + ((skin - LEVELDEF_BULLET_SKIN_STREAK + dir + n) % n);
+                s->level_enemy_bullet_skin = skin;
+            } break;
+            case LEVEL_EDITOR_LEVEL_PROP_ENEMY_BULLET_COLOR:
+            {
+                const int dir = (delta >= 0.0f) ? 1 : -1;
+                const int n = LEVELDEF_ENEMY_BULLET_COLOR_MAGENTA - LEVELDEF_ENEMY_BULLET_COLOR_PALETTE + 1;
+                int color = clampi(s->level_enemy_bullet_color, LEVELDEF_ENEMY_BULLET_COLOR_PALETTE, LEVELDEF_ENEMY_BULLET_COLOR_MAGENTA);
+                color = LEVELDEF_ENEMY_BULLET_COLOR_PALETTE + ((color - LEVELDEF_ENEMY_BULLET_COLOR_PALETTE + dir + n) % n);
+                s->level_enemy_bullet_color = color;
             } break;
             case LEVEL_EDITOR_LEVEL_PROP_BACKGROUND:
             {
@@ -4639,6 +4693,8 @@ int level_editor_revert(level_editor_state* s) {
     s->level_wave_mode = s->snapshot_level_wave_mode;
     s->level_theme_palette = s->snapshot_level_theme_palette;
     s->level_enemy_palette = s->snapshot_level_enemy_palette;
+    s->level_enemy_bullet_skin = s->snapshot_level_enemy_bullet_skin;
+    s->level_enemy_bullet_color = s->snapshot_level_enemy_bullet_color;
     s->level_background_style = s->snapshot_level_background_style;
     s->level_background_mask_style = s->snapshot_level_background_mask_style;
     s->level_texture_atlas_id = s->snapshot_level_texture_atlas_id;
@@ -4703,6 +4759,8 @@ void level_editor_new_blank(level_editor_state* s) {
     s->level_style = LEVEL_STYLE_BLANK;
     s->level_theme_palette = 0;
     s->level_enemy_palette = LEVELDEF_ENEMY_PALETTE_DEFAULT;
+    s->level_enemy_bullet_skin = LEVELDEF_BULLET_SKIN_STREAK;
+    s->level_enemy_bullet_color = LEVELDEF_ENEMY_BULLET_COLOR_PALETTE;
     s->level_background_style = LEVELDEF_BACKGROUND_NONE;
     s->level_background_mask_style = LEVELDEF_BG_MASK_NONE;
     s->level_texture_atlas_id = editor_default_texture_atlas_id();
