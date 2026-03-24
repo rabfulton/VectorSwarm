@@ -715,6 +715,7 @@ typedef struct app {
     uint32_t radar_tri_vertex_count;
     VkSampler sphere_style_point_sampler;
     VkSampler sphere_style_linear_sampler;
+    VkSampler sphere_style_wrap_u_sampler;
     VkImage sphere_style_blue_noise_image;
     VkDeviceMemory sphere_style_blue_noise_memory;
     VkImageView sphere_style_blue_noise_view;
@@ -7847,6 +7848,10 @@ static void destroy_sphere_style_resources(app* a) {
         vkDestroySampler(a->device, a->sphere_style_linear_sampler, NULL);
         a->sphere_style_linear_sampler = VK_NULL_HANDLE;
     }
+    if (a->sphere_style_wrap_u_sampler) {
+        vkDestroySampler(a->device, a->sphere_style_wrap_u_sampler, NULL);
+        a->sphere_style_wrap_u_sampler = VK_NULL_HANDLE;
+    }
     if (a->sphere_style_blue_noise_view) {
         vkDestroyImageView(a->device, a->sphere_style_blue_noise_view, NULL);
         a->sphere_style_blue_noise_view = VK_NULL_HANDLE;
@@ -9828,7 +9833,6 @@ static int create_sphere_style_resources(app* a) {
     VkShaderModule holo_glow_fs = VK_NULL_HANDLE;
     VkShaderModule ion_vs = VK_NULL_HANDLE;
     VkShaderModule ion_fs = VK_NULL_HANDLE;
-    VkShaderModule ion_bloom_fs = VK_NULL_HANDLE;
     uint8_t* blue_noise = NULL;
     uint8_t* holo_mask = NULL;
     uint8_t* band_warp = NULL;
@@ -9998,10 +10002,23 @@ static int create_sphere_style_resources(app* a) {
             .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
             .maxLod = 1.0f
         };
+        VkSamplerCreateInfo wrap_u_sampler = {
+            .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+            .magFilter = VK_FILTER_LINEAR,
+            .minFilter = VK_FILTER_LINEAR,
+            .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+            .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .maxLod = 1.0f
+        };
         if (!check_vk(vkCreateSampler(a->device, &point_sampler, NULL, &a->sphere_style_point_sampler), "vkCreateSampler(sphere point)")) {
             return 0;
         }
         if (!check_vk(vkCreateSampler(a->device, &linear_sampler, NULL, &a->sphere_style_linear_sampler), "vkCreateSampler(sphere linear)")) {
+            return 0;
+        }
+        if (!check_vk(vkCreateSampler(a->device, &wrap_u_sampler, NULL, &a->sphere_style_wrap_u_sampler), "vkCreateSampler(sphere wrap-u)")) {
             return 0;
         }
     }
@@ -10072,17 +10089,17 @@ static int create_sphere_style_resources(app* a) {
             .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
         };
         infos[2] = (VkDescriptorImageInfo){
-            .sampler = a->sphere_style_linear_sampler,
+            .sampler = a->sphere_style_wrap_u_sampler,
             .imageView = a->sphere_style_band_warp_view,
             .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
         };
         infos[3] = (VkDescriptorImageInfo){
-            .sampler = a->sphere_style_linear_sampler,
+            .sampler = a->sphere_style_wrap_u_sampler,
             .imageView = a->sphere_style_aurora_mask_view,
             .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
         };
         infos[4] = (VkDescriptorImageInfo){
-            .sampler = a->sphere_style_linear_sampler,
+            .sampler = a->sphere_style_wrap_u_sampler,
             .imageView = a->sphere_style_storm_shape_view,
             .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
         };
@@ -10131,11 +10148,6 @@ static int create_sphere_style_resources(app* a) {
             .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
             .codeSize = v_type_sphere_ion_storm_frag_spv_len,
             .pCode = (const uint32_t*)v_type_sphere_ion_storm_frag_spv
-        };
-        VkShaderModuleCreateInfo ion_bloom_fs_ci = {
-            .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-            .codeSize = v_type_sphere_ion_storm_bloom_frag_spv_len,
-            .pCode = (const uint32_t*)v_type_sphere_ion_storm_bloom_frag_spv
         };
         VkPipelineShaderStageCreateInfo stages[2];
         VkVertexInputBindingDescription line_binding = {
@@ -10264,8 +10276,7 @@ static int create_sphere_style_resources(app* a) {
             !check_vk(vkCreateShaderModule(a->device, &holo_line_fs_ci, NULL, &holo_line_fs), "vkCreateShaderModule(sphere holo line fs)") ||
             !check_vk(vkCreateShaderModule(a->device, &holo_glow_fs_ci, NULL, &holo_glow_fs), "vkCreateShaderModule(sphere holo glow fs)") ||
             !check_vk(vkCreateShaderModule(a->device, &ion_vs_ci, NULL, &ion_vs), "vkCreateShaderModule(sphere ion vs)") ||
-            !check_vk(vkCreateShaderModule(a->device, &ion_fs_ci, NULL, &ion_fs), "vkCreateShaderModule(sphere ion fs)") ||
-            !check_vk(vkCreateShaderModule(a->device, &ion_bloom_fs_ci, NULL, &ion_bloom_fs), "vkCreateShaderModule(sphere ion bloom fs)")) {
+            !check_vk(vkCreateShaderModule(a->device, &ion_fs_ci, NULL, &ion_fs), "vkCreateShaderModule(sphere ion fs)")) {
             goto sphere_style_shader_fail;
         }
         stages[0].module = holo_vs;
@@ -10316,17 +10327,6 @@ static int create_sphere_style_resources(app* a) {
         if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->sphere_ion_storm_pipeline), "vkCreateGraphicsPipelines(sphere ion storm)")) {
             goto sphere_style_shader_fail;
         }
-        stages[1].module = ion_bloom_fs;
-        gp.renderPass = a->bloom_render_pass;
-        gp.pMultisampleState = &ms_bloom;
-        cb_att.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
-        cb_att.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
-        cb_att.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-        cb_att.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-        if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->sphere_ion_storm_bloom_pipeline), "vkCreateGraphicsPipelines(sphere ion storm bloom)")) {
-            goto sphere_style_shader_fail;
-        }
-        vkDestroyShaderModule(a->device, ion_bloom_fs, NULL);
         vkDestroyShaderModule(a->device, ion_fs, NULL);
         vkDestroyShaderModule(a->device, ion_vs, NULL);
         vkDestroyShaderModule(a->device, holo_glow_fs, NULL);
@@ -10335,7 +10335,6 @@ static int create_sphere_style_resources(app* a) {
         a->sphere_style_resources_ready = 1;
         return 1;
     sphere_style_shader_fail:
-        if (ion_bloom_fs) vkDestroyShaderModule(a->device, ion_bloom_fs, NULL);
         if (ion_fs) vkDestroyShaderModule(a->device, ion_fs, NULL);
         if (ion_vs) vkDestroyShaderModule(a->device, ion_vs, NULL);
         if (holo_glow_fs) vkDestroyShaderModule(a->device, holo_glow_fs, NULL);
@@ -14533,8 +14532,8 @@ static void record_gpu_sphere_ion_storm(app* a, VkCommandBuffer cmd) {
     (void)a;
     (void)cmd;
 #else
-    static const float shell_offsets[] = {0.0035f};
-    static const float shell_alpha[] = {0.40f};
+    static const float shell_offsets[] = {0.0035f, 0.026f};
+    static const float shell_alpha[] = {0.40f, 0.12f};
     if (!a || !cmd ||
         !game_render_style_is_ion_storm(a->game.render_style) ||
         !a->sphere_style_resources_ready ||
@@ -14563,11 +14562,11 @@ static void record_gpu_sphere_ion_storm(app* a, VkCommandBuffer cmd) {
         pc.tune0[0] = shell_offsets[i];
         pc.tune0[1] = layer_t;
         pc.tune0[2] = shell_alpha[i];
-        pc.tune0[3] = 0.12f + (float)i * 0.09f;
-        pc.tune1[0] = 0.28f + layer_t * 0.03f;
-        pc.tune1[1] = 0.74f - layer_t * 0.06f;
-        pc.tune1[2] = 0.40f + layer_t * 0.04f;
-        pc.tune1[3] = 0.26f + layer_t * 0.04f;
+        pc.tune0[3] = 0.22f + (float)i * 0.10f;
+        pc.tune1[0] = 0.30f + layer_t * 0.02f;
+        pc.tune1[1] = 0.78f - layer_t * 0.05f;
+        pc.tune1[2] = 0.34f + layer_t * 0.02f;
+        pc.tune1[3] = 0.86f + layer_t * 0.32f;
         vkCmdPushConstants(cmd, a->sphere_style_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
         vkCmdDrawIndexed(cmd, a->sphere_style_shell_index_count, 1, 0, 0, 0);
     }

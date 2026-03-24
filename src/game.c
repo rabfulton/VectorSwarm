@@ -459,7 +459,7 @@ static void kill_powerup_pickup(game_state* g, powerup_pickup* p) {
 
 static int powerup_pick_drop_type(const game_state* g) {
     const float r = frand01();
-    if (level_uses_cylinder(g)) {
+    if (level_uses_cylinder(g) || level_uses_sphere(g)) {
         if (r < 0.27f) return POWERUP_DOUBLE_SHOT;
         if (r < 0.48f) return POWERUP_TRIPLE_SHOT;
         if (r < 0.68f) return POWERUP_VITALITY;
@@ -489,7 +489,7 @@ static void game_apply_powerup(game_state* g, int type) {
             g->lives = clampi(g->lives + 1, 0, 3);
             break;
         case POWERUP_ORBITAL_BOOST:
-            if (level_uses_cylinder(g)) {
+            if (level_uses_cylinder(g) || level_uses_sphere(g)) {
                 g->level_time_remaining_s = fmaxf(g->level_time_remaining_s, 0.0f) + 15.0f;
             }
             break;

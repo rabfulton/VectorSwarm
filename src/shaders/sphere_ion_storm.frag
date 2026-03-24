@@ -139,6 +139,50 @@ void main() {
     float azimuth = length(local_n.xz);
     float azimuth_t = smoothstep(0.18, 0.52, azimuth);
     float rim = rim_mask(view_n.z);
+    float layer_t = clamp(pc.tune0.y, 0.0, 1.0);
+    float layer_alpha = max(pc.tune0.z, 0.0);
+    float fresnel = pow(clamp(1.0 - max(view_n.z, 0.0), 0.0, 1.0), mix(4.8, 3.4, layer_t));
+
+    if (layer_t > 0.5) {
+        float atmo_visible = smoothstep(0.10, 0.84, rim);
+        if (atmo_visible <= 0.001) {
+            discard;
+        }
+
+        vec3 haze_tex = texture(
+            u_band_warp,
+            vec2(
+                fract(base_uv.x * 0.74 + pc.p0.z * 0.00012 + pc.tune0.w * 0.09),
+                clamp(base_uv.y * 0.70 + 0.15 + local_n.y * 0.02, 0.0, 1.0)
+            )
+        ).rgb;
+        float lat_soft = 1.0 - smoothstep(0.72, 0.98, abs(local_n.y));
+        float high_haze = (0.34 + 0.66 * haze_tex.g) * (0.82 + 0.18 * haze_tex.r) * (0.74 + 0.26 * lat_soft);
+        float atmo_rim = pow(rim, 0.92) * (0.62 + 0.38 * high_haze);
+        float atmo_band = smoothstep(0.24, 0.90, rim) * (0.24 + 0.76 * high_haze) * lat_soft;
+        float atmo_veil = high_haze * (0.040 + 0.075 * rim + 0.022 * fresnel) * (0.58 + 0.42 * lat_soft);
+        vec3 haze_col = mix(pc.color0.rgb, vec3(0.98, 0.98, 1.00), 0.24 + 0.08 * haze_tex.b);
+
+        vec3 rgb = haze_col * (
+            atmo_veil * (0.34 + 0.18 * pc.tune1.w) +
+            atmo_band * (0.10 + 0.10 * pc.tune1.w) +
+            atmo_rim * (0.48 + 0.30 * pc.tune1.w)
+        );
+        float dither = texture(
+            u_blue_noise,
+            fract(base_uv * vec2(23.0, 11.0) + vec2(pc.tune0.w * 0.37, pc.tune0.y * 0.29))
+        ).r;
+        float alpha = layer_alpha * front * atmo_visible *
+            (0.11 * atmo_veil + 0.11 * atmo_band + 0.24 * atmo_rim * pc.tune1.w);
+        alpha *= mix(0.997, 1.003, dither);
+        alpha = clamp(alpha, 0.0, 1.0);
+        if (alpha < 0.010) {
+            discard;
+        }
+
+        out_color = vec4(rgb, alpha);
+        return;
+    }
 
     vec4 curl_lo_s = texture(
         u_curl_volume,
@@ -160,8 +204,8 @@ void main() {
     );
     vec3 curl_hi = curl_hi_s.rgb * 2.0 - 1.0;
     float density = clamp(curl_lo_s.a * 0.40 + curl_mid_s.a * 0.35 + curl_hi_s.a * 0.25, 0.0, 1.0);
-    float layer_t = clamp(pc.tune0.y, 0.0, 1.0);
-    float layer_alpha = max(pc.tune0.z, 0.0);
+    float atmo_shell = smoothstep(0.55, 1.0, layer_t);
+    float body_shell = 1.0 - atmo_shell;
 
     float lon = fract(base_uv.x + advect_mid.x + pc.p0.z * 0.00025);
     float lat = clamp(base_uv.y * 2.0 - 1.0 + advect_mid.y * (1.05 + 0.12 * pc.tune1.y), -1.0, 1.0);
@@ -231,6 +275,20 @@ void main() {
     base = mix(base, storm_col, storm * (0.30 + 0.18 * boundary));
     base += storm_col * storm * 0.18;
 
+    vec3 haze_tex = texture(
+        u_band_warp,
+        vec2(
+            fract(lon * 0.72 + curl_lo.x * 0.015 * azimuth_t + pc.p0.z * 0.00012 + pc.tune0.w * 0.09),
+            clamp(base_uv.y * 0.70 + 0.15 + curl_lo.z * 0.012 * azimuth_t, 0.0, 1.0)
+        )
+    ).rgb;
+    float upper_cloud = smoothstep(0.44, 0.86, band_mix) * (0.40 + 0.60 * haze_tex.g) * (0.68 + 0.32 * azimuth_t);
+    float high_haze = (0.26 + 0.74 * upper_cloud) * (0.78 + 0.22 * haze_tex.r);
+    float atmo_rim = pow(rim, 1.08) * (0.46 + 0.54 * high_haze);
+    float atmo_band = smoothstep(0.20, 0.92, rim) * (0.22 + 0.78 * high_haze);
+    float atmo_veil = high_haze * (0.050 + 0.080 * rim + 0.018 * fresnel) * (0.70 + 0.30 * boundary);
+    vec3 haze_col = mix(pc.color0.rgb, vec3(0.98, 0.98, 1.00), 0.24 + 0.08 * haze_tex.b);
+
     vec3 aurora_tex = texture(
         u_aurora_mask,
         vec2(
@@ -243,20 +301,24 @@ void main() {
     aurora *= 0.18 + 0.10 * azimuth_t;
     vec3 aurora_col = mix(pc.color0.rgb, pc.color2.rgb, 0.04 + 0.04 * aurora_tex.b);
 
-    float fresnel = pow(clamp(1.0 - max(view_n.z, 0.0), 0.0, 1.0), mix(4.8, 3.4, layer_t));
+    float body_weight = mix(1.0, 0.05, atmo_shell);
+    float haze_weight = mix(1.0, 1.65, atmo_shell);
+    vec3 rgb = base * (pc.p0.w * (0.98 + (density - 0.5) * 0.10)) * body_weight;
+    rgb += base * detail_mask * 0.12 * body_shell;
+    rgb += aurora_col * aurora * 0.10 * body_weight;
+    rgb += pc.color0.rgb * fresnel * 0.010 * pc.tune1.w * body_weight;
+    rgb += mix(pc.color0.rgb, pc.color2.rgb, 0.10) * rim * 0.0018 * pc.tune1.w * body_weight;
+    rgb += haze_col * atmo_veil * (0.34 + 0.22 * pc.tune1.w) * haze_weight;
+    rgb += haze_col * atmo_band * (0.10 + 0.10 * pc.tune1.w) * haze_weight;
+    rgb += haze_col * atmo_rim * (0.42 + 0.28 * pc.tune1.w) * haze_weight;
+
     float dither = texture(
         u_blue_noise,
         fract(base_uv * vec2(23.0, 11.0) + vec2(pc.tune0.w * 0.37, pc.tune0.y * 0.29))
     ).r;
-
-    vec3 rgb = base * (pc.p0.w * (0.98 + (density - 0.5) * 0.10));
-    rgb += base * detail_mask * 0.12;
-    rgb += aurora_col * aurora * 0.10;
-    rgb += pc.color0.rgb * fresnel * 0.010 * pc.tune1.w;
-    rgb += mix(pc.color0.rgb, pc.color2.rgb, 0.10) * rim * 0.0018 * pc.tune1.w;
-
     float alpha = layer_alpha * front *
-        (0.34 + 0.08 * boundary + 0.10 * detail_mask + 0.08 * storm + 0.03 * aurora + 0.008 * fresnel * pc.tune1.w);
+        (body_shell * (0.34 + 0.08 * boundary + 0.10 * detail_mask + 0.08 * storm + 0.03 * aurora + 0.008 * fresnel * pc.tune1.w) +
+         haze_weight * (0.12 * atmo_veil + 0.09 * atmo_band + 0.20 * atmo_rim * pc.tune1.w));
     alpha *= 0.92 + 0.08 * density;
     alpha *= mix(0.995, 1.005, dither);
     alpha = clamp(alpha, 0.0, 1.0);
