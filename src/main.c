@@ -6175,6 +6175,33 @@ static uint8_t sphere_style_u8(float v) {
     return (uint8_t)lroundf(clamped * 255.0f);
 }
 
+static void sphere_style_periodic_mode_accum(
+    float u,
+    float v,
+    float w,
+    float fx,
+    float fy,
+    float fz,
+    float phase,
+    float amp,
+    float* out_value,
+    sphere_cpu_v3* out_grad
+) {
+    const float tau = 6.28318530718f;
+    const float arg = tau * (fx * u + fy * v + fz * w) + phase;
+    const float s = sinf(arg);
+    const float c = cosf(arg);
+    if (out_value) {
+        *out_value += amp * s;
+    }
+    if (out_grad) {
+        const float g = amp * tau * c;
+        out_grad->x += g * fx;
+        out_grad->y += g * fy;
+        out_grad->z += g * fz;
+    }
+}
+
 static int create_static_buffer_with_data(
     app* a,
     const void* data,
@@ -6645,20 +6672,51 @@ static void sphere_style_bake_curl_volume(uint8_t* out_rgba) {
             for (uint32_t x = 0; x < SPHERE_STYLE_CURL_VOLUME_SIZE; ++x) {
                 const size_t idx =
                     (((size_t)z * SPHERE_STYLE_CURL_VOLUME_SIZE + (size_t)y) * SPHERE_STYLE_CURL_VOLUME_SIZE + (size_t)x) * 4u;
-                const float fx = ((float)x + 0.5f) / (float)SPHERE_STYLE_CURL_VOLUME_SIZE * 2.0f - 1.0f;
-                const float fy = ((float)y + 0.5f) / (float)SPHERE_STYLE_CURL_VOLUME_SIZE * 2.0f - 1.0f;
-                const float fz = ((float)z + 0.5f) / (float)SPHERE_STYLE_CURL_VOLUME_SIZE * 2.0f - 1.0f;
-                const float ax = sinf(fy * 4.9f + sinf(fz * 2.3f) * 1.2f) + sinf(fy * 9.1f + fz * 3.7f) * 0.34f;
-                const float ay = sinf(fz * 5.3f + sinf(fx * 2.7f) * 1.1f) + sinf(fz * 8.4f + fx * 4.1f) * 0.31f;
-                const float az = sinf(fx * 4.5f + sinf(fy * 2.9f) * 1.3f) + sinf(fx * 9.8f + fy * 3.3f) * 0.33f;
+                const float u = ((float)x + 0.5f) / (float)SPHERE_STYLE_CURL_VOLUME_SIZE;
+                const float v = ((float)y + 0.5f) / (float)SPHERE_STYLE_CURL_VOLUME_SIZE;
+                const float w = ((float)z + 0.5f) / (float)SPHERE_STYLE_CURL_VOLUME_SIZE;
+                float phi = 0.0f;
+                float psi = 0.0f;
+                float chi = 0.0f;
+                float density_field = 0.0f;
+                sphere_cpu_v3 dphi = sphere_cpu_v3_make(0.0f, 0.0f, 0.0f);
+                sphere_cpu_v3 dpsi = sphere_cpu_v3_make(0.0f, 0.0f, 0.0f);
+                sphere_cpu_v3 dchi = sphere_cpu_v3_make(0.0f, 0.0f, 0.0f);
+
+                sphere_style_periodic_mode_accum(u, v, w, 2.0f,  3.0f,  1.0f, 0.31f, 0.72f, &phi, &dphi);
+                sphere_style_periodic_mode_accum(u, v, w, 5.0f, -2.0f,  4.0f, 1.17f, 0.34f, &phi, &dphi);
+                sphere_style_periodic_mode_accum(u, v, w,-3.0f,  4.0f,  6.0f, 2.41f, 0.22f, &phi, &dphi);
+                sphere_style_periodic_mode_accum(u, v, w, 7.0f,  1.0f, -5.0f, 0.83f, 0.12f, &phi, &dphi);
+
+                sphere_style_periodic_mode_accum(u, v, w, 4.0f,  1.0f,  3.0f, 1.11f, 0.68f, &psi, &dpsi);
+                sphere_style_periodic_mode_accum(u, v, w,-2.0f,  5.0f,  2.0f, 0.53f, 0.30f, &psi, &dpsi);
+                sphere_style_periodic_mode_accum(u, v, w, 6.0f, -4.0f,  1.0f, 2.07f, 0.20f, &psi, &dpsi);
+                sphere_style_periodic_mode_accum(u, v, w, 3.0f,  7.0f, -2.0f, 1.73f, 0.10f, &psi, &dpsi);
+
+                sphere_style_periodic_mode_accum(u, v, w, 3.0f,  4.0f,  2.0f, 2.23f, 0.70f, &chi, &dchi);
+                sphere_style_periodic_mode_accum(u, v, w, 1.0f, -3.0f,  5.0f, 0.91f, 0.32f, &chi, &dchi);
+                sphere_style_periodic_mode_accum(u, v, w, 5.0f,  2.0f, -4.0f, 1.49f, 0.18f, &chi, &dchi);
+                sphere_style_periodic_mode_accum(u, v, w,-6.0f,  1.0f,  3.0f, 2.77f, 0.12f, &chi, &dchi);
+
+                sphere_style_periodic_mode_accum(u, v, w, 2.0f,  1.0f,  3.0f, 0.41f, 0.46f, &density_field, NULL);
+                sphere_style_periodic_mode_accum(u, v, w, 5.0f,  4.0f,  2.0f, 1.27f, 0.28f, &density_field, NULL);
+                sphere_style_periodic_mode_accum(u, v, w, 7.0f, -3.0f,  6.0f, 2.19f, 0.18f, &density_field, NULL);
+                sphere_style_periodic_mode_accum(u, v, w, 9.0f,  5.0f, -4.0f, 0.67f, 0.10f, &density_field, NULL);
+
                 const sphere_cpu_v3 curl = sphere_cpu_v3_norm_safe(sphere_cpu_v3_make(
-                    ay - az,
-                    az - ax,
-                    ax - ay
+                    dchi.y - dpsi.z,
+                    dphi.z - dchi.x,
+                    dpsi.x - dphi.y
                 ));
-                const float d0 = value_noise3_cpu(sphere_cpu_v3_make(fx * 2.4f + 4.0f, fy * 2.2f + 1.0f, fz * 2.6f + 7.0f));
-                const float d1 = value_noise3_cpu(sphere_cpu_v3_make(fx * 5.2f + 9.0f, fy * 5.0f + 3.0f, fz * 5.4f + 5.0f));
-                const float density = clampf(d0 * 0.62f + d1 * 0.38f, 0.0f, 1.0f);
+                const float density = clampf(
+                    0.50f +
+                    phi * 0.08f +
+                    psi * 0.07f +
+                    chi * 0.06f +
+                    density_field * 0.18f,
+                    0.0f,
+                    1.0f
+                );
                 out_rgba[idx + 0u] = sphere_style_u8(curl.x * 0.5f + 0.5f);
                 out_rgba[idx + 1u] = sphere_style_u8(curl.y * 0.5f + 0.5f);
                 out_rgba[idx + 2u] = sphere_style_u8(curl.z * 0.5f + 0.5f);
