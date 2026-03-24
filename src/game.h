@@ -52,7 +52,12 @@ enum level_render_style_id {
     LEVEL_RENDER_FOG = 4,
     LEVEL_RENDER_BLANK = 5,
     LEVEL_RENDER_SPHERE = 6,
-    LEVEL_RENDER_SPHERE_PARTICLE = 7
+    LEVEL_RENDER_SPHERE_PARTICLE = 7,
+    LEVEL_RENDER_SPHERE_HOLOGRAM = 8,
+    LEVEL_RENDER_SPHERE_ION_STORM = 9,
+    LEVEL_RENDER_SPHERE_ION_STORM_2 = 10,
+    LEVEL_RENDER_SPHERE_ION_STORM_3 = 11,
+    LEVEL_RENDER_COUNT = 12
 };
 
 enum enemy_visual_kind {
@@ -594,6 +599,9 @@ typedef struct game_state {
     float sphere_scroll_dy;
     float sphere_move_dir_x;
     float sphere_move_dir_y;
+    float sphere_player_vel_x;
+    float sphere_player_vel_y;
+    float sphere_player_vel_z;
     int level_style; /* enum level_style_id */
     int level_index;
     char current_level_name[64];
@@ -678,6 +686,19 @@ typedef struct game_state {
     int alt_weapon_equipped; /* enum player_alt_weapon_id */
     int alt_weapon_ammo[PLAYER_ALT_WEAPON_COUNT];
 } game_state;
+
+static inline int game_render_style_is_ion_storm(int render_style) {
+    return render_style == LEVEL_RENDER_SPHERE_ION_STORM ||
+           render_style == LEVEL_RENDER_SPHERE_ION_STORM_2 ||
+           render_style == LEVEL_RENDER_SPHERE_ION_STORM_3;
+}
+
+static inline int game_render_style_uses_sphere(int render_style) {
+    return render_style == LEVEL_RENDER_SPHERE ||
+           render_style == LEVEL_RENDER_SPHERE_PARTICLE ||
+           render_style == LEVEL_RENDER_SPHERE_HOLOGRAM ||
+           game_render_style_is_ion_storm(render_style);
+}
 
 void game_init(game_state* g, float world_w, float world_h);
 void game_set_world_size(game_state* g, float world_w, float world_h);

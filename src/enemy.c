@@ -235,6 +235,19 @@ static float sphere_surface_radius(const game_state* g) {
     return g->world_h * (8.0f / 9.0f);
 }
 
+static float enemy_sphere_horizon_z(float sphere_shell) {
+    const float shell_scale = fmaxf(1.0f + sphere_shell, 1.0f);
+    if (shell_scale <= 1.0001f) {
+        return 0.0f;
+    }
+    return -sqrtf(fmaxf(0.0f, 1.0f - 1.0f / (shell_scale * shell_scale)));
+}
+
+static float enemy_sphere_depth01(float z_view, float sphere_shell) {
+    const float horizon_z = enemy_sphere_horizon_z(sphere_shell);
+    return clampf((z_view - horizon_z) / fmaxf(1.0f - horizon_z, 1.0e-4f), 0.0f, 1.0f);
+}
+
 static void sphere_build_basis(enemy_v3 n, enemy_v3* out_tx, enemy_v3* out_ty) {
     enemy_v3 up = enemy_v3_make(0.0f, 1.0f, 0.0f);
     enemy_v3 tx;
@@ -311,9 +324,7 @@ static float dist_sq_level(int uses_cylinder, float period, float ax, float ay, 
 }
 
 static int level_uses_sphere_enemy(const game_state* g) {
-    return g &&
-           (g->render_style == LEVEL_RENDER_SPHERE ||
-            g->render_style == LEVEL_RENDER_SPHERE_PARTICLE);
+    return g && game_render_style_uses_sphere(g->render_style);
 }
 
 static void enemy_project_sphere_state(const game_state* g, enemy* e) {
@@ -322,7 +333,8 @@ static void enemy_project_sphere_state(const game_state* g, enemy* e) {
     const enemy_v3 vel_local = enemy_v3_make(e->sphere_vel_x, e->sphere_vel_y, e->sphere_vel_z);
     const enemy_v3 pos_view = quat_rotate_enemy_v3(g->sphere_visual_q, pos_local);
     const float draw_radius = sphere_surface_radius(g) * (1.0f + e->sphere_shell);
-    if (pos_view.z <= 0.0f) {
+    const float horizon_z = enemy_sphere_horizon_z(e->sphere_shell);
+    if (pos_view.z <= horizon_z) {
         e->sphere_visible = 0;
         e->sphere_depth = 0.0f;
         e->b.x = -10000.0f;
@@ -330,7 +342,7 @@ static void enemy_project_sphere_state(const game_state* g, enemy* e) {
         return;
     }
     e->sphere_visible = 1;
-    e->sphere_depth = clampf(pos_view.z, 0.0f, 1.0f);
+    e->sphere_depth = enemy_sphere_depth01(pos_view.z, e->sphere_shell);
     e->b.x = center.x + pos_view.x * draw_radius;
     e->b.y = center.y + pos_view.y * draw_radius;
     {

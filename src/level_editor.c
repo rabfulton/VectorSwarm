@@ -9,6 +9,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef V_TYPE_HAS_TERRAIN_SHADERS
+#define V_TYPE_HAS_TERRAIN_SHADERS 0
+#endif
+
 static float clampf(float v, float lo, float hi) {
     if (v < lo) return lo;
     if (v > hi) return hi;
@@ -780,13 +784,7 @@ static int marker_is_event_item(const level_editor_state* s, const level_editor_
     if (!is_enemy_marker_kind(m->kind)) {
         return 0;
     }
-    if (m->track == LEVEL_EDITOR_TRACK_EVENT) {
-        return 1;
-    }
-    if (m->kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM) {
-        return 0;
-    }
-    return !level_editor_enemy_spatial(s);
+    return (m->track == LEVEL_EDITOR_TRACK_EVENT);
 }
 
 static int next_event_order(const level_editor_state* s) {
@@ -1182,6 +1180,16 @@ static const char* style_header_name(int style) {
     }
 }
 
+static int editor_render_style_available(int style) {
+#if V_TYPE_HAS_TERRAIN_SHADERS
+    (void)style;
+    return 1;
+#else
+    return style != LEVEL_RENDER_SPHERE_HOLOGRAM &&
+           !game_render_style_is_ion_storm(style);
+#endif
+}
+
 static const char* render_style_name(int render_style) {
     switch (render_style) {
         case LEVEL_RENDER_DEFENDER: return "defender";
@@ -1192,6 +1200,10 @@ static const char* render_style_name(int render_style) {
         case LEVEL_RENDER_BLANK: return "blank";
         case LEVEL_RENDER_SPHERE: return "sphere";
         case LEVEL_RENDER_SPHERE_PARTICLE: return "sphere_particle";
+        case LEVEL_RENDER_SPHERE_HOLOGRAM: return "sphere_hologram_planetarium";
+        case LEVEL_RENDER_SPHERE_ION_STORM: return "sphere_ion_storm_1";
+        case LEVEL_RENDER_SPHERE_ION_STORM_2: return "sphere_ion_storm_2";
+        case LEVEL_RENDER_SPHERE_ION_STORM_3: return "sphere_ion_storm_3";
         default: return "defender";
     }
 }
@@ -1391,6 +1403,10 @@ static const char* render_style_file_base(int render_style) {
         case LEVEL_RENDER_BLANK: return "level_blank";
         case LEVEL_RENDER_SPHERE: return "level_sphere_web";
         case LEVEL_RENDER_SPHERE_PARTICLE: return "level_sphere_particle";
+        case LEVEL_RENDER_SPHERE_HOLOGRAM: return "level_sphere_hologram";
+        case LEVEL_RENDER_SPHERE_ION_STORM: return "level_sphere_ion_storm_1";
+        case LEVEL_RENDER_SPHERE_ION_STORM_2: return "level_sphere_ion_storm_2";
+        case LEVEL_RENDER_SPHERE_ION_STORM_3: return "level_sphere_ion_storm_3";
         default: return "level_defender";
     }
 }
@@ -1434,6 +1450,10 @@ static int level_style_from_render_style(int render_style) {
         case LEVEL_RENDER_BLANK: return LEVEL_STYLE_BLANK;
         case LEVEL_RENDER_SPHERE: return LEVEL_STYLE_SPHERE_WEB;
         case LEVEL_RENDER_SPHERE_PARTICLE: return LEVEL_STYLE_SPHERE_WEB;
+        case LEVEL_RENDER_SPHERE_HOLOGRAM: return LEVEL_STYLE_SPHERE_WEB;
+        case LEVEL_RENDER_SPHERE_ION_STORM: return LEVEL_STYLE_SPHERE_WEB;
+        case LEVEL_RENDER_SPHERE_ION_STORM_2: return LEVEL_STYLE_SPHERE_WEB;
+        case LEVEL_RENDER_SPHERE_ION_STORM_3: return LEVEL_STYLE_SPHERE_WEB;
         default: return LEVEL_STYLE_DEFENDER;
     }
 }
@@ -3796,9 +3816,6 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
             s->entity_drag_y = mouse_y;
             return 1;
         }
-        if (point_in_rect(mouse_x, mouse_y, l.timeline_window) || point_in_rect(mouse_x, mouse_y, l.timeline_track)) {
-            s->timeline_drag = 1;
-        }
         if (!level_editor_enemy_spatial(s) && point_in_rect(mouse_x, mouse_y, l.timeline_enemy_track)) {
             const int picked = pick_event_marker_in_enemy_timeline(s, mouse_x, &l);
             if (picked >= 0) {
@@ -3812,6 +3829,9 @@ int level_editor_handle_mouse(level_editor_state* s, float mouse_x, float mouse_
                 add_marker_at_timeline(s, s->entity_tool_selected, tx01);
                 return 1;
             }
+        }
+        if (point_in_rect(mouse_x, mouse_y, l.timeline_window) || point_in_rect(mouse_x, mouse_y, l.timeline_track)) {
+            s->timeline_drag = 1;
         }
 
         if (point_in_rect(mouse_x, mouse_y, l.viewport)) {
@@ -3916,6 +3936,11 @@ int level_editor_handle_mouse_release(level_editor_state* s, float mouse_x, floa
         } else {
             add_marker_at_view(s, s->entity_drag_kind, mx01, my01);
         }
+    } else if (point_in_rect(mouse_x, mouse_y, l.timeline_enemy_track)) {
+        const float tx01 = clampf((mouse_x - l.timeline_enemy_track.x) / fmaxf(l.timeline_enemy_track.w, 1.0f), 0.0f, 1.0f);
+        if (!level_editor_enemy_spatial(s)) {
+            add_marker_at_timeline(s, s->entity_drag_kind, tx01);
+        }
     } else if (point_in_rect(mouse_x, mouse_y, l.timeline_track)) {
         const float tx01 = clampf((mouse_x - l.timeline_track.x) / fmaxf(l.timeline_track.w, 1.0f), 0.0f, 1.0f);
         if (s->entity_drag_kind == LEVEL_EDITOR_MARKER_SEARCHLIGHT ||
@@ -3939,11 +3964,6 @@ int level_editor_handle_mouse_release(level_editor_state* s, float mouse_x, floa
                 tx01,
                 default_y01
             );
-        }
-    } else if (point_in_rect(mouse_x, mouse_y, l.timeline_enemy_track)) {
-        const float tx01 = clampf((mouse_x - l.timeline_enemy_track.x) / fmaxf(l.timeline_enemy_track.w, 1.0f), 0.0f, 1.0f);
-        if (!level_editor_enemy_spatial(s)) {
-            add_marker_at_timeline(s, s->entity_drag_kind, tx01);
         }
     }
     if (s->entity_drag_kind != LEVEL_EDITOR_MARKER_STRUCTURE) {
@@ -4046,12 +4066,18 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             } break;
             case LEVEL_EDITOR_LEVEL_PROP_RENDER_STYLE: {
                 const int dir = (delta >= 0.0f) ? 1 : -1;
-                const int n = 8;
+                const int n = LEVEL_RENDER_COUNT;
                 int r = s->level_render_style;
                 if (r < 0 || r >= n) {
                     r = LEVEL_RENDER_DEFENDER;
                 }
-                s->level_render_style = (r + dir + n) % n;
+                for (int attempt = 0; attempt < n; ++attempt) {
+                    r = (r + dir + n) % n;
+                    if (editor_render_style_available(r)) {
+                        break;
+                    }
+                }
+                s->level_render_style = r;
                 s->level_style = level_style_from_render_style(s->level_render_style);
             } break;
             case LEVEL_EDITOR_LEVEL_PROP_THEME: {

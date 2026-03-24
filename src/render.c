@@ -1515,6 +1515,15 @@ static float sphere_enemy_render_scale(const game_state* g, const enemy* e) {
     return lerpf(0.46f, 1.18f, powf(depth, 0.82f));
 }
 
+static float sphere_enemy_render_alpha(const enemy* e) {
+    float t;
+    if (!e) {
+        return 1.0f;
+    }
+    t = clampf((e->sphere_depth - 0.03f) / 0.17f, 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
 static void interpolate_missile_render(homing_missile* dst, const game_state* g, const homing_missile* prev, const homing_missile* curr, float alpha) {
     if (!dst || !curr) {
         return;
@@ -1534,9 +1543,7 @@ static int level_uses_cylinder_render(const game_state* g) {
 }
 
 static int level_uses_sphere_render(const game_state* g) {
-    return g &&
-           (g->render_style == LEVEL_RENDER_SPHERE ||
-            g->render_style == LEVEL_RENDER_SPHERE_PARTICLE);
+    return g && game_render_style_uses_sphere(g->render_style);
 }
 
 static vg_result draw_sphere_web(
@@ -5554,6 +5561,47 @@ static const char* level_editor_marker_name(int kind) {
     }
 }
 
+static int editor_marker_is_wave_kind(int kind) {
+    return kind == LEVEL_EDITOR_MARKER_WAVE_SINE ||
+           kind == LEVEL_EDITOR_MARKER_WAVE_V ||
+           kind == LEVEL_EDITOR_MARKER_WAVE_KAMIKAZE ||
+           kind == LEVEL_EDITOR_MARKER_BOID ||
+           kind == LEVEL_EDITOR_MARKER_BOID_FISH ||
+           kind == LEVEL_EDITOR_MARKER_BOID_FIREFLY ||
+           kind == LEVEL_EDITOR_MARKER_BOID_BIRD ||
+           kind == LEVEL_EDITOR_MARKER_BOID_ORBITAL ||
+           kind == LEVEL_EDITOR_MARKER_JELLY_SWARM ||
+           kind == LEVEL_EDITOR_MARKER_MANTA_WING ||
+           kind == LEVEL_EDITOR_MARKER_EEL_SWARM ||
+           kind == LEVEL_EDITOR_MARKER_BOSS;
+}
+
+static int editor_marker_is_boid_kind(int kind) {
+    return kind == LEVEL_EDITOR_MARKER_BOID ||
+           kind == LEVEL_EDITOR_MARKER_BOID_FISH ||
+           kind == LEVEL_EDITOR_MARKER_BOID_FIREFLY ||
+           kind == LEVEL_EDITOR_MARKER_BOID_BIRD ||
+           kind == LEVEL_EDITOR_MARKER_BOID_ORBITAL ||
+           kind == LEVEL_EDITOR_MARKER_JELLY_SWARM ||
+           kind == LEVEL_EDITOR_MARKER_EEL_SWARM;
+}
+
+static int editor_marker_is_regular_boid_kind(int kind) {
+    return kind == LEVEL_EDITOR_MARKER_BOID ||
+           kind == LEVEL_EDITOR_MARKER_BOID_FISH ||
+           kind == LEVEL_EDITOR_MARKER_BOID_FIREFLY ||
+           kind == LEVEL_EDITOR_MARKER_BOID_BIRD ||
+           kind == LEVEL_EDITOR_MARKER_BOID_ORBITAL;
+}
+
+static int editor_marker_is_enemy_kind(int kind) {
+    return editor_marker_is_wave_kind(kind) || kind == LEVEL_EDITOR_MARKER_ASTEROID_STORM;
+}
+
+static int editor_marker_is_event_item(int kind, int track) {
+    return editor_marker_is_enemy_kind(kind) && track == LEVEL_EDITOR_TRACK_EVENT;
+}
+
 static vg_color level_editor_marker_color(const palette_theme* pal, int kind) {
     if (kind == 0) {
         return (vg_color){0.95f, 0.4f, 0.95f, 1.0f};
@@ -5582,7 +5630,7 @@ static vg_color level_editor_marker_color(const palette_theme* pal, int kind) {
     if (kind == 20) {
         return (vg_color){1.0f, 0.56f, 0.18f, 1.0f};
     }
-    if (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 15 || kind == 16 || kind == 17 || kind == 18) {
+    if (editor_marker_is_wave_kind(kind)) {
         return (vg_color){1.0f, 0.26f, 0.26f, 1.0f};
     }
     return pal->secondary;
@@ -5952,6 +6000,7 @@ static const char* editor_wave_type_name(int kind) {
         case 10: return "SWARM FISH";
         case 11: return "SWARM FIREFLY";
         case 12: return "SWARM BIRD";
+        case 18: return "SWARM ORBITAL";
         case 15: return "JELLY SWARM";
         case 16: return "MANTA WING";
         case 17: return "EEL SWARM";
@@ -6057,6 +6106,10 @@ static const char* editor_render_style_name(int style) {
     if (style == LEVEL_RENDER_BLANK) return "BLANK";
     if (style == LEVEL_RENDER_SPHERE) return "SPHERE";
     if (style == LEVEL_RENDER_SPHERE_PARTICLE) return "SPHERE PARTICLE";
+    if (style == LEVEL_RENDER_SPHERE_HOLOGRAM) return "SPHERE HOLOGRAM";
+    if (style == LEVEL_RENDER_SPHERE_ION_STORM) return "SPHERE ION STORM 1";
+    if (style == LEVEL_RENDER_SPHERE_ION_STORM_2) return "SPHERE ION STORM 2";
+    if (style == LEVEL_RENDER_SPHERE_ION_STORM_3) return "SPHERE ION STORM 3";
     return "DEFENDER";
 }
 
@@ -6241,9 +6294,9 @@ static int editor_marker_properties_text(
         if (n < cap) { out_labels[n] = "GATES EXIT"; snprintf(out_values[n], 32, "%s", (metrics->level_editor_marker_e[sel] > 0.5f) ? "YES" : "NO"); n++; }
         return n;
     }
-    if (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 15 || kind == 16 || kind == 17) {
+    if (editor_marker_is_wave_kind(kind) && kind != LEVEL_EDITOR_MARKER_BOSS) {
         const int event_item = (metrics->level_editor_marker_track[sel] == 1);
-        const int boid_item = (kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 15 || kind == 17);
+        const int boid_item = editor_marker_is_boid_kind(kind);
         const int kamikaze_item = (kind == 4);
         const int curated_mode = (metrics->level_editor_wave_mode == LEVELDEF_WAVES_CURATED);
         if (n < cap) { out_labels[n] = "TYPE"; snprintf(out_values[n], 32, "%s", editor_wave_type_name(kind)); n++; }
@@ -6291,7 +6344,7 @@ static int editor_marker_properties_text(
             }
             n++;
         }
-        if (boid_item && kind != 15 && kind != 17 && n < cap) {
+        if (editor_marker_is_regular_boid_kind(kind) && n < cap) {
             out_labels[n] = "SIZE SCALE";
             snprintf(out_values[n], 32, "%.2f", editor_boid_size_scale_from_value(metrics->level_editor_marker_e[sel]));
             n++;
@@ -6786,13 +6839,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
         int event_n = 0;
         if (!enemy_spatial) {
             for (int i = 0; i < marker_n && i < LEVEL_EDITOR_MAX_MARKERS; ++i) {
-                const int kind_i = metrics->level_editor_marker_kind[i];
-                const int track_i = metrics->level_editor_marker_track[i];
-                const int is_enemy_i =
-                    (kind_i == 2 || kind_i == 3 || kind_i == 4 || kind_i == 5 || kind_i == 6 ||
-                     kind_i == 10 || kind_i == 11 || kind_i == 12 || kind_i == 15 || kind_i == 17 || kind_i == 20);
-                const int event_item_i = is_enemy_i && (track_i == 1);
-                if (event_item_i) {
+                if (editor_marker_is_event_item(metrics->level_editor_marker_kind[i], metrics->level_editor_marker_track[i])) {
                     event_n += 1;
                 }
             }
@@ -6802,8 +6849,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             const float my01 = clampf(metrics->level_editor_marker_y01[i], 0.0f, 1.0f);
             const int kind = metrics->level_editor_marker_kind[i];
             const int track = metrics->level_editor_marker_track[i];
-            const int is_enemy = (kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 6 || kind == 10 || kind == 11 || kind == 12 || kind == 15 || kind == 17 || kind == 20);
-            const int event_item = is_enemy && (track == 1);
+            const int event_item = editor_marker_is_event_item(kind, track);
             const vg_color c = level_editor_marker_color(&pal, kind);
 
             vg_stroke_style mk = frame;
@@ -6822,13 +6868,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
             } else {
                 int rank = 0;
                 for (int j = 0; j < marker_n && j < LEVEL_EDITOR_MAX_MARKERS; ++j) {
-                    const int kind_j = metrics->level_editor_marker_kind[j];
-                    const int track_j = metrics->level_editor_marker_track[j];
-                    const int is_enemy_j =
-                        (kind_j == 2 || kind_j == 3 || kind_j == 4 || kind_j == 5 || kind_j == 6 ||
-                         kind_j == 10 || kind_j == 11 || kind_j == 12 || kind_j == 15 || kind_j == 17 || kind_j == 20);
-                    const int event_item_j = is_enemy_j && (track_j == 1);
-                    if (!event_item_j) {
+                    if (!editor_marker_is_event_item(metrics->level_editor_marker_kind[j], metrics->level_editor_marker_track[j])) {
                         continue;
                     }
                     const int oj = metrics->level_editor_marker_order[j];
@@ -6926,7 +6966,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
                     mk2.intensity *= 0.74f;
                     r = draw_editor_diamond(ctx, (vg_vec2){vx, vy}, 6.0f * ui * glyph_scale, &mk2);
                 }
-            } else if (kind == 5 || kind == 10 || kind == 11 || kind == 12 || kind == 15 || kind == 17) {
+            } else if (editor_marker_is_boid_kind(kind)) {
                 vg_stroke_style mk2 = mk;
                 mk2.intensity *= 0.78f;
                 r = draw_editor_diamond(ctx, (vg_vec2){vx, vy}, 21.0f * ui * glyph_scale, &mk);
@@ -7332,7 +7372,7 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     );
     if (r != VG_OK) return r;
     if (metrics->level_editor_drag_active &&
-        (metrics->level_editor_drag_kind == 0 || metrics->level_editor_drag_kind == 5 || metrics->level_editor_drag_kind == 10 || metrics->level_editor_drag_kind == 11 || metrics->level_editor_drag_kind == 12 || metrics->level_editor_drag_kind == 15 || metrics->level_editor_drag_kind == 17 || metrics->level_editor_drag_kind == 1 || metrics->level_editor_drag_kind == 6 || metrics->level_editor_drag_kind == 7 || metrics->level_editor_drag_kind == 8 || metrics->level_editor_drag_kind == 9 || metrics->level_editor_drag_kind == 13 || metrics->level_editor_drag_kind == 14)) {
+        (metrics->level_editor_drag_kind == 0 || editor_marker_is_boid_kind(metrics->level_editor_drag_kind) || metrics->level_editor_drag_kind == 1 || metrics->level_editor_drag_kind == 6 || metrics->level_editor_drag_kind == 7 || metrics->level_editor_drag_kind == 8 || metrics->level_editor_drag_kind == 9 || metrics->level_editor_drag_kind == 13 || metrics->level_editor_drag_kind == 14)) {
         vg_stroke_style gs = frame;
         gs.intensity = 1.2f;
         gs.color = level_editor_marker_color(&pal, metrics->level_editor_drag_kind);
@@ -13863,11 +13903,18 @@ skip_legacy_landscape:
         }
         const enemy* e = &g->enemies[i];
         float rr = e->radius;
+        vg_stroke_style es = enemy_style;
         if (level_uses_sphere_render(g) && !e->sphere_visible) {
             continue;
         }
         if (level_uses_sphere_render(g)) {
+            const float fade = sphere_enemy_render_alpha(e);
+            if (fade <= 0.01f) {
+                continue;
+            }
             rr *= sphere_enemy_render_scale(g, e);
+            es.intensity *= fade;
+            es.color.a *= fade;
         }
         if (!rects_intersect(
                 e->b.x - rr,
@@ -13880,7 +13927,7 @@ skip_legacy_landscape:
                 world_cull_max_y)) {
             continue;
         }
-        r = draw_enemy_glyph(ctx, e, e->b.x, e->b.y, rr, &enemy_style);
+        r = draw_enemy_glyph(ctx, e, e->b.x, e->b.y, rr, &es);
         if (r != VG_OK) {
             (void)vg_transform_pop(ctx);
             return r;

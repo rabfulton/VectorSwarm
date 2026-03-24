@@ -60,6 +60,15 @@ The scrolling propaganda/news marquee should use:
 
 It is set via `sync_planetarium_marquee(...)` in `src/main.c`. Avoid replacing it with short per-system strings unless explicitly requested.
 
+### 6. GPU sphere style variants share one runtime resource block
+
+`sphere_hologram_planetarium` and `sphere_ion_storm` are GPU-only sphere render styles.
+
+Important details:
+- Their shared static buffers, prebaked textures, descriptor set, and pipelines live in `src/main.c` under the `sphere_style_*` resource block.
+- Do not add CPU/vector fallbacks for these styles through `draw_sphere_web(...)`.
+- If you change their shared sphere-style resource ownership or lifecycle, keep init/recreate/destroy paths in sync together.
+
 ## Planetarium Data Model Notes
 
 Files:

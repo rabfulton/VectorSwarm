@@ -312,6 +312,13 @@ static float sphere_surface_radius(const game_state* g) {
     return g->world_h * (8.0f / 9.0f);
 }
 
+static game_v3 sphere_player_surface_velocity_local(const game_state* g) {
+    if (!g) {
+        return game_v3_make(0.0f, 0.0f, 0.0f);
+    }
+    return game_v3_make(g->sphere_player_vel_x, g->sphere_player_vel_y, g->sphere_player_vel_z);
+}
+
 static void project_sphere_bullet(game_state* g, bullet* b) {
     const game_v3 pos_local = game_v3_make(b->sphere_pos_x, b->sphere_pos_y, b->sphere_pos_z);
     const game_v3 vel_local = game_v3_make(b->sphere_vel_x, b->sphere_vel_y, b->sphere_vel_z);
@@ -2490,9 +2497,7 @@ static int level_uses_cylinder(const game_state* g) {
 }
 
 static int level_uses_sphere(const game_state* g) {
-    return g &&
-           (g->render_style == LEVEL_RENDER_SPHERE ||
-            g->render_style == LEVEL_RENDER_SPHERE_PARTICLE);
+    return g && game_render_style_uses_sphere(g->render_style);
 }
 
 static int level_count_gating_boss_markers(const leveldef_level* lvl) {
@@ -2609,6 +2614,9 @@ static int set_level_index(game_state* g, int index) {
     g->camera_bias_x = g->world_w * 0.25f;
     quat_identity4(g->sphere_target_q);
     quat_identity4(g->sphere_visual_q);
+    g->sphere_player_vel_x = 0.0f;
+    g->sphere_player_vel_y = 0.0f;
+    g->sphere_player_vel_z = 0.0f;
     g->shield_radius = 52.0f * su;
     g->mine_push_ax = 0.0f;
     g->mine_push_ay = 0.0f;
@@ -2923,7 +2931,14 @@ static void emit_thruster(game_state* g, float dt) {
     }
 }
 
-static int spawn_bullet_single(game_state* g, float y_offset, float muzzle_speed, float dir, float muzzle_offset) {
+static int spawn_bullet_single(
+    game_state* g,
+    float y_offset,
+    float muzzle_speed,
+    float dir,
+    float muzzle_offset,
+    float sphere_velocity_inherit_scale
+) {
     const float su = gameplay_ui_scale(g);
     const float vertical_inherit = 0.18f;
     if (level_uses_sphere(g)) {
@@ -2946,16 +2961,20 @@ static int spawn_bullet_single(game_state* g, float y_offset, float muzzle_speed
             game_v3 muzzle;
             game_v3 ahead;
             game_v3 tangent;
+            game_v3 player_vel;
+            float inherited_speed;
             muzzle = sphere_local_from_screen_point(g, muzzle_x, muzzle_y);
             ahead = sphere_local_from_screen_point(g, ahead_x, ahead_y);
             tangent = game_v3_proj_tangent(game_v3_sub(ahead, muzzle), muzzle);
             tangent = game_v3_norm(tangent);
+            player_vel = sphere_player_surface_velocity_local(g);
+            inherited_speed = game_v3_dot(player_vel, tangent) * sphere_velocity_inherit_scale;
             b->sphere_pos_x = muzzle.x;
             b->sphere_pos_y = muzzle.y;
             b->sphere_pos_z = muzzle.z;
-            b->sphere_vel_x = tangent.x * muzzle_speed;
-            b->sphere_vel_y = tangent.y * muzzle_speed;
-            b->sphere_vel_z = tangent.z * muzzle_speed;
+            b->sphere_vel_x = tangent.x * (muzzle_speed + inherited_speed);
+            b->sphere_vel_y = tangent.y * (muzzle_speed + inherited_speed);
+            b->sphere_vel_z = tangent.z * (muzzle_speed + inherited_speed);
             b->spawn_x = 0.0f;
             b->ttl_s = 1.4f;
             project_sphere_bullet(g, b);
@@ -2979,17 +2998,17 @@ static void spawn_bullet(game_state* g) {
     const float dir = (g->player.facing_x < 0.0f) ? -1.0f : 1.0f;
     g->fire_sfx_pending += 1;
     if (g->weapon_level <= 1) {
-        (void)spawn_bullet_single(g, 0.0f, 760.0f * su, dir, 36.0f);
+        (void)spawn_bullet_single(g, 0.0f, 760.0f * su, dir, 36.0f, 1.0f);
         return;
     }
     if (g->weapon_level == 2) {
-        (void)spawn_bullet_single(g, -12.0f * su, 800.0f * su, dir, 36.0f);
-        (void)spawn_bullet_single(g, 12.0f * su, 800.0f * su, dir, 36.0f);
+        (void)spawn_bullet_single(g, -12.0f * su, 800.0f * su, dir, 36.0f, 1.0f);
+        (void)spawn_bullet_single(g, 12.0f * su, 800.0f * su, dir, 36.0f, 1.0f);
         return;
     }
-    (void)spawn_bullet_single(g, 0.0f, 860.0f * su, dir, 36.0f);
-    (void)spawn_bullet_single(g, -15.0f * su, 860.0f * su, dir, 36.0f);
-    (void)spawn_bullet_single(g, 15.0f * su, 860.0f * su, dir, 36.0f);
+    (void)spawn_bullet_single(g, 0.0f, 860.0f * su, dir, 36.0f, 1.0f);
+    (void)spawn_bullet_single(g, -15.0f * su, 860.0f * su, dir, 36.0f, 1.0f);
+    (void)spawn_bullet_single(g, 15.0f * su, 860.0f * su, dir, 36.0f, 1.0f);
 }
 
 static void spawn_secondary_bullet(game_state* g) {
@@ -3005,7 +3024,7 @@ static void spawn_secondary_bullet(game_state* g) {
     {
         const float su = gameplay_ui_scale(g);
         const float dir = (g->player.facing_x < 0.0f) ? 1.0f : -1.0f;
-        if (spawn_bullet_single(g, 0.0f, 720.0f * su, dir, 30.0f)) {
+        if (spawn_bullet_single(g, 0.0f, 720.0f * su, dir, 30.0f, 0.0f)) {
             g->alt_weapon_ammo[PLAYER_ALT_WEAPON_REAR_GUN] -= 1;
             g->secondary_fire_cooldown_s = 0.085f;
             g->fire_sfx_pending += 1;
@@ -3165,6 +3184,9 @@ void game_init(game_state* g, float world_w, float world_h) {
     g->camera_bias_x = world_w * 0.25f;
     quat_identity4(g->sphere_target_q);
     quat_identity4(g->sphere_visual_q);
+    g->sphere_player_vel_x = 0.0f;
+    g->sphere_player_vel_y = 0.0f;
+    g->sphere_player_vel_z = 0.0f;
     g->level_style = LEVEL_STYLE_DEFENDER;
     g->level_index = 0;
     g->current_level_name[0] = '\0';
@@ -3289,12 +3311,16 @@ static int game_update_player(game_state* g, float dt, const game_input* in, flo
     g->sphere_scroll_dy = 0.0f;
     g->sphere_move_dir_x = 0.0f;
     g->sphere_move_dir_y = 0.0f;
+    g->sphere_player_vel_x = 0.0f;
+    g->sphere_player_vel_y = 0.0f;
+    g->sphere_player_vel_z = 0.0f;
     if (g->lives <= 0) {
         return 0;
     }
     if (level_uses_sphere(g)) {
         const game_v3 ref_local = game_v3_make(0.0f, 0.0f, 1.0f);
         const game_v3 ref_prev = quat_rotate_game_v3(g->sphere_visual_q, ref_local);
+        const game_v3 player_prev_local = quat_conjugate_rotate_game_v3(g->sphere_visual_q, ref_local);
         float input_x = 0.0f;
         float input_y = 0.0f;
         if (in->left) input_x -= 1.0f;
@@ -3329,9 +3355,16 @@ static int game_update_player(game_state* g, float dt, const game_input* in, flo
         }
         {
             const game_v3 ref_curr = quat_rotate_game_v3(g->sphere_visual_q, ref_local);
+            const game_v3 player_curr_local = quat_conjugate_rotate_game_v3(g->sphere_visual_q, ref_local);
             const float r = sphere_surface_radius(g);
+            const float inv_dt = (dt > 1.0e-5f) ? (1.0f / dt) : 0.0f;
+            game_v3 player_step = game_v3_proj_tangent(game_v3_sub(player_curr_local, player_prev_local), player_curr_local);
             g->sphere_scroll_dx = -(ref_curr.x - ref_prev.x) * r;
             g->sphere_scroll_dy = -(ref_curr.y - ref_prev.y) * r;
+            player_step = game_v3_scale(player_step, r * inv_dt);
+            g->sphere_player_vel_x = player_step.x;
+            g->sphere_player_vel_y = player_step.y;
+            g->sphere_player_vel_z = player_step.z;
         }
         g->player.b.x = g->world_w * 0.5f;
         g->player.b.y = g->world_h * 0.5f;

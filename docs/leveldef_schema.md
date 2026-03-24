@@ -97,6 +97,14 @@
 - `drifter`
 - `drifter_shaded`
 - `fog`
+- `blank`
+- `sphere`
+- `sphere_particle`
+- `sphere_hologram_planetarium`
+- `sphere_ion_storm_1`
+- `sphere_ion_storm_2`
+- `sphere_ion_storm_3`
+- `sphere_ion_storm` alias for `sphere_ion_storm_1`
 - `wave_mode` enum: `normal`, `boid_only`, or `curated`
 - `theme_palette` int (`0..2`)
 - `enemy_palette` enum: `default`, `anemone`, `amber`, `ice`, `toxic`

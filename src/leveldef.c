@@ -247,6 +247,11 @@ static int render_style_from_name(const char* name) {
     if (strcmp(name, "blank") == 0) return LEVEL_RENDER_BLANK;
     if (strcmp(name, "sphere") == 0) return LEVEL_RENDER_SPHERE;
     if (strcmp(name, "sphere_particle") == 0) return LEVEL_RENDER_SPHERE_PARTICLE;
+    if (strcmp(name, "sphere_hologram_planetarium") == 0) return LEVEL_RENDER_SPHERE_HOLOGRAM;
+    if (strcmp(name, "sphere_ion_storm") == 0) return LEVEL_RENDER_SPHERE_ION_STORM;
+    if (strcmp(name, "sphere_ion_storm_1") == 0) return LEVEL_RENDER_SPHERE_ION_STORM;
+    if (strcmp(name, "sphere_ion_storm_2") == 0) return LEVEL_RENDER_SPHERE_ION_STORM_2;
+    if (strcmp(name, "sphere_ion_storm_3") == 0) return LEVEL_RENDER_SPHERE_ION_STORM_3;
     return -1;
 }
 

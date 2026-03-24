@@ -68,6 +68,12 @@
 #include "sphere_particle_vert_spv.h"
 #include "sphere_particle_frag_spv.h"
 #include "sphere_particle_bloom_frag_spv.h"
+#include "sphere_hologram_vert_spv.h"
+#include "sphere_hologram_line_frag_spv.h"
+#include "sphere_hologram_glow_frag_spv.h"
+#include "sphere_ion_storm_vert_spv.h"
+#include "sphere_ion_storm_frag_spv.h"
+#include "sphere_ion_storm_bloom_frag_spv.h"
 #include "wormhole_line_vert_spv.h"
 #include "wormhole_line_frag_spv.h"
 #include "radar_line_vert_spv.h"
@@ -115,6 +121,21 @@
 #define MAX_MOD_TRACKS 128
 #define UNDERWATER_KELP_RT_DIVISOR 2u
 #define UNDERWATER_KELP_RT_Y_START_NORM 0.38f
+#define SPHERE_STYLE_BLUE_NOISE_TEX_SIZE 64u
+#define SPHERE_STYLE_HOLO_MASK_TEX_SIZE 64u
+#define SPHERE_STYLE_BAND_WARP_W 512u
+#define SPHERE_STYLE_BAND_WARP_H 128u
+#define SPHERE_STYLE_AURORA_MASK_W 512u
+#define SPHERE_STYLE_AURORA_MASK_H 256u
+#define SPHERE_STYLE_STORM_SHAPE_W 512u
+#define SPHERE_STYLE_STORM_SHAPE_H 256u
+#define SPHERE_STYLE_CURL_VOLUME_SIZE 96u
+#define SPHERE_STYLE_SHELL_SUBDIVISIONS 5
+#define SPHERE_STYLE_LINE_GEODESIC_SUBDIVISIONS 3u
+#define SPHERE_STYLE_LINE_RING_SEGMENTS 96u
+#define SPHERE_STYLE_MAX_LINE_VERTS 12288u
+#define SPHERE_STYLE_MAX_SHELL_VERTS 12288u
+#define SPHERE_STYLE_MAX_SHELL_INDICES 65536u
 
 enum sphere_particle_variant {
     SPHERE_PARTICLE_VARIANT_CORE = 0,
@@ -311,6 +332,44 @@ typedef struct sphere_particle_pc {
     float low[4];
     float rim[4];
 } sphere_particle_pc;
+
+typedef struct sphere_style_line_vertex {
+    float px;
+    float py;
+    float pz;
+    float kind;
+    float arc_t;
+    float weight;
+} sphere_style_line_vertex;
+
+typedef struct sphere_style_shell_vertex {
+    float px;
+    float py;
+    float pz;
+} sphere_style_shell_vertex;
+
+typedef struct sphere_style_pc {
+    float p0[4];     /* x=viewport_w, y=viewport_h, z=time_s, w=style_gain */
+    float p1[4];     /* x=center_x, y=center_y, z=sphere_radius_px, w=dpi */
+    float q[4];      /* sphere orientation quaternion wxyz */
+    float color0[4]; /* primary palette */
+    float color1[4]; /* secondary palette */
+    float color2[4]; /* accent palette */
+    float tune0[4];  /* style-specific tuning */
+    float tune1[4];  /* style-specific tuning */
+} sphere_style_pc;
+
+typedef struct sphere_style_cpu_shell_mesh {
+    sphere_style_shell_vertex vertices[SPHERE_STYLE_MAX_SHELL_VERTS];
+    uint16_t indices[SPHERE_STYLE_MAX_SHELL_INDICES];
+    uint32_t vertex_count;
+    uint32_t index_count;
+} sphere_style_cpu_shell_mesh;
+
+typedef struct sphere_style_cpu_line_mesh {
+    sphere_style_line_vertex vertices[SPHERE_STYLE_MAX_LINE_VERTS];
+    uint32_t vertex_count;
+} sphere_style_cpu_line_mesh;
 
 typedef struct wormhole_line_pc {
     float params[4]; /* x=viewport_width, y=viewport_height, z=intensity */
@@ -549,6 +608,15 @@ typedef struct app {
     VkPipelineLayout sphere_particle_layout;
     VkPipeline sphere_particle_pipeline;
     VkPipeline sphere_particle_bloom_pipeline;
+    VkDescriptorSetLayout sphere_style_desc_layout;
+    VkDescriptorPool sphere_style_desc_pool;
+    VkDescriptorSet sphere_style_desc_set;
+    VkPipelineLayout sphere_style_layout;
+    VkPipeline sphere_hologram_line_pipeline;
+    VkPipeline sphere_hologram_glow_pipeline;
+    VkPipeline sphere_hologram_bloom_pipeline;
+    VkPipeline sphere_ion_storm_pipeline;
+    VkPipeline sphere_ion_storm_bloom_pipeline;
     VkPipelineLayout wormhole_line_layout;
     VkPipeline wormhole_depth_pipeline;
     VkPipeline wormhole_line_pipeline;
@@ -645,6 +713,36 @@ typedef struct app {
     VkDeviceMemory radar_tri_vertex_memory;
     void* radar_tri_vertex_map;
     uint32_t radar_tri_vertex_count;
+    VkSampler sphere_style_point_sampler;
+    VkSampler sphere_style_linear_sampler;
+    VkImage sphere_style_blue_noise_image;
+    VkDeviceMemory sphere_style_blue_noise_memory;
+    VkImageView sphere_style_blue_noise_view;
+    VkImage sphere_style_holo_mask_image;
+    VkDeviceMemory sphere_style_holo_mask_memory;
+    VkImageView sphere_style_holo_mask_view;
+    VkImage sphere_style_band_warp_image;
+    VkDeviceMemory sphere_style_band_warp_memory;
+    VkImageView sphere_style_band_warp_view;
+    VkImage sphere_style_aurora_mask_image;
+    VkDeviceMemory sphere_style_aurora_mask_memory;
+    VkImageView sphere_style_aurora_mask_view;
+    VkImage sphere_style_storm_shape_image;
+    VkDeviceMemory sphere_style_storm_shape_memory;
+    VkImageView sphere_style_storm_shape_view;
+    VkImage sphere_style_curl_volume_image;
+    VkDeviceMemory sphere_style_curl_volume_memory;
+    VkImageView sphere_style_curl_volume_view;
+    VkBuffer sphere_style_line_buffer;
+    VkDeviceMemory sphere_style_line_memory;
+    uint32_t sphere_style_line_vertex_count;
+    VkBuffer sphere_style_shell_vertex_buffer;
+    VkDeviceMemory sphere_style_shell_vertex_memory;
+    uint32_t sphere_style_shell_vertex_count;
+    VkBuffer sphere_style_shell_index_buffer;
+    VkDeviceMemory sphere_style_shell_index_memory;
+    uint32_t sphere_style_shell_index_count;
+    int sphere_style_resources_ready;
     int use_gpu_wormhole;
     int use_gpu_radar;
     int use_gpu_arc;
@@ -3180,6 +3278,7 @@ static int create_sync(app* a);
 static int create_post_resources(app* a);
 static int create_terrain_resources(app* a);
 static int create_particle_resources(app* a);
+static int create_sphere_style_resources(app* a);
 static int create_wormhole_resources(app* a);
 static int create_radar_resources(app* a);
 static int create_fog_resources(app* a);
@@ -3209,6 +3308,10 @@ static void record_gpu_particles(
 static void record_gpu_particles_bloom(app* a, VkCommandBuffer cmd, int emit_runtime_particles, int emit_level_smoke);
 static void record_gpu_sphere_particles(app* a, VkCommandBuffer cmd);
 static void record_gpu_sphere_particles_bloom(app* a, VkCommandBuffer cmd);
+static void record_gpu_sphere_hologram(app* a, VkCommandBuffer cmd);
+static void record_gpu_sphere_hologram_bloom(app* a, VkCommandBuffer cmd);
+static void record_gpu_sphere_ion_storm(app* a, VkCommandBuffer cmd);
+static void record_gpu_sphere_ion_storm_bloom(app* a, VkCommandBuffer cmd);
 static void record_gpu_wormhole(app* a, VkCommandBuffer cmd);
 static void record_gpu_radar(app* a, VkCommandBuffer cmd);
 static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t);
@@ -3225,6 +3328,8 @@ static void record_gpu_industry(app* a, VkCommandBuffer cmd, float t);
 static void record_gpu_structure_tiles(app* a, VkCommandBuffer cmd, int pass);
 static void begin_gpu_label(app* a, VkCommandBuffer cmd, const char* name, float r, float g, float b);
 static void end_gpu_label(app* a, VkCommandBuffer cmd);
+static int begin_one_shot_commands(app* a, VkCommandBuffer* out_cmd);
+static int end_one_shot_commands(app* a, VkCommandBuffer* cmd);
 static void reset_terrain_tuning(app* a);
 static void sync_terrain_tuning_text(app* a);
 static int handle_terrain_tuning_key(app* a, SDL_Keycode key);
@@ -5398,6 +5503,66 @@ static int create_image_2d(
     return check_vk(vkCreateImageView(a->device, &vi, NULL, out_view), "vkCreateImageView(offscreen)");
 }
 
+static int create_image_3d(
+    app* a,
+    uint32_t w,
+    uint32_t h,
+    uint32_t d,
+    VkFormat format,
+    VkImageUsageFlags usage,
+    VkImage* out_image,
+    VkDeviceMemory* out_mem,
+    VkImageView* out_view
+) {
+    VkImageCreateInfo img = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType = VK_IMAGE_TYPE_3D,
+        .format = format,
+        .extent = {w, h, d},
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = usage,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
+    };
+    if (!check_vk(vkCreateImage(a->device, &img, NULL, out_image), "vkCreateImage(3d)")) {
+        return 0;
+    }
+    VkMemoryRequirements req;
+    vkGetImageMemoryRequirements(a->device, *out_image, &req);
+    uint32_t mem_type = find_memory_type(a, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (mem_type == UINT32_MAX) {
+        return 0;
+    }
+    VkMemoryAllocateInfo ai = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = req.size,
+        .memoryTypeIndex = mem_type
+    };
+    if (!check_vk(vkAllocateMemory(a->device, &ai, NULL, out_mem), "vkAllocateMemory(image 3d)")) {
+        return 0;
+    }
+    if (!check_vk(vkBindImageMemory(a->device, *out_image, *out_mem, 0), "vkBindImageMemory(3d)")) {
+        return 0;
+    }
+    VkImageViewCreateInfo vi = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = *out_image,
+        .viewType = VK_IMAGE_VIEW_TYPE_3D,
+        .format = format,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        }
+    };
+    return check_vk(vkCreateImageView(a->device, &vi, NULL, out_view), "vkCreateImageView(3d)");
+}
+
 static int create_depth_image_2d(
     app* a,
     uint32_t w,
@@ -5492,6 +5657,284 @@ static int create_buffer(
         return 0;
     }
     return 1;
+}
+
+static int upload_rgba8_image_2d(
+    app* a,
+    VkImage image,
+    uint32_t w,
+    uint32_t h,
+    const uint8_t* pixels
+) {
+    VkDeviceSize bytes = 0;
+    VkBuffer staging = VK_NULL_HANDLE;
+    VkDeviceMemory staging_mem = VK_NULL_HANDLE;
+    void* mapped = NULL;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    if (!a || !image || !pixels || w == 0u || h == 0u) {
+        return 0;
+    }
+    bytes = (VkDeviceSize)w * (VkDeviceSize)h * 4u;
+    if (!create_buffer(
+            a,
+            bytes,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &staging,
+            &staging_mem)) {
+        return 0;
+    }
+    if (!check_vk(vkMapMemory(a->device, staging_mem, 0, bytes, 0, &mapped), "vkMapMemory(rgba8 2d staging)")) {
+        vkDestroyBuffer(a->device, staging, NULL);
+        vkFreeMemory(a->device, staging_mem, NULL);
+        return 0;
+    }
+    memcpy(mapped, pixels, (size_t)bytes);
+    vkUnmapMemory(a->device, staging_mem);
+    if (!begin_one_shot_commands(a, &cmd)) {
+        vkDestroyBuffer(a->device, staging, NULL);
+        vkFreeMemory(a->device, staging_mem, NULL);
+        return 0;
+    }
+    {
+        VkImageMemoryBarrier to_dst = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .srcAccessMask = 0,
+            .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            }
+        };
+        VkBufferImageCopy copy = {
+            .bufferOffset = 0,
+            .bufferRowLength = w,
+            .bufferImageHeight = h,
+            .imageSubresource = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            },
+            .imageExtent = {w, h, 1}
+        };
+        VkImageMemoryBarrier to_sampled = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            }
+        };
+        vkCmdPipelineBarrier(
+            cmd,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0,
+            0, NULL,
+            0, NULL,
+            1, &to_dst
+        );
+        vkCmdCopyBufferToImage(cmd, staging, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+        vkCmdPipelineBarrier(
+            cmd,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0,
+            0, NULL,
+            0, NULL,
+            1, &to_sampled
+        );
+    }
+    if (!end_one_shot_commands(a, &cmd)) {
+        vkDestroyBuffer(a->device, staging, NULL);
+        vkFreeMemory(a->device, staging_mem, NULL);
+        return 0;
+    }
+    vkDestroyBuffer(a->device, staging, NULL);
+    vkFreeMemory(a->device, staging_mem, NULL);
+    return 1;
+}
+
+static int upload_rgba8_image_3d(
+    app* a,
+    VkImage image,
+    uint32_t w,
+    uint32_t h,
+    uint32_t d,
+    const uint8_t* pixels
+) {
+    VkDeviceSize bytes = 0;
+    VkBuffer staging = VK_NULL_HANDLE;
+    VkDeviceMemory staging_mem = VK_NULL_HANDLE;
+    void* mapped = NULL;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    if (!a || !image || !pixels || w == 0u || h == 0u || d == 0u) {
+        return 0;
+    }
+    bytes = (VkDeviceSize)w * (VkDeviceSize)h * (VkDeviceSize)d * 4u;
+    if (!create_buffer(
+            a,
+            bytes,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &staging,
+            &staging_mem)) {
+        return 0;
+    }
+    if (!check_vk(vkMapMemory(a->device, staging_mem, 0, bytes, 0, &mapped), "vkMapMemory(rgba8 3d staging)")) {
+        vkDestroyBuffer(a->device, staging, NULL);
+        vkFreeMemory(a->device, staging_mem, NULL);
+        return 0;
+    }
+    memcpy(mapped, pixels, (size_t)bytes);
+    vkUnmapMemory(a->device, staging_mem);
+    if (!begin_one_shot_commands(a, &cmd)) {
+        vkDestroyBuffer(a->device, staging, NULL);
+        vkFreeMemory(a->device, staging_mem, NULL);
+        return 0;
+    }
+    {
+        VkImageMemoryBarrier to_dst = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .srcAccessMask = 0,
+            .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            }
+        };
+        VkBufferImageCopy copy = {
+            .bufferOffset = 0,
+            .bufferRowLength = w,
+            .bufferImageHeight = h,
+            .imageSubresource = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            },
+            .imageExtent = {w, h, d}
+        };
+        VkImageMemoryBarrier to_sampled = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            }
+        };
+        vkCmdPipelineBarrier(
+            cmd,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0,
+            0, NULL,
+            0, NULL,
+            1, &to_dst
+        );
+        vkCmdCopyBufferToImage(cmd, staging, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+        vkCmdPipelineBarrier(
+            cmd,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0,
+            0, NULL,
+            0, NULL,
+            1, &to_sampled
+        );
+    }
+    if (!end_one_shot_commands(a, &cmd)) {
+        vkDestroyBuffer(a->device, staging, NULL);
+        vkFreeMemory(a->device, staging_mem, NULL);
+        return 0;
+    }
+    vkDestroyBuffer(a->device, staging, NULL);
+    vkFreeMemory(a->device, staging_mem, NULL);
+    return 1;
+}
+
+static int create_sampled_rgba8_texture_2d(
+    app* a,
+    uint32_t w,
+    uint32_t h,
+    const uint8_t* pixels,
+    VkImage* out_image,
+    VkDeviceMemory* out_memory,
+    VkImageView* out_view
+) {
+    if (!create_image_2d(
+            a,
+            w,
+            h,
+            VK_FORMAT_R8G8B8A8_UNORM,
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            VK_SAMPLE_COUNT_1_BIT,
+            out_image,
+            out_memory,
+            out_view)) {
+        return 0;
+    }
+    return upload_rgba8_image_2d(a, *out_image, w, h, pixels);
+}
+
+static int create_sampled_rgba8_texture_3d(
+    app* a,
+    uint32_t w,
+    uint32_t h,
+    uint32_t d,
+    const uint8_t* pixels,
+    VkImage* out_image,
+    VkDeviceMemory* out_memory,
+    VkImageView* out_view
+) {
+    if (!create_image_3d(
+            a,
+            w,
+            h,
+            d,
+            VK_FORMAT_R8G8B8A8_UNORM,
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            out_image,
+            out_memory,
+            out_view)) {
+        return 0;
+    }
+    return upload_rgba8_image_3d(a, *out_image, w, h, d, pixels);
 }
 
 static int begin_one_shot_commands(app* a, VkCommandBuffer* out_cmd) {
@@ -5597,7 +6040,7 @@ static int g_sphere_particle_seeds_ready = 0;
 static float sphere_particle_field_noise(sphere_cpu_v3 p, float phase);
 
 static int render_style_uses_sphere_mode(int render_style) {
-    return render_style == LEVEL_RENDER_SPHERE || render_style == LEVEL_RENDER_SPHERE_PARTICLE;
+    return game_render_style_uses_sphere(render_style);
 }
 
 static int gameplay_uses_particle_sphere(const game_state* g) {
@@ -5724,6 +6167,504 @@ static float value_noise3_cpu(sphere_cpu_v3 p) {
     const float y0 = lerpf(x00, x10, sy);
     const float y1 = lerpf(x01, x11, sy);
     return lerpf(y0, y1, sz);
+}
+
+static uint8_t sphere_style_u8(float v) {
+    const float clamped = clampf(v, 0.0f, 1.0f);
+    return (uint8_t)lroundf(clamped * 255.0f);
+}
+
+static int create_static_buffer_with_data(
+    app* a,
+    const void* data,
+    VkDeviceSize bytes,
+    VkBufferUsageFlags usage,
+    VkBuffer* out_buffer,
+    VkDeviceMemory* out_memory
+) {
+    void* mapped = NULL;
+    if (!a || !data || !out_buffer || !out_memory || bytes == 0) {
+        return 0;
+    }
+    if (!create_buffer(
+            a,
+            bytes,
+            usage,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            out_buffer,
+            out_memory)) {
+        return 0;
+    }
+    if (!check_vk(vkMapMemory(a->device, *out_memory, 0, bytes, 0, &mapped), "vkMapMemory(static buffer)")) {
+        return 0;
+    }
+    memcpy(mapped, data, (size_t)bytes);
+    vkUnmapMemory(a->device, *out_memory);
+    return 1;
+}
+
+static int sphere_style_append_line_vertex(
+    sphere_style_cpu_line_mesh* mesh,
+    sphere_cpu_v3 p,
+    float kind,
+    float arc_t,
+    float weight
+) {
+    if (!mesh || mesh->vertex_count >= SPHERE_STYLE_MAX_LINE_VERTS) {
+        return 0;
+    }
+    mesh->vertices[mesh->vertex_count++] = (sphere_style_line_vertex){
+        p.x, p.y, p.z, kind, arc_t, weight
+    };
+    return 1;
+}
+
+static int sphere_style_append_line_segment(
+    sphere_style_cpu_line_mesh* mesh,
+    sphere_cpu_v3 a,
+    sphere_cpu_v3 b,
+    float kind,
+    float arc_t0,
+    float arc_t1,
+    float weight
+) {
+    return sphere_style_append_line_vertex(mesh, a, kind, arc_t0, weight) &&
+           sphere_style_append_line_vertex(mesh, b, kind, arc_t1, weight);
+}
+
+static void sphere_style_build_base_icosahedron(sphere_cpu_v3 out_vertices[12], uint16_t out_indices[60]) {
+    static const float phi = 1.61803398875f;
+    static const float raw_vertices[12][3] = {
+        {-1.0f,  phi,  0.0f},
+        { 1.0f,  phi,  0.0f},
+        {-1.0f, -phi,  0.0f},
+        { 1.0f, -phi,  0.0f},
+        { 0.0f, -1.0f,  phi},
+        { 0.0f,  1.0f,  phi},
+        { 0.0f, -1.0f, -phi},
+        { 0.0f,  1.0f, -phi},
+        { phi,  0.0f, -1.0f},
+        { phi,  0.0f,  1.0f},
+        {-phi,  0.0f, -1.0f},
+        {-phi,  0.0f,  1.0f}
+    };
+    static const uint16_t raw_indices[60] = {
+        0, 11, 5,  0, 5, 1,  0, 1, 7,  0, 7,10,  0,10,11,
+        1, 5, 9,   5,11, 4, 11,10, 2, 10, 7, 6,  7, 1, 8,
+        3, 9, 4,   3, 4, 2,  3, 2, 6,  3, 6, 8,  3, 8, 9,
+        4, 9, 5,   2, 4,11,  6, 2,10,  8, 6, 7,  9, 8, 1
+    };
+    for (int i = 0; i < 12; ++i) {
+        out_vertices[i] = sphere_cpu_v3_norm_safe(sphere_cpu_v3_make(
+            raw_vertices[i][0],
+            raw_vertices[i][1],
+            raw_vertices[i][2]
+        ));
+    }
+    memcpy(out_indices, raw_indices, sizeof(raw_indices));
+}
+
+static uint16_t sphere_style_shell_midpoint(
+    sphere_style_cpu_shell_mesh* mesh,
+    uint16_t* cache_a,
+    uint16_t* cache_b,
+    uint16_t* cache_mid,
+    uint32_t* cache_count,
+    uint16_t ia,
+    uint16_t ib
+) {
+    uint16_t a = ia;
+    uint16_t b = ib;
+    if (a > b) {
+        const uint16_t tmp = a;
+        a = b;
+        b = tmp;
+    }
+    for (uint32_t i = 0; i < *cache_count; ++i) {
+        if (cache_a[i] == a && cache_b[i] == b) {
+            return cache_mid[i];
+        }
+    }
+    if (mesh->vertex_count >= SPHERE_STYLE_MAX_SHELL_VERTS || *cache_count >= SPHERE_STYLE_MAX_SHELL_INDICES) {
+        return UINT16_MAX;
+    }
+    {
+        const sphere_cpu_v3 va = sphere_cpu_v3_make(
+            mesh->vertices[a].px,
+            mesh->vertices[a].py,
+            mesh->vertices[a].pz
+        );
+        const sphere_cpu_v3 vb = sphere_cpu_v3_make(
+            mesh->vertices[b].px,
+            mesh->vertices[b].py,
+            mesh->vertices[b].pz
+        );
+        const sphere_cpu_v3 mid = sphere_cpu_v3_norm_safe(sphere_cpu_v3_scale(sphere_cpu_v3_add(va, vb), 0.5f));
+        const uint16_t idx = (uint16_t)mesh->vertex_count++;
+        mesh->vertices[idx] = (sphere_style_shell_vertex){mid.x, mid.y, mid.z};
+        cache_a[*cache_count] = a;
+        cache_b[*cache_count] = b;
+        cache_mid[*cache_count] = idx;
+        *cache_count += 1u;
+        return idx;
+    }
+}
+
+static int sphere_style_build_shell_mesh_subdiv(
+    sphere_style_cpu_shell_mesh* out_mesh,
+    uint32_t subdivisions
+) {
+    sphere_cpu_v3 base_vertices[12];
+    uint16_t base_indices[60];
+    if (!out_mesh) {
+        return 0;
+    }
+    memset(out_mesh, 0, sizeof(*out_mesh));
+    sphere_style_build_base_icosahedron(base_vertices, base_indices);
+    out_mesh->vertex_count = 12u;
+    out_mesh->index_count = 60u;
+    for (uint32_t i = 0; i < out_mesh->vertex_count; ++i) {
+        out_mesh->vertices[i] = (sphere_style_shell_vertex){base_vertices[i].x, base_vertices[i].y, base_vertices[i].z};
+    }
+    memcpy(out_mesh->indices, base_indices, sizeof(base_indices));
+    for (uint32_t subdiv = 0; subdiv < subdivisions; ++subdiv) {
+        uint16_t prev_indices[SPHERE_STYLE_MAX_SHELL_INDICES];
+        uint16_t cache_a[SPHERE_STYLE_MAX_SHELL_INDICES];
+        uint16_t cache_b[SPHERE_STYLE_MAX_SHELL_INDICES];
+        uint16_t cache_mid[SPHERE_STYLE_MAX_SHELL_INDICES];
+        uint32_t prev_index_count = out_mesh->index_count;
+        uint32_t cache_count = 0u;
+        uint32_t next_index_count = 0u;
+        memcpy(prev_indices, out_mesh->indices, (size_t)prev_index_count * sizeof(uint16_t));
+        for (uint32_t i = 0; i + 2u < prev_index_count; i += 3u) {
+            const uint16_t i0 = prev_indices[i + 0u];
+            const uint16_t i1 = prev_indices[i + 1u];
+            const uint16_t i2 = prev_indices[i + 2u];
+            const uint16_t a = sphere_style_shell_midpoint(out_mesh, cache_a, cache_b, cache_mid, &cache_count, i0, i1);
+            const uint16_t b = sphere_style_shell_midpoint(out_mesh, cache_a, cache_b, cache_mid, &cache_count, i1, i2);
+            const uint16_t c = sphere_style_shell_midpoint(out_mesh, cache_a, cache_b, cache_mid, &cache_count, i2, i0);
+            if (a == UINT16_MAX || b == UINT16_MAX || c == UINT16_MAX ||
+                next_index_count + 12u > SPHERE_STYLE_MAX_SHELL_INDICES) {
+                return 0;
+            }
+            out_mesh->indices[next_index_count++] = i0;
+            out_mesh->indices[next_index_count++] = a;
+            out_mesh->indices[next_index_count++] = c;
+            out_mesh->indices[next_index_count++] = i1;
+            out_mesh->indices[next_index_count++] = b;
+            out_mesh->indices[next_index_count++] = a;
+            out_mesh->indices[next_index_count++] = i2;
+            out_mesh->indices[next_index_count++] = c;
+            out_mesh->indices[next_index_count++] = b;
+            out_mesh->indices[next_index_count++] = a;
+            out_mesh->indices[next_index_count++] = b;
+            out_mesh->indices[next_index_count++] = c;
+        }
+        out_mesh->index_count = next_index_count;
+    }
+    return 1;
+}
+
+static int sphere_style_build_shell_mesh(sphere_style_cpu_shell_mesh* out_mesh) {
+    return sphere_style_build_shell_mesh_subdiv(out_mesh, SPHERE_STYLE_SHELL_SUBDIVISIONS);
+}
+
+static void sphere_style_add_lat_ring(
+    sphere_style_cpu_line_mesh* mesh,
+    float latitude_deg,
+    float kind,
+    float weight
+) {
+    const float lat = latitude_deg * (3.14159265359f / 180.0f);
+    const float y = sinf(lat);
+    const float r = cosf(lat);
+    const uint32_t seg_n = SPHERE_STYLE_LINE_RING_SEGMENTS;
+    for (uint32_t seg = 0; seg < seg_n; ++seg) {
+        const float t0 = (float)seg / (float)seg_n;
+        const float t1 = (float)(seg + 1u) / (float)seg_n;
+        const float a0 = t0 * 6.28318530718f;
+        const float a1 = t1 * 6.28318530718f;
+        const sphere_cpu_v3 p0 = sphere_cpu_v3_make(cosf(a0) * r, y, sinf(a0) * r);
+        const sphere_cpu_v3 p1 = sphere_cpu_v3_make(cosf(a1) * r, y, sinf(a1) * r);
+        (void)sphere_style_append_line_segment(mesh, p0, p1, kind, t0, t1, weight);
+    }
+}
+
+static void sphere_style_add_meridian(
+    sphere_style_cpu_line_mesh* mesh,
+    float longitude_deg,
+    float kind,
+    float weight
+) {
+    const float lon = longitude_deg * (3.14159265359f / 180.0f);
+    const uint32_t seg_n = SPHERE_STYLE_LINE_RING_SEGMENTS;
+    for (uint32_t seg = 0; seg < seg_n; ++seg) {
+        const float t0 = (float)seg / (float)seg_n;
+        const float t1 = (float)(seg + 1u) / (float)seg_n;
+        const float lat0 = lerpf(-1.57079632679f, 1.57079632679f, t0);
+        const float lat1 = lerpf(-1.57079632679f, 1.57079632679f, t1);
+        const float r0 = cosf(lat0);
+        const float r1 = cosf(lat1);
+        const sphere_cpu_v3 p0 = sphere_cpu_v3_make(cosf(lon) * r0, sinf(lat0), sinf(lon) * r0);
+        const sphere_cpu_v3 p1 = sphere_cpu_v3_make(cosf(lon) * r1, sinf(lat1), sinf(lon) * r1);
+        (void)sphere_style_append_line_segment(mesh, p0, p1, kind, t0, t1, weight);
+    }
+}
+
+static void sphere_style_add_orbit_arc(
+    sphere_style_cpu_line_mesh* mesh,
+    sphere_cpu_v3 normal,
+    float start_deg,
+    float sweep_deg,
+    float kind,
+    float weight
+) {
+    sphere_cpu_v3 t0;
+    sphere_cpu_v3 t1;
+    const float start_rad = start_deg * (3.14159265359f / 180.0f);
+    const float sweep_rad = sweep_deg * (3.14159265359f / 180.0f);
+    const uint32_t seg_n = (uint32_t)fmaxf(
+        12.0f,
+        ceilf((float)SPHERE_STYLE_LINE_RING_SEGMENTS * fabsf(sweep_deg) / 360.0f)
+    );
+    sphere_cpu_v3_tangent_basis(sphere_cpu_v3_norm_safe(normal), &t0, &t1);
+    for (uint32_t seg = 0; seg < seg_n; ++seg) {
+        const float u0 = (float)seg / (float)seg_n;
+        const float u1 = (float)(seg + 1u) / (float)seg_n;
+        const float a0 = start_rad + sweep_rad * u0;
+        const float a1 = start_rad + sweep_rad * u1;
+        const sphere_cpu_v3 p0 = sphere_cpu_v3_norm_safe(sphere_cpu_v3_add(
+            sphere_cpu_v3_scale(t0, cosf(a0)),
+            sphere_cpu_v3_scale(t1, sinf(a0))
+        ));
+        const sphere_cpu_v3 p1 = sphere_cpu_v3_norm_safe(sphere_cpu_v3_add(
+            sphere_cpu_v3_scale(t0, cosf(a1)),
+            sphere_cpu_v3_scale(t1, sinf(a1))
+        ));
+        (void)sphere_style_append_line_segment(mesh, p0, p1, kind, u0, u1, weight);
+    }
+}
+
+static void sphere_style_add_great_circle(
+    sphere_style_cpu_line_mesh* mesh,
+    sphere_cpu_v3 normal,
+    float kind,
+    float weight
+) {
+    sphere_style_add_orbit_arc(mesh, normal, 0.0f, 360.0f, kind, weight);
+}
+
+static int sphere_style_build_line_mesh(sphere_style_cpu_line_mesh* out_mesh) {
+    if (!out_mesh) {
+        return 0;
+    }
+    memset(out_mesh, 0, sizeof(*out_mesh));
+    sphere_style_add_great_circle(out_mesh, sphere_cpu_v3_make(1.0f, 0.0f, 0.0f), 0.0f, 0.42f);
+    sphere_style_add_great_circle(out_mesh, sphere_cpu_v3_make(0.0f, 1.0f, 0.0f), 0.0f, 0.48f);
+    sphere_style_add_great_circle(out_mesh, sphere_cpu_v3_make(0.0f, 0.0f, 1.0f), 0.0f, 0.42f);
+    sphere_style_add_great_circle(out_mesh, sphere_cpu_v3_make(1.0f, 1.0f, 0.0f), 0.0f, 0.28f);
+    sphere_style_add_great_circle(out_mesh, sphere_cpu_v3_make(1.0f, 0.0f, 1.0f), 0.0f, 0.24f);
+    sphere_style_add_great_circle(out_mesh, sphere_cpu_v3_make(0.0f, 1.0f, 1.0f), 0.0f, 0.20f);
+    sphere_style_add_lat_ring(out_mesh, -60.0f, 1.0f, 0.16f);
+    sphere_style_add_lat_ring(out_mesh, -30.0f, 1.0f, 0.30f);
+    sphere_style_add_lat_ring(out_mesh,   0.0f, 1.0f, 0.64f);
+    sphere_style_add_lat_ring(out_mesh,  30.0f, 1.0f, 0.30f);
+    sphere_style_add_lat_ring(out_mesh,  60.0f, 1.0f, 0.16f);
+    for (int i = 0; i < 8; ++i) {
+        sphere_style_add_meridian(out_mesh, (float)i * 22.5f, 2.0f, (i & 1) ? 0.20f : 0.34f);
+    }
+    sphere_style_add_orbit_arc(out_mesh, sphere_cpu_v3_make(1.0f, 0.18f, 0.22f), -52.0f, 192.0f, 3.0f, 0.34f);
+    sphere_style_add_orbit_arc(out_mesh, sphere_cpu_v3_make(-0.24f, 0.96f, 0.16f), 30.0f, 164.0f, 3.0f, 0.28f);
+    sphere_style_add_orbit_arc(out_mesh, sphere_cpu_v3_make(0.16f, 0.38f, 0.92f), -84.0f, 182.0f, 3.0f, 0.24f);
+    return out_mesh->vertex_count > 0u;
+}
+
+static void sphere_style_bake_blue_noise(uint8_t* out_rgba) {
+    for (uint32_t y = 0; y < SPHERE_STYLE_BLUE_NOISE_TEX_SIZE; ++y) {
+        for (uint32_t x = 0; x < SPHERE_STYLE_BLUE_NOISE_TEX_SIZE; ++x) {
+            const size_t idx = ((size_t)y * SPHERE_STYLE_BLUE_NOISE_TEX_SIZE + (size_t)x) * 4u;
+            const float n0 = hash12_cpu((float)x * 1.37f + 17.0f, (float)y * 0.91f + 11.0f);
+            const float n1 = hash12_cpu((float)x * 5.11f + 29.0f, (float)y * 3.17f + 47.0f);
+            const float n2 = hash12_cpu((float)x * 9.07f + (float)y * 2.0f, (float)y * 7.31f + 13.0f);
+            const float v = clampf(n0 * 0.55f + n1 * 0.30f + n2 * 0.15f, 0.0f, 1.0f);
+            out_rgba[idx + 0u] = sphere_style_u8(v);
+            out_rgba[idx + 1u] = sphere_style_u8(v);
+            out_rgba[idx + 2u] = sphere_style_u8(v);
+            out_rgba[idx + 3u] = 255u;
+        }
+    }
+}
+
+static void sphere_style_bake_holo_mask(uint8_t* out_rgba) {
+    static const uint8_t bayer8[8][8] = {
+        { 0, 32,  8, 40,  2, 34, 10, 42},
+        {48, 16, 56, 24, 50, 18, 58, 26},
+        {12, 44,  4, 36, 14, 46,  6, 38},
+        {60, 28, 52, 20, 62, 30, 54, 22},
+        { 3, 35, 11, 43,  1, 33,  9, 41},
+        {51, 19, 59, 27, 49, 17, 57, 25},
+        {15, 47,  7, 39, 13, 45,  5, 37},
+        {63, 31, 55, 23, 61, 29, 53, 21}
+    };
+    for (uint32_t y = 0; y < SPHERE_STYLE_HOLO_MASK_TEX_SIZE; ++y) {
+        for (uint32_t x = 0; x < SPHERE_STYLE_HOLO_MASK_TEX_SIZE; ++x) {
+            const size_t idx = ((size_t)y * SPHERE_STYLE_HOLO_MASK_TEX_SIZE + (size_t)x) * 4u;
+            const float stripe = (x % 3u == 0u) ? 1.00f : ((x % 3u == 1u) ? 0.78f : 0.52f);
+            const float scan = (y & 1u) ? 0.60f : 1.00f;
+            const float dither = ((float)bayer8[y & 7u][x & 7u] + 0.5f) / 64.0f;
+            const float mask = clampf(0.18f + stripe * scan * 0.62f + (1.0f - dither) * 0.20f, 0.0f, 1.0f);
+            const uint8_t c = sphere_style_u8(mask);
+            out_rgba[idx + 0u] = c;
+            out_rgba[idx + 1u] = c;
+            out_rgba[idx + 2u] = c;
+            out_rgba[idx + 3u] = 255u;
+        }
+    }
+}
+
+static void sphere_style_bake_band_warp(uint8_t* out_rgba) {
+    for (uint32_t y = 0; y < SPHERE_STYLE_BAND_WARP_H; ++y) {
+        for (uint32_t x = 0; x < SPHERE_STYLE_BAND_WARP_W; ++x) {
+            const size_t idx = ((size_t)y * SPHERE_STYLE_BAND_WARP_W + (size_t)x) * 4u;
+            const float u = ((float)x + 0.5f) / (float)SPHERE_STYLE_BAND_WARP_W;
+            const float v = ((float)y + 0.5f) / (float)SPHERE_STYLE_BAND_WARP_H;
+            const float theta = u * 6.28318530718f;
+            const float n0 = value_noise3_cpu(sphere_cpu_v3_make(
+                cosf(theta) * 2.8f,
+                sinf(theta) * 2.8f,
+                v * 3.6f + 0.35f
+            ));
+            const float n1 = value_noise3_cpu(sphere_cpu_v3_make(
+                cosf(theta * 2.0f) * 1.9f + 3.0f,
+                sinf(theta * 2.0f) * 1.9f + 1.0f,
+                v * 6.5f + 1.3f
+            ));
+            const float n2 = value_noise3_cpu(sphere_cpu_v3_make(
+                cosf(theta * 5.0f) * 1.4f + 6.0f,
+                sinf(theta * 5.0f) * 1.4f + 2.0f,
+                v * 12.0f + 4.2f
+            ));
+            const float wave = 0.5f + 0.5f * sinf(theta * 16.0f + v * 8.0f + n1 * 4.0f + n2 * 2.5f);
+            out_rgba[idx + 0u] = sphere_style_u8(wave);
+            out_rgba[idx + 1u] = sphere_style_u8(clampf(n0 * 0.44f + n2 * 0.56f, 0.0f, 1.0f));
+            out_rgba[idx + 2u] = sphere_style_u8(clampf(n0 * 0.26f + n1 * 0.34f + n2 * 0.40f, 0.0f, 1.0f));
+            out_rgba[idx + 3u] = 255u;
+        }
+    }
+}
+
+static void sphere_style_bake_aurora_mask(uint8_t* out_rgba) {
+    for (uint32_t y = 0; y < SPHERE_STYLE_AURORA_MASK_H; ++y) {
+        for (uint32_t x = 0; x < SPHERE_STYLE_AURORA_MASK_W; ++x) {
+            const size_t idx = ((size_t)y * SPHERE_STYLE_AURORA_MASK_W + (size_t)x) * 4u;
+            const float u = ((float)x + 0.5f) / (float)SPHERE_STYLE_AURORA_MASK_W;
+            const float v = ((float)y + 0.5f) / (float)SPHERE_STYLE_AURORA_MASK_H;
+            const float curtain = powf(1.0f - fabsf(v * 2.0f - 1.0f), 1.5f);
+            const float theta = u * 6.28318530718f;
+            const float n0 = value_noise3_cpu(sphere_cpu_v3_make(
+                cosf(theta) * 4.8f,
+                sinf(theta) * 4.8f,
+                v * 9.2f + 0.75f
+            ));
+            const float n1 = value_noise3_cpu(sphere_cpu_v3_make(
+                cosf(theta * 3.0f) * 3.2f + 2.0f,
+                sinf(theta * 3.0f) * 3.2f + 7.0f,
+                v * 5.6f + 1.9f
+            ));
+            const float n2 = value_noise3_cpu(sphere_cpu_v3_make(
+                cosf(theta * 6.0f) * 2.1f + 8.0f,
+                sinf(theta * 6.0f) * 2.1f + 3.0f,
+                v * 15.0f + 4.6f
+            ));
+            const float ribbons = 0.5f + 0.5f * sinf(theta * 12.0f + n0 * 7.0f + n2 * 3.2f + v * 14.0f);
+            const float glow = clampf(curtain * (0.12f + 0.88f * ribbons) * (0.25f + 0.55f * n1 + 0.20f * n2), 0.0f, 1.0f);
+            out_rgba[idx + 0u] = sphere_style_u8(glow);
+            out_rgba[idx + 1u] = sphere_style_u8(ribbons);
+            out_rgba[idx + 2u] = sphere_style_u8(clampf(n0 * 0.54f + n2 * 0.46f, 0.0f, 1.0f));
+            out_rgba[idx + 3u] = 255u;
+        }
+    }
+}
+
+static void sphere_style_bake_storm_shape(uint8_t* out_rgba) {
+    static const float centers[4][4] = {
+        {0.18f, 0.26f, 0.16f, 0.10f},
+        {0.44f, 0.68f, 0.22f, 0.14f},
+        {0.72f, 0.38f, 0.20f, 0.12f},
+        {0.88f, 0.74f, 0.14f, 0.10f}
+    };
+    for (uint32_t y = 0; y < SPHERE_STYLE_STORM_SHAPE_H; ++y) {
+        for (uint32_t x = 0; x < SPHERE_STYLE_STORM_SHAPE_W; ++x) {
+            const size_t idx = ((size_t)y * SPHERE_STYLE_STORM_SHAPE_W + (size_t)x) * 4u;
+            const float u = ((float)x + 0.5f) / (float)SPHERE_STYLE_STORM_SHAPE_W;
+            const float v = ((float)y + 0.5f) / (float)SPHERE_STYLE_STORM_SHAPE_H;
+            const float theta = u * 6.28318530718f;
+            float oval = 0.0f;
+            for (int i = 0; i < 4; ++i) {
+                float dx = fabsf(u - centers[i][0]);
+                dx = fminf(dx, 1.0f - dx);
+                {
+                    const float dy = v - centers[i][1];
+                    const float ex = dx / fmaxf(centers[i][2], 1e-4f);
+                    const float ey = dy / fmaxf(centers[i][3], 1e-4f);
+                    oval = fmaxf(oval, expf(-(ex * ex + ey * ey) * 3.2f));
+                }
+            }
+            {
+                const float n0 = value_noise3_cpu(sphere_cpu_v3_make(
+                    cosf(theta) * 6.0f + 2.0f,
+                    sinf(theta) * 6.0f + 1.0f,
+                    v * 8.0f + 0.2f
+                ));
+                const float n1 = value_noise3_cpu(sphere_cpu_v3_make(
+                    cosf(theta * 2.0f) * 4.2f + 5.0f,
+                    sinf(theta * 2.0f) * 4.2f + 7.0f,
+                    v * 14.0f + 0.8f
+                ));
+                const float n2 = value_noise3_cpu(sphere_cpu_v3_make(
+                    cosf(theta * 4.0f) * 3.0f + 9.0f,
+                    sinf(theta * 4.0f) * 3.0f + 3.0f,
+                    v * 18.0f + 5.4f
+                ));
+                const float swirl = 0.5f + 0.5f * sinf(theta * 10.0f + v * 12.0f + n1 * 5.0f);
+                const float cells = 0.5f + 0.5f * sinf(theta * 14.0f + v * 18.0f + n2 * 6.0f);
+                const float storm = clampf(oval * (0.60f + 0.24f * swirl + 0.16f * cells) + n0 * 0.10f + n2 * 0.10f, 0.0f, 1.0f);
+                out_rgba[idx + 0u] = sphere_style_u8(storm);
+                out_rgba[idx + 1u] = sphere_style_u8(oval);
+                out_rgba[idx + 2u] = sphere_style_u8(clampf(swirl * 0.65f + cells * 0.35f, 0.0f, 1.0f));
+                out_rgba[idx + 3u] = 255u;
+            }
+        }
+    }
+}
+
+static void sphere_style_bake_curl_volume(uint8_t* out_rgba) {
+    for (uint32_t z = 0; z < SPHERE_STYLE_CURL_VOLUME_SIZE; ++z) {
+        for (uint32_t y = 0; y < SPHERE_STYLE_CURL_VOLUME_SIZE; ++y) {
+            for (uint32_t x = 0; x < SPHERE_STYLE_CURL_VOLUME_SIZE; ++x) {
+                const size_t idx =
+                    (((size_t)z * SPHERE_STYLE_CURL_VOLUME_SIZE + (size_t)y) * SPHERE_STYLE_CURL_VOLUME_SIZE + (size_t)x) * 4u;
+                const float fx = ((float)x + 0.5f) / (float)SPHERE_STYLE_CURL_VOLUME_SIZE * 2.0f - 1.0f;
+                const float fy = ((float)y + 0.5f) / (float)SPHERE_STYLE_CURL_VOLUME_SIZE * 2.0f - 1.0f;
+                const float fz = ((float)z + 0.5f) / (float)SPHERE_STYLE_CURL_VOLUME_SIZE * 2.0f - 1.0f;
+                const float ax = sinf(fy * 4.9f + sinf(fz * 2.3f) * 1.2f) + sinf(fy * 9.1f + fz * 3.7f) * 0.34f;
+                const float ay = sinf(fz * 5.3f + sinf(fx * 2.7f) * 1.1f) + sinf(fz * 8.4f + fx * 4.1f) * 0.31f;
+                const float az = sinf(fx * 4.5f + sinf(fy * 2.9f) * 1.3f) + sinf(fx * 9.8f + fy * 3.3f) * 0.33f;
+                const sphere_cpu_v3 curl = sphere_cpu_v3_norm_safe(sphere_cpu_v3_make(
+                    ay - az,
+                    az - ax,
+                    ax - ay
+                ));
+                const float d0 = value_noise3_cpu(sphere_cpu_v3_make(fx * 2.4f + 4.0f, fy * 2.2f + 1.0f, fz * 2.6f + 7.0f));
+                const float d1 = value_noise3_cpu(sphere_cpu_v3_make(fx * 5.2f + 9.0f, fy * 5.0f + 3.0f, fz * 5.4f + 5.0f));
+                const float density = clampf(d0 * 0.62f + d1 * 0.38f, 0.0f, 1.0f);
+                out_rgba[idx + 0u] = sphere_style_u8(curl.x * 0.5f + 0.5f);
+                out_rgba[idx + 1u] = sphere_style_u8(curl.y * 0.5f + 0.5f);
+                out_rgba[idx + 2u] = sphere_style_u8(curl.z * 0.5f + 0.5f);
+                out_rgba[idx + 3u] = sphere_style_u8(density);
+            }
+        }
+    }
 }
 
 static float sphere_particle_ridged_mf_cpu(sphere_cpu_v3 p) {
@@ -6859,6 +7800,157 @@ static void clear_scene_color_depth(VkCommandBuffer cmd, VkExtent2D extent) {
     vkCmdClearAttachments(cmd, 2, clears, 1, &rect);
 }
 
+static void destroy_sphere_style_resources(app* a) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+#else
+    if (!a || a->device == VK_NULL_HANDLE) {
+        return;
+    }
+    if (a->sphere_hologram_line_pipeline) {
+        vkDestroyPipeline(a->device, a->sphere_hologram_line_pipeline, NULL);
+        a->sphere_hologram_line_pipeline = VK_NULL_HANDLE;
+    }
+    if (a->sphere_hologram_glow_pipeline) {
+        vkDestroyPipeline(a->device, a->sphere_hologram_glow_pipeline, NULL);
+        a->sphere_hologram_glow_pipeline = VK_NULL_HANDLE;
+    }
+    if (a->sphere_hologram_bloom_pipeline) {
+        vkDestroyPipeline(a->device, a->sphere_hologram_bloom_pipeline, NULL);
+        a->sphere_hologram_bloom_pipeline = VK_NULL_HANDLE;
+    }
+    if (a->sphere_ion_storm_pipeline) {
+        vkDestroyPipeline(a->device, a->sphere_ion_storm_pipeline, NULL);
+        a->sphere_ion_storm_pipeline = VK_NULL_HANDLE;
+    }
+    if (a->sphere_ion_storm_bloom_pipeline) {
+        vkDestroyPipeline(a->device, a->sphere_ion_storm_bloom_pipeline, NULL);
+        a->sphere_ion_storm_bloom_pipeline = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_layout) {
+        vkDestroyPipelineLayout(a->device, a->sphere_style_layout, NULL);
+        a->sphere_style_layout = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_desc_pool) {
+        vkDestroyDescriptorPool(a->device, a->sphere_style_desc_pool, NULL);
+        a->sphere_style_desc_pool = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_desc_layout) {
+        vkDestroyDescriptorSetLayout(a->device, a->sphere_style_desc_layout, NULL);
+        a->sphere_style_desc_layout = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_point_sampler) {
+        vkDestroySampler(a->device, a->sphere_style_point_sampler, NULL);
+        a->sphere_style_point_sampler = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_linear_sampler) {
+        vkDestroySampler(a->device, a->sphere_style_linear_sampler, NULL);
+        a->sphere_style_linear_sampler = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_blue_noise_view) {
+        vkDestroyImageView(a->device, a->sphere_style_blue_noise_view, NULL);
+        a->sphere_style_blue_noise_view = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_holo_mask_view) {
+        vkDestroyImageView(a->device, a->sphere_style_holo_mask_view, NULL);
+        a->sphere_style_holo_mask_view = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_band_warp_view) {
+        vkDestroyImageView(a->device, a->sphere_style_band_warp_view, NULL);
+        a->sphere_style_band_warp_view = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_aurora_mask_view) {
+        vkDestroyImageView(a->device, a->sphere_style_aurora_mask_view, NULL);
+        a->sphere_style_aurora_mask_view = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_storm_shape_view) {
+        vkDestroyImageView(a->device, a->sphere_style_storm_shape_view, NULL);
+        a->sphere_style_storm_shape_view = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_curl_volume_view) {
+        vkDestroyImageView(a->device, a->sphere_style_curl_volume_view, NULL);
+        a->sphere_style_curl_volume_view = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_blue_noise_image) {
+        vkDestroyImage(a->device, a->sphere_style_blue_noise_image, NULL);
+        a->sphere_style_blue_noise_image = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_holo_mask_image) {
+        vkDestroyImage(a->device, a->sphere_style_holo_mask_image, NULL);
+        a->sphere_style_holo_mask_image = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_band_warp_image) {
+        vkDestroyImage(a->device, a->sphere_style_band_warp_image, NULL);
+        a->sphere_style_band_warp_image = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_aurora_mask_image) {
+        vkDestroyImage(a->device, a->sphere_style_aurora_mask_image, NULL);
+        a->sphere_style_aurora_mask_image = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_storm_shape_image) {
+        vkDestroyImage(a->device, a->sphere_style_storm_shape_image, NULL);
+        a->sphere_style_storm_shape_image = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_curl_volume_image) {
+        vkDestroyImage(a->device, a->sphere_style_curl_volume_image, NULL);
+        a->sphere_style_curl_volume_image = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_blue_noise_memory) {
+        vkFreeMemory(a->device, a->sphere_style_blue_noise_memory, NULL);
+        a->sphere_style_blue_noise_memory = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_holo_mask_memory) {
+        vkFreeMemory(a->device, a->sphere_style_holo_mask_memory, NULL);
+        a->sphere_style_holo_mask_memory = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_band_warp_memory) {
+        vkFreeMemory(a->device, a->sphere_style_band_warp_memory, NULL);
+        a->sphere_style_band_warp_memory = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_aurora_mask_memory) {
+        vkFreeMemory(a->device, a->sphere_style_aurora_mask_memory, NULL);
+        a->sphere_style_aurora_mask_memory = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_storm_shape_memory) {
+        vkFreeMemory(a->device, a->sphere_style_storm_shape_memory, NULL);
+        a->sphere_style_storm_shape_memory = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_curl_volume_memory) {
+        vkFreeMemory(a->device, a->sphere_style_curl_volume_memory, NULL);
+        a->sphere_style_curl_volume_memory = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_line_buffer) {
+        vkDestroyBuffer(a->device, a->sphere_style_line_buffer, NULL);
+        a->sphere_style_line_buffer = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_shell_vertex_buffer) {
+        vkDestroyBuffer(a->device, a->sphere_style_shell_vertex_buffer, NULL);
+        a->sphere_style_shell_vertex_buffer = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_shell_index_buffer) {
+        vkDestroyBuffer(a->device, a->sphere_style_shell_index_buffer, NULL);
+        a->sphere_style_shell_index_buffer = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_line_memory) {
+        vkFreeMemory(a->device, a->sphere_style_line_memory, NULL);
+        a->sphere_style_line_memory = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_shell_vertex_memory) {
+        vkFreeMemory(a->device, a->sphere_style_shell_vertex_memory, NULL);
+        a->sphere_style_shell_vertex_memory = VK_NULL_HANDLE;
+    }
+    if (a->sphere_style_shell_index_memory) {
+        vkFreeMemory(a->device, a->sphere_style_shell_index_memory, NULL);
+        a->sphere_style_shell_index_memory = VK_NULL_HANDLE;
+    }
+    a->sphere_style_desc_set = VK_NULL_HANDLE;
+    a->sphere_style_line_vertex_count = 0u;
+    a->sphere_style_shell_vertex_count = 0u;
+    a->sphere_style_shell_index_count = 0u;
+    a->sphere_style_resources_ready = 0;
+#endif
+}
+
 static void cleanup(app* a) {
     g_shared_noise_tex_ready = 0;
     if (a->device != VK_NULL_HANDLE && !a->device_lost) {
@@ -6912,6 +8004,7 @@ static void cleanup(app* a) {
     if (a->particle_bloom_pipeline) vkDestroyPipeline(a->device, a->particle_bloom_pipeline, NULL);
     if (a->sphere_particle_pipeline) vkDestroyPipeline(a->device, a->sphere_particle_pipeline, NULL);
     if (a->sphere_particle_bloom_pipeline) vkDestroyPipeline(a->device, a->sphere_particle_bloom_pipeline, NULL);
+    destroy_sphere_style_resources(a);
     if (a->wormhole_depth_pipeline) vkDestroyPipeline(a->device, a->wormhole_depth_pipeline, NULL);
     if (a->wormhole_line_pipeline) vkDestroyPipeline(a->device, a->wormhole_line_pipeline, NULL);
     if (a->radar_fill_pipeline) vkDestroyPipeline(a->device, a->radar_fill_pipeline, NULL);
@@ -7171,6 +8264,7 @@ static void destroy_render_runtime(app* a) {
         vkDestroyPipeline(a->device, a->sphere_particle_bloom_pipeline, NULL);
         a->sphere_particle_bloom_pipeline = VK_NULL_HANDLE;
     }
+    destroy_sphere_style_resources(a);
     if (a->wormhole_depth_pipeline) {
         vkDestroyPipeline(a->device, a->wormhole_depth_pipeline, NULL);
         a->wormhole_depth_pipeline = VK_NULL_HANDLE;
@@ -7712,6 +8806,7 @@ static int recreate_render_runtime(app* a) {
         !create_post_resources(a) ||
         !create_terrain_resources(a) ||
         !create_underwater_resources(a) ||
+        !create_sphere_style_resources(a) ||
         !create_particle_resources(a) ||
         !create_wormhole_resources(a) ||
         !create_grid_resources(a) ||
@@ -8718,6 +9813,536 @@ static int create_terrain_resources(app* a) {
     a->terrain_cache_col_spacing = 0.0f;
     a->terrain_cache_h = 0.0f;
     return 1;
+#endif
+}
+
+static int create_sphere_style_resources(app* a) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    return 1;
+#else
+    sphere_style_cpu_shell_mesh shell_mesh;
+    sphere_style_cpu_line_mesh line_mesh;
+    VkShaderModule holo_vs = VK_NULL_HANDLE;
+    VkShaderModule holo_line_fs = VK_NULL_HANDLE;
+    VkShaderModule holo_glow_fs = VK_NULL_HANDLE;
+    VkShaderModule ion_vs = VK_NULL_HANDLE;
+    VkShaderModule ion_fs = VK_NULL_HANDLE;
+    VkShaderModule ion_bloom_fs = VK_NULL_HANDLE;
+    uint8_t* blue_noise = NULL;
+    uint8_t* holo_mask = NULL;
+    uint8_t* band_warp = NULL;
+    uint8_t* aurora_mask = NULL;
+    uint8_t* storm_shape = NULL;
+    uint8_t* curl_volume = NULL;
+    size_t blue_bytes;
+    size_t holo_bytes;
+    size_t band_bytes;
+    size_t aurora_bytes;
+    size_t storm_bytes;
+    size_t curl_bytes;
+    const float dpi_scale = drawable_scale_y(a);
+    if (!a) {
+        return 0;
+    }
+    a->sphere_style_resources_ready = 0;
+    memset(&shell_mesh, 0, sizeof(shell_mesh));
+    memset(&line_mesh, 0, sizeof(line_mesh));
+    if (!sphere_style_build_shell_mesh(&shell_mesh) || !sphere_style_build_line_mesh(&line_mesh)) {
+        fprintf(stderr, "sphere style: failed to build static meshes\n");
+        return 0;
+    }
+    if (!create_static_buffer_with_data(
+            a,
+            line_mesh.vertices,
+            (VkDeviceSize)line_mesh.vertex_count * sizeof(line_mesh.vertices[0]),
+            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            &a->sphere_style_line_buffer,
+            &a->sphere_style_line_memory)) {
+        return 0;
+    }
+    a->sphere_style_line_vertex_count = line_mesh.vertex_count;
+    if (!create_static_buffer_with_data(
+            a,
+            shell_mesh.vertices,
+            (VkDeviceSize)shell_mesh.vertex_count * sizeof(shell_mesh.vertices[0]),
+            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            &a->sphere_style_shell_vertex_buffer,
+            &a->sphere_style_shell_vertex_memory)) {
+        return 0;
+    }
+    a->sphere_style_shell_vertex_count = shell_mesh.vertex_count;
+    if (!create_static_buffer_with_data(
+            a,
+            shell_mesh.indices,
+            (VkDeviceSize)shell_mesh.index_count * sizeof(shell_mesh.indices[0]),
+            VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+            &a->sphere_style_shell_index_buffer,
+            &a->sphere_style_shell_index_memory)) {
+        return 0;
+    }
+    a->sphere_style_shell_index_count = shell_mesh.index_count;
+
+    blue_bytes = (size_t)SPHERE_STYLE_BLUE_NOISE_TEX_SIZE * (size_t)SPHERE_STYLE_BLUE_NOISE_TEX_SIZE * 4u;
+    holo_bytes = (size_t)SPHERE_STYLE_HOLO_MASK_TEX_SIZE * (size_t)SPHERE_STYLE_HOLO_MASK_TEX_SIZE * 4u;
+    band_bytes = (size_t)SPHERE_STYLE_BAND_WARP_W * (size_t)SPHERE_STYLE_BAND_WARP_H * 4u;
+    aurora_bytes = (size_t)SPHERE_STYLE_AURORA_MASK_W * (size_t)SPHERE_STYLE_AURORA_MASK_H * 4u;
+    storm_bytes = (size_t)SPHERE_STYLE_STORM_SHAPE_W * (size_t)SPHERE_STYLE_STORM_SHAPE_H * 4u;
+    curl_bytes = (size_t)SPHERE_STYLE_CURL_VOLUME_SIZE * (size_t)SPHERE_STYLE_CURL_VOLUME_SIZE *
+                 (size_t)SPHERE_STYLE_CURL_VOLUME_SIZE * 4u;
+    blue_noise = (uint8_t*)malloc(blue_bytes);
+    holo_mask = (uint8_t*)malloc(holo_bytes);
+    band_warp = (uint8_t*)malloc(band_bytes);
+    aurora_mask = (uint8_t*)malloc(aurora_bytes);
+    storm_shape = (uint8_t*)malloc(storm_bytes);
+    curl_volume = (uint8_t*)malloc(curl_bytes);
+    if (!blue_noise || !holo_mask || !band_warp || !aurora_mask || !storm_shape || !curl_volume) {
+        fprintf(stderr, "sphere style: failed to allocate prebake textures\n");
+        free(blue_noise);
+        free(holo_mask);
+        free(band_warp);
+        free(aurora_mask);
+        free(storm_shape);
+        free(curl_volume);
+        return 0;
+    }
+    sphere_style_bake_blue_noise(blue_noise);
+    sphere_style_bake_holo_mask(holo_mask);
+    sphere_style_bake_band_warp(band_warp);
+    sphere_style_bake_aurora_mask(aurora_mask);
+    sphere_style_bake_storm_shape(storm_shape);
+    sphere_style_bake_curl_volume(curl_volume);
+    if (!create_sampled_rgba8_texture_2d(
+            a,
+            SPHERE_STYLE_BLUE_NOISE_TEX_SIZE,
+            SPHERE_STYLE_BLUE_NOISE_TEX_SIZE,
+            blue_noise,
+            &a->sphere_style_blue_noise_image,
+            &a->sphere_style_blue_noise_memory,
+            &a->sphere_style_blue_noise_view) ||
+        !create_sampled_rgba8_texture_2d(
+            a,
+            SPHERE_STYLE_HOLO_MASK_TEX_SIZE,
+            SPHERE_STYLE_HOLO_MASK_TEX_SIZE,
+            holo_mask,
+            &a->sphere_style_holo_mask_image,
+            &a->sphere_style_holo_mask_memory,
+            &a->sphere_style_holo_mask_view) ||
+        !create_sampled_rgba8_texture_2d(
+            a,
+            SPHERE_STYLE_BAND_WARP_W,
+            SPHERE_STYLE_BAND_WARP_H,
+            band_warp,
+            &a->sphere_style_band_warp_image,
+            &a->sphere_style_band_warp_memory,
+            &a->sphere_style_band_warp_view) ||
+        !create_sampled_rgba8_texture_2d(
+            a,
+            SPHERE_STYLE_AURORA_MASK_W,
+            SPHERE_STYLE_AURORA_MASK_H,
+            aurora_mask,
+            &a->sphere_style_aurora_mask_image,
+            &a->sphere_style_aurora_mask_memory,
+            &a->sphere_style_aurora_mask_view) ||
+        !create_sampled_rgba8_texture_2d(
+            a,
+            SPHERE_STYLE_STORM_SHAPE_W,
+            SPHERE_STYLE_STORM_SHAPE_H,
+            storm_shape,
+            &a->sphere_style_storm_shape_image,
+            &a->sphere_style_storm_shape_memory,
+            &a->sphere_style_storm_shape_view) ||
+        !create_sampled_rgba8_texture_3d(
+            a,
+            SPHERE_STYLE_CURL_VOLUME_SIZE,
+            SPHERE_STYLE_CURL_VOLUME_SIZE,
+            SPHERE_STYLE_CURL_VOLUME_SIZE,
+            curl_volume,
+            &a->sphere_style_curl_volume_image,
+            &a->sphere_style_curl_volume_memory,
+            &a->sphere_style_curl_volume_view)) {
+        free(blue_noise);
+        free(holo_mask);
+        free(band_warp);
+        free(aurora_mask);
+        free(storm_shape);
+        free(curl_volume);
+        fprintf(stderr, "sphere style: failed to create prebaked textures\n");
+        return 0;
+    }
+    free(blue_noise);
+    free(holo_mask);
+    free(band_warp);
+    free(aurora_mask);
+    free(storm_shape);
+    free(curl_volume);
+
+    {
+        VkSamplerCreateInfo point_sampler = {
+            .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+            .magFilter = VK_FILTER_NEAREST,
+            .minFilter = VK_FILTER_NEAREST,
+            .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
+            .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .maxLod = 1.0f
+        };
+        VkSamplerCreateInfo linear_sampler = {
+            .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+            .magFilter = VK_FILTER_LINEAR,
+            .minFilter = VK_FILTER_LINEAR,
+            .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+            .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .maxLod = 1.0f
+        };
+        if (!check_vk(vkCreateSampler(a->device, &point_sampler, NULL, &a->sphere_style_point_sampler), "vkCreateSampler(sphere point)")) {
+            return 0;
+        }
+        if (!check_vk(vkCreateSampler(a->device, &linear_sampler, NULL, &a->sphere_style_linear_sampler), "vkCreateSampler(sphere linear)")) {
+            return 0;
+        }
+    }
+
+    {
+        VkDescriptorSetLayoutBinding binds[6];
+        VkDescriptorPoolSize ps = {
+            .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .descriptorCount = 6
+        };
+        VkDescriptorPoolCreateInfo dp = {
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .maxSets = 1,
+            .poolSizeCount = 1,
+            .pPoolSizes = &ps
+        };
+        VkDescriptorSetAllocateInfo dsa;
+        VkDescriptorImageInfo infos[6];
+        VkWriteDescriptorSet writes[6];
+        VkPushConstantRange pc = {
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            .offset = 0,
+            .size = sizeof(sphere_style_pc)
+        };
+        VkPipelineLayoutCreateInfo pli = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .setLayoutCount = 1,
+            .pSetLayouts = &a->sphere_style_desc_layout,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &pc
+        };
+        memset(binds, 0, sizeof(binds));
+        for (uint32_t i = 0; i < 6u; ++i) {
+            binds[i].binding = i;
+            binds[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            binds[i].descriptorCount = 1;
+            binds[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        }
+        {
+            VkDescriptorSetLayoutCreateInfo dsl = {
+                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+                .bindingCount = 6,
+                .pBindings = binds
+            };
+            if (!check_vk(vkCreateDescriptorSetLayout(a->device, &dsl, NULL, &a->sphere_style_desc_layout), "vkCreateDescriptorSetLayout(sphere style)")) {
+                return 0;
+            }
+        }
+        if (!check_vk(vkCreateDescriptorPool(a->device, &dp, NULL, &a->sphere_style_desc_pool), "vkCreateDescriptorPool(sphere style)")) {
+            return 0;
+        }
+        memset(&dsa, 0, sizeof(dsa));
+        dsa.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsa.descriptorPool = a->sphere_style_desc_pool;
+        dsa.descriptorSetCount = 1;
+        dsa.pSetLayouts = &a->sphere_style_desc_layout;
+        if (!check_vk(vkAllocateDescriptorSets(a->device, &dsa, &a->sphere_style_desc_set), "vkAllocateDescriptorSets(sphere style)")) {
+            return 0;
+        }
+        infos[0] = (VkDescriptorImageInfo){
+            .sampler = a->sphere_style_point_sampler,
+            .imageView = a->sphere_style_blue_noise_view,
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        };
+        infos[1] = (VkDescriptorImageInfo){
+            .sampler = a->sphere_style_point_sampler,
+            .imageView = a->sphere_style_holo_mask_view,
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        };
+        infos[2] = (VkDescriptorImageInfo){
+            .sampler = a->sphere_style_linear_sampler,
+            .imageView = a->sphere_style_band_warp_view,
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        };
+        infos[3] = (VkDescriptorImageInfo){
+            .sampler = a->sphere_style_linear_sampler,
+            .imageView = a->sphere_style_aurora_mask_view,
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        };
+        infos[4] = (VkDescriptorImageInfo){
+            .sampler = a->sphere_style_linear_sampler,
+            .imageView = a->sphere_style_storm_shape_view,
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        };
+        infos[5] = (VkDescriptorImageInfo){
+            .sampler = a->sphere_style_linear_sampler,
+            .imageView = a->sphere_style_curl_volume_view,
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        };
+        memset(writes, 0, sizeof(writes));
+        for (uint32_t i = 0; i < 6u; ++i) {
+            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet = a->sphere_style_desc_set;
+            writes[i].dstBinding = i;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[i].pImageInfo = &infos[i];
+        }
+        vkUpdateDescriptorSets(a->device, 6, writes, 0, NULL);
+        if (!check_vk(vkCreatePipelineLayout(a->device, &pli, NULL, &a->sphere_style_layout), "vkCreatePipelineLayout(sphere style)")) {
+            return 0;
+        }
+    }
+
+    {
+        VkShaderModuleCreateInfo holo_vs_ci = {
+            .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .codeSize = v_type_sphere_hologram_vert_spv_len,
+            .pCode = (const uint32_t*)v_type_sphere_hologram_vert_spv
+        };
+        VkShaderModuleCreateInfo holo_line_fs_ci = {
+            .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .codeSize = v_type_sphere_hologram_line_frag_spv_len,
+            .pCode = (const uint32_t*)v_type_sphere_hologram_line_frag_spv
+        };
+        VkShaderModuleCreateInfo holo_glow_fs_ci = {
+            .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .codeSize = v_type_sphere_hologram_glow_frag_spv_len,
+            .pCode = (const uint32_t*)v_type_sphere_hologram_glow_frag_spv
+        };
+        VkShaderModuleCreateInfo ion_vs_ci = {
+            .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .codeSize = v_type_sphere_ion_storm_vert_spv_len,
+            .pCode = (const uint32_t*)v_type_sphere_ion_storm_vert_spv
+        };
+        VkShaderModuleCreateInfo ion_fs_ci = {
+            .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .codeSize = v_type_sphere_ion_storm_frag_spv_len,
+            .pCode = (const uint32_t*)v_type_sphere_ion_storm_frag_spv
+        };
+        VkShaderModuleCreateInfo ion_bloom_fs_ci = {
+            .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .codeSize = v_type_sphere_ion_storm_bloom_frag_spv_len,
+            .pCode = (const uint32_t*)v_type_sphere_ion_storm_bloom_frag_spv
+        };
+        VkPipelineShaderStageCreateInfo stages[2];
+        VkVertexInputBindingDescription line_binding = {
+            .binding = 0,
+            .stride = sizeof(sphere_style_line_vertex),
+            .inputRate = VK_VERTEX_INPUT_RATE_VERTEX
+        };
+        VkVertexInputAttributeDescription line_attr[2];
+        VkPipelineVertexInputStateCreateInfo vi_line;
+        VkVertexInputBindingDescription shell_binding = {
+            .binding = 0,
+            .stride = sizeof(sphere_style_shell_vertex),
+            .inputRate = VK_VERTEX_INPUT_RATE_VERTEX
+        };
+        VkVertexInputAttributeDescription shell_attr[1];
+        VkPipelineVertexInputStateCreateInfo vi_shell;
+        VkPipelineInputAssemblyStateCreateInfo ia_line = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+            .topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST
+        };
+        VkPipelineInputAssemblyStateCreateInfo ia_tri = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+            .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
+        };
+        VkPipelineViewportStateCreateInfo vp = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+            .viewportCount = 1,
+            .scissorCount = 1
+        };
+        VkPipelineRasterizationStateCreateInfo rs = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+            .polygonMode = VK_POLYGON_MODE_FILL,
+            .lineWidth = 1.0f,
+            .cullMode = VK_CULL_MODE_NONE,
+            .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE
+        };
+        VkPipelineMultisampleStateCreateInfo ms_scene = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+            .rasterizationSamples = scene_samples(a)
+        };
+        VkPipelineMultisampleStateCreateInfo ms_bloom = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+            .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT
+        };
+        VkPipelineColorBlendAttachmentState cb_att = {
+            .blendEnable = VK_TRUE,
+            .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+            .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            .colorBlendOp = VK_BLEND_OP_ADD,
+            .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+            .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            .alphaBlendOp = VK_BLEND_OP_ADD,
+            .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                              VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
+        };
+        VkPipelineColorBlendStateCreateInfo cb = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .attachmentCount = 1,
+            .pAttachments = &cb_att
+        };
+        VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo ds = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+            .dynamicStateCount = 2,
+            .pDynamicStates = dyn
+        };
+        VkPipelineDepthStencilStateCreateInfo depth = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+            .depthTestEnable = VK_FALSE,
+            .depthWriteEnable = VK_FALSE,
+            .depthCompareOp = VK_COMPARE_OP_ALWAYS
+        };
+        VkGraphicsPipelineCreateInfo gp = {
+            .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .stageCount = 2,
+            .pStages = stages,
+            .pViewportState = &vp,
+            .pRasterizationState = &rs,
+            .pMultisampleState = &ms_scene,
+            .pDepthStencilState = &depth,
+            .pColorBlendState = &cb,
+            .pDynamicState = &ds,
+            .layout = a->sphere_style_layout,
+            .renderPass = a->scene_render_pass,
+            .subpass = 0
+        };
+        memset(line_attr, 0, sizeof(line_attr));
+        line_attr[0].location = 0;
+        line_attr[0].binding = 0;
+        line_attr[0].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+        line_attr[0].offset = 0;
+        line_attr[1].location = 1;
+        line_attr[1].binding = 0;
+        line_attr[1].format = VK_FORMAT_R32G32_SFLOAT;
+        line_attr[1].offset = sizeof(float) * 4;
+        memset(&vi_line, 0, sizeof(vi_line));
+        vi_line.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        vi_line.vertexBindingDescriptionCount = 1;
+        vi_line.pVertexBindingDescriptions = &line_binding;
+        vi_line.vertexAttributeDescriptionCount = 2;
+        vi_line.pVertexAttributeDescriptions = line_attr;
+        memset(shell_attr, 0, sizeof(shell_attr));
+        shell_attr[0].location = 0;
+        shell_attr[0].binding = 0;
+        shell_attr[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+        shell_attr[0].offset = 0;
+        memset(&vi_shell, 0, sizeof(vi_shell));
+        vi_shell.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        vi_shell.vertexBindingDescriptionCount = 1;
+        vi_shell.pVertexBindingDescriptions = &shell_binding;
+        vi_shell.vertexAttributeDescriptionCount = 1;
+        vi_shell.pVertexAttributeDescriptions = shell_attr;
+        stages[0] = (VkPipelineShaderStageCreateInfo){
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = VK_SHADER_STAGE_VERTEX_BIT,
+            .module = VK_NULL_HANDLE,
+            .pName = "main"
+        };
+        stages[1] = (VkPipelineShaderStageCreateInfo){
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+            .module = VK_NULL_HANDLE,
+            .pName = "main"
+        };
+        if (!check_vk(vkCreateShaderModule(a->device, &holo_vs_ci, NULL, &holo_vs), "vkCreateShaderModule(sphere holo vs)") ||
+            !check_vk(vkCreateShaderModule(a->device, &holo_line_fs_ci, NULL, &holo_line_fs), "vkCreateShaderModule(sphere holo line fs)") ||
+            !check_vk(vkCreateShaderModule(a->device, &holo_glow_fs_ci, NULL, &holo_glow_fs), "vkCreateShaderModule(sphere holo glow fs)") ||
+            !check_vk(vkCreateShaderModule(a->device, &ion_vs_ci, NULL, &ion_vs), "vkCreateShaderModule(sphere ion vs)") ||
+            !check_vk(vkCreateShaderModule(a->device, &ion_fs_ci, NULL, &ion_fs), "vkCreateShaderModule(sphere ion fs)") ||
+            !check_vk(vkCreateShaderModule(a->device, &ion_bloom_fs_ci, NULL, &ion_bloom_fs), "vkCreateShaderModule(sphere ion bloom fs)")) {
+            goto sphere_style_shader_fail;
+        }
+        stages[0].module = holo_vs;
+        stages[1].module = holo_line_fs;
+        gp.pVertexInputState = &vi_line;
+        gp.pInputAssemblyState = &ia_line;
+        gp.renderPass = a->scene_render_pass;
+        gp.pMultisampleState = &ms_scene;
+        rs.lineWidth = 1.0f;
+        cb_att.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        cb_att.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        cb_att.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        cb_att.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->sphere_hologram_line_pipeline), "vkCreateGraphicsPipelines(sphere hologram line)")) {
+            goto sphere_style_shader_fail;
+        }
+        stages[1].module = holo_glow_fs;
+        rs.lineWidth = 1.70f * dpi_scale;
+        cb_att.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        cb_att.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        cb_att.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        cb_att.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->sphere_hologram_glow_pipeline), "vkCreateGraphicsPipelines(sphere hologram glow)")) {
+            goto sphere_style_shader_fail;
+        }
+        gp.renderPass = a->bloom_render_pass;
+        gp.pMultisampleState = &ms_bloom;
+        rs.lineWidth = 2.30f * dpi_scale;
+        cb_att.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        cb_att.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        cb_att.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        cb_att.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->sphere_hologram_bloom_pipeline), "vkCreateGraphicsPipelines(sphere hologram bloom)")) {
+            goto sphere_style_shader_fail;
+        }
+        stages[0].module = ion_vs;
+        stages[1].module = ion_fs;
+        gp.pVertexInputState = &vi_shell;
+        gp.pInputAssemblyState = &ia_tri;
+        gp.renderPass = a->scene_render_pass;
+        gp.pMultisampleState = &ms_scene;
+        rs.lineWidth = 1.0f;
+        rs.cullMode = VK_CULL_MODE_BACK_BIT;
+        cb_att.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        cb_att.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        cb_att.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        cb_att.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->sphere_ion_storm_pipeline), "vkCreateGraphicsPipelines(sphere ion storm)")) {
+            goto sphere_style_shader_fail;
+        }
+        stages[1].module = ion_bloom_fs;
+        gp.renderPass = a->bloom_render_pass;
+        gp.pMultisampleState = &ms_bloom;
+        cb_att.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        cb_att.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        cb_att.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        cb_att.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->sphere_ion_storm_bloom_pipeline), "vkCreateGraphicsPipelines(sphere ion storm bloom)")) {
+            goto sphere_style_shader_fail;
+        }
+        vkDestroyShaderModule(a->device, ion_bloom_fs, NULL);
+        vkDestroyShaderModule(a->device, ion_fs, NULL);
+        vkDestroyShaderModule(a->device, ion_vs, NULL);
+        vkDestroyShaderModule(a->device, holo_glow_fs, NULL);
+        vkDestroyShaderModule(a->device, holo_line_fs, NULL);
+        vkDestroyShaderModule(a->device, holo_vs, NULL);
+        a->sphere_style_resources_ready = 1;
+        return 1;
+    sphere_style_shader_fail:
+        if (ion_bloom_fs) vkDestroyShaderModule(a->device, ion_bloom_fs, NULL);
+        if (ion_fs) vkDestroyShaderModule(a->device, ion_fs, NULL);
+        if (ion_vs) vkDestroyShaderModule(a->device, ion_vs, NULL);
+        if (holo_glow_fs) vkDestroyShaderModule(a->device, holo_glow_fs, NULL);
+        if (holo_line_fs) vkDestroyShaderModule(a->device, holo_line_fs, NULL);
+        if (holo_vs) vkDestroyShaderModule(a->device, holo_vs, NULL);
+        return 0;
+    }
 #endif
 }
 
@@ -12748,6 +14373,221 @@ static void record_gpu_sphere_particles_bloom(app* a, VkCommandBuffer cmd) {
 #endif
 }
 
+static void sphere_style_fill_common_pc(const app* a, sphere_style_pc* pc, float style_gain) {
+    if (!a || !pc) {
+        return;
+    }
+    memset(pc, 0, sizeof(*pc));
+    pc->p0[0] = (float)a->swapchain_extent.width;
+    pc->p0[1] = (float)a->swapchain_extent.height;
+    pc->p0[2] = a->game.t;
+    pc->p0[3] = style_gain;
+    pc->p1[0] = a->game.world_w * 0.5f;
+    pc->p1[1] = a->game.world_h * 0.5f;
+    pc->p1[2] = a->game.world_h * (8.0f / 9.0f);
+    pc->p1[3] = drawable_scale_y(a);
+    memcpy(pc->q, a->game.sphere_visual_q, sizeof(pc->q));
+}
+
+static void sphere_style_fill_hologram_palette(const app* a, sphere_style_pc* pc) {
+    const int palette_mode = gameplay_palette_mode(a);
+    if (!a || !pc) {
+        return;
+    }
+    if (palette_mode == 1) {
+        pc->color0[0] = 1.00f; pc->color0[1] = 0.74f; pc->color0[2] = 0.28f; pc->color0[3] = 1.0f;
+        pc->color1[0] = 1.00f; pc->color1[1] = 0.44f; pc->color1[2] = 0.20f; pc->color1[3] = 1.0f;
+        pc->color2[0] = 1.00f; pc->color2[1] = 0.92f; pc->color2[2] = 0.68f; pc->color2[3] = 1.0f;
+    } else if (palette_mode == 2) {
+        pc->color0[0] = 0.54f; pc->color0[1] = 0.94f; pc->color0[2] = 1.00f; pc->color0[3] = 1.0f;
+        pc->color1[0] = 0.34f; pc->color1[1] = 0.52f; pc->color1[2] = 1.00f; pc->color1[3] = 1.0f;
+        pc->color2[0] = 0.96f; pc->color2[1] = 0.99f; pc->color2[2] = 1.00f; pc->color2[3] = 1.0f;
+    } else {
+        pc->color0[0] = 0.32f; pc->color0[1] = 0.90f; pc->color0[2] = 1.00f; pc->color0[3] = 1.0f;
+        pc->color1[0] = 0.62f; pc->color1[1] = 0.28f; pc->color1[2] = 0.96f; pc->color1[3] = 1.0f;
+        pc->color2[0] = 1.00f; pc->color2[1] = 0.88f; pc->color2[2] = 0.54f; pc->color2[3] = 1.0f;
+    }
+}
+
+static void sphere_style_fill_ion_palette(const app* a, sphere_style_pc* pc) {
+    if (!a || !pc) {
+        return;
+    }
+    switch (a->game.render_style) {
+        case LEVEL_RENDER_SPHERE_ION_STORM_2:
+            pc->color0[0] = 0.66f; pc->color0[1] = 0.78f; pc->color0[2] = 0.84f; pc->color0[3] = 1.0f;
+            pc->color1[0] = 0.12f; pc->color1[1] = 0.18f; pc->color1[2] = 0.28f; pc->color1[3] = 1.0f;
+            pc->color2[0] = 0.58f; pc->color2[1] = 0.92f; pc->color2[2] = 0.86f; pc->color2[3] = 1.0f;
+            break;
+        case LEVEL_RENDER_SPHERE_ION_STORM_3:
+            pc->color0[0] = 0.80f; pc->color0[1] = 0.72f; pc->color0[2] = 0.76f; pc->color0[3] = 1.0f;
+            pc->color1[0] = 0.27f; pc->color1[1] = 0.16f; pc->color1[2] = 0.18f; pc->color1[3] = 1.0f;
+            pc->color2[0] = 0.98f; pc->color2[1] = 0.70f; pc->color2[2] = 0.48f; pc->color2[3] = 1.0f;
+            break;
+        case LEVEL_RENDER_SPHERE_ION_STORM:
+        default:
+            pc->color0[0] = 0.84f; pc->color0[1] = 0.80f; pc->color0[2] = 0.70f; pc->color0[3] = 1.0f;
+            pc->color1[0] = 0.36f; pc->color1[1] = 0.24f; pc->color1[2] = 0.16f; pc->color1[3] = 1.0f;
+            pc->color2[0] = 0.96f; pc->color2[1] = 0.87f; pc->color2[2] = 0.62f; pc->color2[3] = 1.0f;
+            break;
+    }
+}
+
+static void record_gpu_sphere_hologram(app* a, VkCommandBuffer cmd) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    (void)cmd;
+#else
+    if (!a || !cmd ||
+        a->game.render_style != LEVEL_RENDER_SPHERE_HOLOGRAM ||
+        !a->sphere_style_resources_ready ||
+        !a->sphere_hologram_line_pipeline ||
+        !a->sphere_hologram_glow_pipeline ||
+        !a->sphere_style_line_buffer ||
+        !a->sphere_style_layout ||
+        !a->sphere_style_desc_set ||
+        a->sphere_style_line_vertex_count < 2u) {
+        return;
+    }
+
+    VkDeviceSize off = 0;
+    sphere_style_pc pc;
+    const float sweep_phase = fmodf(a->game.t * 0.16f, 1.0f);
+    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    begin_gpu_label(a, cmd, "sphere hologram", 0.28f, 0.86f, 1.00f);
+    vkCmdBindVertexBuffers(cmd, 0, 1, &a->sphere_style_line_buffer, &off);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->sphere_style_layout, 0, 1, &a->sphere_style_desc_set, 0, NULL);
+
+    sphere_style_fill_common_pc(a, &pc, 1.16f);
+    sphere_style_fill_hologram_palette(a, &pc);
+    pc.tune0[0] = 0.30f;
+    pc.tune0[1] = 0.12f;
+    pc.tune0[2] = 8.2f;
+    pc.tune0[3] = 1.02f;
+    pc.tune1[0] = sweep_phase;
+    pc.tune1[1] = 0.076f;
+    pc.tune1[2] = 0.12f;
+    pc.tune1[3] = 0.0f;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->sphere_hologram_glow_pipeline);
+    vkCmdPushConstants(cmd, a->sphere_style_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cmd, a->sphere_style_line_vertex_count, 1, 0, 0);
+
+    sphere_style_fill_common_pc(a, &pc, 1.04f);
+    sphere_style_fill_hologram_palette(a, &pc);
+    pc.tune0[0] = 0.60f;
+    pc.tune0[1] = 0.14f;
+    pc.tune0[2] = 8.8f;
+    pc.tune0[3] = 0.82f;
+    pc.tune1[0] = sweep_phase;
+    pc.tune1[1] = 0.058f;
+    pc.tune1[2] = 0.18f;
+    pc.tune1[3] = 0.0f;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->sphere_hologram_line_pipeline);
+    vkCmdPushConstants(cmd, a->sphere_style_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cmd, a->sphere_style_line_vertex_count, 1, 0, 0);
+    end_gpu_label(a, cmd);
+#endif
+}
+
+static void record_gpu_sphere_hologram_bloom(app* a, VkCommandBuffer cmd) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    (void)cmd;
+#else
+    if (!a || !cmd ||
+        a->game.render_style != LEVEL_RENDER_SPHERE_HOLOGRAM ||
+        !a->sphere_style_resources_ready ||
+        !a->sphere_hologram_bloom_pipeline ||
+        !a->sphere_style_line_buffer ||
+        !a->sphere_style_layout ||
+        !a->sphere_style_desc_set ||
+        a->sphere_style_line_vertex_count < 2u) {
+        return;
+    }
+
+    VkDeviceSize off = 0;
+    sphere_style_pc pc;
+    set_viewport_scissor(cmd, a->bloom_w, a->bloom_h);
+    begin_gpu_label(a, cmd, "sphere hologram bloom", 0.40f, 0.92f, 1.00f);
+    sphere_style_fill_common_pc(a, &pc, 1.20f);
+    sphere_style_fill_hologram_palette(a, &pc);
+    pc.tune0[0] = 0.18f;
+    pc.tune0[1] = 0.04f;
+    pc.tune0[2] = 7.6f;
+    pc.tune0[3] = 1.28f;
+    pc.tune1[0] = fmodf(a->game.t * 0.16f, 1.0f);
+    pc.tune1[1] = 0.090f;
+    pc.tune1[2] = 0.05f;
+    pc.tune1[3] = 1.0f;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &a->sphere_style_line_buffer, &off);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->sphere_hologram_bloom_pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->sphere_style_layout, 0, 1, &a->sphere_style_desc_set, 0, NULL);
+    vkCmdPushConstants(cmd, a->sphere_style_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cmd, a->sphere_style_line_vertex_count, 1, 0, 0);
+    end_gpu_label(a, cmd);
+#endif
+}
+
+static void record_gpu_sphere_ion_storm(app* a, VkCommandBuffer cmd) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    (void)cmd;
+#else
+    static const float shell_offsets[] = {0.0035f};
+    static const float shell_alpha[] = {0.40f};
+    if (!a || !cmd ||
+        !game_render_style_is_ion_storm(a->game.render_style) ||
+        !a->sphere_style_resources_ready ||
+        !a->sphere_ion_storm_pipeline ||
+        !a->sphere_style_shell_vertex_buffer ||
+        !a->sphere_style_shell_index_buffer ||
+        !a->sphere_style_layout ||
+        !a->sphere_style_desc_set ||
+        a->sphere_style_shell_index_count < 3u) {
+        return;
+    }
+
+    VkDeviceSize off = 0;
+    const uint32_t shell_count = (uint32_t)(sizeof(shell_offsets) / sizeof(shell_offsets[0]));
+    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    begin_gpu_label(a, cmd, "sphere ion storm", 0.44f, 0.86f, 0.96f);
+    vkCmdBindVertexBuffers(cmd, 0, 1, &a->sphere_style_shell_vertex_buffer, &off);
+    vkCmdBindIndexBuffer(cmd, a->sphere_style_shell_index_buffer, 0, VK_INDEX_TYPE_UINT16);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->sphere_ion_storm_pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->sphere_style_layout, 0, 1, &a->sphere_style_desc_set, 0, NULL);
+    for (uint32_t i = 0; i < shell_count; ++i) {
+        sphere_style_pc pc;
+        const float layer_t = (shell_count > 1u) ? ((float)i / (float)(shell_count - 1u)) : 0.0f;
+        sphere_style_fill_common_pc(a, &pc, 1.10f);
+        sphere_style_fill_ion_palette(a, &pc);
+        pc.tune0[0] = shell_offsets[i];
+        pc.tune0[1] = layer_t;
+        pc.tune0[2] = shell_alpha[i];
+        pc.tune0[3] = 0.12f + (float)i * 0.09f;
+        pc.tune1[0] = 0.28f + layer_t * 0.03f;
+        pc.tune1[1] = 0.74f - layer_t * 0.06f;
+        pc.tune1[2] = 0.40f + layer_t * 0.04f;
+        pc.tune1[3] = 0.26f + layer_t * 0.04f;
+        vkCmdPushConstants(cmd, a->sphere_style_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+        vkCmdDrawIndexed(cmd, a->sphere_style_shell_index_count, 1, 0, 0, 0);
+    }
+    end_gpu_label(a, cmd);
+#endif
+}
+
+static void record_gpu_sphere_ion_storm_bloom(app* a, VkCommandBuffer cmd) {
+#if !V_TYPE_HAS_TERRAIN_SHADERS
+    (void)a;
+    (void)cmd;
+#else
+    (void)a;
+    (void)cmd;
+    /* The low-res bloom shell introduces visible shimmer on motion for this full-surface effect.
+       Keep ion storm self-contained in the scene pass until a stable dedicated composite path exists. */
+    return;
+#endif
+}
+
 static void record_gpu_wormhole(app* a, VkCommandBuffer cmd) {
 #if !V_TYPE_HAS_TERRAIN_SHADERS
     (void)a;
@@ -14426,7 +16266,10 @@ static int record_submit_present(
         const int in_gameplay_scene = menu_is_gameplay(&a->menu);
         const leveldef_level* lvl_bg = game_current_leveldef(&a->game);
         const int use_gpu_grid_sim =
-            (lvl_bg && lvl_bg->background_style == LEVELDEF_BACKGROUND_GRID) ? 1 : 0;
+            (lvl_bg &&
+             lvl_bg->background_style == LEVELDEF_BACKGROUND_GRID &&
+             (!render_style_uses_sphere_mode(a->game.render_style) ||
+              a->game.render_style == LEVEL_RENDER_SPHERE)) ? 1 : 0;
         if (in_gameplay_scene && use_gpu_grid_sim) {
             record_gpu_grid_sim(a, cmd, dt);
         } else {
@@ -14807,6 +16650,14 @@ static int record_submit_present(
         const int use_gpu_sphere_particles =
             V_TYPE_HAS_TERRAIN_SHADERS &&
             (a->game.render_style == LEVEL_RENDER_SPHERE_PARTICLE);
+        const int use_gpu_sphere_hologram =
+            V_TYPE_HAS_TERRAIN_SHADERS &&
+            a->sphere_style_resources_ready &&
+            (a->game.render_style == LEVEL_RENDER_SPHERE_HOLOGRAM);
+        const int use_gpu_sphere_ion_storm =
+            V_TYPE_HAS_TERRAIN_SHADERS &&
+            a->sphere_style_resources_ready &&
+            game_render_style_is_ion_storm(a->game.render_style);
         const int use_gpu_arc =
             a->use_gpu_arc &&
             (a->game.render_style != LEVEL_RENDER_CYLINDER) &&
@@ -14824,7 +16675,27 @@ static int record_submit_present(
              !render_style_uses_sphere_mode(a->game.render_style)) ? 1 : 0;
         const int use_gpu_industry = a->use_gpu_industry && (a->game.render_style == LEVEL_RENDER_DEFENDER);
         const int use_gpu_revolver = a->use_gpu_revolver && (a->game.level_style == LEVEL_STYLE_REVOLVER);
-        const int need_mid_scene_gpu = (use_gpu_terrain || use_gpu_wormhole || use_gpu_radar || use_gpu_sphere_particles || use_gpu_revolver || use_gpu_arc || use_gpu_grid);
+        const int stable_ion_overlay =
+            use_gpu_sphere_ion_storm &&
+            lvl_bg &&
+            lvl_bg->background_style == LEVELDEF_BACKGROUND_NONE &&
+            !use_gpu_terrain &&
+            !use_gpu_wormhole &&
+            !use_gpu_radar &&
+            !use_gpu_sphere_particles &&
+            !use_gpu_sphere_hologram &&
+            !use_gpu_fog &&
+            !use_gpu_underwater &&
+            !use_gpu_fire &&
+            !use_gpu_ice &&
+            !use_gpu_forest &&
+            !use_gpu_grid &&
+            !use_gpu_industry &&
+            !use_gpu_revolver;
+        const int need_mid_scene_gpu =
+            (use_gpu_terrain || use_gpu_wormhole || use_gpu_radar ||
+             use_gpu_sphere_particles || use_gpu_sphere_hologram || use_gpu_sphere_ion_storm ||
+             use_gpu_revolver || use_gpu_arc || use_gpu_grid);
         const int split_scene =
             in_gameplay_scene &&
             (need_mid_scene_gpu || use_gpu_fog || use_gpu_underwater || use_gpu_fire || use_gpu_ice || use_gpu_forest || (use_gpu_particles && !a->disable_scene_split));
@@ -14885,6 +16756,34 @@ static int record_submit_present(
             if (use_gpu_particles) {
                 record_gpu_particles(a, cmd, 1, 1, NULL);
             }
+        } else if (in_gameplay_scene && stable_ion_overlay) {
+            /* Ion storm with a plain background is more stable as:
+               clear -> ion storm -> clear depth -> overlay-no-clear scene.
+               Re-validate if changing this path. */
+            metrics.use_gpu_particles = use_gpu_particles ? 1 : 0;
+            metrics.use_gpu_terrain = 0;
+            metrics.use_gpu_wormhole = 0;
+            metrics.use_gpu_radar = 0;
+            metrics.use_gpu_arc = use_gpu_arc ? 1 : 0;
+            metrics.use_gpu_industry = 0;
+            clear_scene_color_depth(cmd, a->swapchain_extent);
+            record_gpu_sphere_ion_storm(a, cmd);
+            clear_scene_depth(cmd, a->swapchain_extent);
+            if (use_gpu_arc) {
+                record_gpu_arc_beam(a, cmd, t);
+            }
+            record_gpu_structure_tiles(a, cmd, STRUCTURE_TILE_PASS_WORLD);
+            metrics.scene_phase = 3; /* overlay-no-clear */
+            {
+                vr = render_frame(a->vg, &a->game, &metrics);
+            }
+            if (vr != VG_OK) {
+                fprintf(stderr, "VG failure: render_frame(ion overlay) -> %s (%d)\n", vg_result_string(vr), (int)vr);
+                return 0;
+            }
+            if (use_gpu_particles) {
+                record_gpu_particles(a, cmd, 1, 1, NULL);
+            }
         } else if (split_scene) {
             metrics.use_gpu_particles = use_gpu_particles ? 1 : 0;
             metrics.use_gpu_terrain = use_gpu_terrain ? 1 : 0;
@@ -14923,6 +16822,12 @@ static int record_submit_present(
             }
             if (use_gpu_sphere_particles) {
                 record_gpu_sphere_particles(a, cmd);
+            }
+            if (use_gpu_sphere_hologram) {
+                record_gpu_sphere_hologram(a, cmd);
+            }
+            if (use_gpu_sphere_ion_storm) {
+                record_gpu_sphere_ion_storm(a, cmd);
             }
             if (use_gpu_revolver) {
                 if (use_gpu_particles) {
@@ -15082,6 +16987,12 @@ static int record_submit_present(
         const leveldef_level* bloom_lvl = game_current_leveldef(&a->game);
         if (particle_bloom_enabled && a->game.render_style == LEVEL_RENDER_SPHERE_PARTICLE) {
             record_gpu_sphere_particles_bloom(a, cmd);
+        }
+        if (particle_bloom_enabled && a->game.render_style == LEVEL_RENDER_SPHERE_HOLOGRAM) {
+            record_gpu_sphere_hologram_bloom(a, cmd);
+        }
+        if (particle_bloom_enabled && game_render_style_is_ion_storm(a->game.render_style)) {
+            record_gpu_sphere_ion_storm_bloom(a, cmd);
         }
         if (particle_bloom_enabled && bloom_lvl && bloom_lvl->background_style == LEVELDEF_BACKGROUND_FOREST) {
             record_gpu_particles_bloom(a, cmd, 0, 1);
@@ -15396,6 +17307,7 @@ int main(void) {
         !create_post_resources(&a) ||
         !create_terrain_resources(&a) ||
         !create_underwater_resources(&a) ||
+        !create_sphere_style_resources(&a) ||
         !create_particle_resources(&a) ||
         !create_wormhole_resources(&a) ||
         !create_grid_resources(&a) ||
