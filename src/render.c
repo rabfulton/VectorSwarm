@@ -679,8 +679,8 @@ static size_t wormhole_emit_segment(
     if (!out || count + 2u > out_cap) {
         return count;
     }
-    out[count + 0u] = (wormhole_line_vertex){ax, ay, az, fade};
-    out[count + 1u] = (wormhole_line_vertex){bx, by, bz, fade};
+    out[count + 0u] = (wormhole_line_vertex){ax, ay, az, fade, -1.0f};
+    out[count + 1u] = (wormhole_line_vertex){bx, by, bz, fade, -1.0f};
     return count + 2u;
 }
 
@@ -848,10 +848,10 @@ size_t render_build_event_horizon_gpu_tris(const game_state* g, wormhole_line_ve
     for (int c = 0; c < WORMHOLE_COLS; ++c) {
         const int cn = wrapi(c + 1, WORMHOLE_COLS);
         for (int j = 0; j + 1 < WORMHOLE_ROWS; ++j) {
-            const wormhole_line_vertex a = {p[c][j].x, p[c][j].y, z[c][j], 1.0f};
-            const wormhole_line_vertex b = {p[cn][j].x, p[cn][j].y, z[cn][j], 1.0f};
-            const wormhole_line_vertex d = {p[cn][j + 1].x, p[cn][j + 1].y, z[cn][j + 1], 1.0f};
-            const wormhole_line_vertex e = {p[c][j + 1].x, p[c][j + 1].y, z[c][j + 1], 1.0f};
+            const wormhole_line_vertex a = {p[c][j].x, p[c][j].y, z[c][j], 1.0f, -1.0f};
+            const wormhole_line_vertex b = {p[cn][j].x, p[cn][j].y, z[cn][j], 1.0f, -1.0f};
+            const wormhole_line_vertex d = {p[cn][j + 1].x, p[cn][j + 1].y, z[cn][j + 1], 1.0f, -1.0f};
+            const wormhole_line_vertex e = {p[c][j + 1].x, p[c][j + 1].y, z[c][j + 1], 1.0f, -1.0f};
             if (count + 6u > out_cap) {
                 return count;
             }
@@ -1087,9 +1087,9 @@ size_t render_build_enemy_radar_gpu_tris(const game_state* g, wormhole_line_vert
         if (count + 3u > out_cap) {
             return count;
         }
-        out[count++] = (wormhole_line_vertex){cx, cy, z_tip, fade};
-        out[count++] = (wormhole_line_vertex){p0.x, p0.y, z_tip, fade};
-        out[count++] = (wormhole_line_vertex){p1.x, p1.y, z_tip, fade};
+        out[count++] = (wormhole_line_vertex){cx, cy, z_tip, fade, -1.0f};
+        out[count++] = (wormhole_line_vertex){p0.x, p0.y, z_tip, fade, -1.0f};
+        out[count++] = (wormhole_line_vertex){p1.x, p1.y, z_tip, fade, -1.0f};
     }
 
     return count;
@@ -1113,18 +1113,24 @@ typedef struct sphere_face_edge_entry {
     uint16_t face;
 } sphere_face_edge_entry;
 
+#define SPHERE_CELL_MAX_DEGREE 6
+
 typedef struct sphere_graph_cache {
     int valid;
     int node_count;
     int segment_count;
+    int cell_count;
     float last_t;
     v3 base_pos[5120];
+    v3 cell_center[SPHERE_VORONOI_CELL_COUNT];
     float disp[5120];
     float vel[5120];
     uint16_t neighbors[5120][3];
     uint8_t neighbor_count[5120];
     uint16_t seg_a[7680];
     uint16_t seg_b[7680];
+    uint16_t cell_nodes[SPHERE_VORONOI_CELL_COUNT][SPHERE_CELL_MAX_DEGREE];
+    uint8_t cell_degree[SPHERE_VORONOI_CELL_COUNT];
 } sphere_graph_cache;
 
 static sphere_graph_cache g_sphere_graph_cache;
@@ -1207,7 +1213,7 @@ static void sphere_graph_reset_sim(sphere_graph_cache* cache) {
 static void sphere_graph_build(sphere_graph_cache* cache) {
     enum {
         SUBDIV = 4,
-        MAX_VERTS = 2562,
+        MAX_VERTS = SPHERE_VORONOI_CELL_COUNT,
         MAX_FACES = 5120,
         MID_HASH_CAP = 16384,
         EDGE_HASH_CAP = 32768
@@ -1228,12 +1234,16 @@ static void sphere_graph_build(sphere_graph_cache* cache) {
     v3 verts[MAX_VERTS];
     sphere_ico_face faces[MAX_FACES];
     sphere_ico_face next_faces[MAX_FACES];
+    uint16_t cell_faces[MAX_VERTS][SPHERE_CELL_MAX_DEGREE];
+    uint8_t cell_face_count[MAX_VERTS];
     int vert_count = 12;
     int face_count = 20;
     if (!cache) {
         return;
     }
     memset(cache, 0, sizeof(*cache));
+    memset(cell_faces, 0, sizeof(cell_faces));
+    memset(cell_face_count, 0, sizeof(cell_face_count));
     for (int i = 0; i < 12; ++i) {
         verts[i] = v3_norm_safe(k_verts[i]);
     }
@@ -1263,6 +1273,7 @@ static void sphere_graph_build(sphere_graph_cache* cache) {
     }
 
     cache->node_count = face_count;
+    cache->cell_count = vert_count;
     for (int i = 0; i < face_count; ++i) {
         const v3 c = v3_norm_safe(v3_scale(
             v3_add(v3_add(verts[faces[i].v[0]], verts[faces[i].v[1]]), verts[faces[i].v[2]]),
@@ -1273,6 +1284,44 @@ static void sphere_graph_build(sphere_graph_cache* cache) {
         const float j1 = hash01_u32((uint32_t)(0x85ebca6bu ^ (uint32_t)i * 0x27d4eb2du)) - 0.5f;
         sphere_node_tangent_basis(c, &t0, &t1);
         cache->base_pos[i] = v3_norm_safe(v3_add(c, v3_add(v3_scale(t0, j0 * 0.026f), v3_scale(t1, j1 * 0.026f))));
+        for (int corner = 0; corner < 3; ++corner) {
+            const uint16_t cell_idx = faces[i].v[corner];
+            if (cell_idx >= MAX_VERTS || cell_face_count[cell_idx] >= SPHERE_CELL_MAX_DEGREE) {
+                continue;
+            }
+            cell_faces[cell_idx][cell_face_count[cell_idx]++] = (uint16_t)i;
+        }
+    }
+    for (int i = 0; i < vert_count && i < SPHERE_VORONOI_CELL_COUNT; ++i) {
+        cache->cell_center[i] = verts[i];
+        cache->cell_degree[i] = cell_face_count[i];
+        memcpy(cache->cell_nodes[i], cell_faces[i], sizeof(cache->cell_nodes[i]));
+        if (cache->cell_degree[i] > 1u) {
+            float ang[SPHERE_CELL_MAX_DEGREE];
+            v3 t0;
+            v3 t1;
+            sphere_node_tangent_basis(verts[i], &t0, &t1);
+            for (int k = 0; k < cache->cell_degree[i]; ++k) {
+                const uint16_t face_idx = cache->cell_nodes[i][k];
+                const v3 rel = v3_sub(
+                    cache->base_pos[face_idx],
+                    v3_scale(verts[i], v3_dot(cache->base_pos[face_idx], verts[i]))
+                );
+                ang[k] = atan2f(v3_dot(rel, t1), v3_dot(rel, t0));
+            }
+            for (int a = 1; a < cache->cell_degree[i]; ++a) {
+                uint16_t face_idx = cache->cell_nodes[i][a];
+                float theta = ang[a];
+                int b = a - 1;
+                while (b >= 0 && ang[b] > theta) {
+                    cache->cell_nodes[i][b + 1] = cache->cell_nodes[i][b];
+                    ang[b + 1] = ang[b];
+                    --b;
+                }
+                cache->cell_nodes[i][b + 1] = face_idx;
+                ang[b + 1] = theta;
+            }
+        }
     }
     {
         sphere_face_edge_entry edges[EDGE_HASH_CAP];
@@ -1346,14 +1395,36 @@ static v3 sphere_graph_node_position(const sphere_graph_cache* cache, int idx) {
     return v3_scale(cache->base_pos[idx], 1.0f + cache->disp[idx]);
 }
 
+static void sphere_graph_ensure_built(void) {
+    if (!g_sphere_graph_cache.valid) {
+        sphere_graph_build(&g_sphere_graph_cache);
+    }
+}
+
+int render_sphere_voronoi_cell_count(void) {
+    sphere_graph_ensure_built();
+    return g_sphere_graph_cache.valid ? g_sphere_graph_cache.cell_count : 0;
+}
+
+void render_sphere_voronoi_cell_center(int idx, float* out_x, float* out_y, float* out_z) {
+    if (out_x) *out_x = 0.0f;
+    if (out_y) *out_y = 0.0f;
+    if (out_z) *out_z = 1.0f;
+    sphere_graph_ensure_built();
+    if (!g_sphere_graph_cache.valid || idx < 0 || idx >= g_sphere_graph_cache.cell_count) {
+        return;
+    }
+    if (out_x) *out_x = g_sphere_graph_cache.cell_center[idx].x;
+    if (out_y) *out_y = g_sphere_graph_cache.cell_center[idx].y;
+    if (out_z) *out_z = g_sphere_graph_cache.cell_center[idx].z;
+}
+
 size_t render_build_sphere_gpu_lines(const game_state* g, wormhole_line_vertex* out, size_t out_cap) {
     size_t count = 0u;
     if (!g || !out || out_cap == 0u || g->render_style != LEVEL_RENDER_SPHERE) {
         return 0u;
     }
-    if (!g_sphere_graph_cache.valid) {
-        sphere_graph_build(&g_sphere_graph_cache);
-    }
+    sphere_graph_ensure_built();
     sphere_graph_step(&g_sphere_graph_cache, g);
     const vg_vec2 c = {g->world_w * 0.5f, g->world_h * 0.5f};
     const float radius = g->world_h * (8.0f / 9.0f);
@@ -1386,30 +1457,49 @@ size_t render_build_sphere_gpu_tris(const game_state* g, wormhole_line_vertex* o
     if (!g || !out || out_cap == 0u || g->render_style != LEVEL_RENDER_SPHERE) {
         return 0u;
     }
-    if (!g_sphere_graph_cache.valid) {
-        sphere_graph_build(&g_sphere_graph_cache);
-    }
+    sphere_graph_ensure_built();
     sphere_graph_step(&g_sphere_graph_cache, g);
     {
         const vg_vec2 c = {g->world_w * 0.5f, g->world_h * 0.5f};
         const float radius = g->world_h * (8.0f / 9.0f);
-        const float r = 1.65f;
-        for (int i = 0; i < g_sphere_graph_cache.node_count && count + 6u <= out_cap; ++i) {
-            const v3 p = sphere_graph_node_position(&g_sphere_graph_cache, i);
-            const v3 v = quat_rotate_v3(g->sphere_visual_q, p);
-            const float x = c.x + v.x * radius;
-            const float y = c.y + v.y * radius;
-            const float z = clampf(v.z, 0.05f, 0.98f);
-            const float f = 0.96f;
-            if (v.z <= 0.02f) {
+        for (int i = 0; i < g_sphere_graph_cache.cell_count; ++i) {
+            const uint8_t degree = g_sphere_graph_cache.cell_degree[i];
+            const v3 center_local = g_sphere_graph_cache.cell_center[i];
+            const v3 center_view = quat_rotate_v3(g->sphere_visual_q, center_local);
+            const float flash = 1.0f + clampf(g->sphere_cell_flash[i], 0.0f, 0.9f);
+            if (degree < 3u || center_view.z <= 0.02f) {
                 continue;
             }
-            out[count++] = (wormhole_line_vertex){x - r, y, z, f};
-            out[count++] = (wormhole_line_vertex){x, y - r, z, f};
-            out[count++] = (wormhole_line_vertex){x + r, y, z, f};
-            out[count++] = (wormhole_line_vertex){x - r, y, z, f};
-            out[count++] = (wormhole_line_vertex){x + r, y, z, f};
-            out[count++] = (wormhole_line_vertex){x, y + r, z, f};
+            if (count + (size_t)degree * 3u > out_cap) {
+                break;
+            }
+            const float cx = c.x + center_view.x * radius;
+            const float cy = c.y + center_view.y * radius;
+            const float cz = clampf(center_view.z, 0.05f, 0.98f);
+            for (uint8_t k = 0; k < degree; ++k) {
+                const uint16_t node_a_idx = g_sphere_graph_cache.cell_nodes[i][k];
+                const uint16_t node_b_idx = g_sphere_graph_cache.cell_nodes[i][(k + 1u) % degree];
+                const v3 node_a_view = quat_rotate_v3(g->sphere_visual_q, sphere_graph_node_position(&g_sphere_graph_cache, node_a_idx));
+                const v3 node_b_view = quat_rotate_v3(g->sphere_visual_q, sphere_graph_node_position(&g_sphere_graph_cache, node_b_idx));
+                if (node_a_view.z <= 0.02f && node_b_view.z <= 0.02f) {
+                    continue;
+                }
+                out[count++] = (wormhole_line_vertex){cx, cy, cz, flash, (float)i};
+                out[count++] = (wormhole_line_vertex){
+                    c.x + node_a_view.x * radius,
+                    c.y + node_a_view.y * radius,
+                    clampf(node_a_view.z, 0.05f, 0.98f),
+                    flash,
+                    (float)i
+                };
+                out[count++] = (wormhole_line_vertex){
+                    c.x + node_b_view.x * radius,
+                    c.y + node_b_view.y * radius,
+                    clampf(node_b_view.z, 0.05f, 0.98f),
+                    flash,
+                    (float)i
+                };
+            }
         }
     }
     return count;

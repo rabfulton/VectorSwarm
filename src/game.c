@@ -2,6 +2,7 @@
 #include "boss.h"
 #include "enemy.h"
 #include "leveldef.h"
+#include "render.h"
 #include "death_teletype_messages.h"
 
 #include <math.h>
@@ -167,6 +168,7 @@ static void game_reset_powerup_state(game_state* g, int clear_pickups);
 static void game_capture_render_prev_state(game_state* g);
 static void game_set_player_dead(game_state* g, int queue_message);
 static void game_update_powerups(game_state* g, float dt);
+static void game_update_sphere_cell_flashes(game_state* g, float dt);
 static void game_try_spawn_powerup_drop(game_state* g, float x, float y, float vx, float vy);
 
 static void quat_identity4(float q[4]) {
@@ -244,6 +246,8 @@ typedef struct game_v3 {
     float z;
 } game_v3;
 
+static game_v3 sphere_local_from_screen_point(const game_state* g, float x, float y);
+
 static game_v3 game_v3_make(float x, float y, float z) {
     game_v3 v;
     v.x = x;
@@ -310,6 +314,73 @@ static float sphere_surface_radius(const game_state* g) {
         return 1.0f;
     }
     return g->world_h * (8.0f / 9.0f);
+}
+
+static int sphere_voronoi_cell_count(void) {
+    const int count = render_sphere_voronoi_cell_count();
+    return clampi(count, 0, SPHERE_VORONOI_CELL_COUNT);
+}
+
+static game_v3 sphere_voronoi_cell_center_local(int idx) {
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 1.0f;
+    render_sphere_voronoi_cell_center(idx, &x, &y, &z);
+    return game_v3_norm(game_v3_make(x, y, z));
+}
+
+static void game_flash_sphere_cells_at_local(game_state* g, game_v3 local_p, float strength, float radius_rad) {
+    const float radius_cos = cosf(clampf(radius_rad, 0.01f, 1.20f));
+    const int cell_count = sphere_voronoi_cell_count();
+    if (!g) {
+        return;
+    }
+    local_p = game_v3_norm(local_p);
+    for (int i = 0; i < cell_count; ++i) {
+        const float d = game_v3_dot(local_p, sphere_voronoi_cell_center_local(i));
+        if (d < radius_cos) {
+            continue;
+        }
+        {
+            const float w = smoothstepf(radius_cos, 1.0f, d);
+            const float flash = strength * (0.30f + 0.65f * w);
+            g->sphere_cell_flash[i] = fmaxf(g->sphere_cell_flash[i], flash);
+        }
+    }
+}
+
+static void game_flash_sphere_cell_at_screen_pos(game_state* g, float x, float y, float strength) {
+    if (!g || g->render_style != LEVEL_RENDER_SPHERE) {
+        return;
+    }
+    const float radius = sphere_surface_radius(g);
+    if (radius <= 1.0e-5f) {
+        return;
+    }
+    {
+        const float sx = (x - g->world_w * 0.5f) / radius;
+        const float sy = (y - g->world_h * 0.5f) / radius;
+        const float r2 = sx * sx + sy * sy;
+        if (r2 > 1.0f) {
+            return;
+        }
+        {
+            const game_v3 local = sphere_local_from_screen_point(g, x, y);
+            game_flash_sphere_cells_at_local(g, local, strength, 0.16f);
+        }
+    }
+}
+
+void game_flash_sphere_cells_local(game_state* g, float local_x, float local_y, float local_z, float strength) {
+    if (!g || g->render_style != LEVEL_RENDER_SPHERE) {
+        return;
+    }
+    game_flash_sphere_cells_at_local(
+        g,
+        game_v3_make(local_x, local_y, local_z),
+        strength,
+        0.16f
+    );
 }
 
 static game_v3 sphere_player_surface_velocity_local(const game_state* g) {
@@ -809,6 +880,7 @@ void game_on_enemy_destroyed(game_state* g, float x, float y, float vx, float vy
     }
     g->kills += 1;
     g->score += score_delta;
+    game_flash_sphere_cell_at_screen_pos(g, x, y, 1.0f);
     game_try_spawn_powerup_drop(g, x, y, vx, vy);
 }
 
@@ -2000,6 +2072,7 @@ static void explode_missile(game_state* g, homing_missile* m, int direct_hit) {
     }
     const float su = gameplay_ui_scale(g);
     const int uses_cylinder = level_uses_cylinder(g);
+    const int uses_sphere = level_uses_sphere(g);
     const float period = cylinder_period(g);
     const float x = m->b.x;
     const float y = m->b.y;
@@ -2047,6 +2120,9 @@ static void explode_missile(game_state* g, homing_missile* m, int direct_hit) {
                 const int hp_max = (e->hp > 0) ? e->hp : 1;
                 e->hp = hp_max - 1;
                 if (e->hp <= 0) {
+                    if (uses_sphere) {
+                        game_flash_sphere_cells_local(g, e->sphere_pos_x, e->sphere_pos_y, e->sphere_pos_z, 1.0f);
+                    }
                     e->active = 0;
                     game_push_audio_event(g, GAME_AUDIO_EVENT_EXPLOSION, e->b.x, e->b.y);
                     game_on_enemy_destroyed(g, e->b.x, e->b.y, e->b.vx, e->b.vy, 100);
@@ -2857,6 +2933,7 @@ static int set_level_index(game_state* g, int index) {
     g->sphere_player_vel_x = 0.0f;
     g->sphere_player_vel_y = 0.0f;
     g->sphere_player_vel_z = 0.0f;
+    memset(g->sphere_cell_flash, 0, sizeof(g->sphere_cell_flash));
     g->shield_radius = 52.0f * su;
     g->mine_push_ax = 0.0f;
     g->mine_push_ay = 0.0f;
@@ -4095,6 +4172,21 @@ static void game_update_particles(game_state* g, float dt) {
     }
 }
 
+static void game_update_sphere_cell_flashes(game_state* g, float dt) {
+    if (!g) {
+        return;
+    }
+    for (int i = 0; i < SPHERE_VORONOI_CELL_COUNT; ++i) {
+        float v = g->sphere_cell_flash[i];
+        if (v <= 0.0f) {
+            g->sphere_cell_flash[i] = 0.0f;
+            continue;
+        }
+        v -= dt * 0.80f;
+        g->sphere_cell_flash[i] = (v > 1.0e-4f) ? v : 0.0f;
+    }
+}
+
 static void game_update_camera(game_state* g, float dt) {
     if (level_uses_sphere(g)) {
         g->prev_camera_x = g->camera_x;
@@ -4133,6 +4225,9 @@ void game_update(game_state* g, float dt, const game_input* in) {
     g->t += dt;
     const float su = gameplay_ui_scale(g);
     game_capture_render_prev_state(g);
+    if (g->render_style == LEVEL_RENDER_SPHERE) {
+        game_update_sphere_cell_flashes(g, dt);
+    }
 
     game_handle_restart(g, in);
     game_update_stars(g, dt);

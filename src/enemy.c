@@ -5161,6 +5161,15 @@ void enemy_update_system(
                     if (hit->hp <= 0) {
                         emit_enemy_debris(g, hit, g->bullets[bi].b.vx, g->bullets[bi].b.vy);
                         boss_on_enemy_destroyed(g, (int)ei);
+                        if (uses_sphere) {
+                            game_flash_sphere_cells_local(
+                                g,
+                                hit->sphere_pos_x,
+                                hit->sphere_pos_y,
+                                hit->sphere_pos_z,
+                                1.0f
+                            );
+                        }
                         hit->active = 0;
                         emit_explosion(g, hit->b.x, hit->b.y, hit->b.vx, hit->b.vy, 26, su);
                         game_on_enemy_destroyed(g, hit->b.x, hit->b.y, hit->b.vx, hit->b.vy, 100);
@@ -5242,6 +5251,9 @@ void enemy_apply_emp(
             emit_enemy_debris(g, e, e->b.vx, e->b.vy);
             boss_on_enemy_destroyed(g, (int)i);
             emit_explosion(g, e->b.x, e->b.y, e->b.vx, e->b.vy, 26, su);
+            if (level_uses_sphere_enemy(g)) {
+                game_flash_sphere_cells_local(g, e->sphere_pos_x, e->sphere_pos_y, e->sphere_pos_z, 1.0f);
+            }
             e->active = 0;
             game_on_enemy_destroyed(g, e->b.x, e->b.y, e->b.vx, e->b.vy, 100);
             continue;

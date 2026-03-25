@@ -253,6 +253,7 @@ typedef struct wormhole_line_vertex {
     float y;
     float z;
     float fade;
+    float cell_id;
 } wormhole_line_vertex;
 
 typedef struct sphere_render_debug_stats {
@@ -275,6 +276,8 @@ size_t render_build_enemy_radar_gpu_lines(const game_state* g, wormhole_line_ver
 size_t render_build_enemy_radar_gpu_tris(const game_state* g, wormhole_line_vertex* out, size_t out_cap);
 size_t render_build_sphere_gpu_lines(const game_state* g, wormhole_line_vertex* out, size_t out_cap);
 size_t render_build_sphere_gpu_tris(const game_state* g, wormhole_line_vertex* out, size_t out_cap);
+int render_sphere_voronoi_cell_count(void);
+void render_sphere_voronoi_cell_center(int idx, float* out_x, float* out_y, float* out_z);
 void render_get_sphere_debug_stats(sphere_render_debug_stats* out);
 
 vg_result render_frame(vg_context* ctx, const game_state* g, const render_metrics* metrics);

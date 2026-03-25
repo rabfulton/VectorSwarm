@@ -410,7 +410,7 @@ typedef struct grid_pc {
     float p4[4];      /* x=camera_x, y=camera_y, z=world_w, w=world_h */
     float p5[4];      /* x=mode(0=flat,1=sphere), y=sphere_radius_px, z=seed_count, w=line_px */
     float p6[4];      /* sphere orientation quaternion wxyz */
-    float p7[4];      /* x=spring_distort_px, y=time_s, z=reserved, w=reserved */
+    float p7[4];      /* x=spring_distort_px, y=time_s, z=cell_fill_gain, w=cell_line_gain */
 } grid_pc;
 
 typedef struct grid_sim_pc {
@@ -422,6 +422,7 @@ typedef struct grid_sim_pc {
 
 typedef struct grid_sim_sources_ubo {
     float src[GRID_SIM_MAX_SOURCES][4];  /* x=px, y=py, z=amp_px, w=radius_px */
+    float sphere_cell_flash[SPHERE_VORONOI_CELL_PACKED_COUNT][4];
 } grid_sim_sources_ubo;
 
 typedef struct industry_pc {
@@ -10948,6 +10949,17 @@ static void update_gpu_wormhole_tri_vertices(app* a) {
     a->wormhole_tri_vertex_count = (uint32_t)((n > (size_t)UINT32_MAX) ? (size_t)UINT32_MAX : n);
 }
 
+static void update_sphere_cell_flash_ubo(app* a) {
+    if (!a || !a->grid_sim_sources_map) {
+        return;
+    }
+    grid_sim_sources_ubo* ubo = (grid_sim_sources_ubo*)a->grid_sim_sources_map;
+    memset(ubo->sphere_cell_flash, 0, sizeof(ubo->sphere_cell_flash));
+    for (int i = 0; i < SPHERE_VORONOI_CELL_COUNT; ++i) {
+        ubo->sphere_cell_flash[i >> 2][i & 3] = a->game.sphere_cell_flash[i];
+    }
+}
+
 static void update_gpu_radar_vertices(app* a) {
     if (!a || !a->radar_line_vertex_map || !a->radar_tri_vertex_map) {
         return;
@@ -10965,6 +10977,7 @@ static void update_gpu_radar_vertices(app* a) {
             a->radar_tri_vertex_count = (uint32_t)((n > (size_t)UINT32_MAX) ? (size_t)UINT32_MAX : n);
             a->sphere_debug_tri_count = a->radar_tri_vertex_count;
         }
+        update_sphere_cell_flash_ubo(a);
         return;
     }
     {
@@ -11052,7 +11065,7 @@ static int create_wormhole_resources(app* a) {
         .stride = sizeof(wormhole_line_vertex),
         .inputRate = VK_VERTEX_INPUT_RATE_VERTEX
     };
-    VkVertexInputAttributeDescription attr[2];
+    VkVertexInputAttributeDescription attr[3];
     memset(attr, 0, sizeof(attr));
     attr[0].location = 0;
     attr[0].binding = 0;
@@ -11062,11 +11075,15 @@ static int create_wormhole_resources(app* a) {
     attr[1].binding = 0;
     attr[1].format = VK_FORMAT_R32_SFLOAT;
     attr[1].offset = sizeof(float) * 3;
+    attr[2].location = 2;
+    attr[2].binding = 0;
+    attr[2].format = VK_FORMAT_R32_SFLOAT;
+    attr[2].offset = sizeof(float) * 4;
     VkPipelineVertexInputStateCreateInfo vi = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
         .vertexBindingDescriptionCount = 1,
         .pVertexBindingDescriptions = &binding,
-        .vertexAttributeDescriptionCount = 2,
+        .vertexAttributeDescriptionCount = 3,
         .pVertexAttributeDescriptions = attr
     };
     VkPipelineInputAssemblyStateCreateInfo ia_line = {
@@ -14982,8 +14999,8 @@ static void record_gpu_radar(app* a, VkCommandBuffer cmd) {
         pc.color[0] = primary_dim[0];
         pc.color[1] = primary_dim[1];
         pc.color[2] = primary_dim[2];
-        pc.color[3] = sphere_mode ? 0.54f : 0.16f;
-        pc.params[2] = sphere_mode ? 1.15f : 0.70f;
+        pc.color[3] = sphere_mode ? 0.16f : 0.16f;
+        pc.params[2] = sphere_mode ? 0.88f : 0.70f;
         pc.offset[0] = 0.0f;
         pc.offset[1] = 0.0f;
         pc.offset[2] = 0.0f;
@@ -15748,6 +15765,23 @@ static int gather_grid_sim_sources(const app* a, float out_src[GRID_SIM_MAX_SOUR
     return n;
 }
 
+static void update_grid_aux_ubo(app* a, const float src[GRID_SIM_MAX_SOURCES][4], int src_n) {
+    if (!a || !a->grid_sim_sources_map) {
+        return;
+    }
+    grid_sim_sources_ubo* ubo = (grid_sim_sources_ubo*)a->grid_sim_sources_map;
+    memset(ubo, 0, sizeof(*ubo));
+    for (int i = 0; i < src_n && i < GRID_SIM_MAX_SOURCES; ++i) {
+        ubo->src[i][0] = src[i][0];
+        ubo->src[i][1] = src[i][1];
+        ubo->src[i][2] = src[i][2];
+        ubo->src[i][3] = src[i][3];
+    }
+    for (int i = 0; i < SPHERE_VORONOI_CELL_COUNT; ++i) {
+        ubo->sphere_cell_flash[i >> 2][i & 3] = a->game.sphere_cell_flash[i];
+    }
+}
+
 static void record_gpu_grid_sim(app* a, VkCommandBuffer cmd, float dt) {
 #if !V_TYPE_HAS_TERRAIN_SHADERS
     (void)a;
@@ -15772,11 +15806,6 @@ static void record_gpu_grid_sim(app* a, VkCommandBuffer cmd, float dt) {
         steps = 8;
         a->grid_sim_accum_s = step_s;
     }
-    if (steps <= 0) {
-        return;
-    }
-    a->grid_sim_accum_s -= step_s * (float)steps;
-
     float cam_dx = 0.0f;
     float cam_dy = 0.0f;
     if (a->grid_state_initialized) {
@@ -15788,16 +15817,11 @@ static void record_gpu_grid_sim(app* a, VkCommandBuffer cmd, float dt) {
 
     float src[GRID_SIM_MAX_SOURCES][4] = {{0}};
     const int src_n = gather_grid_sim_sources(a, src);
-    if (a->grid_sim_sources_map) {
-        grid_sim_sources_ubo* ubo = (grid_sim_sources_ubo*)a->grid_sim_sources_map;
-        memset(ubo, 0, sizeof(*ubo));
-        for (int i = 0; i < src_n && i < GRID_SIM_MAX_SOURCES; ++i) {
-            ubo->src[i][0] = src[i][0];
-            ubo->src[i][1] = src[i][1];
-            ubo->src[i][2] = src[i][2];
-            ubo->src[i][3] = src[i][3];
-        }
+    update_grid_aux_ubo(a, src, src_n);
+    if (steps <= 0) {
+        return;
     }
+    a->grid_sim_accum_s -= step_s * (float)steps;
     for (int step = 0; step < steps; ++step) {
         const uint32_t prev = a->grid_state_curr;
         const uint32_t next = 1u - prev;
@@ -15910,13 +15934,15 @@ static void record_gpu_grid(app* a, VkCommandBuffer cmd) {
     if (a->game.render_style == LEVEL_RENDER_SPHERE) {
         pc.p5[0] = 1.0f;
         pc.p5[1] = a->game.world_h * (8.0f / 9.0f);
-        pc.p5[2] = 2048.0f;
+        pc.p5[2] = (float)SPHERE_VORONOI_CELL_COUNT;
         pc.p5[3] = 0.35f;
         pc.p6[0] = a->game.sphere_visual_q[0];
         pc.p6[1] = a->game.sphere_visual_q[1];
         pc.p6[2] = a->game.sphere_visual_q[2];
         pc.p6[3] = a->game.sphere_visual_q[3];
         pc.p7[0] = 1.0f;
+        pc.p7[2] = 0.55f;
+        pc.p7[3] = 2.10f;
     }
 
     set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);

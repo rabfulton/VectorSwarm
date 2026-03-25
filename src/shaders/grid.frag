@@ -5,6 +5,11 @@ layout(location = 0) out vec4 out_color;
 
 layout(set = 0, binding = 0) uniform sampler2D u_grid_state;
 
+layout(std140, set = 0, binding = 1) uniform GridAux {
+    vec4 src[32];
+    vec4 sphere_cell_flash[641];
+} grid_aux;
+
 layout(push_constant) uniform GridPC {
     vec4 p0;      /* x=viewport_w, y=viewport_h, z=grid_dx, w=grid_dy */
     vec4 p1;      /* x=distort_gain, y=strain_gain, z=state_w, w=state_h */
@@ -75,10 +80,11 @@ vec3 quat_conjugate_rotate(vec4 q, vec3 v) {
     return quat_rotate(vec4(q.x, -q.y, -q.z, -q.w), v);
 }
 
-float sphere_voronoi_gap(vec3 local_p, int seed_count) {
+float sphere_voronoi_gap(vec3 local_p, int seed_count, out int best_idx) {
     const float golden_angle = 2.39996323;
     float best = -1.0e9;
     float second_best = -1.0e9;
+    best_idx = 0;
     for (int i = 0; i < 2048; ++i) {
         if (i >= seed_count) {
             break;
@@ -92,11 +98,22 @@ float sphere_voronoi_gap(vec3 local_p, int seed_count) {
         if (d > best) {
             second_best = best;
             best = d;
+            best_idx = i;
         } else if (d > second_best) {
             second_best = d;
         }
     }
     return best - second_best;
+}
+
+float sphere_cell_flash_value(int cell_id) {
+    int idx = clamp(cell_id, 0, 2047);
+    vec4 packed = grid_aux.sphere_cell_flash[idx >> 2];
+    int lane = idx & 3;
+    if (lane == 0) return packed.x;
+    if (lane == 1) return packed.y;
+    if (lane == 2) return packed.z;
+    return packed.w;
 }
 
 void main() {
@@ -112,6 +129,8 @@ void main() {
     );
 
     float line = voronoi_edge_band(world, vec2(pc.p0.z, pc.p0.w));
+    float fill_alpha = 0.0;
+    vec3 fill_col = pc.p3.rgb;
     if (pc.p5.x > 0.5) {
         vec2 center = vec2(pc.p0.x, pc.p0.y) * 0.5;
         float sphere_radius = max(pc.p5.y, 1.0);
@@ -125,13 +144,21 @@ void main() {
         }
         vec3 sphere_view = vec3(sphere_xy, sqrt(max(0.0, 1.0 - r2)));
         vec3 sphere_local = normalize(quat_conjugate_rotate(pc.p6, sphere_view));
-        float gap = sphere_voronoi_gap(sphere_local, int(pc.p5.z + 0.5));
+        int cell_id = 0;
+        float gap = sphere_voronoi_gap(sphere_local, int(pc.p5.z + 0.5), cell_id);
         float line_px = max(pc.p5.w, 0.05);
         float threshold = 0.00018 * line_px;
         float aa = max(fwidth(gap) * 0.55, 0.00006);
         line = 1.0 - smoothstep(threshold, threshold + aa, gap);
+        {
+            float cell_flash = clamp(sphere_cell_flash_value(cell_id), 0.0, 1.0);
+            float interior = smoothstep(threshold + aa, threshold * 10.0 + aa, gap);
+            fill_alpha = cell_flash * interior * pc.p7.z * pc.p2.w;
+            fill_col = mix(pc.p2.rgb, pc.p3.rgb, 0.78 + 0.22 * cell_flash);
+            line *= (1.0 + cell_flash * pc.p7.w);
+        }
     }
-    if (line <= 0.001) {
+    if (line <= 0.001 && fill_alpha <= 0.001) {
         discard;
     }
 
@@ -140,8 +167,11 @@ void main() {
     vec3 col = mix(pc.p2.rgb, pc.p3.rgb, 0.22 + 0.78 * strain);
     float alpha = line * (0.25 + 0.55 * strain) * pc.p2.w * pc.p3.w;
     if (pc.p5.x > 0.5) {
-        col = mix(pc.p2.rgb, pc.p3.rgb, 0.86 + 0.14 * strain);
-        alpha *= 10.5;
+        vec3 line_col = mix(pc.p2.rgb, pc.p3.rgb, 0.86 + 0.14 * strain);
+        float line_alpha = alpha * 10.5;
+        float total_alpha = line_alpha + fill_alpha;
+        col = (line_col * line_alpha + fill_col * fill_alpha) / max(total_alpha, 1.0e-4);
+        alpha = total_alpha;
     }
     out_color = vec4(col, alpha);
 }

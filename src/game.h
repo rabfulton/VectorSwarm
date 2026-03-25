@@ -26,6 +26,8 @@
 #define EEL_ARC_PULSE_PERIOD_S 0.60f
 #define EEL_ARC_PULSE_ON_S 0.20f
 #define PLAYER_ALT_WEAPON_COUNT 4
+#define SPHERE_VORONOI_CELL_COUNT 2562
+#define SPHERE_VORONOI_CELL_PACKED_COUNT ((SPHERE_VORONOI_CELL_COUNT + 3) / 4)
 
 struct leveldef_db;
 struct leveldef_level;
@@ -626,6 +628,7 @@ typedef struct game_state {
     float sphere_player_vel_x;
     float sphere_player_vel_y;
     float sphere_player_vel_z;
+    float sphere_cell_flash[SPHERE_VORONOI_CELL_COUNT];
     int level_style; /* enum level_style_id */
     int level_index;
     char current_level_name[64];
@@ -745,6 +748,7 @@ void game_set_alt_weapon(game_state* g, int weapon_id);
 int game_get_alt_weapon(const game_state* g);
 int game_get_alt_weapon_ammo(const game_state* g, int weapon_id);
 void game_on_enemy_destroyed(game_state* g, float x, float y, float vx, float vy, int score_delta);
+void game_flash_sphere_cells_local(game_state* g, float local_x, float local_y, float local_z, float strength);
 void game_on_player_life_lost(game_state* g);
 int game_structure_circle_overlap(const game_state* g, float x, float y, float radius);
 int game_find_noncolliding_spawn(
