@@ -58,7 +58,8 @@ enum leveldef_background_style {
 enum leveldef_background_mask_style {
     LEVELDEF_BG_MASK_NONE = 0,
     LEVELDEF_BG_MASK_TERRAIN = 1,
-    LEVELDEF_BG_MASK_WINDOWS = 2
+    LEVELDEF_BG_MASK_WINDOWS = 2,
+    LEVELDEF_BG_MASK_SPHERE = 3
 };
 
 enum leveldef_enemy_palette {

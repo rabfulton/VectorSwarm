@@ -1676,7 +1676,7 @@ static int level_background_mask_style(const game_state* g) {
     if (!lvl) {
         return LEVELDEF_BG_MASK_NONE;
     }
-    return clampi(lvl->background_mask_style, LEVELDEF_BG_MASK_NONE, LEVELDEF_BG_MASK_WINDOWS);
+    return clampi(lvl->background_mask_style, LEVELDEF_BG_MASK_NONE, LEVELDEF_BG_MASK_SPHERE);
 }
 
 static int point_in_window_trapezoid(float px, float py, float cx, float cy, float width, float height, int flip_vertical) {
@@ -1921,6 +1921,19 @@ static int star_visible_with_mask(const game_state* g, float sx, float sy) {
             }
         }
         return 0;
+    }
+    if (mask == LEVELDEF_BG_MASK_SPHERE) {
+        if (!level_uses_sphere_render(g)) {
+            return 1;
+        }
+        {
+            const float cx = g->world_w * 0.5f;
+            const float cy = g->world_h * 0.5f;
+            const float radius = g->world_h * (8.0f / 9.0f);
+            const float dx = sx - cx;
+            const float dy = sy - cy;
+            return (dx * dx + dy * dy >= radius * radius) ? 1 : 0;
+        }
     }
     return 1;
 }
@@ -6172,6 +6185,7 @@ static const char* editor_background_style_name(int style) {
 static const char* editor_background_mask_style_name(int style) {
     if (style == LEVELDEF_BG_MASK_TERRAIN) return "TERRAIN";
     if (style == LEVELDEF_BG_MASK_WINDOWS) return "WINDOWS";
+    if (style == LEVELDEF_BG_MASK_SPHERE) return "SPHERE";
     return "NONE";
 }
 
@@ -6494,6 +6508,120 @@ static int editor_marker_properties_text(
     return n;
 }
 
+static vg_result draw_level_editor_viewport_background_preview(
+    vg_context* ctx,
+    vg_rect viewport,
+    const render_metrics* metrics,
+    const palette_theme* pal,
+    float t_s
+) {
+    if (!ctx || !metrics || !pal) {
+        return VG_OK;
+    }
+
+    const int sphere_preview =
+        game_render_style_uses_sphere(metrics->level_editor_render_style) &&
+        metrics->level_editor_background_mask_style == LEVELDEF_BG_MASK_SPHERE;
+    const int star_preview = (metrics->level_editor_background_style == LEVELDEF_BACKGROUND_STARS);
+    const float ui = ui_reference_scale(viewport.w, viewport.h);
+    const vg_vec2 center = {
+        viewport.x + viewport.w * 0.5f,
+        viewport.y + viewport.h * 0.5f
+    };
+    const float radius = fminf(viewport.w, viewport.h) * 0.43f;
+
+    if (star_preview) {
+        const float pan = clampf(metrics->level_editor_timeline_01, 0.0f, 1.0f);
+        for (uint32_t i = 0; i < 88u; ++i) {
+            const uint32_t seed0 = 0x9e3779b9u ^ (i * 0x85ebca6bu);
+            const uint32_t seed1 = 0x7f4a7c15u ^ (i * 0xc2b2ae35u);
+            const uint32_t seed2 = 0x165667b1u ^ (i * 0x27d4eb2du);
+            const uint32_t seed3 = 0x52dce729u ^ (i * 0x94d049bbu);
+            const float depth = hash01_u32(seed0);
+            const float su = repeatf(hash01_u32(seed1) - pan * (0.05f + depth * 0.16f), 1.0f);
+            const float sv = hash01_u32(seed2);
+            const float sx = viewport.x + su * viewport.w;
+            const float sy = viewport.y + sv * viewport.h;
+            if (sphere_preview) {
+                const float dx = (sx - center.x) / fmaxf(radius, 1.0f);
+                const float dy = (sy - center.y) / fmaxf(radius, 1.0f);
+                if (dx * dx + dy * dy <= 1.0f) {
+                    continue;
+                }
+            }
+            {
+                const float twinkle = 0.82f + 0.18f * sinf(t_s * (0.65f + depth * 0.90f) + hash01_u32(seed3) * 6.2831853f);
+                vg_fill_style star = make_fill(
+                    (0.28f + depth * 0.48f) * twinkle,
+                    (vg_color){
+                        lerpf(0.60f, 0.92f, depth),
+                        lerpf(0.78f, 0.97f, depth),
+                        1.00f,
+                        0.92f
+                    },
+                    VG_BLEND_ADDITIVE
+                );
+                const float rr = (0.45f + depth * 1.20f) * ui;
+                vg_result r = vg_fill_circle(ctx, (vg_vec2){sx, sy}, rr, &star, 10);
+                if (r != VG_OK) {
+                    return r;
+                }
+            }
+        }
+    }
+
+    if (sphere_preview) {
+        enum { RING_SEGMENTS = 40 };
+        vg_vec2 ring[RING_SEGMENTS + 1];
+        vg_fill_style outer = make_fill(
+            0.34f,
+            (vg_color){pal->primary_dim.r, pal->primary_dim.g, pal->primary_dim.b, 0.18f},
+            VG_BLEND_ALPHA
+        );
+        vg_fill_style body = make_fill(
+            1.0f,
+            (vg_color){0.0f, 0.0f, 0.0f, 0.88f},
+            VG_BLEND_ALPHA
+        );
+        vg_fill_style haze = make_fill(
+            0.20f,
+            (vg_color){pal->haze.r, pal->haze.g, pal->haze.b, 0.10f},
+            VG_BLEND_ALPHA
+        );
+        vg_stroke_style rim = make_stroke(
+            1.35f * ui,
+            0.76f,
+            (vg_color){pal->secondary.r, pal->secondary.g, pal->secondary.b, 0.46f},
+            VG_BLEND_ALPHA
+        );
+        vg_result r = vg_fill_circle(ctx, center, radius * 1.035f, &outer, 30);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_fill_circle(ctx, center, radius, &body, 30);
+        if (r != VG_OK) {
+            return r;
+        }
+        r = vg_fill_circle(ctx, center, radius * 0.93f, &haze, 28);
+        if (r != VG_OK) {
+            return r;
+        }
+        for (int i = 0; i <= RING_SEGMENTS; ++i) {
+            const float a = ((float)i / (float)RING_SEGMENTS) * 6.28318530718f;
+            ring[i] = (vg_vec2){
+                center.x + cosf(a) * radius,
+                center.y + sinf(a) * radius
+            };
+        }
+        r = vg_draw_polyline(ctx, ring, RING_SEGMENTS + 1, &rim, 1);
+        if (r != VG_OK) {
+            return r;
+        }
+    }
+
+    return VG_OK;
+}
+
 static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const render_metrics* metrics, float t_s) {
     (void)t_s;
     const float ui = ui_reference_scale(w, h);
@@ -6590,6 +6718,8 @@ static vg_result draw_level_editor_ui(vg_context* ctx, float w, float h, const r
     };
 
     vg_result r = vg_fill_rect(ctx, viewport, &haze);
+    if (r != VG_OK) return r;
+    r = draw_level_editor_viewport_background_preview(ctx, viewport, metrics, &pal, t_s);
     if (r != VG_OK) return r;
     r = vg_draw_rect(ctx, viewport, &frame);
     if (r != VG_OK) return r;

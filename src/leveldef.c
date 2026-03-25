@@ -288,6 +288,7 @@ static int background_mask_style_from_name(const char* name) {
     if (strcmp(name, "none") == 0) return LEVELDEF_BG_MASK_NONE;
     if (strcmp(name, "terrain") == 0) return LEVELDEF_BG_MASK_TERRAIN;
     if (strcmp(name, "windows") == 0) return LEVELDEF_BG_MASK_WINDOWS;
+    if (strcmp(name, "sphere") == 0) return LEVELDEF_BG_MASK_SPHERE;
     return -1;
 }
 
@@ -1961,9 +1962,9 @@ static int leveldef_validate(const leveldef_db* db, FILE* log_out) {
             }
             ok = 0;
         }
-        if (l->background_mask_style < LEVELDEF_BG_MASK_NONE || l->background_mask_style > LEVELDEF_BG_MASK_WINDOWS) {
+        if (l->background_mask_style < LEVELDEF_BG_MASK_NONE || l->background_mask_style > LEVELDEF_BG_MASK_SPHERE) {
             if (log_out) {
-                fprintf(log_out, "leveldef: level %d invalid background_mask (expected none|terrain|windows)\n", i);
+                fprintf(log_out, "leveldef: level %d invalid background_mask (expected none|terrain|windows|sphere)\n", i);
             }
             ok = 0;
         }

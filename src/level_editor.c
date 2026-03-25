@@ -1272,6 +1272,7 @@ static const char* background_mask_style_name(int style) {
     switch (style) {
         case LEVELDEF_BG_MASK_TERRAIN: return "terrain";
         case LEVELDEF_BG_MASK_WINDOWS: return "windows";
+        case LEVELDEF_BG_MASK_SPHERE: return "sphere";
         case LEVELDEF_BG_MASK_NONE:
         default: return "none";
     }
@@ -1959,7 +1960,7 @@ static int build_level_serialized_text(
         if (!appendf(out, out_cap, &used, "forest.root_arch_density=%.3f\n", lvl.forest_root_arch_density)) return 0;
         if (!appendf(out, out_cap, &used, "forest.foreground_occluder_alpha=%.3f\n", lvl.forest_foreground_occluder_alpha)) return 0;
     }
-    if (!appendf(out, out_cap, &used, "background_mask=%s\n", background_mask_style_name(clampi(lvl.background_mask_style, LEVELDEF_BG_MASK_NONE, LEVELDEF_BG_MASK_WINDOWS)))) return 0;
+    if (!appendf(out, out_cap, &used, "background_mask=%s\n", background_mask_style_name(clampi(lvl.background_mask_style, LEVELDEF_BG_MASK_NONE, LEVELDEF_BG_MASK_SPHERE)))) return 0;
     if (!appendf(out, out_cap, &used, "spawn_mode=%s\n", spawn_mode_name(lvl.spawn_mode))) return 0;
     if (!appendf(out, out_cap, &used, "spawn_interval_s=%.3f\n", lvl.spawn_interval_s)) return 0;
     if (lvl.default_boid_profile >= 0 && lvl.default_boid_profile < db->profile_count) {
@@ -3263,7 +3264,7 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
             s->level_enemy_bullet_skin = clampi(lvl->enemy_bullet_skin, LEVELDEF_BULLET_SKIN_STREAK, LEVELDEF_BULLET_SKIN_CRYSTAL);
             s->level_enemy_bullet_color = clampi(lvl->enemy_bullet_color, LEVELDEF_ENEMY_BULLET_COLOR_PALETTE, LEVELDEF_ENEMY_BULLET_COLOR_MAGENTA);
             s->level_background_style = clampi(lvl->background_style, LEVELDEF_BACKGROUND_STARS, LEVELDEF_BACKGROUND_FOREST);
-            s->level_background_mask_style = clampi(lvl->background_mask_style, LEVELDEF_BG_MASK_NONE, LEVELDEF_BG_MASK_WINDOWS);
+            s->level_background_mask_style = clampi(lvl->background_mask_style, LEVELDEF_BG_MASK_NONE, LEVELDEF_BG_MASK_SPHERE);
             s->level_texture_atlas_id = texture_atlas_get(lvl->texture_atlas_id) ? lvl->texture_atlas_id : editor_default_texture_atlas_id();
             s->level_texture_tile_w_px = (lvl->texture_tile_w_px > 0) ? lvl->texture_tile_w_px : texture_atlas_default_tile_w(s->level_texture_atlas_id);
             s->level_texture_tile_h_px = (lvl->texture_tile_h_px > 0) ? lvl->texture_tile_h_px : texture_atlas_default_tile_h(s->level_texture_atlas_id);
@@ -3291,7 +3292,10 @@ int level_editor_load_by_name(level_editor_state* s, const leveldef_db* db, cons
             s->level_background_mask_style =
                 (s->level_render_style == LEVEL_RENDER_DRIFTER || s->level_render_style == LEVEL_RENDER_DRIFTER_SHADED)
                 ? LEVELDEF_BG_MASK_TERRAIN
-                : LEVELDEF_BG_MASK_NONE;
+                : (game_render_style_uses_sphere(s->level_render_style) &&
+                   s->level_background_style == LEVELDEF_BACKGROUND_STARS)
+                    ? LEVELDEF_BG_MASK_SPHERE
+                    : LEVELDEF_BG_MASK_NONE;
             s->level_texture_atlas_id = editor_default_texture_atlas_id();
             s->level_texture_tile_w_px = 256;
             s->level_texture_tile_h_px = 256;
@@ -4121,8 +4125,8 @@ void level_editor_adjust_selected_property(level_editor_state* s, float delta) {
             case LEVEL_EDITOR_LEVEL_PROP_BG_MASK:
             {
                 const int dir = (delta >= 0.0f) ? 1 : -1;
-                const int n = LEVELDEF_BG_MASK_WINDOWS - LEVELDEF_BG_MASK_NONE + 1;
-                int mask = clampi(s->level_background_mask_style, LEVELDEF_BG_MASK_NONE, LEVELDEF_BG_MASK_WINDOWS);
+                const int n = LEVELDEF_BG_MASK_SPHERE - LEVELDEF_BG_MASK_NONE + 1;
+                int mask = clampi(s->level_background_mask_style, LEVELDEF_BG_MASK_NONE, LEVELDEF_BG_MASK_SPHERE);
                 mask = LEVELDEF_BG_MASK_NONE + ((mask - LEVELDEF_BG_MASK_NONE + dir + n) % n);
                 s->level_background_mask_style = mask;
             } break;

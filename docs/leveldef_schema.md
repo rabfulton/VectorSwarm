@@ -142,7 +142,7 @@
 - `forest.godray_strength` float
 - `forest.root_arch_density` float
 - `forest.foreground_occluder_alpha` float
-- `background_mask` enum: `none`, `terrain`, `windows`
+- `background_mask` enum: `none`, `terrain`, `windows`, `sphere`
 - `spawn_mode` enum:
 - `sequenced_clear` (spawn next wave only when clear + cooldown elapsed)
 - `timed` (spawn on interval regardless of clear state)
