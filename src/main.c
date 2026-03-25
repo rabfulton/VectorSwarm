@@ -69,6 +69,7 @@
 #include "sphere_particle_frag_spv.h"
 #include "sphere_particle_bloom_frag_spv.h"
 #include "sphere_hologram_vert_spv.h"
+#include "sphere_hologram_shell_frag_spv.h"
 #include "sphere_hologram_line_frag_spv.h"
 #include "sphere_hologram_glow_frag_spv.h"
 #include "sphere_ion_storm_vert_spv.h"
@@ -612,6 +613,7 @@ typedef struct app {
     VkDescriptorPool sphere_style_desc_pool;
     VkDescriptorSet sphere_style_desc_set;
     VkPipelineLayout sphere_style_layout;
+    VkPipeline sphere_hologram_shell_pipeline;
     VkPipeline sphere_hologram_line_pipeline;
     VkPipeline sphere_hologram_glow_pipeline;
     VkPipeline sphere_hologram_bloom_pipeline;
@@ -6397,11 +6399,19 @@ static int sphere_style_build_shell_mesh(sphere_style_cpu_shell_mesh* out_mesh) 
     return sphere_style_build_shell_mesh_subdiv(out_mesh, SPHERE_STYLE_SHELL_SUBDIVISIONS);
 }
 
+static sphere_cpu_v3 sphere_style_dir_lat_lon(float latitude_deg, float longitude_deg) {
+    const float lat = latitude_deg * (3.14159265359f / 180.0f);
+    const float lon = longitude_deg * (3.14159265359f / 180.0f);
+    const float r = cosf(lat);
+    return sphere_cpu_v3_make(cosf(lon) * r, sinf(lat), sinf(lon) * r);
+}
+
 static void sphere_style_add_lat_ring(
     sphere_style_cpu_line_mesh* mesh,
     float latitude_deg,
     float kind,
-    float weight
+    float weight,
+    float shell_scale
 ) {
     const float lat = latitude_deg * (3.14159265359f / 180.0f);
     const float y = sinf(lat);
@@ -6412,29 +6422,48 @@ static void sphere_style_add_lat_ring(
         const float t1 = (float)(seg + 1u) / (float)seg_n;
         const float a0 = t0 * 6.28318530718f;
         const float a1 = t1 * 6.28318530718f;
-        const sphere_cpu_v3 p0 = sphere_cpu_v3_make(cosf(a0) * r, y, sinf(a0) * r);
-        const sphere_cpu_v3 p1 = sphere_cpu_v3_make(cosf(a1) * r, y, sinf(a1) * r);
+        const sphere_cpu_v3 p0 = sphere_cpu_v3_scale(
+            sphere_cpu_v3_make(cosf(a0) * r, y, sinf(a0) * r),
+            shell_scale
+        );
+        const sphere_cpu_v3 p1 = sphere_cpu_v3_scale(
+            sphere_cpu_v3_make(cosf(a1) * r, y, sinf(a1) * r),
+            shell_scale
+        );
         (void)sphere_style_append_line_segment(mesh, p0, p1, kind, t0, t1, weight);
     }
 }
 
-static void sphere_style_add_meridian(
+static void sphere_style_add_meridian_band(
     sphere_style_cpu_line_mesh* mesh,
     float longitude_deg,
+    float lat0_deg,
+    float lat1_deg,
     float kind,
-    float weight
+    float weight,
+    float shell_scale
 ) {
     const float lon = longitude_deg * (3.14159265359f / 180.0f);
-    const uint32_t seg_n = SPHERE_STYLE_LINE_RING_SEGMENTS;
+    const float span = fabsf(lat1_deg - lat0_deg);
+    const uint32_t seg_n = (uint32_t)fmaxf(
+        10.0f,
+        ceilf((float)SPHERE_STYLE_LINE_RING_SEGMENTS * span / 180.0f)
+    );
     for (uint32_t seg = 0; seg < seg_n; ++seg) {
         const float t0 = (float)seg / (float)seg_n;
         const float t1 = (float)(seg + 1u) / (float)seg_n;
-        const float lat0 = lerpf(-1.57079632679f, 1.57079632679f, t0);
-        const float lat1 = lerpf(-1.57079632679f, 1.57079632679f, t1);
+        const float lat0 = lerpf(lat0_deg, lat1_deg, t0) * (3.14159265359f / 180.0f);
+        const float lat1 = lerpf(lat0_deg, lat1_deg, t1) * (3.14159265359f / 180.0f);
         const float r0 = cosf(lat0);
         const float r1 = cosf(lat1);
-        const sphere_cpu_v3 p0 = sphere_cpu_v3_make(cosf(lon) * r0, sinf(lat0), sinf(lon) * r0);
-        const sphere_cpu_v3 p1 = sphere_cpu_v3_make(cosf(lon) * r1, sinf(lat1), sinf(lon) * r1);
+        const sphere_cpu_v3 p0 = sphere_cpu_v3_scale(
+            sphere_cpu_v3_make(cosf(lon) * r0, sinf(lat0), sinf(lon) * r0),
+            shell_scale
+        );
+        const sphere_cpu_v3 p1 = sphere_cpu_v3_scale(
+            sphere_cpu_v3_make(cosf(lon) * r1, sinf(lat1), sinf(lon) * r1),
+            shell_scale
+        );
         (void)sphere_style_append_line_segment(mesh, p0, p1, kind, t0, t1, weight);
     }
 }
@@ -6445,7 +6474,8 @@ static void sphere_style_add_orbit_arc(
     float start_deg,
     float sweep_deg,
     float kind,
-    float weight
+    float weight,
+    float shell_scale
 ) {
     sphere_cpu_v3 t0;
     sphere_cpu_v3 t1;
@@ -6461,14 +6491,20 @@ static void sphere_style_add_orbit_arc(
         const float u1 = (float)(seg + 1u) / (float)seg_n;
         const float a0 = start_rad + sweep_rad * u0;
         const float a1 = start_rad + sweep_rad * u1;
-        const sphere_cpu_v3 p0 = sphere_cpu_v3_norm_safe(sphere_cpu_v3_add(
-            sphere_cpu_v3_scale(t0, cosf(a0)),
-            sphere_cpu_v3_scale(t1, sinf(a0))
-        ));
-        const sphere_cpu_v3 p1 = sphere_cpu_v3_norm_safe(sphere_cpu_v3_add(
-            sphere_cpu_v3_scale(t0, cosf(a1)),
-            sphere_cpu_v3_scale(t1, sinf(a1))
-        ));
+        const sphere_cpu_v3 p0 = sphere_cpu_v3_scale(
+            sphere_cpu_v3_norm_safe(sphere_cpu_v3_add(
+                sphere_cpu_v3_scale(t0, cosf(a0)),
+                sphere_cpu_v3_scale(t1, sinf(a0))
+            )),
+            shell_scale
+        );
+        const sphere_cpu_v3 p1 = sphere_cpu_v3_scale(
+            sphere_cpu_v3_norm_safe(sphere_cpu_v3_add(
+                sphere_cpu_v3_scale(t0, cosf(a1)),
+                sphere_cpu_v3_scale(t1, sinf(a1))
+            )),
+            shell_scale
+        );
         (void)sphere_style_append_line_segment(mesh, p0, p1, kind, u0, u1, weight);
     }
 }
@@ -6477,33 +6513,116 @@ static void sphere_style_add_great_circle(
     sphere_style_cpu_line_mesh* mesh,
     sphere_cpu_v3 normal,
     float kind,
-    float weight
+    float weight,
+    float shell_scale
 ) {
-    sphere_style_add_orbit_arc(mesh, normal, 0.0f, 360.0f, kind, weight);
+    sphere_style_add_orbit_arc(mesh, normal, 0.0f, 360.0f, kind, weight, shell_scale);
+}
+
+static void sphere_style_add_small_circle(
+    sphere_style_cpu_line_mesh* mesh,
+    sphere_cpu_v3 center,
+    float angular_radius_deg,
+    float kind,
+    float weight,
+    float shell_scale,
+    uint32_t seg_n
+) {
+    sphere_cpu_v3 t0;
+    sphere_cpu_v3 t1;
+    const float radius = angular_radius_deg * (3.14159265359f / 180.0f);
+    const float cr = cosf(radius);
+    const float sr = sinf(radius);
+    const sphere_cpu_v3 n = sphere_cpu_v3_norm_safe(center);
+    sphere_cpu_v3_tangent_basis(n, &t0, &t1);
+    if (seg_n < 12u) {
+        seg_n = 12u;
+    }
+    for (uint32_t seg = 0; seg < seg_n; ++seg) {
+        const float u0 = (float)seg / (float)seg_n;
+        const float u1 = (float)(seg + 1u) / (float)seg_n;
+        const float a0 = u0 * 6.28318530718f;
+        const float a1 = u1 * 6.28318530718f;
+        const sphere_cpu_v3 p0 = sphere_cpu_v3_scale(
+            sphere_cpu_v3_norm_safe(sphere_cpu_v3_add(
+                sphere_cpu_v3_scale(n, cr),
+                sphere_cpu_v3_add(
+                    sphere_cpu_v3_scale(t0, cosf(a0) * sr),
+                    sphere_cpu_v3_scale(t1, sinf(a0) * sr)
+                )
+            )),
+            shell_scale
+        );
+        const sphere_cpu_v3 p1 = sphere_cpu_v3_scale(
+            sphere_cpu_v3_norm_safe(sphere_cpu_v3_add(
+                sphere_cpu_v3_scale(n, cr),
+                sphere_cpu_v3_add(
+                    sphere_cpu_v3_scale(t0, cosf(a1) * sr),
+                    sphere_cpu_v3_scale(t1, sinf(a1) * sr)
+                )
+            )),
+            shell_scale
+        );
+        (void)sphere_style_append_line_segment(mesh, p0, p1, kind, u0, u1, weight);
+    }
 }
 
 static int sphere_style_build_line_mesh(sphere_style_cpu_line_mesh* out_mesh) {
+    static const float k_node_lat_lon[][2] = {
+        { 56.0f,  -18.0f},
+        { 28.0f,   48.0f},
+        {  8.0f,  122.0f},
+        {-24.0f,  172.0f},
+        {-48.0f,   92.0f},
+        {-46.0f,  -22.0f},
+        {-10.0f, -106.0f},
+        { 22.0f, -152.0f},
+        { 68.0f,  138.0f},
+        {-70.0f, -136.0f}
+    };
+    sphere_cpu_v3 nodes[(int)(sizeof(k_node_lat_lon) / sizeof(k_node_lat_lon[0]))];
     if (!out_mesh) {
         return 0;
     }
     memset(out_mesh, 0, sizeof(*out_mesh));
-    sphere_style_add_great_circle(out_mesh, sphere_cpu_v3_make(1.0f, 0.0f, 0.0f), 0.0f, 0.42f);
-    sphere_style_add_great_circle(out_mesh, sphere_cpu_v3_make(0.0f, 1.0f, 0.0f), 0.0f, 0.48f);
-    sphere_style_add_great_circle(out_mesh, sphere_cpu_v3_make(0.0f, 0.0f, 1.0f), 0.0f, 0.42f);
-    sphere_style_add_great_circle(out_mesh, sphere_cpu_v3_make(1.0f, 1.0f, 0.0f), 0.0f, 0.28f);
-    sphere_style_add_great_circle(out_mesh, sphere_cpu_v3_make(1.0f, 0.0f, 1.0f), 0.0f, 0.24f);
-    sphere_style_add_great_circle(out_mesh, sphere_cpu_v3_make(0.0f, 1.0f, 1.0f), 0.0f, 0.20f);
-    sphere_style_add_lat_ring(out_mesh, -60.0f, 1.0f, 0.16f);
-    sphere_style_add_lat_ring(out_mesh, -30.0f, 1.0f, 0.30f);
-    sphere_style_add_lat_ring(out_mesh,   0.0f, 1.0f, 0.64f);
-    sphere_style_add_lat_ring(out_mesh,  30.0f, 1.0f, 0.30f);
-    sphere_style_add_lat_ring(out_mesh,  60.0f, 1.0f, 0.16f);
-    for (int i = 0; i < 8; ++i) {
-        sphere_style_add_meridian(out_mesh, (float)i * 22.5f, 2.0f, (i & 1) ? 0.20f : 0.34f);
+
+    for (int i = 0; i < (int)(sizeof(nodes) / sizeof(nodes[0])); ++i) {
+        nodes[i] = sphere_style_dir_lat_lon(k_node_lat_lon[i][0], k_node_lat_lon[i][1]);
     }
-    sphere_style_add_orbit_arc(out_mesh, sphere_cpu_v3_make(1.0f, 0.18f, 0.22f), -52.0f, 192.0f, 3.0f, 0.34f);
-    sphere_style_add_orbit_arc(out_mesh, sphere_cpu_v3_make(-0.24f, 0.96f, 0.16f), 30.0f, 164.0f, 3.0f, 0.28f);
-    sphere_style_add_orbit_arc(out_mesh, sphere_cpu_v3_make(0.16f, 0.38f, 0.92f), -84.0f, 182.0f, 3.0f, 0.24f);
+
+    sphere_style_add_great_circle(out_mesh, sphere_cpu_v3_make(0.0f, 1.0f, 0.0f), 0.0f, 0.52f, 1.001f);
+    sphere_style_add_great_circle(out_mesh, sphere_cpu_v3_make(1.0f, 0.0f, 0.0f), 0.0f, 0.32f, 1.001f);
+    sphere_style_add_great_circle(out_mesh, sphere_cpu_v3_make(0.32f, 0.0f, 0.95f), 0.0f, 0.28f, 1.001f);
+    sphere_style_add_great_circle(out_mesh, sphere_cpu_v3_make(0.88f, 0.18f, -0.42f), 0.0f, 0.24f, 1.001f);
+
+    sphere_style_add_lat_ring(out_mesh, -46.0f, 1.0f, 0.18f, 1.006f);
+    sphere_style_add_lat_ring(out_mesh, -14.0f, 1.0f, 0.34f, 1.006f);
+    sphere_style_add_lat_ring(out_mesh,  18.0f, 1.0f, 0.28f, 1.006f);
+    sphere_style_add_lat_ring(out_mesh,  52.0f, 1.0f, 0.16f, 1.006f);
+
+    sphere_style_add_lat_ring(out_mesh,  72.0f, 5.0f, 0.30f, 1.012f);
+    sphere_style_add_lat_ring(out_mesh,  82.0f, 5.0f, 0.22f, 1.014f);
+    sphere_style_add_lat_ring(out_mesh, -72.0f, 5.0f, 0.30f, 1.012f);
+    sphere_style_add_lat_ring(out_mesh, -82.0f, 5.0f, 0.22f, 1.014f);
+    for (int i = 0; i < 6; ++i) {
+        const float lon = 15.0f + (float)i * 60.0f;
+        sphere_style_add_meridian_band(out_mesh, lon, 66.0f, 88.0f, 5.0f, (i & 1) ? 0.14f : 0.18f, 1.012f);
+        sphere_style_add_meridian_band(out_mesh, lon, -88.0f, -66.0f, 5.0f, (i & 1) ? 0.14f : 0.18f, 1.012f);
+    }
+
+    for (int i = 0; i < (int)(sizeof(nodes) / sizeof(nodes[0])); ++i) {
+        const float outer_r = (i >= 8) ? 7.2f : 5.6f;
+        const float inner_r = (i >= 8) ? 3.8f : 2.7f;
+        const float outer_w = (i >= 8) ? 0.18f : 0.14f;
+        const float inner_w = (i >= 8) ? 0.10f : 0.06f;
+        sphere_style_add_small_circle(out_mesh, nodes[i], outer_r, 3.0f, outer_w, 1.024f, 40u);
+        sphere_style_add_small_circle(out_mesh, nodes[i], inner_r, 3.0f, inner_w, 1.032f, 28u);
+    }
+
+    sphere_style_add_orbit_arc(out_mesh, sphere_cpu_v3_make(0.12f, 1.0f, 0.24f), -52.0f, 244.0f, 4.0f, 0.14f, 1.054f);
+    sphere_style_add_orbit_arc(out_mesh, sphere_cpu_v3_make(-0.88f, 0.22f, 0.42f), 18.0f, 188.0f, 4.0f, 0.12f, 1.048f);
+    sphere_style_add_orbit_arc(out_mesh, sphere_cpu_v3_make(0.34f, 0.42f, 0.92f), -116.0f, 172.0f, 4.0f, 0.10f, 1.062f);
+    sphere_style_add_orbit_arc(out_mesh, sphere_cpu_v3_make(0.0f, 1.0f, 0.0f), 0.0f, 360.0f, 4.0f, 0.08f, 1.036f);
     return out_mesh->vertex_count > 0u;
 }
 
@@ -7865,6 +7984,10 @@ static void destroy_sphere_style_resources(app* a) {
 #else
     if (!a || a->device == VK_NULL_HANDLE) {
         return;
+    }
+    if (a->sphere_hologram_shell_pipeline) {
+        vkDestroyPipeline(a->device, a->sphere_hologram_shell_pipeline, NULL);
+        a->sphere_hologram_shell_pipeline = VK_NULL_HANDLE;
     }
     if (a->sphere_hologram_line_pipeline) {
         vkDestroyPipeline(a->device, a->sphere_hologram_line_pipeline, NULL);
@@ -9887,6 +10010,7 @@ static int create_sphere_style_resources(app* a) {
     sphere_style_cpu_shell_mesh shell_mesh;
     sphere_style_cpu_line_mesh line_mesh;
     VkShaderModule holo_vs = VK_NULL_HANDLE;
+    VkShaderModule holo_shell_fs = VK_NULL_HANDLE;
     VkShaderModule holo_line_fs = VK_NULL_HANDLE;
     VkShaderModule holo_glow_fs = VK_NULL_HANDLE;
     VkShaderModule ion_vs = VK_NULL_HANDLE;
@@ -10187,6 +10311,11 @@ static int create_sphere_style_resources(app* a) {
             .codeSize = v_type_sphere_hologram_vert_spv_len,
             .pCode = (const uint32_t*)v_type_sphere_hologram_vert_spv
         };
+        VkShaderModuleCreateInfo holo_shell_fs_ci = {
+            .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .codeSize = v_type_sphere_hologram_shell_frag_spv_len,
+            .pCode = (const uint32_t*)v_type_sphere_hologram_shell_frag_spv
+        };
         VkShaderModuleCreateInfo holo_line_fs_ci = {
             .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
             .codeSize = v_type_sphere_hologram_line_frag_spv_len,
@@ -10331,10 +10460,26 @@ static int create_sphere_style_resources(app* a) {
             .pName = "main"
         };
         if (!check_vk(vkCreateShaderModule(a->device, &holo_vs_ci, NULL, &holo_vs), "vkCreateShaderModule(sphere holo vs)") ||
+            !check_vk(vkCreateShaderModule(a->device, &holo_shell_fs_ci, NULL, &holo_shell_fs), "vkCreateShaderModule(sphere holo shell fs)") ||
             !check_vk(vkCreateShaderModule(a->device, &holo_line_fs_ci, NULL, &holo_line_fs), "vkCreateShaderModule(sphere holo line fs)") ||
             !check_vk(vkCreateShaderModule(a->device, &holo_glow_fs_ci, NULL, &holo_glow_fs), "vkCreateShaderModule(sphere holo glow fs)") ||
             !check_vk(vkCreateShaderModule(a->device, &ion_vs_ci, NULL, &ion_vs), "vkCreateShaderModule(sphere ion vs)") ||
             !check_vk(vkCreateShaderModule(a->device, &ion_fs_ci, NULL, &ion_fs), "vkCreateShaderModule(sphere ion fs)")) {
+            goto sphere_style_shader_fail;
+        }
+        stages[0].module = ion_vs;
+        stages[1].module = holo_shell_fs;
+        gp.pVertexInputState = &vi_shell;
+        gp.pInputAssemblyState = &ia_tri;
+        gp.renderPass = a->scene_render_pass;
+        gp.pMultisampleState = &ms_scene;
+        rs.lineWidth = 1.0f;
+        rs.cullMode = VK_CULL_MODE_NONE;
+        cb_att.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        cb_att.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        cb_att.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        cb_att.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        if (!check_vk(vkCreateGraphicsPipelines(a->device, VK_NULL_HANDLE, 1, &gp, NULL, &a->sphere_hologram_shell_pipeline), "vkCreateGraphicsPipelines(sphere hologram shell)")) {
             goto sphere_style_shader_fail;
         }
         stages[0].module = holo_vs;
@@ -10344,6 +10489,7 @@ static int create_sphere_style_resources(app* a) {
         gp.renderPass = a->scene_render_pass;
         gp.pMultisampleState = &ms_scene;
         rs.lineWidth = 1.0f;
+        rs.cullMode = VK_CULL_MODE_NONE;
         cb_att.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
         cb_att.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
         cb_att.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
@@ -10387,6 +10533,7 @@ static int create_sphere_style_resources(app* a) {
         }
         vkDestroyShaderModule(a->device, ion_fs, NULL);
         vkDestroyShaderModule(a->device, ion_vs, NULL);
+        vkDestroyShaderModule(a->device, holo_shell_fs, NULL);
         vkDestroyShaderModule(a->device, holo_glow_fs, NULL);
         vkDestroyShaderModule(a->device, holo_line_fs, NULL);
         vkDestroyShaderModule(a->device, holo_vs, NULL);
@@ -10395,6 +10542,7 @@ static int create_sphere_style_resources(app* a) {
     sphere_style_shader_fail:
         if (ion_fs) vkDestroyShaderModule(a->device, ion_fs, NULL);
         if (ion_vs) vkDestroyShaderModule(a->device, ion_vs, NULL);
+        if (holo_shell_fs) vkDestroyShaderModule(a->device, holo_shell_fs, NULL);
         if (holo_glow_fs) vkDestroyShaderModule(a->device, holo_glow_fs, NULL);
         if (holo_line_fs) vkDestroyShaderModule(a->device, holo_line_fs, NULL);
         if (holo_vs) vkDestroyShaderModule(a->device, holo_vs, NULL);
@@ -14452,17 +14600,17 @@ static void sphere_style_fill_hologram_palette(const app* a, sphere_style_pc* pc
         return;
     }
     if (palette_mode == 1) {
-        pc->color0[0] = 1.00f; pc->color0[1] = 0.74f; pc->color0[2] = 0.28f; pc->color0[3] = 1.0f;
-        pc->color1[0] = 1.00f; pc->color1[1] = 0.44f; pc->color1[2] = 0.20f; pc->color1[3] = 1.0f;
-        pc->color2[0] = 1.00f; pc->color2[1] = 0.92f; pc->color2[2] = 0.68f; pc->color2[3] = 1.0f;
+        pc->color0[0] = 0.98f; pc->color0[1] = 0.78f; pc->color0[2] = 0.28f; pc->color0[3] = 1.0f;
+        pc->color1[0] = 0.42f; pc->color1[1] = 0.18f; pc->color1[2] = 0.04f; pc->color1[3] = 1.0f;
+        pc->color2[0] = 1.00f; pc->color2[1] = 0.96f; pc->color2[2] = 0.82f; pc->color2[3] = 1.0f;
     } else if (palette_mode == 2) {
-        pc->color0[0] = 0.54f; pc->color0[1] = 0.94f; pc->color0[2] = 1.00f; pc->color0[3] = 1.0f;
-        pc->color1[0] = 0.34f; pc->color1[1] = 0.52f; pc->color1[2] = 1.00f; pc->color1[3] = 1.0f;
-        pc->color2[0] = 0.96f; pc->color2[1] = 0.99f; pc->color2[2] = 1.00f; pc->color2[3] = 1.0f;
+        pc->color0[0] = 0.34f; pc->color0[1] = 0.98f; pc->color0[2] = 0.78f; pc->color0[3] = 1.0f;
+        pc->color1[0] = 0.08f; pc->color1[1] = 0.34f; pc->color1[2] = 0.60f; pc->color1[3] = 1.0f;
+        pc->color2[0] = 0.92f; pc->color2[1] = 1.00f; pc->color2[2] = 1.00f; pc->color2[3] = 1.0f;
     } else {
-        pc->color0[0] = 0.32f; pc->color0[1] = 0.90f; pc->color0[2] = 1.00f; pc->color0[3] = 1.0f;
-        pc->color1[0] = 0.62f; pc->color1[1] = 0.28f; pc->color1[2] = 0.96f; pc->color1[3] = 1.0f;
-        pc->color2[0] = 1.00f; pc->color2[1] = 0.88f; pc->color2[2] = 0.54f; pc->color2[3] = 1.0f;
+        pc->color0[0] = 0.22f; pc->color0[1] = 0.92f; pc->color0[2] = 1.00f; pc->color0[3] = 1.0f;
+        pc->color1[0] = 0.08f; pc->color1[1] = 0.22f; pc->color1[2] = 0.62f; pc->color1[3] = 1.0f;
+        pc->color2[0] = 1.00f; pc->color2[1] = 0.72f; pc->color2[2] = 0.28f; pc->color2[3] = 1.0f;
     }
 }
 
@@ -14495,53 +14643,84 @@ static void record_gpu_sphere_hologram(app* a, VkCommandBuffer cmd) {
     (void)a;
     (void)cmd;
 #else
+    static const float shell_offsets[] = {0.002f, 0.026f};
+    static const float shell_layer_t[] = {0.0f, 1.0f};
+    static const float shell_alpha[] = {0.68f, 0.40f};
+    static const float line_tap_gain[] = {0.42f, 0.12f, 0.12f, 0.12f, 0.12f};
+    static const float line_tap_code[] = {0.0f, 2.0f, 3.0f, 4.0f, 5.0f};
     if (!a || !cmd ||
         a->game.render_style != LEVEL_RENDER_SPHERE_HOLOGRAM ||
         !a->sphere_style_resources_ready ||
+        !a->sphere_hologram_shell_pipeline ||
         !a->sphere_hologram_line_pipeline ||
         !a->sphere_hologram_glow_pipeline ||
+        !a->sphere_style_shell_vertex_buffer ||
+        !a->sphere_style_shell_index_buffer ||
         !a->sphere_style_line_buffer ||
         !a->sphere_style_layout ||
         !a->sphere_style_desc_set ||
+        a->sphere_style_shell_index_count < 3u ||
         a->sphere_style_line_vertex_count < 2u) {
         return;
     }
 
     VkDeviceSize off = 0;
     sphere_style_pc pc;
-    const float sweep_phase = fmodf(a->game.t * 0.16f, 1.0f);
+    const float sweep_phase = fmodf(a->game.t * 0.036f, 1.0f);
     set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
     begin_gpu_label(a, cmd, "sphere hologram", 0.28f, 0.86f, 1.00f);
-    vkCmdBindVertexBuffers(cmd, 0, 1, &a->sphere_style_line_buffer, &off);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->sphere_style_layout, 0, 1, &a->sphere_style_desc_set, 0, NULL);
 
-    sphere_style_fill_common_pc(a, &pc, 1.16f);
+    vkCmdBindVertexBuffers(cmd, 0, 1, &a->sphere_style_shell_vertex_buffer, &off);
+    vkCmdBindIndexBuffer(cmd, a->sphere_style_shell_index_buffer, 0, VK_INDEX_TYPE_UINT16);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->sphere_hologram_shell_pipeline);
+    for (uint32_t i = 0; i < 2u; ++i) {
+        sphere_style_fill_common_pc(a, &pc, i == 0u ? 0.92f : 0.82f);
+        sphere_style_fill_hologram_palette(a, &pc);
+        pc.tune0[0] = shell_offsets[i];
+        pc.tune0[1] = shell_layer_t[i];
+        pc.tune0[2] = shell_alpha[i];
+        pc.tune0[3] = 0.18f + (float)i * 0.41f;
+        pc.tune1[0] = sweep_phase;
+        pc.tune1[1] = (i == 0u) ? 0.070f : 0.050f;
+        pc.tune1[2] = (i == 0u) ? 0.58f : 0.24f;
+        pc.tune1[3] = (i == 0u) ? 0.82f : 1.10f;
+        vkCmdPushConstants(cmd, a->sphere_style_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+        vkCmdDrawIndexed(cmd, a->sphere_style_shell_index_count, 1, 0, 0, 0);
+    }
+
+    off = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &a->sphere_style_line_buffer, &off);
+
+    sphere_style_fill_common_pc(a, &pc, 1.04f);
     sphere_style_fill_hologram_palette(a, &pc);
-    pc.tune0[0] = 0.30f;
-    pc.tune0[1] = 0.12f;
-    pc.tune0[2] = 8.2f;
-    pc.tune0[3] = 1.02f;
+    pc.tune0[0] = 2.3f;
+    pc.tune0[1] = 0.10f;
+    pc.tune0[2] = 16.0f;
+    pc.tune0[3] = 2.2f;
     pc.tune1[0] = sweep_phase;
-    pc.tune1[1] = 0.076f;
-    pc.tune1[2] = 0.12f;
+    pc.tune1[1] = 0.060f;
+    pc.tune1[2] = 0.26f;
     pc.tune1[3] = 0.0f;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->sphere_hologram_glow_pipeline);
     vkCmdPushConstants(cmd, a->sphere_style_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
     vkCmdDraw(cmd, a->sphere_style_line_vertex_count, 1, 0, 0);
 
-    sphere_style_fill_common_pc(a, &pc, 1.04f);
-    sphere_style_fill_hologram_palette(a, &pc);
-    pc.tune0[0] = 0.60f;
-    pc.tune0[1] = 0.14f;
-    pc.tune0[2] = 8.8f;
-    pc.tune0[3] = 0.82f;
-    pc.tune1[0] = sweep_phase;
-    pc.tune1[1] = 0.058f;
-    pc.tune1[2] = 0.18f;
-    pc.tune1[3] = 0.0f;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->sphere_hologram_line_pipeline);
-    vkCmdPushConstants(cmd, a->sphere_style_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
-    vkCmdDraw(cmd, a->sphere_style_line_vertex_count, 1, 0, 0);
+    for (uint32_t i = 0; i < 5u; ++i) {
+        sphere_style_fill_common_pc(a, &pc, 0.98f * line_tap_gain[i]);
+        sphere_style_fill_hologram_palette(a, &pc);
+        pc.tune0[0] = 2.3f;
+        pc.tune0[1] = 0.10f;
+        pc.tune0[2] = 16.0f;
+        pc.tune0[3] = 2.2f;
+        pc.tune1[0] = sweep_phase;
+        pc.tune1[1] = 0.042f;
+        pc.tune1[2] = 0.18f;
+        pc.tune1[3] = line_tap_code[i];
+        vkCmdPushConstants(cmd, a->sphere_style_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+        vkCmdDraw(cmd, a->sphere_style_line_vertex_count, 1, 0, 0);
+    }
     end_gpu_label(a, cmd);
 #endif
 }
@@ -14564,17 +14743,18 @@ static void record_gpu_sphere_hologram_bloom(app* a, VkCommandBuffer cmd) {
 
     VkDeviceSize off = 0;
     sphere_style_pc pc;
+    const float sweep_phase = fmodf(a->game.t * 0.068f, 1.0f);
     set_viewport_scissor(cmd, a->bloom_w, a->bloom_h);
     begin_gpu_label(a, cmd, "sphere hologram bloom", 0.40f, 0.92f, 1.00f);
-    sphere_style_fill_common_pc(a, &pc, 1.20f);
+    sphere_style_fill_common_pc(a, &pc, 1.16f);
     sphere_style_fill_hologram_palette(a, &pc);
-    pc.tune0[0] = 0.18f;
-    pc.tune0[1] = 0.04f;
-    pc.tune0[2] = 7.6f;
-    pc.tune0[3] = 1.28f;
-    pc.tune1[0] = fmodf(a->game.t * 0.16f, 1.0f);
-    pc.tune1[1] = 0.090f;
-    pc.tune1[2] = 0.05f;
+    pc.tune0[0] = 2.8f;
+    pc.tune0[1] = 0.12f;
+    pc.tune0[2] = 18.0f;
+    pc.tune0[3] = 2.2f;
+    pc.tune1[0] = sweep_phase;
+    pc.tune1[1] = 0.080f;
+    pc.tune1[2] = 0.18f;
     pc.tune1[3] = 1.0f;
     vkCmdBindVertexBuffers(cmd, 0, 1, &a->sphere_style_line_buffer, &off);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->sphere_hologram_bloom_pipeline);

@@ -25,9 +25,28 @@ vec3 quat_rotate(vec4 q, vec3 v) {
     return v + q.x * t + cross(q.yzw, t);
 }
 
+vec2 line_aa_offset(float tap_code, float px) {
+    if (tap_code > 1.5 && tap_code < 2.5) {
+        return vec2(px, 0.0);
+    }
+    if (tap_code > 2.5 && tap_code < 3.5) {
+        return vec2(-px, 0.0);
+    }
+    if (tap_code > 3.5 && tap_code < 4.5) {
+        return vec2(0.0, px);
+    }
+    if (tap_code > 4.5 && tap_code < 5.5) {
+        return vec2(0.0, -px);
+    }
+    return vec2(0.0);
+}
+
 void main() {
-    vec3 dir_view = quat_rotate(pc.q, normalize(in_pos_kind.xyz));
-    vec2 screen = pc.p1.xy + dir_view.xy * pc.p1.z;
+    vec3 pos_view = quat_rotate(pc.q, in_pos_kind.xyz);
+    float shell_r = max(length(pos_view), 1.0e-4);
+    vec3 dir_view = pos_view / shell_r;
+    vec2 screen = pc.p1.xy + pos_view.xy * pc.p1.z;
+    screen += line_aa_offset(pc.tune1.w, 0.42 * pc.p1.w);
     vec2 ndc;
     ndc.x = (screen.x / pc.p0.x) * 2.0 - 1.0;
     ndc.y = 1.0 - (screen.y / pc.p0.y) * 2.0;

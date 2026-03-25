@@ -27,41 +27,84 @@ float wrap_dist(float a, float b) {
     return min(d, 1.0 - d);
 }
 
-void glow_kind_profile(float kind, out float glow_mul, out float sweep_mul) {
+void glow_profile(float kind, out float base_glow, out float event_glow, out float rim_gain) {
     if (kind < 0.5) {
-        glow_mul = 0.22;
-        sweep_mul = 0.16;
+        base_glow = 0.08;
+        event_glow = 0.04;
+        rim_gain = 0.16;
         return;
     }
     if (kind < 1.5) {
-        glow_mul = 0.44;
-        sweep_mul = 0.24;
+        base_glow = 0.04;
+        event_glow = 0.06;
+        rim_gain = 0.06;
         return;
     }
     if (kind < 2.5) {
-        glow_mul = 0.30;
-        sweep_mul = 0.18;
+        base_glow = 0.12;
+        event_glow = 0.22;
+        rim_gain = 0.08;
         return;
     }
-    glow_mul = 0.40;
-    sweep_mul = 0.34;
+    if (kind < 3.5) {
+        base_glow = 0.05;
+        event_glow = 0.07;
+        rim_gain = 0.04;
+        return;
+    }
+    if (kind < 4.5) {
+        base_glow = 0.05;
+        event_glow = 0.42;
+        rim_gain = 0.04;
+        return;
+    }
+    base_glow = 0.10;
+    event_glow = 0.14;
+    rim_gain = 0.14;
 }
 
 void main() {
-    float glow_mul;
-    float sweep_mul;
-    glow_kind_profile(v_kind, glow_mul, sweep_mul);
-
-    float front = smoothstep(-0.14, 0.20, v_view.z);
+    float base_glow;
+    float event_glow;
+    float rim_gain;
+    float front = smoothstep(0.00, 0.24, v_view.z);
+    float rear_dim = mix(0.10, 1.0, front);
+    float limb = pow(clamp(1.0 - abs(v_view.z), 0.0, 1.0), 1.10);
+    float packet = exp(-pow(wrap_dist(fract(v_arc * pc.tune0.x - pc.p0.z * pc.tune0.y), 0.5) / 0.26, 2.0));
+    float beacon = 0.5 + 0.5 * sin(pc.p0.z * pc.tune0.w + v_arc * 12.56637061436);
     float sweep = exp(-pow(wrap_dist(fract(v_arc), pc.tune1.x) / max(pc.tune1.y, 0.001), 2.0));
-    float noise = texture(u_blue_noise, fract(gl_FragCoord.xy / 64.0 + vec2(pc.p0.z * 0.003, pc.p0.z * 0.007))).r;
-    float holo = texture(u_holo_mask, fract(gl_FragCoord.xy / 64.0 + v_screen_uv * 0.10)).r;
-    float glow = v_weight * glow_mul * (0.16 + sweep * sweep_mul * (0.46 + 0.30 * front));
-    glow *= mix(0.94, 1.06, noise) * mix(0.92, 1.00, holo) * pc.p0.w;
+    float crown = 0.5 + 0.5 * sin(v_arc * 18.84955592154 + pc.p0.z * 0.32);
+    vec2 screen_px = v_screen_uv * pc.p0.xy;
+    float mask = texture(u_holo_mask, fract(screen_px / vec2(9.0, 6.0))).r;
+    float noise = texture(u_blue_noise, fract(screen_px / 64.0)).r;
+    float pass_boost = mix(1.0, 1.55, clamp(pc.tune1.w, 0.0, 1.0));
+    float event = 0.0;
+    vec3 color = pc.color0.rgb;
+
+    glow_profile(v_kind, base_glow, event_glow, rim_gain);
+
+    if (v_kind >= 2.0 && v_kind < 2.5) {
+        event = packet;
+        color = pc.color2.rgb;
+    } else if (v_kind >= 3.0 && v_kind < 3.5) {
+        event = 0.25 + 0.45 * beacon;
+        color = mix(pc.color0.rgb, pc.color2.rgb, 0.14);
+    } else if (v_kind >= 4.0 && v_kind < 4.5) {
+        event = sweep;
+        color = mix(pc.color2.rgb, pc.color0.rgb, 0.32);
+    } else if (v_kind >= 5.0) {
+        event = crown;
+        color = mix(pc.color0.rgb, vec3(1.0), 0.14);
+    }
+
+    float glow = v_weight * base_glow;
+    glow += event * event_glow;
+    glow += limb * rim_gain * (0.18 + 0.30 * front);
+    glow *= (0.94 + (mask - 0.5) * 0.08 + (noise - 0.5) * 0.06);
+    glow *= pc.p0.w * pass_boost * rear_dim;
     if (glow < 0.004) {
         discard;
     }
 
-    vec3 base = mix(pc.color0.rgb, pc.color2.rgb, 0.12 + 0.10 * step(2.5, v_kind));
-    out_color = vec4(base * glow, clamp(glow * mix(0.06, 0.12, front), 0.0, 1.0));
+    out_color = vec4(color * glow * rear_dim, clamp(glow * (0.08 + 0.10 * front), 0.0, 1.0));
 }
