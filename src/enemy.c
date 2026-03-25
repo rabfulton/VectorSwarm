@@ -347,8 +347,8 @@ static void enemy_project_sphere_state(const game_state* g, enemy* e) {
     e->b.y = center.y + pos_view.y * draw_radius;
     {
         enemy_v3 vel_view = quat_rotate_enemy_v3(g->sphere_visual_q, vel_local);
-        e->b.vx = vel_view.x * draw_radius;
-        e->b.vy = vel_view.y * draw_radius;
+        e->b.vx = vel_view.x;
+        e->b.vy = vel_view.y;
         float fx = vel_view.x;
         float fy = vel_view.y;
         normalize2(&fx, &fy);
@@ -380,8 +380,8 @@ static void enemy_project_sphere_bullet(const game_state* g, enemy_bullet* b) {
     b->b.y = center.y + pos_view.y * draw_radius;
     {
         const enemy_v3 vel_view = quat_rotate_enemy_v3(g->sphere_visual_q, vel_local);
-        b->b.vx = vel_view.x * draw_radius;
-        b->b.vy = vel_view.y * draw_radius;
+        b->b.vx = vel_view.x;
+        b->b.vy = vel_view.y;
     }
 }
 
@@ -1084,7 +1084,9 @@ static void emit_enemy_debris(game_state* g, const enemy* e, float impact_vx, fl
             if (d->active) {
                 continue;
             }
+            memset(d, 0, sizeof(*d));
             d->active = 1;
+            d->sphere_shell = e->sphere_shell;
             d->half_len = e->radius * 0.52f;
             d->angle = atan2f(ty[seg] - ny[seg], tx[seg] - nx[seg]);
             d->spin_rate = frands1() * (6.0f + 6.0f * frand01());
@@ -5185,7 +5187,11 @@ void enemy_update_system(
             d->active = 0;
             continue;
         }
-        integrate_body(&d->b, dt);
+        if (uses_sphere) {
+            game_update_sphere_enemy_debris(g, d, dt);
+        } else {
+            integrate_body(&d->b, dt);
+        }
         d->angle += d->spin_rate * dt;
         d->alpha = clampf(1.0f - (d->age_s / d->life_s), 0.0f, 1.0f);
         if (d->b.y < -48.0f * su) {

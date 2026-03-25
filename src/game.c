@@ -334,13 +334,13 @@ static void project_sphere_bullet(game_state* g, bullet* b) {
     b->b.y = g->world_h * 0.5f + pos_view.y * sphere_surface_radius(g);
     {
         const game_v3 vel_view = quat_rotate_game_v3(g->sphere_visual_q, vel_local);
-        b->b.vx = vel_view.x * sphere_surface_radius(g);
-        b->b.vy = vel_view.y * sphere_surface_radius(g);
+        b->b.vx = vel_view.x;
+        b->b.vy = vel_view.y;
     }
 }
 
-static game_v3 sphere_local_from_screen_point(const game_state* g, float x, float y) {
-    const float radius = sphere_surface_radius(g);
+static game_v3 sphere_local_from_screen_point_shell(const game_state* g, float x, float y, float sphere_shell) {
+    const float radius = sphere_surface_radius(g) * fmaxf(1.0f + sphere_shell, 1.0f);
     const float cx = g->world_w * 0.5f;
     const float cy = g->world_h * 0.5f;
     const float vx = (x - cx) / fmaxf(radius, 1.0f);
@@ -349,6 +349,10 @@ static game_v3 sphere_local_from_screen_point(const game_state* g, float x, floa
     const float vz = (rr < 1.0f) ? sqrtf(fmaxf(0.0f, 1.0f - rr)) : 0.0f;
     const game_v3 view = game_v3_norm(game_v3_make(vx, vy, vz));
     return quat_conjugate_rotate_game_v3(g->sphere_visual_q, view);
+}
+
+static game_v3 sphere_local_from_screen_point(const game_state* g, float x, float y) {
+    return sphere_local_from_screen_point_shell(g, x, y, 0.0f);
 }
 
 static void project_sphere_powerup(game_state* g, powerup_pickup* p) {
@@ -368,9 +372,245 @@ static void project_sphere_powerup(game_state* g, powerup_pickup* p) {
     {
         const game_v3 vel_local = game_v3_make(p->sphere_vel_x, p->sphere_vel_y, p->sphere_vel_z);
         const game_v3 vel_view = quat_rotate_game_v3(g->sphere_visual_q, vel_local);
-        p->b.vx = vel_view.x * sphere_surface_radius(g);
-        p->b.vy = vel_view.y * sphere_surface_radius(g);
+        p->b.vx = vel_view.x;
+        p->b.vy = vel_view.y;
     }
+}
+
+static float sphere_effect_horizon_z(float sphere_shell) {
+    const float shell_scale = fmaxf(1.0f + sphere_shell, 1.0f);
+    if (shell_scale <= 1.0001f) {
+        return 0.0f;
+    }
+    return -sqrtf(fmaxf(0.0f, 1.0f - 1.0f / (shell_scale * shell_scale)));
+}
+
+static void sphere_build_basis_game_v3(game_v3 n, game_v3* out_tx, game_v3* out_ty) {
+    game_v3 up = game_v3_make(0.0f, 1.0f, 0.0f);
+    game_v3 tx;
+    if (fabsf(game_v3_dot(n, up)) > 0.92f) {
+        up = game_v3_make(1.0f, 0.0f, 0.0f);
+    }
+    tx = game_v3_norm(game_v3_cross(up, n));
+    if (out_tx) {
+        *out_tx = tx;
+    }
+    if (out_ty) {
+        *out_ty = game_v3_norm(game_v3_cross(n, tx));
+    }
+}
+
+static void sphere_bind_screen_body(
+    const game_state* g,
+    float x,
+    float y,
+    float vx,
+    float vy,
+    float ax,
+    float ay,
+    float sphere_shell,
+    float* out_pos_x,
+    float* out_pos_y,
+    float* out_pos_z,
+    float* out_vel_x,
+    float* out_vel_y,
+    float* out_vel_z,
+    float* out_acc_x,
+    float* out_acc_y,
+    float* out_acc_z
+) {
+    const game_v3 pos = sphere_local_from_screen_point_shell(g, x, y, sphere_shell);
+    game_v3 tx;
+    game_v3 ty;
+    {
+        const game_v3 view_x_local = quat_conjugate_rotate_game_v3(g->sphere_visual_q, game_v3_make(1.0f, 0.0f, 0.0f));
+        const game_v3 view_y_local = quat_conjugate_rotate_game_v3(g->sphere_visual_q, game_v3_make(0.0f, 1.0f, 0.0f));
+        tx = game_v3_proj_tangent(view_x_local, pos);
+        ty = game_v3_proj_tangent(view_y_local, pos);
+        if (game_v3_len(tx) <= 1.0e-5f || game_v3_len(ty) <= 1.0e-5f) {
+            sphere_build_basis_game_v3(pos, &tx, &ty);
+        } else {
+            tx = game_v3_norm(tx);
+            ty = game_v3_norm(ty);
+        }
+    }
+    {
+        game_v3 vel = game_v3_add(game_v3_scale(tx, vx), game_v3_scale(ty, vy));
+        game_v3 acc = game_v3_add(game_v3_scale(tx, ax), game_v3_scale(ty, ay));
+        vel = game_v3_proj_tangent(vel, pos);
+        acc = game_v3_proj_tangent(acc, pos);
+        if (out_pos_x) *out_pos_x = pos.x;
+        if (out_pos_y) *out_pos_y = pos.y;
+        if (out_pos_z) *out_pos_z = pos.z;
+        if (out_vel_x) *out_vel_x = vel.x;
+        if (out_vel_y) *out_vel_y = vel.y;
+        if (out_vel_z) *out_vel_z = vel.z;
+        if (out_acc_x) *out_acc_x = acc.x;
+        if (out_acc_y) *out_acc_y = acc.y;
+        if (out_acc_z) *out_acc_z = acc.z;
+    }
+}
+
+static void project_sphere_particle_state(game_state* g, particle* p) {
+    const game_v3 pos_local = game_v3_make(p->sphere_pos_x, p->sphere_pos_y, p->sphere_pos_z);
+    const game_v3 vel_local = game_v3_make(p->sphere_vel_x, p->sphere_vel_y, p->sphere_vel_z);
+    const float draw_radius = sphere_surface_radius(g) * fmaxf(1.0f + p->sphere_shell, 1.0f);
+    const game_v3 pos_view = quat_rotate_game_v3(g->sphere_visual_q, pos_local);
+    if (pos_view.z <= sphere_effect_horizon_z(p->sphere_shell)) {
+        p->sphere_visible = 0;
+        p->b.x = -10000.0f;
+        p->b.y = -10000.0f;
+        p->b.vx = 0.0f;
+        p->b.vy = 0.0f;
+        return;
+    }
+    p->sphere_visible = 1;
+    p->b.x = g->world_w * 0.5f + pos_view.x * draw_radius;
+    p->b.y = g->world_h * 0.5f + pos_view.y * draw_radius;
+    {
+        const game_v3 vel_view = quat_rotate_game_v3(g->sphere_visual_q, vel_local);
+        p->b.vx = vel_view.x;
+        p->b.vy = vel_view.y;
+    }
+}
+
+static void project_sphere_enemy_debris_state(game_state* g, enemy_debris* d) {
+    const game_v3 pos_local = game_v3_make(d->sphere_pos_x, d->sphere_pos_y, d->sphere_pos_z);
+    const game_v3 vel_local = game_v3_make(d->sphere_vel_x, d->sphere_vel_y, d->sphere_vel_z);
+    const float draw_radius = sphere_surface_radius(g) * fmaxf(1.0f + d->sphere_shell, 1.0f);
+    const game_v3 pos_view = quat_rotate_game_v3(g->sphere_visual_q, pos_local);
+    if (pos_view.z <= sphere_effect_horizon_z(d->sphere_shell)) {
+        d->sphere_visible = 0;
+        d->b.x = -10000.0f;
+        d->b.y = -10000.0f;
+        d->b.vx = 0.0f;
+        d->b.vy = 0.0f;
+        return;
+    }
+    d->sphere_visible = 1;
+    d->b.x = g->world_w * 0.5f + pos_view.x * draw_radius;
+    d->b.y = g->world_h * 0.5f + pos_view.y * draw_radius;
+    {
+        const game_v3 vel_view = quat_rotate_game_v3(g->sphere_visual_q, vel_local);
+        d->b.vx = vel_view.x;
+        d->b.vy = vel_view.y;
+    }
+}
+
+void game_bind_particle_to_sphere(game_state* g, particle* p) {
+    if (!g || !p || !p->active || !level_uses_sphere(g)) {
+        return;
+    }
+    sphere_bind_screen_body(
+        g,
+        p->b.x,
+        p->b.y,
+        p->b.vx,
+        p->b.vy,
+        p->b.ax,
+        p->b.ay,
+        p->sphere_shell,
+        &p->sphere_pos_x,
+        &p->sphere_pos_y,
+        &p->sphere_pos_z,
+        &p->sphere_vel_x,
+        &p->sphere_vel_y,
+        &p->sphere_vel_z,
+        &p->sphere_acc_x,
+        &p->sphere_acc_y,
+        &p->sphere_acc_z
+    );
+    p->sphere_bound = 1;
+    project_sphere_particle_state(g, p);
+}
+
+void game_update_sphere_particle(game_state* g, particle* p, float dt) {
+    game_v3 pos;
+    game_v3 vel;
+    game_v3 acc;
+    const float draw_radius = sphere_surface_radius(g) * fmaxf(1.0f + p->sphere_shell, 1.0f);
+    if (!g || !p || !p->active || !level_uses_sphere(g)) {
+        return;
+    }
+    if (!p->sphere_bound) {
+        game_bind_particle_to_sphere(g, p);
+    }
+    pos = game_v3_make(p->sphere_pos_x, p->sphere_pos_y, p->sphere_pos_z);
+    vel = game_v3_make(p->sphere_vel_x, p->sphere_vel_y, p->sphere_vel_z);
+    acc = game_v3_make(p->sphere_acc_x, p->sphere_acc_y, p->sphere_acc_z);
+    vel = game_v3_add(vel, game_v3_scale(acc, dt));
+    pos = game_v3_add(pos, game_v3_scale(vel, dt / fmaxf(draw_radius, 1.0f)));
+    pos = game_v3_norm(pos);
+    vel = game_v3_proj_tangent(vel, pos);
+    acc = game_v3_proj_tangent(acc, pos);
+    p->sphere_pos_x = pos.x;
+    p->sphere_pos_y = pos.y;
+    p->sphere_pos_z = pos.z;
+    p->sphere_vel_x = vel.x;
+    p->sphere_vel_y = vel.y;
+    p->sphere_vel_z = vel.z;
+    p->sphere_acc_x = acc.x;
+    p->sphere_acc_y = acc.y;
+    p->sphere_acc_z = acc.z;
+    project_sphere_particle_state(g, p);
+}
+
+void game_bind_enemy_debris_to_sphere(game_state* g, enemy_debris* d) {
+    if (!g || !d || !d->active || !level_uses_sphere(g)) {
+        return;
+    }
+    sphere_bind_screen_body(
+        g,
+        d->b.x,
+        d->b.y,
+        d->b.vx,
+        d->b.vy,
+        d->b.ax,
+        d->b.ay,
+        d->sphere_shell,
+        &d->sphere_pos_x,
+        &d->sphere_pos_y,
+        &d->sphere_pos_z,
+        &d->sphere_vel_x,
+        &d->sphere_vel_y,
+        &d->sphere_vel_z,
+        &d->sphere_acc_x,
+        &d->sphere_acc_y,
+        &d->sphere_acc_z
+    );
+    d->sphere_bound = 1;
+    project_sphere_enemy_debris_state(g, d);
+}
+
+void game_update_sphere_enemy_debris(game_state* g, enemy_debris* d, float dt) {
+    game_v3 pos;
+    game_v3 vel;
+    game_v3 acc;
+    const float draw_radius = sphere_surface_radius(g) * fmaxf(1.0f + d->sphere_shell, 1.0f);
+    if (!g || !d || !d->active || !level_uses_sphere(g)) {
+        return;
+    }
+    if (!d->sphere_bound) {
+        game_bind_enemy_debris_to_sphere(g, d);
+    }
+    pos = game_v3_make(d->sphere_pos_x, d->sphere_pos_y, d->sphere_pos_z);
+    vel = game_v3_make(d->sphere_vel_x, d->sphere_vel_y, d->sphere_vel_z);
+    acc = game_v3_make(d->sphere_acc_x, d->sphere_acc_y, d->sphere_acc_z);
+    vel = game_v3_add(vel, game_v3_scale(acc, dt));
+    pos = game_v3_add(pos, game_v3_scale(vel, dt / fmaxf(draw_radius, 1.0f)));
+    pos = game_v3_norm(pos);
+    vel = game_v3_proj_tangent(vel, pos);
+    acc = game_v3_proj_tangent(acc, pos);
+    d->sphere_pos_x = pos.x;
+    d->sphere_pos_y = pos.y;
+    d->sphere_pos_z = pos.z;
+    d->sphere_vel_x = vel.x;
+    d->sphere_vel_y = vel.y;
+    d->sphere_vel_z = vel.z;
+    d->sphere_acc_x = acc.x;
+    d->sphere_acc_y = acc.y;
+    d->sphere_acc_z = acc.z;
+    project_sphere_enemy_debris_state(g, d);
 }
 
 static int game_audio_event_priority(game_audio_event_type type) {
@@ -2793,8 +3033,10 @@ static void emit_mine_debris(game_state* g, float x, float y, float radius, floa
             if (d->active) {
                 continue;
             }
+            memset(d, 0, sizeof(*d));
             const float a = ((float)seg / 12.0f) * 6.2831853f;
             d->active = 1;
+            d->sphere_shell = 0.0f;
             d->half_len = radius * 0.36f;
             d->angle = a;
             d->spin_rate = frands1() * (5.0f + 7.0f * frand01());
@@ -3818,6 +4060,7 @@ static void game_update_wave_spawning(game_state* g, float dt) {
 
 static void game_update_particles(game_state* g, float dt) {
     const int uses_cylinder = level_uses_cylinder(g);
+    const int uses_sphere = level_uses_sphere(g);
     const float period = uses_cylinder ? cylinder_period(g) : 0.0f;
     for (size_t i = 0; i < MAX_PARTICLES; ++i) {
         particle* p = &g->particles[i];
@@ -3830,7 +4073,11 @@ static void game_update_particles(game_state* g, float dt) {
             continue;
         }
         p->spin += p->spin_rate * dt;
-        integrate_body(&p->b, dt);
+        if (uses_sphere) {
+            game_update_sphere_particle(g, p, dt);
+        } else {
+            integrate_body(&p->b, dt);
+        }
         if (uses_cylinder) {
             p->b.x = g->camera_x + wrap_delta(p->b.x, g->camera_x, period);
         }

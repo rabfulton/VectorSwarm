@@ -342,6 +342,18 @@ typedef struct particle {
     int active;
     particle_type type;
     body b;
+    float sphere_pos_x;
+    float sphere_pos_y;
+    float sphere_pos_z;
+    float sphere_vel_x;
+    float sphere_vel_y;
+    float sphere_vel_z;
+    float sphere_acc_x;
+    float sphere_acc_y;
+    float sphere_acc_z;
+    float sphere_shell;
+    int sphere_visible;
+    int sphere_bound;
     float age_s;
     float life_s;
     float size;
@@ -356,6 +368,18 @@ typedef struct particle {
 typedef struct enemy_debris {
     int active;
     body b;
+    float sphere_pos_x;
+    float sphere_pos_y;
+    float sphere_pos_z;
+    float sphere_vel_x;
+    float sphere_vel_y;
+    float sphere_vel_z;
+    float sphere_acc_x;
+    float sphere_acc_y;
+    float sphere_acc_z;
+    float sphere_shell;
+    int sphere_visible;
+    int sphere_bound;
     float half_len;
     float angle;
     float spin_rate;
@@ -764,5 +788,9 @@ int game_spawn_enemy_missile(
     float hit_radius,
     float blast_radius
 );
+void game_bind_particle_to_sphere(game_state* g, particle* p);
+void game_update_sphere_particle(game_state* g, particle* p, float dt);
+void game_bind_enemy_debris_to_sphere(game_state* g, enemy_debris* d);
+void game_update_sphere_enemy_debris(game_state* g, enemy_debris* d, float dt);
 
 #endif
