@@ -199,6 +199,74 @@ cleanup:
     return ok;
 }
 
+static int verify_defender_industry_parallax_roundtrip(const leveldef_db* db) {
+    char path[] = "/tmp/vtype_level_defender_parallax_XXXXXX";
+    level_editor_state editor;
+    leveldef_level reloaded;
+    char* saved_bytes = NULL;
+    size_t saved_size = 0;
+    int style = -1;
+    int fd = -1;
+    int ok = 0;
+
+    if (!db) {
+        return 0;
+    }
+
+    level_editor_init(&editor);
+    if (!level_editor_load_by_name(&editor, db, "level_defender")) {
+        fprintf(stderr, "defender parallax roundtrip: level_editor_load_by_name failed\n");
+        return 0;
+    }
+
+    editor.loaded_level.defender_industry_parallax_speed = 2.5f;
+    editor.loaded_level_valid = 1;
+
+    fd = mkstemp(path);
+    if (fd < 0) {
+        fprintf(stderr, "defender parallax roundtrip: mkstemp failed\n");
+        return 0;
+    }
+    close(fd);
+    snprintf(editor.source_path, sizeof(editor.source_path), "%s", path);
+
+    if (!level_editor_save_current(&editor, db, NULL, 0)) {
+        fprintf(stderr, "defender parallax roundtrip: save failed (%s)\n", editor.status_text);
+        goto cleanup;
+    }
+    if (!read_file_bytes(path, &saved_bytes, &saved_size)) {
+        fprintf(stderr, "defender parallax roundtrip: read saved file failed\n");
+        goto cleanup;
+    }
+    if (!strstr(saved_bytes, "defender.industry_parallax_speed=2.500\n")) {
+        fprintf(stderr, "defender parallax roundtrip: serialized text omitted defender.industry_parallax_speed\n");
+        goto cleanup;
+    }
+    if (!leveldef_load_level_file_with_base(db, path, &reloaded, &style, stderr)) {
+        fprintf(stderr, "defender parallax roundtrip: reload failed\n");
+        goto cleanup;
+    }
+    if (style != LEVEL_STYLE_DEFENDER) {
+        fprintf(stderr, "defender parallax roundtrip: wrong style %d\n", style);
+        goto cleanup;
+    }
+    if (fabsf(reloaded.defender_industry_parallax_speed - 2.5f) > kFloatEps) {
+        fprintf(
+            stderr,
+            "defender parallax roundtrip: mismatch defender.industry_parallax_speed (%.6f vs %.6f)\n",
+            reloaded.defender_industry_parallax_speed,
+            2.5f);
+        goto cleanup;
+    }
+
+    ok = 1;
+
+cleanup:
+    free(saved_bytes);
+    unlink(path);
+    return ok;
+}
+
 static int cmp_int(const char* ctx, const char* field, int a, int b) {
     if (a != b) {
         fprintf(stderr, "%s: mismatch %s (%d vs %d)\n", ctx, field, a, b);
@@ -322,6 +390,7 @@ static int compare_levels_semantic(const char* ctx, const leveldef_level* a, con
     CMP_FLOAT_FIELD(ctx, a, b, forest_godray_strength);
     CMP_FLOAT_FIELD(ctx, a, b, forest_root_arch_density);
     CMP_FLOAT_FIELD(ctx, a, b, forest_foreground_occluder_alpha);
+    CMP_FLOAT_FIELD(ctx, a, b, defender_industry_parallax_speed);
     CMP_INT_FIELD(ctx, a, b, render_style);
     CMP_INT_FIELD(ctx, a, b, wave_mode);
     CMP_INT_FIELD(ctx, a, b, spawn_mode);
@@ -662,13 +731,23 @@ static int verify_wave_type_remap_semantics(void) {
     m->b = 300.0f;
     m->c = 7.8f;
     m->d = 440.0f;
+    m->e = 0.0f;
     level_editor_adjust_selected_property(&editor, 1.0f);
-    if (m->kind != LEVEL_EDITOR_MARKER_JELLY_SWARM) {
-        fprintf(stderr, "roundtrip: wave remap failed to cycle bird->jelly\n");
+    if (m->kind != LEVEL_EDITOR_MARKER_BOID_ORBITAL) {
+        fprintf(stderr, "roundtrip: wave remap failed to cycle bird->orbital\n");
         return 0;
     }
-    if (m->d > 4.0f) {
-        fprintf(stderr, "roundtrip: wave remap kept incompatible turn-rate as jelly size (d=%.3f)\n", m->d);
+    if (fabsf(m->d - (float)BOID_STYLE_CLASSIC) > 1.0e-6f || fabsf(m->e - 1.0f) > 1.0e-6f) {
+        fprintf(stderr, "roundtrip: wave remap kept incompatible bird params for orbital (d=%.3f e=%.3f)\n", m->d, m->e);
+        return 0;
+    }
+    level_editor_adjust_selected_property(&editor, 1.0f);
+    if (m->kind != LEVEL_EDITOR_MARKER_JELLY_SWARM) {
+        fprintf(stderr, "roundtrip: wave remap failed to cycle orbital->jelly\n");
+        return 0;
+    }
+    if (fabsf(m->d - 1.0f) > 1.0e-6f || fabsf(m->e) > 1.0e-6f) {
+        fprintf(stderr, "roundtrip: wave remap produced invalid jelly params from orbital (d=%.3f e=%.3f)\n", m->d, m->e);
         return 0;
     }
     level_editor_adjust_selected_property(&editor, 1.0f);
@@ -936,6 +1015,9 @@ int main(void) {
         return 1;
     }
     if (!verify_level_file_load_isolated_from_peer_style_values()) {
+        return 1;
+    }
+    if (!verify_defender_industry_parallax_roundtrip(&db)) {
         return 1;
     }
     if (!verify_wave_type_remap_semantics()) {

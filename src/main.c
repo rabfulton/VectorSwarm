@@ -53,8 +53,8 @@
 
 #if V_TYPE_HAS_POST_SHADERS
 #include "demo_bloom_frag_spv.h"
-#include "demo_composite_frag_spv.h"
 #include "demo_fullscreen_vert_spv.h"
+#include "composite_frag_spv.h"
 #endif
 
 #if V_TYPE_HAS_TERRAIN_SHADERS
@@ -548,6 +548,8 @@ typedef struct app {
 
     VkSwapchainKHR swapchain;
     VkFormat swapchain_format;
+    VkColorSpaceKHR swapchain_color_space;
+    VkFormat offscreen_color_format;
     VkExtent2D swapchain_extent;
     uint32_t swapchain_image_count;
     VkImage swapchain_images[APP_MAX_SWAPCHAIN_IMAGES];
@@ -1137,6 +1139,45 @@ static const char* vk_physical_device_type_name(VkPhysicalDeviceType type) {
         case VK_PHYSICAL_DEVICE_TYPE_CPU: return "cpu";
         default: return "other";
     }
+}
+
+static const char* vk_format_name(VkFormat format) {
+    switch (format) {
+        case VK_FORMAT_UNDEFINED: return "UNDEFINED";
+        case VK_FORMAT_R8G8B8A8_UNORM: return "R8G8B8A8_UNORM";
+        case VK_FORMAT_R8G8B8A8_SRGB: return "R8G8B8A8_SRGB";
+        case VK_FORMAT_B8G8R8A8_UNORM: return "B8G8R8A8_UNORM";
+        case VK_FORMAT_B8G8R8A8_SRGB: return "B8G8R8A8_SRGB";
+        default: return "OTHER";
+    }
+}
+
+static const char* vk_color_space_name(VkColorSpaceKHR color_space) {
+    switch (color_space) {
+        case VK_COLOR_SPACE_SRGB_NONLINEAR_KHR: return "SRGB_NONLINEAR";
+        default: return "OTHER";
+    }
+}
+
+static int format_supports_offscreen_color(const app* a, VkFormat format) {
+    VkFormatProperties props;
+    memset(&props, 0, sizeof(props));
+    vkGetPhysicalDeviceFormatProperties(a->physical_device, format, &props);
+    const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+    return (props.optimalTilingFeatures & need) == need;
+}
+
+static VkFormat choose_offscreen_color_format(const app* a) {
+    static const VkFormat candidates[] = {
+        VK_FORMAT_R8G8B8A8_UNORM,
+        VK_FORMAT_B8G8R8A8_UNORM
+    };
+    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); ++i) {
+        if (format_supports_offscreen_color(a, candidates[i])) {
+            return candidates[i];
+        }
+    }
+    return VK_FORMAT_UNDEFINED;
 }
 
 static VkSampleCountFlagBits scene_samples(const app* a) {
@@ -7979,6 +8020,38 @@ static void clear_scene_color_depth(VkCommandBuffer cmd, VkExtent2D extent) {
     vkCmdClearAttachments(cmd, 2, clears, 1, &rect);
 }
 
+static void barrier_color_attachment_to_shader_read(VkCommandBuffer cmd, VkImage image) {
+    if (cmd == VK_NULL_HANDLE || image == VK_NULL_HANDLE) {
+        return;
+    }
+    VkImageMemoryBarrier barrier = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = image,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        }
+    };
+    vkCmdPipelineBarrier(
+        cmd,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0,
+        0, NULL,
+        0, NULL,
+        1, &barrier
+    );
+}
+
 static void destroy_sphere_style_resources(app* a) {
 #if !V_TYPE_HAS_TERRAIN_SHADERS
     (void)a;
@@ -9214,9 +9287,18 @@ static int create_device(app* a) {
 }
 
 static VkSurfaceFormatKHR choose_surface_format(const VkSurfaceFormatKHR* formats, uint32_t count) {
-    for (uint32_t i = 0; i < count; ++i) {
-        if (formats[i].format == VK_FORMAT_B8G8R8A8_UNORM && formats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
-            return formats[i];
+    static const VkFormat preferred_formats[] = {
+        VK_FORMAT_B8G8R8A8_UNORM,
+        VK_FORMAT_R8G8B8A8_UNORM,
+        VK_FORMAT_B8G8R8A8_SRGB,
+        VK_FORMAT_R8G8B8A8_SRGB
+    };
+    for (size_t pref_i = 0; pref_i < sizeof(preferred_formats) / sizeof(preferred_formats[0]); ++pref_i) {
+        for (uint32_t i = 0; i < count; ++i) {
+            if (formats[i].format == preferred_formats[pref_i] &&
+                formats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+                return formats[i];
+            }
         }
     }
     return formats[0];
@@ -9331,9 +9413,21 @@ static int create_swapchain(app* a) {
     }
     if (!check_vk(sc_res, "vkCreateSwapchainKHR")) return 0;
 
+    a->swapchain_format = fmt.format;
+    a->swapchain_color_space = fmt.colorSpace;
+    a->offscreen_color_format = choose_offscreen_color_format(a);
+    a->swapchain_extent = extent;
+    if (a->offscreen_color_format == VK_FORMAT_UNDEFINED) {
+        fprintf(stderr, "No supported linear offscreen color format found\n");
+        return 0;
+    }
+
     fprintf(
         stderr,
-        "swapchain extent=%ux%u drawable=%dx%d currentExtent=%ux%u presentMode=%s images=%u\n",
+        "swapchain format=%s colorSpace=%s offscreen=%s extent=%ux%u drawable=%dx%d currentExtent=%ux%u presentMode=%s images=%u\n",
+        vk_format_name(a->swapchain_format),
+        vk_color_space_name(a->swapchain_color_space),
+        vk_format_name(a->offscreen_color_format),
         extent.width,
         extent.height,
         drawable_w,
@@ -9344,8 +9438,6 @@ static int create_swapchain(app* a) {
         image_count
     );
 
-    a->swapchain_format = fmt.format;
-    a->swapchain_extent = extent;
     a->swapchain_image_count = APP_MAX_SWAPCHAIN_IMAGES;
     if (!check_vk(vkGetSwapchainImagesKHR(a->device, a->swapchain, &a->swapchain_image_count, a->swapchain_images), "vkGetSwapchainImagesKHR")) return 0;
 
@@ -9379,7 +9471,7 @@ static int create_render_passes(app* a) {
     if (samples == VK_SAMPLE_COUNT_1_BIT) {
         VkAttachmentDescription atts[2];
         atts[0] = (VkAttachmentDescription){
-            .format = a->swapchain_format,
+            .format = a->offscreen_color_format,
             .samples = VK_SAMPLE_COUNT_1_BIT,
             .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
             .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
@@ -9417,7 +9509,7 @@ static int create_render_passes(app* a) {
     } else {
         VkAttachmentDescription atts[3];
         atts[0] = (VkAttachmentDescription){
-            .format = a->swapchain_format,
+            .format = a->offscreen_color_format,
             .samples = samples,
             .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
             .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
@@ -9427,7 +9519,7 @@ static int create_render_passes(app* a) {
             .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
         };
         atts[1] = (VkAttachmentDescription){
-            .format = a->swapchain_format,
+            .format = a->offscreen_color_format,
             .samples = VK_SAMPLE_COUNT_1_BIT,
             .loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
             .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
@@ -9467,7 +9559,7 @@ static int create_render_passes(app* a) {
     }
 
     VkAttachmentDescription bloom_att = {
-        .format = a->swapchain_format,
+        .format = a->offscreen_color_format,
         .samples = VK_SAMPLE_COUNT_1_BIT,
         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
         .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
@@ -9520,17 +9612,22 @@ static int create_offscreen_targets(app* a) {
     VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     VkSampleCountFlagBits samples = scene_samples(a);
 
-    if (!create_image_2d(a, w, h, a->swapchain_format, usage, VK_SAMPLE_COUNT_1_BIT, &a->scene_image, &a->scene_memory, &a->scene_view)) return 0;
+    if (a->offscreen_color_format == VK_FORMAT_UNDEFINED) {
+        fprintf(stderr, "Offscreen color format is undefined\n");
+        return 0;
+    }
+
+    if (!create_image_2d(a, w, h, a->offscreen_color_format, usage, VK_SAMPLE_COUNT_1_BIT, &a->scene_image, &a->scene_memory, &a->scene_view)) return 0;
     if (!create_image_2d(
-            a, a->bloom_w, a->bloom_h, a->swapchain_format, usage, VK_SAMPLE_COUNT_1_BIT,
+            a, a->bloom_w, a->bloom_h, a->offscreen_color_format, usage, VK_SAMPLE_COUNT_1_BIT,
             &a->bloom_image, &a->bloom_memory, &a->bloom_view)) return 0;
     a->underwater_kelp_w = (w > UNDERWATER_KELP_RT_DIVISOR) ? (w / UNDERWATER_KELP_RT_DIVISOR) : 1u;
     a->underwater_kelp_h = (h > UNDERWATER_KELP_RT_DIVISOR) ? (h / UNDERWATER_KELP_RT_DIVISOR) : 1u;
     if (!create_image_2d(
-            a, a->underwater_kelp_w, a->underwater_kelp_h, a->swapchain_format, usage, VK_SAMPLE_COUNT_1_BIT,
+            a, a->underwater_kelp_w, a->underwater_kelp_h, a->offscreen_color_format, usage, VK_SAMPLE_COUNT_1_BIT,
             &a->underwater_kelp_image, &a->underwater_kelp_memory, &a->underwater_kelp_view)) return 0;
     if (!create_image_2d(
-            a, a->underwater_kelp_w, a->underwater_kelp_h, a->swapchain_format, usage, VK_SAMPLE_COUNT_1_BIT,
+            a, a->underwater_kelp_w, a->underwater_kelp_h, a->offscreen_color_format, usage, VK_SAMPLE_COUNT_1_BIT,
             &a->forest_cache_image, &a->forest_cache_memory, &a->forest_cache_view)) return 0;
     if (!create_image_2d(
             a, GRID_STATE_W, GRID_STATE_H, VK_FORMAT_R16G16B16A16_SFLOAT,
@@ -9545,7 +9642,7 @@ static int create_offscreen_targets(app* a) {
     if (!create_depth_image_2d(a, w, h, a->scene_depth_format, samples, &a->scene_depth_image, &a->scene_depth_memory, &a->scene_depth_view)) return 0;
     if (samples != VK_SAMPLE_COUNT_1_BIT) {
         VkImageUsageFlags msaa_usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-        if (!create_image_2d(a, w, h, a->swapchain_format, msaa_usage, samples, &a->scene_msaa_image, &a->scene_msaa_memory, &a->scene_msaa_view)) return 0;
+        if (!create_image_2d(a, w, h, a->offscreen_color_format, msaa_usage, samples, &a->scene_msaa_image, &a->scene_msaa_memory, &a->scene_msaa_view)) return 0;
     }
 
     VkImageView scene_att_1[] = {a->scene_view, a->scene_depth_view};
@@ -9704,7 +9801,7 @@ static int create_post_resources(app* a) {
 
     VkShaderModuleCreateInfo vs_ci = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = demo_fullscreen_vert_spv_len, .pCode = (const uint32_t*)demo_fullscreen_vert_spv};
     VkShaderModuleCreateInfo bloom_ci = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = demo_bloom_frag_spv_len, .pCode = (const uint32_t*)demo_bloom_frag_spv};
-    VkShaderModuleCreateInfo comp_ci = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = demo_composite_frag_spv_len, .pCode = (const uint32_t*)demo_composite_frag_spv};
+    VkShaderModuleCreateInfo comp_ci = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = v_type_composite_frag_spv_len, .pCode = (const uint32_t*)v_type_composite_frag_spv};
 
     VkShaderModule vs = VK_NULL_HANDLE, fs_bloom = VK_NULL_HANDLE, fs_comp = VK_NULL_HANDLE;
     if (!check_vk(vkCreateShaderModule(a->device, &vs_ci, NULL, &vs), "vkCreateShaderModule(vs)")) return 0;
@@ -15862,6 +15959,7 @@ static void record_gpu_grid_sim(app* a, VkCommandBuffer cmd, float dt) {
         vkCmdPushConstants(cmd, a->grid_sim_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
         vkCmdDraw(cmd, 3, 1, 0, 0);
         vkCmdEndRenderPass(cmd);
+        barrier_color_attachment_to_shader_read(cmd, a->grid_state_image[next]);
         a->grid_state_curr = next;
         a->grid_state_initialized = 1;
     }
@@ -16559,6 +16657,7 @@ static int record_submit_present(
                 vkCmdBeginRenderPass(cmd, &forest_cache_rp, VK_SUBPASS_CONTENTS_INLINE);
                 record_gpu_forest_cache(a, cmd, t);
                 vkCmdEndRenderPass(cmd);
+                barrier_color_attachment_to_shader_read(cmd, a->forest_cache_image);
             }
             VkClearValue kelp_clear = {.color = {{0.0f, 0.0f, 0.0f, 0.0f}}};
             VkRenderPassBeginInfo kelp_rp = {
@@ -16576,6 +16675,7 @@ static int record_submit_present(
                 record_gpu_underwater_kelp(a, cmd, t);
             }
             vkCmdEndRenderPass(cmd);
+            barrier_color_attachment_to_shader_read(cmd, a->underwater_kelp_image);
         }
     }
 
@@ -17197,6 +17297,7 @@ static int record_submit_present(
     if (a->gpu_timestamps_enabled && frame->gpu_timestamp_query_pool != VK_NULL_HANDLE) {
         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, frame->gpu_timestamp_query_pool, GPU_TS_SCENE_END);
     }
+    barrier_color_attachment_to_shader_read(cmd, a->scene_image);
     const uint64_t t_after_scene = SDL_GetPerformanceCounter();
 
     VkClearValue bloom_clear = {.color = {{0.0f, 0.0f, 0.0f, 1.0f}}};
@@ -17268,6 +17369,7 @@ static int record_submit_present(
     if (a->gpu_timestamps_enabled && frame->gpu_timestamp_query_pool != VK_NULL_HANDLE) {
         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, frame->gpu_timestamp_query_pool, GPU_TS_BLOOM_END);
     }
+    barrier_color_attachment_to_shader_read(cmd, a->bloom_image);
 
     VkClearValue present_clear = {.color = {{0.0f, 0.0f, 0.0f, 1.0f}}};
     VkRenderPassBeginInfo present_rp = {

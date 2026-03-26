@@ -1895,6 +1895,9 @@ static int build_level_serialized_text(
     if (!appendf(out, out_cap, &used, "[level %s]\n", style_header_name(s->level_style))) return 0;
     if (!appendf(out, out_cap, &used, "level_length_screens=%.3f\n", lvl.editor_length_screens)) return 0;
     if (!appendf(out, out_cap, &used, "render_style=%s\n", render_style_name(lvl.render_style))) return 0;
+    if (lvl.render_style == LEVEL_RENDER_DEFENDER) {
+        if (!appendf(out, out_cap, &used, "defender.industry_parallax_speed=%.3f\n", lvl.defender_industry_parallax_speed)) return 0;
+    }
     if (!appendf(out, out_cap, &used, "wave_mode=%s\n", wave_mode_name(lvl.wave_mode))) return 0;
     if (!appendf(out, out_cap, &used, "theme_palette=%d\n", clampi(lvl.theme_palette, 0, 2))) return 0;
     if (leveldef_level_uses_textured_panels(&lvl)) {
