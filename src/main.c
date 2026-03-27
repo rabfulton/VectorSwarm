@@ -1053,6 +1053,7 @@ typedef struct app {
 
 static int video_resolution_index(const app* a, int w, int h);
 static void current_video_mode_dimensions(const app* a, int* out_w, int* out_h);
+static VkImageAspectFlags image_aspect_mask_for_format(VkFormat fmt);
 
 static VkSampleCountFlagBits pick_msaa_samples(app* a) {
     if (!a || a->physical_device == VK_NULL_HANDLE) {
@@ -1144,6 +1145,7 @@ static const char* vk_physical_device_type_name(VkPhysicalDeviceType type) {
 static const char* vk_format_name(VkFormat format) {
     switch (format) {
         case VK_FORMAT_UNDEFINED: return "UNDEFINED";
+        case VK_FORMAT_R16G16B16A16_SFLOAT: return "R16G16B16A16_SFLOAT";
         case VK_FORMAT_R8G8B8A8_UNORM: return "R8G8B8A8_UNORM";
         case VK_FORMAT_R8G8B8A8_SRGB: return "R8G8B8A8_SRGB";
         case VK_FORMAT_B8G8R8A8_UNORM: return "B8G8R8A8_UNORM";
@@ -1167,13 +1169,36 @@ static int format_supports_offscreen_color(const app* a, VkFormat format) {
     return (props.optimalTilingFeatures & need) == need;
 }
 
+static int format_supports_offscreen_color_samples(const app* a, VkFormat format, VkSampleCountFlagBits samples) {
+    if (!format_supports_offscreen_color(a, format)) {
+        return 0;
+    }
+    VkImageFormatProperties props;
+    memset(&props, 0, sizeof(props));
+    VkResult r = vkGetPhysicalDeviceImageFormatProperties(
+        a->physical_device,
+        format,
+        VK_IMAGE_TYPE_2D,
+        VK_IMAGE_TILING_OPTIMAL,
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        0,
+        &props
+    );
+    if (r != VK_SUCCESS) {
+        return 0;
+    }
+    return (props.sampleCounts & samples) == samples;
+}
+
 static VkFormat choose_offscreen_color_format(const app* a) {
+    const VkSampleCountFlagBits samples = (a && a->msaa_enabled) ? a->msaa_samples : VK_SAMPLE_COUNT_1_BIT;
     static const VkFormat candidates[] = {
+        VK_FORMAT_R16G16B16A16_SFLOAT,
         VK_FORMAT_R8G8B8A8_UNORM,
         VK_FORMAT_B8G8R8A8_UNORM
     };
     for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); ++i) {
-        if (format_supports_offscreen_color(a, candidates[i])) {
+        if (format_supports_offscreen_color_samples(a, candidates[i], samples)) {
             return candidates[i];
         }
     }
@@ -3319,6 +3344,7 @@ static int create_render_passes(app* a);
 static int create_offscreen_targets(app* a);
 static int create_present_framebuffers(app* a);
 static int create_commands(app* a);
+static int initialize_render_target_layouts(app* a);
 static int create_sync(app* a);
 static int create_post_resources(app* a);
 static int create_terrain_resources(app* a);
@@ -5499,6 +5525,15 @@ static int create_image_2d(
     VkDeviceMemory* out_mem,
     VkImageView* out_view
 ) {
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    if (!a || !out_image || !out_mem || !out_view) {
+        return 0;
+    }
+    *out_image = VK_NULL_HANDLE;
+    *out_mem = VK_NULL_HANDLE;
+    *out_view = VK_NULL_HANDLE;
     VkImageCreateInfo img = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
         .imageType = VK_IMAGE_TYPE_2D,
@@ -5512,13 +5547,14 @@ static int create_image_2d(
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
     };
-    if (!check_vk(vkCreateImage(a->device, &img, NULL, out_image), "vkCreateImage")) {
+    if (!check_vk(vkCreateImage(a->device, &img, NULL, &image), "vkCreateImage")) {
         return 0;
     }
     VkMemoryRequirements req;
-    vkGetImageMemoryRequirements(a->device, *out_image, &req);
+    vkGetImageMemoryRequirements(a->device, image, &req);
     uint32_t mem_type = find_memory_type(a, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     if (mem_type == UINT32_MAX) {
+        vkDestroyImage(a->device, image, NULL);
         return 0;
     }
     VkMemoryAllocateInfo ai = {
@@ -5526,15 +5562,18 @@ static int create_image_2d(
         .allocationSize = req.size,
         .memoryTypeIndex = mem_type
     };
-    if (!check_vk(vkAllocateMemory(a->device, &ai, NULL, out_mem), "vkAllocateMemory(image)")) {
+    if (!check_vk(vkAllocateMemory(a->device, &ai, NULL, &memory), "vkAllocateMemory(image)")) {
+        vkDestroyImage(a->device, image, NULL);
         return 0;
     }
-    if (!check_vk(vkBindImageMemory(a->device, *out_image, *out_mem, 0), "vkBindImageMemory")) {
+    if (!check_vk(vkBindImageMemory(a->device, image, memory, 0), "vkBindImageMemory")) {
+        vkFreeMemory(a->device, memory, NULL);
+        vkDestroyImage(a->device, image, NULL);
         return 0;
     }
     VkImageViewCreateInfo vi = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-        .image = *out_image,
+        .image = image,
         .viewType = VK_IMAGE_VIEW_TYPE_2D,
         .format = format,
         .subresourceRange = {
@@ -5545,7 +5584,15 @@ static int create_image_2d(
             .layerCount = 1
         }
     };
-    return check_vk(vkCreateImageView(a->device, &vi, NULL, out_view), "vkCreateImageView(offscreen)");
+    if (!check_vk(vkCreateImageView(a->device, &vi, NULL, &view), "vkCreateImageView(offscreen)")) {
+        vkFreeMemory(a->device, memory, NULL);
+        vkDestroyImage(a->device, image, NULL);
+        return 0;
+    }
+    *out_image = image;
+    *out_mem = memory;
+    *out_view = view;
+    return 1;
 }
 
 static int create_image_3d(
@@ -5559,6 +5606,15 @@ static int create_image_3d(
     VkDeviceMemory* out_mem,
     VkImageView* out_view
 ) {
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    if (!a || !out_image || !out_mem || !out_view) {
+        return 0;
+    }
+    *out_image = VK_NULL_HANDLE;
+    *out_mem = VK_NULL_HANDLE;
+    *out_view = VK_NULL_HANDLE;
     VkImageCreateInfo img = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
         .imageType = VK_IMAGE_TYPE_3D,
@@ -5572,13 +5628,14 @@ static int create_image_3d(
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
     };
-    if (!check_vk(vkCreateImage(a->device, &img, NULL, out_image), "vkCreateImage(3d)")) {
+    if (!check_vk(vkCreateImage(a->device, &img, NULL, &image), "vkCreateImage(3d)")) {
         return 0;
     }
     VkMemoryRequirements req;
-    vkGetImageMemoryRequirements(a->device, *out_image, &req);
+    vkGetImageMemoryRequirements(a->device, image, &req);
     uint32_t mem_type = find_memory_type(a, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     if (mem_type == UINT32_MAX) {
+        vkDestroyImage(a->device, image, NULL);
         return 0;
     }
     VkMemoryAllocateInfo ai = {
@@ -5586,15 +5643,18 @@ static int create_image_3d(
         .allocationSize = req.size,
         .memoryTypeIndex = mem_type
     };
-    if (!check_vk(vkAllocateMemory(a->device, &ai, NULL, out_mem), "vkAllocateMemory(image 3d)")) {
+    if (!check_vk(vkAllocateMemory(a->device, &ai, NULL, &memory), "vkAllocateMemory(image 3d)")) {
+        vkDestroyImage(a->device, image, NULL);
         return 0;
     }
-    if (!check_vk(vkBindImageMemory(a->device, *out_image, *out_mem, 0), "vkBindImageMemory(3d)")) {
+    if (!check_vk(vkBindImageMemory(a->device, image, memory, 0), "vkBindImageMemory(3d)")) {
+        vkFreeMemory(a->device, memory, NULL);
+        vkDestroyImage(a->device, image, NULL);
         return 0;
     }
     VkImageViewCreateInfo vi = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-        .image = *out_image,
+        .image = image,
         .viewType = VK_IMAGE_VIEW_TYPE_3D,
         .format = format,
         .subresourceRange = {
@@ -5605,7 +5665,15 @@ static int create_image_3d(
             .layerCount = 1
         }
     };
-    return check_vk(vkCreateImageView(a->device, &vi, NULL, out_view), "vkCreateImageView(3d)");
+    if (!check_vk(vkCreateImageView(a->device, &vi, NULL, &view), "vkCreateImageView(3d)")) {
+        vkFreeMemory(a->device, memory, NULL);
+        vkDestroyImage(a->device, image, NULL);
+        return 0;
+    }
+    *out_image = image;
+    *out_mem = memory;
+    *out_view = view;
+    return 1;
 }
 
 static int create_depth_image_2d(
@@ -5618,6 +5686,15 @@ static int create_depth_image_2d(
     VkDeviceMemory* out_mem,
     VkImageView* out_view
 ) {
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    if (!a || !out_image || !out_mem || !out_view) {
+        return 0;
+    }
+    *out_image = VK_NULL_HANDLE;
+    *out_mem = VK_NULL_HANDLE;
+    *out_view = VK_NULL_HANDLE;
     VkImageCreateInfo img = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
         .imageType = VK_IMAGE_TYPE_2D,
@@ -5631,13 +5708,14 @@ static int create_depth_image_2d(
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
     };
-    if (!check_vk(vkCreateImage(a->device, &img, NULL, out_image), "vkCreateImage(depth)")) {
+    if (!check_vk(vkCreateImage(a->device, &img, NULL, &image), "vkCreateImage(depth)")) {
         return 0;
     }
     VkMemoryRequirements req;
-    vkGetImageMemoryRequirements(a->device, *out_image, &req);
+    vkGetImageMemoryRequirements(a->device, image, &req);
     uint32_t mem_type = find_memory_type(a, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     if (mem_type == UINT32_MAX) {
+        vkDestroyImage(a->device, image, NULL);
         return 0;
     }
     VkMemoryAllocateInfo ai = {
@@ -5645,26 +5723,37 @@ static int create_depth_image_2d(
         .allocationSize = req.size,
         .memoryTypeIndex = mem_type
     };
-    if (!check_vk(vkAllocateMemory(a->device, &ai, NULL, out_mem), "vkAllocateMemory(depth)")) {
+    if (!check_vk(vkAllocateMemory(a->device, &ai, NULL, &memory), "vkAllocateMemory(depth)")) {
+        vkDestroyImage(a->device, image, NULL);
         return 0;
     }
-    if (!check_vk(vkBindImageMemory(a->device, *out_image, *out_mem, 0), "vkBindImageMemory(depth)")) {
+    if (!check_vk(vkBindImageMemory(a->device, image, memory, 0), "vkBindImageMemory(depth)")) {
+        vkFreeMemory(a->device, memory, NULL);
+        vkDestroyImage(a->device, image, NULL);
         return 0;
     }
     VkImageViewCreateInfo vi = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-        .image = *out_image,
+        .image = image,
         .viewType = VK_IMAGE_VIEW_TYPE_2D,
         .format = format,
         .subresourceRange = {
-            .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+            .aspectMask = image_aspect_mask_for_format(format),
             .baseMipLevel = 0,
             .levelCount = 1,
             .baseArrayLayer = 0,
             .layerCount = 1
         }
     };
-    return check_vk(vkCreateImageView(a->device, &vi, NULL, out_view), "vkCreateImageView(depth)");
+    if (!check_vk(vkCreateImageView(a->device, &vi, NULL, &view), "vkCreateImageView(depth)")) {
+        vkFreeMemory(a->device, memory, NULL);
+        vkDestroyImage(a->device, image, NULL);
+        return 0;
+    }
+    *out_image = image;
+    *out_mem = memory;
+    *out_view = view;
+    return 1;
 }
 
 static int create_buffer(
@@ -5675,19 +5764,27 @@ static int create_buffer(
     VkBuffer* out_buffer,
     VkDeviceMemory* out_memory
 ) {
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    if (!a || !out_buffer || !out_memory) {
+        return 0;
+    }
+    *out_buffer = VK_NULL_HANDLE;
+    *out_memory = VK_NULL_HANDLE;
     VkBufferCreateInfo bi = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .size = size,
         .usage = usage,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE
     };
-    if (!check_vk(vkCreateBuffer(a->device, &bi, NULL, out_buffer), "vkCreateBuffer")) {
+    if (!check_vk(vkCreateBuffer(a->device, &bi, NULL, &buffer), "vkCreateBuffer")) {
         return 0;
     }
     VkMemoryRequirements req;
-    vkGetBufferMemoryRequirements(a->device, *out_buffer, &req);
+    vkGetBufferMemoryRequirements(a->device, buffer, &req);
     const uint32_t mem_type = find_memory_type(a, req.memoryTypeBits, memory_flags);
     if (mem_type == UINT32_MAX) {
+        vkDestroyBuffer(a->device, buffer, NULL);
         return 0;
     }
     VkMemoryAllocateInfo ai = {
@@ -5695,12 +5792,17 @@ static int create_buffer(
         .allocationSize = req.size,
         .memoryTypeIndex = mem_type
     };
-    if (!check_vk(vkAllocateMemory(a->device, &ai, NULL, out_memory), "vkAllocateMemory(buffer)")) {
+    if (!check_vk(vkAllocateMemory(a->device, &ai, NULL, &memory), "vkAllocateMemory(buffer)")) {
+        vkDestroyBuffer(a->device, buffer, NULL);
         return 0;
     }
-    if (!check_vk(vkBindBufferMemory(a->device, *out_buffer, *out_memory, 0), "vkBindBufferMemory")) {
+    if (!check_vk(vkBindBufferMemory(a->device, buffer, memory, 0), "vkBindBufferMemory")) {
+        vkFreeMemory(a->device, memory, NULL);
+        vkDestroyBuffer(a->device, buffer, NULL);
         return 0;
     }
+    *out_buffer = buffer;
+    *out_memory = memory;
     return 1;
 }
 
@@ -6021,19 +6123,141 @@ static int end_one_shot_commands(app* a, VkCommandBuffer* cmd) {
         .commandBufferCount = 1,
         .pCommandBuffers = cmd
     };
-    if (!check_vk(vkQueueSubmit(a->graphics_queue, 1, &submit, VK_NULL_HANDLE), "vkQueueSubmit(one-shot)")) {
+    VkFenceCreateInfo fence_info = {
+        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO
+    };
+    VkFence fence = VK_NULL_HANDLE;
+    if (!check_vk(vkCreateFence(a->device, &fence_info, NULL, &fence), "vkCreateFence(one-shot)")) {
         vkFreeCommandBuffers(a->device, a->command_pool, 1, cmd);
         *cmd = VK_NULL_HANDLE;
         return 0;
     }
-    if (!check_vk(vkQueueWaitIdle(a->graphics_queue), "vkQueueWaitIdle(one-shot)")) {
+    if (!check_vk(vkQueueSubmit(a->graphics_queue, 1, &submit, fence), "vkQueueSubmit(one-shot)")) {
+        vkDestroyFence(a->device, fence, NULL);
         vkFreeCommandBuffers(a->device, a->command_pool, 1, cmd);
         *cmd = VK_NULL_HANDLE;
         return 0;
     }
+    if (!check_vk(vkWaitForFences(a->device, 1, &fence, VK_TRUE, UINT64_MAX), "vkWaitForFences(one-shot)")) {
+        vkDestroyFence(a->device, fence, NULL);
+        vkFreeCommandBuffers(a->device, a->command_pool, 1, cmd);
+        *cmd = VK_NULL_HANDLE;
+        return 0;
+    }
+    vkDestroyFence(a->device, fence, NULL);
     vkFreeCommandBuffers(a->device, a->command_pool, 1, cmd);
     *cmd = VK_NULL_HANDLE;
     return 1;
+}
+
+static void cmd_transition_image_layout(
+    VkCommandBuffer cmd,
+    VkImage image,
+    VkImageAspectFlags aspect_mask,
+    VkImageLayout old_layout,
+    VkImageLayout new_layout,
+    VkAccessFlags src_access_mask,
+    VkAccessFlags dst_access_mask,
+    VkPipelineStageFlags src_stage_mask,
+    VkPipelineStageFlags dst_stage_mask
+) {
+    if (cmd == VK_NULL_HANDLE || image == VK_NULL_HANDLE) {
+        return;
+    }
+    VkImageMemoryBarrier barrier = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = src_access_mask,
+        .dstAccessMask = dst_access_mask,
+        .oldLayout = old_layout,
+        .newLayout = new_layout,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = image,
+        .subresourceRange = {
+            .aspectMask = aspect_mask,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        }
+    };
+    vkCmdPipelineBarrier(
+        cmd,
+        src_stage_mask,
+        dst_stage_mask,
+        0,
+        0, NULL,
+        0, NULL,
+        1, &barrier
+    );
+}
+
+static int initialize_render_target_layouts(app* a) {
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    if (!a || a->device == VK_NULL_HANDLE) {
+        return 0;
+    }
+    if (!begin_one_shot_commands(a, &cmd)) {
+        return 0;
+    }
+    cmd_transition_image_layout(
+        cmd,
+        a->scene_image,
+        VK_IMAGE_ASPECT_COLOR_BIT,
+        VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        0,
+        VK_ACCESS_SHADER_READ_BIT,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+    );
+    cmd_transition_image_layout(
+        cmd,
+        a->scene_depth_image,
+        image_aspect_mask_for_format(a->scene_depth_format),
+        VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        0,
+        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT
+    );
+    if (scene_samples(a) != VK_SAMPLE_COUNT_1_BIT) {
+        cmd_transition_image_layout(
+            cmd,
+            a->scene_msaa_image,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            0,
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+        );
+    }
+    cmd_transition_image_layout(
+        cmd,
+        a->grid_state_image[0],
+        VK_IMAGE_ASPECT_COLOR_BIT,
+        VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        0,
+        VK_ACCESS_SHADER_READ_BIT,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+    );
+    cmd_transition_image_layout(
+        cmd,
+        a->grid_state_image[1],
+        VK_IMAGE_ASPECT_COLOR_BIT,
+        VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        0,
+        VK_ACCESS_SHADER_READ_BIT,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+    );
+    return end_one_shot_commands(a, &cmd);
 }
 
 static float fractf_local(float v) {
@@ -7980,6 +8204,19 @@ static int format_has_stencil(VkFormat fmt) {
     return fmt == VK_FORMAT_D32_SFLOAT_S8_UINT || fmt == VK_FORMAT_D24_UNORM_S8_UINT || fmt == VK_FORMAT_D16_UNORM_S8_UINT;
 }
 
+static VkImageAspectFlags image_aspect_mask_for_format(VkFormat fmt) {
+    if (fmt == VK_FORMAT_D32_SFLOAT_S8_UINT ||
+        fmt == VK_FORMAT_D24_UNORM_S8_UINT ||
+        fmt == VK_FORMAT_D16_UNORM_S8_UINT) {
+        return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+    }
+    if (fmt == VK_FORMAT_D32_SFLOAT ||
+        fmt == VK_FORMAT_D16_UNORM) {
+        return VK_IMAGE_ASPECT_DEPTH_BIT;
+    }
+    return VK_IMAGE_ASPECT_COLOR_BIT;
+}
+
 static void set_viewport_scissor(VkCommandBuffer cmd, uint32_t w, uint32_t h) {
     VkViewport vp = {.x = 0.0f, .y = 0.0f, .width = (float)w, .height = (float)h, .minDepth = 0.0f, .maxDepth = 1.0f};
     VkRect2D sc = {.offset = {0, 0}, .extent = {w, h}};
@@ -9062,6 +9299,7 @@ static int recreate_render_runtime(app* a) {
         !create_offscreen_targets(a) ||
         !create_present_framebuffers(a) ||
         !create_commands(a) ||
+        !initialize_render_target_layouts(a) ||
         !create_sync(a) ||
         !create_post_resources(a) ||
         !create_terrain_resources(a) ||
@@ -9173,6 +9411,68 @@ static int create_surface(app* a) {
     return SDL_Vulkan_CreateSurface(a->window, a->instance, &a->surface) == SDL_TRUE;
 }
 
+static int physical_device_supports_extension(VkPhysicalDevice dev, const char* extension_name) {
+    uint32_t ext_count = 0;
+    if (dev == VK_NULL_HANDLE || !extension_name) {
+        return 0;
+    }
+    if (vkEnumerateDeviceExtensionProperties(dev, NULL, &ext_count, NULL) != VK_SUCCESS) {
+        return 0;
+    }
+    VkExtensionProperties* exts = (VkExtensionProperties*)calloc(ext_count > 0 ? ext_count : 1u, sizeof(*exts));
+    if (!exts) {
+        return 0;
+    }
+    if (ext_count > 0 && vkEnumerateDeviceExtensionProperties(dev, NULL, &ext_count, exts) != VK_SUCCESS) {
+        free(exts);
+        return 0;
+    }
+    int found = 0;
+    for (uint32_t i = 0; i < ext_count; ++i) {
+        if (strcmp(exts[i].extensionName, extension_name) == 0) {
+            found = 1;
+            break;
+        }
+    }
+    free(exts);
+    return found;
+}
+
+static int physical_device_surface_is_usable(VkPhysicalDevice dev, VkSurfaceKHR surface) {
+    uint32_t format_count = 0;
+    uint32_t mode_count = 0;
+    if (dev == VK_NULL_HANDLE || surface == VK_NULL_HANDLE) {
+        return 0;
+    }
+    if (vkGetPhysicalDeviceSurfaceFormatsKHR(dev, surface, &format_count, NULL) != VK_SUCCESS || format_count == 0) {
+        return 0;
+    }
+    if (vkGetPhysicalDeviceSurfacePresentModesKHR(dev, surface, &mode_count, NULL) != VK_SUCCESS || mode_count == 0) {
+        return 0;
+    }
+    return 1;
+}
+
+static int physical_device_score(const VkPhysicalDeviceProperties* props, uint32_t graphics_queue_family, uint32_t present_queue_family) {
+    int score = 0;
+    if (!props) {
+        return -1;
+    }
+    switch (props->deviceType) {
+        case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU: score += 1000; break;
+        case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: score += 700; break;
+        case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU: score += 500; break;
+        case VK_PHYSICAL_DEVICE_TYPE_CPU: score += 100; break;
+        default: score += 250; break;
+    }
+    if (graphics_queue_family == present_queue_family) {
+        score += 25;
+    }
+    score += (int)(VK_VERSION_MAJOR(props->apiVersion) * 100 + VK_VERSION_MINOR(props->apiVersion) * 10);
+    score += (int)(props->limits.maxImageDimension2D / 1024u);
+    return score;
+}
+
 static int pick_physical_device(app* a) {
     uint32_t count = 0;
     if (!check_vk(vkEnumeratePhysicalDevices(a->instance, &count, NULL), "vkEnumeratePhysicalDevices(count)") || count == 0) return 0;
@@ -9182,6 +9482,13 @@ static int pick_physical_device(app* a) {
         free(devs);
         return 0;
     }
+    VkPhysicalDevice best_dev = VK_NULL_HANDLE;
+    VkPhysicalDeviceProperties best_props;
+    memset(&best_props, 0, sizeof(best_props));
+    uint32_t best_graphics_queue_family = 0u;
+    uint32_t best_present_queue_family = 0u;
+    uint32_t best_graphics_timestamp_valid_bits = 0u;
+    int best_score = -1;
     for (uint32_t d = 0; d < count; ++d) {
         VkPhysicalDevice dev = devs[d];
         uint32_t qcount = 0;
@@ -9207,39 +9514,57 @@ static int pick_physical_device(app* a) {
         }
         free(qprops);
         if (!g || !p) continue;
+        if (!physical_device_supports_extension(dev, VK_KHR_SWAPCHAIN_EXTENSION_NAME)) {
+            continue;
+        }
+        if (!physical_device_surface_is_usable(dev, a->surface)) {
+            continue;
+        }
         VkPhysicalDeviceProperties props;
         memset(&props, 0, sizeof(props));
         vkGetPhysicalDeviceProperties(dev, &props);
-        a->physical_device = dev;
-        a->graphics_queue_family = gi;
-        a->present_queue_family = pi;
-        a->physical_device_vendor_id = props.vendorID;
-        a->physical_device_type = props.deviceType;
-        a->physical_device_api_version = props.apiVersion;
-        a->gpu_timestamp_period_ns = props.limits.timestampPeriod;
-        a->gpu_timestamps_enabled =
-            (graphics_timestamp_valid_bits > 0u) &&
-            (props.limits.timestampPeriod > 0.0f) &&
-            (VK_VERSION_MAJOR(props.apiVersion) > 1 || VK_VERSION_MINOR(props.apiVersion) >= 2);
-        a->gpu_vendor_is_intel = (props.vendorID == 0x8086u) ? 1 : 0;
-        snprintf(a->physical_device_name, sizeof(a->physical_device_name), "%s", props.deviceName);
-        a->msaa_samples = pick_msaa_samples(a);
-        fprintf(
-            stderr,
-            "gpu selected: name=\"%s\" vendor=0x%04x type=%s graphics_q=%u present_q=%u intel=%d timestamps=%d\n",
-            a->physical_device_name,
-            (unsigned)a->physical_device_vendor_id,
-            vk_physical_device_type_name(a->physical_device_type),
-            gi,
-            pi,
-            a->gpu_vendor_is_intel,
-            a->gpu_timestamps_enabled
-        );
-        free(devs);
-        return 1;
+        const int score = physical_device_score(&props, gi, pi);
+        if (score <= best_score) {
+            continue;
+        }
+        best_dev = dev;
+        best_props = props;
+        best_graphics_queue_family = gi;
+        best_present_queue_family = pi;
+        best_graphics_timestamp_valid_bits = graphics_timestamp_valid_bits;
+        best_score = score;
     }
     free(devs);
-    return 0;
+    if (best_dev == VK_NULL_HANDLE) {
+        return 0;
+    }
+    a->physical_device = best_dev;
+    a->graphics_queue_family = best_graphics_queue_family;
+    a->present_queue_family = best_present_queue_family;
+    a->physical_device_vendor_id = best_props.vendorID;
+    a->physical_device_type = best_props.deviceType;
+    a->physical_device_api_version = best_props.apiVersion;
+    a->gpu_timestamp_period_ns = best_props.limits.timestampPeriod;
+    a->gpu_timestamps_enabled =
+        (best_graphics_timestamp_valid_bits > 0u) &&
+        (best_props.limits.timestampPeriod > 0.0f) &&
+        (VK_VERSION_MAJOR(best_props.apiVersion) > 1 || VK_VERSION_MINOR(best_props.apiVersion) >= 2);
+    a->gpu_vendor_is_intel = (best_props.vendorID == 0x8086u) ? 1 : 0;
+    snprintf(a->physical_device_name, sizeof(a->physical_device_name), "%s", best_props.deviceName);
+    a->msaa_samples = pick_msaa_samples(a);
+    fprintf(
+        stderr,
+        "gpu selected: name=\"%s\" vendor=0x%04x type=%s graphics_q=%u present_q=%u intel=%d timestamps=%d score=%d\n",
+        a->physical_device_name,
+        (unsigned)a->physical_device_vendor_id,
+        vk_physical_device_type_name(a->physical_device_type),
+        best_graphics_queue_family,
+        best_present_queue_family,
+        a->gpu_vendor_is_intel,
+        a->gpu_timestamps_enabled,
+        best_score
+    );
+    return 1;
 }
 
 static int create_device(app* a) {
@@ -9466,6 +9791,11 @@ static int create_render_passes(app* a) {
         fprintf(stderr, "No suitable depth format found\n");
         return 0;
     }
+    const VkFormat grid_state_format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    if (!format_supports_offscreen_color(a, grid_state_format)) {
+        fprintf(stderr, "Grid state format %s does not support sampled color attachment usage\n", vk_format_name(grid_state_format));
+        return 0;
+    }
     VkSampleCountFlagBits samples = scene_samples(a);
     const int has_stencil = format_has_stencil(a->scene_depth_format);
     if (samples == VK_SAMPLE_COUNT_1_BIT) {
@@ -9574,7 +9904,7 @@ static int create_render_passes(app* a) {
     if (!check_vk(vkCreateRenderPass(a->device, &bloom_rp, NULL, &a->bloom_render_pass), "vkCreateRenderPass(bloom)")) return 0;
 
     VkAttachmentDescription grid_state_att = {
-        .format = VK_FORMAT_R16G16B16A16_SFLOAT,
+        .format = grid_state_format,
         .samples = VK_SAMPLE_COUNT_1_BIT,
         .loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
         .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
@@ -9607,6 +9937,7 @@ static int create_render_passes(app* a) {
 static int create_offscreen_targets(app* a) {
     uint32_t w = a->swapchain_extent.width;
     uint32_t h = a->swapchain_extent.height;
+    const VkFormat grid_state_format = VK_FORMAT_R16G16B16A16_SFLOAT;
     a->bloom_w = (w > 1u) ? (w / 2u) : 1u;
     a->bloom_h = (h > 1u) ? (h / 2u) : 1u;
     VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
@@ -9630,12 +9961,12 @@ static int create_offscreen_targets(app* a) {
             a, a->underwater_kelp_w, a->underwater_kelp_h, a->offscreen_color_format, usage, VK_SAMPLE_COUNT_1_BIT,
             &a->forest_cache_image, &a->forest_cache_memory, &a->forest_cache_view)) return 0;
     if (!create_image_2d(
-            a, GRID_STATE_W, GRID_STATE_H, VK_FORMAT_R16G16B16A16_SFLOAT,
+            a, GRID_STATE_W, GRID_STATE_H, grid_state_format,
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
             VK_SAMPLE_COUNT_1_BIT,
             &a->grid_state_image[0], &a->grid_state_memory[0], &a->grid_state_view[0])) return 0;
     if (!create_image_2d(
-            a, GRID_STATE_W, GRID_STATE_H, VK_FORMAT_R16G16B16A16_SFLOAT,
+            a, GRID_STATE_W, GRID_STATE_H, grid_state_format,
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
             VK_SAMPLE_COUNT_1_BIT,
             &a->grid_state_image[1], &a->grid_state_memory[1], &a->grid_state_view[1])) return 0;
@@ -17668,6 +17999,7 @@ int main(void) {
         !create_offscreen_targets(&a) ||
         !create_present_framebuffers(&a) ||
         !create_commands(&a) ||
+        !initialize_render_target_layouts(&a) ||
         !create_sync(&a) ||
         !create_post_resources(&a) ||
         !create_terrain_resources(&a) ||
