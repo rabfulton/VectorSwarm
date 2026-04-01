@@ -168,13 +168,8 @@ void main() {
             atmo_band * (0.10 + 0.10 * pc.tune1.w) +
             atmo_rim * (0.48 + 0.30 * pc.tune1.w)
         );
-        float dither = texture(
-            u_blue_noise,
-            fract(base_uv * vec2(23.0, 11.0) + vec2(pc.tune0.w * 0.37, pc.tune0.y * 0.29))
-        ).r;
         float alpha = layer_alpha * front * atmo_visible *
             (0.11 * atmo_veil + 0.11 * atmo_band + 0.24 * atmo_rim * pc.tune1.w);
-        alpha *= mix(0.997, 1.003, dither);
         alpha = clamp(alpha, 0.0, 1.0);
         if (alpha < 0.010) {
             discard;
@@ -329,15 +324,10 @@ void main() {
     rgb += haze_col * atmo_band * (0.10 + 0.10 * pc.tune1.w) * haze_weight;
     rgb += haze_col * atmo_rim * (0.42 + 0.28 * pc.tune1.w) * haze_weight;
 
-    float dither = texture(
-        u_blue_noise,
-        fract(base_uv * vec2(23.0, 11.0) + vec2(pc.tune0.w * 0.37, pc.tune0.y * 0.29))
-    ).r;
     float alpha = layer_alpha * front *
         (body_shell * (0.34 + 0.08 * boundary + 0.10 * detail_mask + 0.08 * storm + 0.03 * aurora + 0.008 * fresnel * pc.tune1.w) +
          haze_weight * (0.12 * atmo_veil + 0.09 * atmo_band + 0.20 * atmo_rim * pc.tune1.w));
     alpha *= 0.92 + 0.08 * density;
-    alpha *= mix(0.995, 1.005, dither);
     alpha = clamp(alpha, 0.0, 1.0);
     if (alpha < 0.010) {
         discard;

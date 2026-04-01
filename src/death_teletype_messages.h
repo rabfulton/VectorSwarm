@@ -12,7 +12,7 @@ static const char* k_death_teletype_messages[] = {
     "NO PAIN, NO GAIN",
     "FALL SEVEN TIMES, STAND UP EIGHT",
     "BETTER LUCK NEXT TIME",
-    "ROME WASNT BUILT IN A DAY",
+    "ROME WASN'T BUILT IN A DAY",
     "THE ONLY FAILURE IS NOT TRYING",
     "KEEP CALM AND SHOOT ON",
     "BORN TO LOSE, LIVE TO WIN",

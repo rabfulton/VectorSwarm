@@ -1154,11 +1154,31 @@ static const char* vk_format_name(VkFormat format) {
     }
 }
 
+static int format_is_srgb(VkFormat format) {
+    switch (format) {
+        case VK_FORMAT_R8G8B8A8_SRGB:
+        case VK_FORMAT_B8G8R8A8_SRGB:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
 static const char* vk_color_space_name(VkColorSpaceKHR color_space) {
     switch (color_space) {
         case VK_COLOR_SPACE_SRGB_NONLINEAR_KHR: return "SRGB_NONLINEAR";
         default: return "OTHER";
     }
+}
+
+static const char* present_output_encode_name(const app* a) {
+    if (!a) {
+        return "raw";
+    }
+    if (format_is_srgb(a->swapchain_format)) {
+        return "attachment_srgb";
+    }
+    return "raw";
 }
 
 static int format_supports_offscreen_color(const app* a, VkFormat format) {
@@ -1203,6 +1223,70 @@ static VkFormat choose_offscreen_color_format(const app* a) {
         }
     }
     return VK_FORMAT_UNDEFINED;
+}
+
+static VkFormat sampled_rgba8_data_format(void) {
+    return VK_FORMAT_R8G8B8A8_UNORM;
+}
+
+static VkFormat sampled_rgba16f_data_format(void) {
+    return VK_FORMAT_R16G16B16A16_SFLOAT;
+}
+
+static int format_supports_sampled_upload(const app* a, VkFormat format, VkImageType image_type) {
+    VkImageFormatProperties props;
+    memset(&props, 0, sizeof(props));
+    return vkGetPhysicalDeviceImageFormatProperties(
+               a->physical_device,
+               format,
+               image_type,
+               VK_IMAGE_TILING_OPTIMAL,
+               VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+               0,
+               &props) == VK_SUCCESS;
+}
+
+static int format_supports_linear_filtering(const app* a, VkFormat format) {
+    VkFormatProperties props;
+    if (!a) {
+        return 0;
+    }
+    memset(&props, 0, sizeof(props));
+    vkGetPhysicalDeviceFormatProperties(a->physical_device, format, &props);
+    return (props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) != 0;
+}
+
+static int validate_sampled_texture_format(const app* a, VkFormat format, VkImageType image_type, const char* label) {
+    if (!a) {
+        return 0;
+    }
+    if (format_supports_sampled_upload(a, format, image_type)) {
+        return 1;
+    }
+    fprintf(
+        stderr,
+        "%s format %s does not support sampled transfer-dst %s usage\n",
+        label ? label : "Texture",
+        vk_format_name(format),
+        (image_type == VK_IMAGE_TYPE_3D) ? "3D" : "2D"
+    );
+    return 0;
+}
+
+static int validate_linear_sampled_texture_format(const app* a, VkFormat format, VkImageType image_type, const char* label) {
+    if (!validate_sampled_texture_format(a, format, image_type, label)) {
+        return 0;
+    }
+    if (format_supports_linear_filtering(a, format)) {
+        return 1;
+    }
+    fprintf(
+        stderr,
+        "%s format %s does not support linear filtered sampling\n",
+        label ? label : "Texture",
+        vk_format_name(format)
+    );
+    return 0;
 }
 
 static VkSampleCountFlagBits scene_samples(const app* a) {
@@ -6035,8 +6119,296 @@ static int upload_rgba8_image_3d(
     return 1;
 }
 
-static int create_sampled_rgba8_texture_2d(
+static uint16_t float_to_half_bits(float value) {
+    uint32_t bits = 0u;
+    uint32_t sign = 0u;
+    uint32_t mantissa = 0u;
+    int32_t exp = 0;
+    memcpy(&bits, &value, sizeof(bits));
+    sign = (bits >> 16) & 0x8000u;
+    mantissa = bits & 0x007fffffu;
+    exp = (int32_t)((bits >> 23) & 0xffu);
+
+    if (exp == 0xff) {
+        if (mantissa != 0u) {
+            return (uint16_t)(sign | 0x7e00u);
+        }
+        return (uint16_t)(sign | 0x7c00u);
+    }
+
+    if (exp == 0) {
+        return (uint16_t)sign;
+    }
+
+    exp = exp - 127 + 15;
+    if (exp >= 31) {
+        return (uint16_t)(sign | 0x7c00u);
+    }
+    if (exp <= 0) {
+        if (exp < -10) {
+            return (uint16_t)sign;
+        }
+        mantissa |= 0x00800000u;
+        {
+            const uint32_t shift = (uint32_t)(1 - exp);
+            uint32_t half_mantissa = mantissa >> (shift + 13u);
+            if ((mantissa >> (shift + 12u)) & 1u) {
+                half_mantissa += 1u;
+            }
+            return (uint16_t)(sign | half_mantissa);
+        }
+    }
+
+    {
+        uint32_t half_exp = (uint32_t)exp << 10u;
+        uint32_t half_mantissa = mantissa >> 13u;
+        if (mantissa & 0x00001000u) {
+            half_mantissa += 1u;
+            if (half_mantissa & 0x00000400u) {
+                half_mantissa = 0u;
+                half_exp += 0x00000400u;
+                if (half_exp >= 0x00007c00u) {
+                    half_exp = 0x00007c00u;
+                }
+            }
+        }
+        return (uint16_t)(sign | half_exp | (half_mantissa & 0x03ffu));
+    }
+}
+
+static int upload_rgba16f_image_2d(
     app* a,
+    VkImage image,
+    uint32_t w,
+    uint32_t h,
+    const uint16_t* pixels
+) {
+    VkDeviceSize bytes = 0;
+    VkBuffer staging = VK_NULL_HANDLE;
+    VkDeviceMemory staging_mem = VK_NULL_HANDLE;
+    void* mapped = NULL;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    if (!a || !image || !pixels || w == 0u || h == 0u) {
+        return 0;
+    }
+    bytes = (VkDeviceSize)w * (VkDeviceSize)h * 4u * sizeof(uint16_t);
+    if (!create_buffer(
+            a,
+            bytes,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &staging,
+            &staging_mem)) {
+        return 0;
+    }
+    if (!check_vk(vkMapMemory(a->device, staging_mem, 0, bytes, 0, &mapped), "vkMapMemory(rgba16f 2d staging)")) {
+        vkDestroyBuffer(a->device, staging, NULL);
+        vkFreeMemory(a->device, staging_mem, NULL);
+        return 0;
+    }
+    memcpy(mapped, pixels, (size_t)bytes);
+    vkUnmapMemory(a->device, staging_mem);
+    if (!begin_one_shot_commands(a, &cmd)) {
+        vkDestroyBuffer(a->device, staging, NULL);
+        vkFreeMemory(a->device, staging_mem, NULL);
+        return 0;
+    }
+    {
+        VkImageMemoryBarrier to_dst = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .srcAccessMask = 0,
+            .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            }
+        };
+        VkBufferImageCopy copy = {
+            .bufferOffset = 0,
+            .bufferRowLength = w,
+            .bufferImageHeight = h,
+            .imageSubresource = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            },
+            .imageExtent = {w, h, 1}
+        };
+        VkImageMemoryBarrier to_sampled = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            }
+        };
+        vkCmdPipelineBarrier(
+            cmd,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0,
+            0, NULL,
+            0, NULL,
+            1, &to_dst
+        );
+        vkCmdCopyBufferToImage(cmd, staging, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+        vkCmdPipelineBarrier(
+            cmd,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0,
+            0, NULL,
+            0, NULL,
+            1, &to_sampled
+        );
+    }
+    if (!end_one_shot_commands(a, &cmd)) {
+        vkDestroyBuffer(a->device, staging, NULL);
+        vkFreeMemory(a->device, staging_mem, NULL);
+        return 0;
+    }
+    vkDestroyBuffer(a->device, staging, NULL);
+    vkFreeMemory(a->device, staging_mem, NULL);
+    return 1;
+}
+
+static int upload_rgba16f_image_3d(
+    app* a,
+    VkImage image,
+    uint32_t w,
+    uint32_t h,
+    uint32_t d,
+    const uint16_t* pixels
+) {
+    VkDeviceSize bytes = 0;
+    VkBuffer staging = VK_NULL_HANDLE;
+    VkDeviceMemory staging_mem = VK_NULL_HANDLE;
+    void* mapped = NULL;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    if (!a || !image || !pixels || w == 0u || h == 0u || d == 0u) {
+        return 0;
+    }
+    bytes = (VkDeviceSize)w * (VkDeviceSize)h * (VkDeviceSize)d * 4u * sizeof(uint16_t);
+    if (!create_buffer(
+            a,
+            bytes,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &staging,
+            &staging_mem)) {
+        return 0;
+    }
+    if (!check_vk(vkMapMemory(a->device, staging_mem, 0, bytes, 0, &mapped), "vkMapMemory(rgba16f 3d staging)")) {
+        vkDestroyBuffer(a->device, staging, NULL);
+        vkFreeMemory(a->device, staging_mem, NULL);
+        return 0;
+    }
+    memcpy(mapped, pixels, (size_t)bytes);
+    vkUnmapMemory(a->device, staging_mem);
+    if (!begin_one_shot_commands(a, &cmd)) {
+        vkDestroyBuffer(a->device, staging, NULL);
+        vkFreeMemory(a->device, staging_mem, NULL);
+        return 0;
+    }
+    {
+        VkImageMemoryBarrier to_dst = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .srcAccessMask = 0,
+            .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            }
+        };
+        VkBufferImageCopy copy = {
+            .bufferOffset = 0,
+            .bufferRowLength = w,
+            .bufferImageHeight = h,
+            .imageSubresource = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            },
+            .imageExtent = {w, h, d}
+        };
+        VkImageMemoryBarrier to_sampled = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            }
+        };
+        vkCmdPipelineBarrier(
+            cmd,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0,
+            0, NULL,
+            0, NULL,
+            1, &to_dst
+        );
+        vkCmdCopyBufferToImage(cmd, staging, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+        vkCmdPipelineBarrier(
+            cmd,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0,
+            0, NULL,
+            0, NULL,
+            1, &to_sampled
+        );
+    }
+    if (!end_one_shot_commands(a, &cmd)) {
+        vkDestroyBuffer(a->device, staging, NULL);
+        vkFreeMemory(a->device, staging_mem, NULL);
+        return 0;
+    }
+    vkDestroyBuffer(a->device, staging, NULL);
+    vkFreeMemory(a->device, staging_mem, NULL);
+    return 1;
+}
+
+static int create_sampled_rgba8_texture_2d_with_format(
+    app* a,
+    VkFormat format,
+    const char* label,
     uint32_t w,
     uint32_t h,
     const uint8_t* pixels,
@@ -6044,11 +6416,14 @@ static int create_sampled_rgba8_texture_2d(
     VkDeviceMemory* out_memory,
     VkImageView* out_view
 ) {
+    if (!validate_sampled_texture_format(a, format, VK_IMAGE_TYPE_2D, label)) {
+        return 0;
+    }
     if (!create_image_2d(
             a,
             w,
             h,
-            VK_FORMAT_R8G8B8A8_UNORM,
+            format,
             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
             VK_SAMPLE_COUNT_1_BIT,
             out_image,
@@ -6059,7 +6434,59 @@ static int create_sampled_rgba8_texture_2d(
     return upload_rgba8_image_2d(a, *out_image, w, h, pixels);
 }
 
-static int create_sampled_rgba8_texture_3d(
+static int create_sampled_rgba8_data_texture_2d(
+    app* a,
+    uint32_t w,
+    uint32_t h,
+    const uint8_t* pixels,
+    VkImage* out_image,
+    VkDeviceMemory* out_memory,
+    VkImageView* out_view
+) {
+    return create_sampled_rgba8_texture_2d_with_format(
+        a,
+        sampled_rgba8_data_format(),
+        "Data texture",
+        w,
+        h,
+        pixels,
+        out_image,
+        out_memory,
+        out_view
+    );
+}
+
+static int create_sampled_rgba8_texture_3d_with_format(
+    app* a,
+    VkFormat format,
+    const char* label,
+    uint32_t w,
+    uint32_t h,
+    uint32_t d,
+    const uint8_t* pixels,
+    VkImage* out_image,
+    VkDeviceMemory* out_memory,
+    VkImageView* out_view
+) {
+    if (!validate_sampled_texture_format(a, format, VK_IMAGE_TYPE_3D, label)) {
+        return 0;
+    }
+    if (!create_image_3d(
+            a,
+            w,
+            h,
+            d,
+            format,
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            out_image,
+            out_memory,
+            out_view)) {
+        return 0;
+    }
+    return upload_rgba8_image_3d(a, *out_image, w, h, d, pixels);
+}
+
+static int create_sampled_rgba8_data_texture_3d(
     app* a,
     uint32_t w,
     uint32_t h,
@@ -6069,19 +6496,75 @@ static int create_sampled_rgba8_texture_3d(
     VkDeviceMemory* out_memory,
     VkImageView* out_view
 ) {
+    return create_sampled_rgba8_texture_3d_with_format(
+        a,
+        sampled_rgba8_data_format(),
+        "Data texture",
+        w,
+        h,
+        d,
+        pixels,
+        out_image,
+        out_memory,
+        out_view
+    );
+}
+
+static int create_sampled_rgba16f_data_texture_2d(
+    app* a,
+    uint32_t w,
+    uint32_t h,
+    const uint16_t* pixels,
+    VkImage* out_image,
+    VkDeviceMemory* out_memory,
+    VkImageView* out_view
+) {
+    const VkFormat format = sampled_rgba16f_data_format();
+    if (!validate_linear_sampled_texture_format(a, format, VK_IMAGE_TYPE_2D, "Ion storm control texture")) {
+        return 0;
+    }
+    if (!create_image_2d(
+            a,
+            w,
+            h,
+            format,
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            VK_SAMPLE_COUNT_1_BIT,
+            out_image,
+            out_memory,
+            out_view)) {
+        return 0;
+    }
+    return upload_rgba16f_image_2d(a, *out_image, w, h, pixels);
+}
+
+static int create_sampled_rgba16f_data_texture_3d(
+    app* a,
+    uint32_t w,
+    uint32_t h,
+    uint32_t d,
+    const uint16_t* pixels,
+    VkImage* out_image,
+    VkDeviceMemory* out_memory,
+    VkImageView* out_view
+) {
+    const VkFormat format = sampled_rgba16f_data_format();
+    if (!validate_linear_sampled_texture_format(a, format, VK_IMAGE_TYPE_3D, "Ion storm control texture")) {
+        return 0;
+    }
     if (!create_image_3d(
             a,
             w,
             h,
             d,
-            VK_FORMAT_R8G8B8A8_UNORM,
+            format,
             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
             out_image,
             out_memory,
             out_view)) {
         return 0;
     }
-    return upload_rgba8_image_3d(a, *out_image, w, h, d, pixels);
+    return upload_rgba16f_image_3d(a, *out_image, w, h, d, pixels);
 }
 
 static int begin_one_shot_commands(app* a, VkCommandBuffer* out_cmd) {
@@ -6441,6 +6924,20 @@ static float value_noise3_cpu(sphere_cpu_v3 p) {
 static uint8_t sphere_style_u8(float v) {
     const float clamped = clampf(v, 0.0f, 1.0f);
     return (uint8_t)lroundf(clamped * 255.0f);
+}
+
+static void sphere_style_store_rgba16f(
+    uint16_t* out_rgba,
+    size_t idx,
+    float r,
+    float g,
+    float b,
+    float a
+) {
+    out_rgba[idx + 0u] = float_to_half_bits(clampf(r, 0.0f, 1.0f));
+    out_rgba[idx + 1u] = float_to_half_bits(clampf(g, 0.0f, 1.0f));
+    out_rgba[idx + 2u] = float_to_half_bits(clampf(b, 0.0f, 1.0f));
+    out_rgba[idx + 3u] = float_to_half_bits(clampf(a, 0.0f, 1.0f));
 }
 
 static void sphere_style_periodic_mode_accum(
@@ -6935,7 +7432,7 @@ static void sphere_style_bake_holo_mask(uint8_t* out_rgba) {
     }
 }
 
-static void sphere_style_bake_band_warp(uint8_t* out_rgba) {
+static void sphere_style_bake_band_warp(uint16_t* out_rgba) {
     for (uint32_t y = 0; y < SPHERE_STYLE_BAND_WARP_H; ++y) {
         for (uint32_t x = 0; x < SPHERE_STYLE_BAND_WARP_W; ++x) {
             const size_t idx = ((size_t)y * SPHERE_STYLE_BAND_WARP_W + (size_t)x) * 4u;
@@ -6958,15 +7455,19 @@ static void sphere_style_bake_band_warp(uint8_t* out_rgba) {
                 v * 12.0f + 4.2f
             ));
             const float wave = 0.5f + 0.5f * sinf(theta * 16.0f + v * 8.0f + n1 * 4.0f + n2 * 2.5f);
-            out_rgba[idx + 0u] = sphere_style_u8(wave);
-            out_rgba[idx + 1u] = sphere_style_u8(clampf(n0 * 0.44f + n2 * 0.56f, 0.0f, 1.0f));
-            out_rgba[idx + 2u] = sphere_style_u8(clampf(n0 * 0.26f + n1 * 0.34f + n2 * 0.40f, 0.0f, 1.0f));
-            out_rgba[idx + 3u] = 255u;
+            sphere_style_store_rgba16f(
+                out_rgba,
+                idx,
+                wave,
+                clampf(n0 * 0.44f + n2 * 0.56f, 0.0f, 1.0f),
+                clampf(n0 * 0.26f + n1 * 0.34f + n2 * 0.40f, 0.0f, 1.0f),
+                1.0f
+            );
         }
     }
 }
 
-static void sphere_style_bake_aurora_mask(uint8_t* out_rgba) {
+static void sphere_style_bake_aurora_mask(uint16_t* out_rgba) {
     for (uint32_t y = 0; y < SPHERE_STYLE_AURORA_MASK_H; ++y) {
         for (uint32_t x = 0; x < SPHERE_STYLE_AURORA_MASK_W; ++x) {
             const size_t idx = ((size_t)y * SPHERE_STYLE_AURORA_MASK_W + (size_t)x) * 4u;
@@ -6991,15 +7492,19 @@ static void sphere_style_bake_aurora_mask(uint8_t* out_rgba) {
             ));
             const float ribbons = 0.5f + 0.5f * sinf(theta * 12.0f + n0 * 7.0f + n2 * 3.2f + v * 14.0f);
             const float glow = clampf(curtain * (0.12f + 0.88f * ribbons) * (0.25f + 0.55f * n1 + 0.20f * n2), 0.0f, 1.0f);
-            out_rgba[idx + 0u] = sphere_style_u8(glow);
-            out_rgba[idx + 1u] = sphere_style_u8(ribbons);
-            out_rgba[idx + 2u] = sphere_style_u8(clampf(n0 * 0.54f + n2 * 0.46f, 0.0f, 1.0f));
-            out_rgba[idx + 3u] = 255u;
+            sphere_style_store_rgba16f(
+                out_rgba,
+                idx,
+                glow,
+                ribbons,
+                clampf(n0 * 0.54f + n2 * 0.46f, 0.0f, 1.0f),
+                1.0f
+            );
         }
     }
 }
 
-static void sphere_style_bake_storm_shape(uint8_t* out_rgba) {
+static void sphere_style_bake_storm_shape(uint16_t* out_rgba) {
     static const float centers[4][4] = {
         {0.18f, 0.26f, 0.16f, 0.10f},
         {0.44f, 0.68f, 0.22f, 0.14f},
@@ -7042,16 +7547,20 @@ static void sphere_style_bake_storm_shape(uint8_t* out_rgba) {
                 const float swirl = 0.5f + 0.5f * sinf(theta * 10.0f + v * 12.0f + n1 * 5.0f);
                 const float cells = 0.5f + 0.5f * sinf(theta * 14.0f + v * 18.0f + n2 * 6.0f);
                 const float storm = clampf(oval * (0.60f + 0.24f * swirl + 0.16f * cells) + n0 * 0.10f + n2 * 0.10f, 0.0f, 1.0f);
-                out_rgba[idx + 0u] = sphere_style_u8(storm);
-                out_rgba[idx + 1u] = sphere_style_u8(oval);
-                out_rgba[idx + 2u] = sphere_style_u8(clampf(swirl * 0.65f + cells * 0.35f, 0.0f, 1.0f));
-                out_rgba[idx + 3u] = 255u;
+                sphere_style_store_rgba16f(
+                    out_rgba,
+                    idx,
+                    storm,
+                    oval,
+                    clampf(swirl * 0.65f + cells * 0.35f, 0.0f, 1.0f),
+                    1.0f
+                );
             }
         }
     }
 }
 
-static void sphere_style_bake_curl_volume(uint8_t* out_rgba) {
+static void sphere_style_bake_curl_volume(uint16_t* out_rgba) {
     for (uint32_t z = 0; z < SPHERE_STYLE_CURL_VOLUME_SIZE; ++z) {
         for (uint32_t y = 0; y < SPHERE_STYLE_CURL_VOLUME_SIZE; ++y) {
             for (uint32_t x = 0; x < SPHERE_STYLE_CURL_VOLUME_SIZE; ++x) {
@@ -7102,10 +7611,14 @@ static void sphere_style_bake_curl_volume(uint8_t* out_rgba) {
                     0.0f,
                     1.0f
                 );
-                out_rgba[idx + 0u] = sphere_style_u8(curl.x * 0.5f + 0.5f);
-                out_rgba[idx + 1u] = sphere_style_u8(curl.y * 0.5f + 0.5f);
-                out_rgba[idx + 2u] = sphere_style_u8(curl.z * 0.5f + 0.5f);
-                out_rgba[idx + 3u] = sphere_style_u8(density);
+                sphere_style_store_rgba16f(
+                    out_rgba,
+                    idx,
+                    curl.x * 0.5f + 0.5f,
+                    curl.y * 0.5f + 0.5f,
+                    curl.z * 0.5f + 0.5f,
+                    density
+                );
             }
         }
     }
@@ -9749,10 +10262,11 @@ static int create_swapchain(app* a) {
 
     fprintf(
         stderr,
-        "swapchain format=%s colorSpace=%s offscreen=%s extent=%ux%u drawable=%dx%d currentExtent=%ux%u presentMode=%s images=%u\n",
+        "swapchain format=%s colorSpace=%s offscreen=%s presentEncode=%s extent=%ux%u drawable=%dx%d currentExtent=%ux%u presentMode=%s images=%u\n",
         vk_format_name(a->swapchain_format),
         vk_color_space_name(a->swapchain_color_space),
         vk_format_name(a->offscreen_color_format),
+        present_output_encode_name(a),
         extent.width,
         extent.height,
         drawable_w,
@@ -10446,10 +10960,10 @@ static int create_sphere_style_resources(app* a) {
     VkShaderModule ion_fs = VK_NULL_HANDLE;
     uint8_t* blue_noise = NULL;
     uint8_t* holo_mask = NULL;
-    uint8_t* band_warp = NULL;
-    uint8_t* aurora_mask = NULL;
-    uint8_t* storm_shape = NULL;
-    uint8_t* curl_volume = NULL;
+    uint16_t* band_warp = NULL;
+    uint16_t* aurora_mask = NULL;
+    uint16_t* storm_shape = NULL;
+    uint16_t* curl_volume = NULL;
     size_t blue_bytes;
     size_t holo_bytes;
     size_t band_bytes;
@@ -10500,17 +11014,17 @@ static int create_sphere_style_resources(app* a) {
 
     blue_bytes = (size_t)SPHERE_STYLE_BLUE_NOISE_TEX_SIZE * (size_t)SPHERE_STYLE_BLUE_NOISE_TEX_SIZE * 4u;
     holo_bytes = (size_t)SPHERE_STYLE_HOLO_MASK_TEX_SIZE * (size_t)SPHERE_STYLE_HOLO_MASK_TEX_SIZE * 4u;
-    band_bytes = (size_t)SPHERE_STYLE_BAND_WARP_W * (size_t)SPHERE_STYLE_BAND_WARP_H * 4u;
-    aurora_bytes = (size_t)SPHERE_STYLE_AURORA_MASK_W * (size_t)SPHERE_STYLE_AURORA_MASK_H * 4u;
-    storm_bytes = (size_t)SPHERE_STYLE_STORM_SHAPE_W * (size_t)SPHERE_STYLE_STORM_SHAPE_H * 4u;
+    band_bytes = (size_t)SPHERE_STYLE_BAND_WARP_W * (size_t)SPHERE_STYLE_BAND_WARP_H * 4u * sizeof(uint16_t);
+    aurora_bytes = (size_t)SPHERE_STYLE_AURORA_MASK_W * (size_t)SPHERE_STYLE_AURORA_MASK_H * 4u * sizeof(uint16_t);
+    storm_bytes = (size_t)SPHERE_STYLE_STORM_SHAPE_W * (size_t)SPHERE_STYLE_STORM_SHAPE_H * 4u * sizeof(uint16_t);
     curl_bytes = (size_t)SPHERE_STYLE_CURL_VOLUME_SIZE * (size_t)SPHERE_STYLE_CURL_VOLUME_SIZE *
-                 (size_t)SPHERE_STYLE_CURL_VOLUME_SIZE * 4u;
+                 (size_t)SPHERE_STYLE_CURL_VOLUME_SIZE * 4u * sizeof(uint16_t);
     blue_noise = (uint8_t*)malloc(blue_bytes);
     holo_mask = (uint8_t*)malloc(holo_bytes);
-    band_warp = (uint8_t*)malloc(band_bytes);
-    aurora_mask = (uint8_t*)malloc(aurora_bytes);
-    storm_shape = (uint8_t*)malloc(storm_bytes);
-    curl_volume = (uint8_t*)malloc(curl_bytes);
+    band_warp = (uint16_t*)malloc(band_bytes);
+    aurora_mask = (uint16_t*)malloc(aurora_bytes);
+    storm_shape = (uint16_t*)malloc(storm_bytes);
+    curl_volume = (uint16_t*)malloc(curl_bytes);
     if (!blue_noise || !holo_mask || !band_warp || !aurora_mask || !storm_shape || !curl_volume) {
         fprintf(stderr, "sphere style: failed to allocate prebake textures\n");
         free(blue_noise);
@@ -10527,7 +11041,7 @@ static int create_sphere_style_resources(app* a) {
     sphere_style_bake_aurora_mask(aurora_mask);
     sphere_style_bake_storm_shape(storm_shape);
     sphere_style_bake_curl_volume(curl_volume);
-    if (!create_sampled_rgba8_texture_2d(
+    if (!create_sampled_rgba8_data_texture_2d(
             a,
             SPHERE_STYLE_BLUE_NOISE_TEX_SIZE,
             SPHERE_STYLE_BLUE_NOISE_TEX_SIZE,
@@ -10535,7 +11049,7 @@ static int create_sphere_style_resources(app* a) {
             &a->sphere_style_blue_noise_image,
             &a->sphere_style_blue_noise_memory,
             &a->sphere_style_blue_noise_view) ||
-        !create_sampled_rgba8_texture_2d(
+        !create_sampled_rgba8_data_texture_2d(
             a,
             SPHERE_STYLE_HOLO_MASK_TEX_SIZE,
             SPHERE_STYLE_HOLO_MASK_TEX_SIZE,
@@ -10543,7 +11057,7 @@ static int create_sphere_style_resources(app* a) {
             &a->sphere_style_holo_mask_image,
             &a->sphere_style_holo_mask_memory,
             &a->sphere_style_holo_mask_view) ||
-        !create_sampled_rgba8_texture_2d(
+        !create_sampled_rgba16f_data_texture_2d(
             a,
             SPHERE_STYLE_BAND_WARP_W,
             SPHERE_STYLE_BAND_WARP_H,
@@ -10551,7 +11065,7 @@ static int create_sphere_style_resources(app* a) {
             &a->sphere_style_band_warp_image,
             &a->sphere_style_band_warp_memory,
             &a->sphere_style_band_warp_view) ||
-        !create_sampled_rgba8_texture_2d(
+        !create_sampled_rgba16f_data_texture_2d(
             a,
             SPHERE_STYLE_AURORA_MASK_W,
             SPHERE_STYLE_AURORA_MASK_H,
@@ -10559,7 +11073,7 @@ static int create_sphere_style_resources(app* a) {
             &a->sphere_style_aurora_mask_image,
             &a->sphere_style_aurora_mask_memory,
             &a->sphere_style_aurora_mask_view) ||
-        !create_sampled_rgba8_texture_2d(
+        !create_sampled_rgba16f_data_texture_2d(
             a,
             SPHERE_STYLE_STORM_SHAPE_W,
             SPHERE_STYLE_STORM_SHAPE_H,
@@ -10567,7 +11081,7 @@ static int create_sphere_style_resources(app* a) {
             &a->sphere_style_storm_shape_image,
             &a->sphere_style_storm_shape_memory,
             &a->sphere_style_storm_shape_view) ||
-        !create_sampled_rgba8_texture_3d(
+        !create_sampled_rgba16f_data_texture_3d(
             a,
             SPHERE_STYLE_CURL_VOLUME_SIZE,
             SPHERE_STYLE_CURL_VOLUME_SIZE,
@@ -12054,7 +12568,12 @@ static int create_underwater_resources(app* a) {
         memcpy(stg_map, ntex_data, (size_t)ntex_bytes);
         vkUnmapMemory(a->device, stg_mem);
         free(ntex_data);
-        if (!create_image_2d(a, ntex_sz, ntex_sz, VK_FORMAT_R8G8B8A8_UNORM,
+        const VkFormat noise_format = sampled_rgba8_data_format();
+        if (!validate_sampled_texture_format(a, noise_format, VK_IMAGE_TYPE_2D, "Underwater noise texture")) {
+            vkDestroyBuffer(a->device, stg, NULL); vkFreeMemory(a->device, stg_mem, NULL);
+            return 0;
+        }
+        if (!create_image_2d(a, ntex_sz, ntex_sz, noise_format,
                 VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                 VK_SAMPLE_COUNT_1_BIT,
                 &a->underwater_noise_image, &a->underwater_noise_memory, &a->underwater_noise_view)) {
@@ -12888,11 +13407,17 @@ static int create_industry_resources(app* a) {
     memcpy(mapped, a->industry_rgba8, (size_t)image_bytes);
     vkUnmapMemory(a->device, staging_mem);
 
+    const VkFormat texture_format = sampled_rgba8_data_format();
+    if (!validate_sampled_texture_format(a, texture_format, VK_IMAGE_TYPE_2D, "Industry texture")) {
+        vkDestroyBuffer(a->device, staging, NULL);
+        vkFreeMemory(a->device, staging_mem, NULL);
+        return 0;
+    }
     if (!create_image_2d(
             a,
             a->industry_w,
             a->industry_h,
-            VK_FORMAT_R8G8B8A8_UNORM,
+            texture_format,
             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
             VK_SAMPLE_COUNT_1_BIT,
             &a->industry_image,
@@ -13192,11 +13717,17 @@ static int create_structure_tile_resources(app* a) {
     }
     vkUnmapMemory(a->device, staging_mem);
 
+    const VkFormat texture_format = sampled_rgba8_data_format();
+    if (!validate_sampled_texture_format(a, texture_format, VK_IMAGE_TYPE_2D, "Structure tile texture")) {
+        vkDestroyBuffer(a->device, staging, NULL);
+        vkFreeMemory(a->device, staging_mem, NULL);
+        return 0;
+    }
     if (!create_image_2d(
             a,
             a->structure_tiles_w,
             a->structure_tiles_h,
-            VK_FORMAT_R8G8B8A8_UNORM,
+            texture_format,
             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
             VK_SAMPLE_COUNT_1_BIT,
             &a->structure_tile_image,

@@ -88,17 +88,12 @@ void main() {
     vec3 aurora_col = mix(pc.color0.rgb, pc.color2.rgb, 0.04 + 0.04 * aurora_tex.b);
 
     float fresnel = pow(clamp(1.0 - max(view_n.z, 0.0), 0.0, 1.0), mix(3.3, 2.5, layer_t));
-    float dither = texture(
-        u_blue_noise,
-        fract(base_uv * vec2(19.0, 9.0) + vec2(pc.tune0.w * 0.41, pc.tune0.y * 0.23))
-    ).r;
-
     float bright_storm = storm * (0.24 + 0.76 * storm_tex.b);
     vec3 rgb = pc.color0.rgb * rim_core * (0.09 + 0.03 * pc.tune1.w);
     rgb += aurora_col * aurora * (0.10 + 0.06 * layer_t);
     rgb += pc.color0.rgb * fresnel * 0.02 * pc.tune1.w;
     rgb += mix(pc.color1.rgb, pc.color0.rgb, 0.26) * bright_storm * 0.02;
-    rgb *= pc.p0.w * mix(0.99, 1.01, dither) * (0.94 + 0.06 * band_tex.b);
+    rgb *= pc.p0.w * (0.94 + 0.06 * band_tex.b);
 
     float alpha = layer_alpha * front * (0.014 * rim_core * pc.tune1.w + 0.006 * aurora + 0.004 * bright_storm);
     alpha = clamp(alpha, 0.0, 1.0);
