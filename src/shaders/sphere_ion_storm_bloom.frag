@@ -1,6 +1,5 @@
 #version 450
 
-layout(set = 0, binding = 0) uniform sampler2D u_blue_noise;
 layout(set = 0, binding = 2) uniform sampler2D u_band_warp;
 layout(set = 0, binding = 3) uniform sampler2D u_aurora_mask;
 layout(set = 0, binding = 4) uniform sampler2D u_storm_shape;

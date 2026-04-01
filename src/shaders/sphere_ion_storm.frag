@@ -1,6 +1,5 @@
 #version 450
 
-layout(set = 0, binding = 0) uniform sampler2D u_blue_noise;
 layout(set = 0, binding = 2) uniform sampler2D u_band_warp;
 layout(set = 0, binding = 3) uniform sampler2D u_aurora_mask;
 layout(set = 0, binding = 4) uniform sampler2D u_storm_shape;
@@ -64,37 +63,6 @@ void sample_band_profile(float lat, vec3 control, out float band_mix, out float 
     }
     band_mix = clamp(tone_sum / max(weight_sum, 0.001), 0.0, 1.0);
     boundary = clamp(edge * (0.74 + 0.26 * control.g), 0.0, 1.0);
-}
-
-float junction_vortex_field(float lon, float lat, vec3 flow, float time_s) {
-    const int k_count = 10;
-    const vec4 cells[k_count] = vec4[k_count](
-        vec4(0.08, -0.64, 0.10, 0.07),
-        vec4(0.20, -0.31, 0.12, 0.08),
-        vec4(0.34, -0.02, 0.14, 0.09),
-        vec4(0.48,  0.26, 0.11, 0.08),
-        vec4(0.64,  0.56, 0.13, 0.08),
-        vec4(0.76, -0.60, 0.10, 0.07),
-        vec4(0.88, -0.28, 0.11, 0.07),
-        vec4(0.96,  0.04, 0.12, 0.09),
-        vec4(0.58, -0.04, 0.10, 0.07),
-        vec4(0.42,  0.58, 0.11, 0.08)
-    );
-    float accum = 0.0;
-    for (int i = 0; i < k_count; ++i) {
-        vec4 c = cells[i];
-        float cx = fract(c.x + time_s * (0.00014 + 0.00004 * float(i)) + flow.x * 0.005);
-        float dx = lon_wrap_dist(lon, cx);
-        float dy = lat - c.y - flow.y * 0.006;
-        float ex = dx / max(c.z, 0.001);
-        float ey = dy / max(c.w, 0.001);
-        float r = sqrt(ex * ex + ey * ey);
-        float ang = atan(dy / max(c.w, 0.001), dx / max(c.z, 0.001));
-        float oval = exp(-r * r * 2.6);
-        float swirl = 0.5 + 0.5 * cos(ang * 2.8 - r * 5.0 + time_s * (0.05 + 0.01 * float(i)) + flow.z * 4.0);
-        accum = max(accum, oval * (0.42 + 0.58 * swirl));
-    }
-    return accum;
 }
 
 float storm_field(float lon, float lat, vec3 tex_mod, float time_s) {
@@ -220,18 +188,6 @@ void main() {
     float boundary;
     sample_band_profile(lat + (control_band.r - 0.5) * 0.040, control_band, band_mix, boundary);
 
-    vec2 band_hi_uv = vec2(
-        fract(lon * 2.8 + curl_hi.x * 0.020 * boundary + pc.p0.z * 0.0008),
-        clamp(base_uv.y * 1.8 + curl_hi.y * 0.016 * boundary, 0.0, 1.0)
-    );
-    band_hi_uv.x = mix(u_anchor, band_hi_uv.x, pole_safe);
-    vec3 band_hi = texture(
-        u_band_warp,
-        band_hi_uv
-    ).rgb;
-    float detail_mask = boundary * azimuth_t *
-        junction_vortex_field(lon, lat, vec3(curl_mid.x, curl_hi.y, band_hi.b), pc.p0.z) *
-        (0.38 + 0.62 * band_hi.g);
     float shear = 0.5 + 0.5 * sin(
         (lon + advect_mid.x * 0.5) * 6.28318530718 * 1.8 +
         lat * 6.28318530718 * 0.9 +
@@ -258,11 +214,8 @@ void main() {
         mix(pc.color0.rgb, pc.color2.rgb, 0.26),
         0.50 + 0.08 * control_band.g + 0.08 * tone_wave
     );
-    vec3 bright_band = mix(pc.color0.rgb, pc.color2.rgb, 0.56);
     vec3 base = mix(deep_band, pale_band, band_mix);
     base = mix(base, mid_band, boundary * 0.18);
-    base = mix(base, bright_band, detail_mask * 0.16);
-    base += bright_band * detail_mask * 0.12;
 
     vec2 storm_uv = vec2(
         fract(lon * 1.4 + curl_mid.x * 0.018 * azimuth_t + pc.p0.z * 0.0004 + pc.tune0.w * 0.04),
@@ -316,7 +269,6 @@ void main() {
     float body_weight = mix(1.0, 0.05, atmo_shell);
     float haze_weight = mix(1.0, 1.65, atmo_shell);
     vec3 rgb = base * (pc.p0.w * (0.98 + (density - 0.5) * 0.10)) * body_weight;
-    rgb += base * detail_mask * 0.12 * body_shell;
     rgb += aurora_col * aurora * 0.10 * body_weight;
     rgb += pc.color0.rgb * fresnel * 0.010 * pc.tune1.w * body_weight;
     rgb += mix(pc.color0.rgb, pc.color2.rgb, 0.10) * rim * 0.0018 * pc.tune1.w * body_weight;
@@ -325,7 +277,7 @@ void main() {
     rgb += haze_col * atmo_rim * (0.42 + 0.28 * pc.tune1.w) * haze_weight;
 
     float alpha = layer_alpha * front *
-        (body_shell * (0.34 + 0.08 * boundary + 0.10 * detail_mask + 0.08 * storm + 0.03 * aurora + 0.008 * fresnel * pc.tune1.w) +
+        (body_shell * (0.34 + 0.08 * boundary + 0.08 * storm + 0.03 * aurora + 0.008 * fresnel * pc.tune1.w) +
          haze_weight * (0.12 * atmo_veil + 0.09 * atmo_band + 0.20 * atmo_rim * pc.tune1.w));
     alpha *= 0.92 + 0.08 * density;
     alpha = clamp(alpha, 0.0, 1.0);
