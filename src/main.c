@@ -551,6 +551,7 @@ typedef struct app {
     VkColorSpaceKHR swapchain_color_space;
     VkFormat offscreen_color_format;
     VkExtent2D swapchain_extent;
+    VkExtent2D scene_extent;
     uint32_t swapchain_image_count;
     VkImage swapchain_images[APP_MAX_SWAPCHAIN_IMAGES];
     VkImageView swapchain_image_views[APP_MAX_SWAPCHAIN_IMAGES];
@@ -2265,6 +2266,11 @@ static int planetarium_quelled_count(const app* a) {
 static void map_mouse_to_scene_coords(const app* a, int mouse_x, int mouse_y, float* out_x, float* out_y);
 static float drawable_scale_y(const app* a);
 static int recreate_render_runtime(app* a);
+static VkExtent2D app_compute_scene_extent(VkExtent2D swapchain_extent);
+static VkRect2D app_compute_scene_display_rect(VkExtent2D swapchain_extent, VkExtent2D scene_extent);
+static VkExtent2D app_scene_extent(const app* a);
+static VkRect2D app_scene_display_rect(const app* a);
+static int mouse_in_scene_rect(const app* a, int mouse_x, int mouse_y);
 
 static float norm_range(float v, float lo, float hi) {
     if (hi <= lo) {
@@ -2280,9 +2286,78 @@ static float norm_range(float v, float lo, float hi) {
     return t;
 }
 
+static VkExtent2D app_compute_scene_extent(VkExtent2D swapchain_extent) {
+    VkExtent2D extent = swapchain_extent;
+    if (extent.width == 0u) {
+        extent.width = 1u;
+    }
+    if (extent.height == 0u) {
+        extent.height = 1u;
+    }
+    if ((uint64_t)extent.width * 9u < (uint64_t)extent.height * 16u) {
+        const uint32_t active_h = (uint32_t)(((uint64_t)extent.width * 9u) / 16u);
+        extent.height = active_h > 0u ? active_h : 1u;
+    }
+    return extent;
+}
+
+static VkRect2D app_compute_scene_display_rect(VkExtent2D swapchain_extent, VkExtent2D scene_extent) {
+    VkRect2D rect = {
+        .offset = {0, 0},
+        .extent = scene_extent
+    };
+    if (swapchain_extent.width > scene_extent.width) {
+        rect.offset.x = (int32_t)((swapchain_extent.width - scene_extent.width) / 2u);
+    }
+    if (swapchain_extent.height > scene_extent.height) {
+        rect.offset.y = (int32_t)((swapchain_extent.height - scene_extent.height) / 2u);
+    }
+    return rect;
+}
+
+static VkExtent2D app_scene_extent(const app* a) {
+    if (!a) {
+        return (VkExtent2D){1u, 1u};
+    }
+    if (a->scene_extent.width == 0u || a->scene_extent.height == 0u) {
+        return app_compute_scene_extent(a->swapchain_extent);
+    }
+    return a->scene_extent;
+}
+
+static VkRect2D app_scene_display_rect(const app* a) {
+    if (!a) {
+        return (VkRect2D){.offset = {0, 0}, .extent = {1u, 1u}};
+    }
+    return app_compute_scene_display_rect(a->swapchain_extent, app_scene_extent(a));
+}
+
+static int mouse_in_scene_rect(const app* a, int mouse_x, int mouse_y) {
+    if (!a || !a->window) {
+        return 0;
+    }
+    int win_w = 0;
+    int win_h = 0;
+    SDL_GetWindowSize(a->window, &win_w, &win_h);
+    if (win_w <= 0 || win_h <= 0) {
+        return 0;
+    }
+    const VkRect2D scene_rect = app_scene_display_rect(a);
+    const float sx = (float)a->swapchain_extent.width / (float)win_w;
+    const float sy = (float)a->swapchain_extent.height / (float)win_h;
+    const float px = (float)mouse_x * sx;
+    const float py = (float)mouse_y * sy;
+    const float x0 = (float)scene_rect.offset.x;
+    const float y0 = (float)scene_rect.offset.y;
+    const float x1 = x0 + (float)scene_rect.extent.width;
+    const float y1 = y0 + (float)scene_rect.extent.height;
+    return px >= x0 && px <= x1 && py >= y0 && py <= y1;
+}
+
 static void video_menu_dial_geometry(const app* a, vg_vec2 centers[VIDEO_MENU_DIAL_COUNT], float* radius_px) {
-    const float w = (float)a->swapchain_extent.width;
-    const float h = (float)a->swapchain_extent.height;
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    const float w = (float)scene_extent.width;
+    const float h = (float)scene_extent.height;
     const vg_rect panel = make_ui_safe_frame(w, h);
     const vg_rect lab = {panel.x + panel.w * 0.42f, panel.y + panel.h * 0.07f, panel.w * 0.54f, panel.h * 0.86f};
     *radius_px = lab.w * 0.058f;
@@ -2357,7 +2432,7 @@ static int update_video_menu_dial_drag(app* a, int mouse_x, int mouse_y) {
     float mx = 0.0f;
     float my = 0.0f;
     map_mouse_to_scene_coords(a, mouse_x, mouse_y, &mx, &my);
-    const float h = fmaxf((float)a->swapchain_extent.height, 1.0f);
+    const float h = fmaxf((float)app_scene_extent(a).height, 1.0f);
     const float dy = my - a->video_menu_dial_drag_start_y;
     const float t = a->video_menu_dial_drag_start_value + (dy / h) * 1.8f;
     a->video_dial_01[a->video_menu_dial_drag] = clampf(t, 0.0f, 1.0f);
@@ -2628,8 +2703,10 @@ static void map_mouse_to_scene_coords(const app* a, int mouse_x, int mouse_y, fl
     if (!a || !out_x || !out_y) {
         return;
     }
-    const float w = (float)a->swapchain_extent.width;
-    const float h = (float)a->swapchain_extent.height;
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    const VkRect2D scene_rect = app_scene_display_rect(a);
+    const float w = (float)scene_extent.width;
+    const float h = (float)scene_extent.height;
     if (w <= 1.0f || h <= 1.0f) {
         *out_x = (float)mouse_x;
         *out_y = 0.0f;
@@ -2640,12 +2717,18 @@ static void map_mouse_to_scene_coords(const app* a, int mouse_x, int mouse_y, fl
     int win_h = 0;
     SDL_GetWindowSize(a->window, &win_w, &win_h);
     if (win_w <= 0) win_w = (int)w;
-    if (win_h <= 0) win_h = (int)h;
+    if (win_h <= 0) win_h = (int)a->swapchain_extent.height;
 
-    const float sx = w / (float)win_w;
-    const float sy = h / (float)win_h;
-    float x = clampf((float)mouse_x * sx, 0.0f, w);
-    float y = clampf(((float)win_h - (float)mouse_y) * sy, 0.0f, h);
+    const float sx = (float)a->swapchain_extent.width / (float)win_w;
+    const float sy = (float)a->swapchain_extent.height / (float)win_h;
+    const float px = (float)mouse_x * sx;
+    const float py = (float)mouse_y * sy;
+    float x = clampf(px - (float)scene_rect.offset.x, 0.0f, w);
+    float y = clampf(
+        ((float)scene_rect.offset.y + (float)scene_rect.extent.height) - py,
+        0.0f,
+        h
+    );
     if (!menu_is_gameplay(&a->menu) || a->show_crt_ui) {
         vg_crt_profile crt;
         vg_get_crt_profile(a->vg, &crt);
@@ -3679,8 +3762,9 @@ static vg_ui_slider_panel_metrics make_scaled_slider_metrics(float ui, float val
 }
 
 static int handle_acoustics_ui_mouse(app* a, int mouse_x, int mouse_y, int set_value) {
-    const float w = (float)a->swapchain_extent.width;
-    const float h = (float)a->swapchain_extent.height;
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    const float w = (float)scene_extent.width;
+    const float h = (float)scene_extent.height;
     const float ui = ui_reference_scale(w, h);
     float display_values[ACOUST_EQUIP_SLIDER_COUNT];
     int display_count = ACOUSTICS_SLIDER_COUNT;
@@ -3978,8 +4062,9 @@ static int mixtape_hit_test(app* a, int mouse_x, int mouse_y, int* out_zone, int
     if (!a || a->acoustics_page != ACOUSTICS_PAGE_MIXTAPE) {
         return 0;
     }
-    const float w = (float)a->swapchain_extent.width;
-    const float h = (float)a->swapchain_extent.height;
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    const float w = (float)scene_extent.width;
+    const float h = (float)scene_extent.height;
     const float ui = ui_reference_scale(w, h);
     const float values[1] = {a->mod_music_volume_01};
     const float value_col_width_px = acoustics_compute_value_col_width(ui, 11.5f * ui, values, 1);
@@ -4727,8 +4812,9 @@ static void set_crt_profile_value01(app* a, int selected, float value_01) {
 }
 
 static int handle_crt_ui_mouse(app* a, int mouse_x, int mouse_y, int set_value) {
-    const float w = (float)a->swapchain_extent.width;
-    const float h = (float)a->swapchain_extent.height;
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    const float w = (float)scene_extent.width;
+    const float h = (float)scene_extent.height;
     const float ui = ui_reference_scale(w, h);
     const vg_rect safe = make_ui_safe_frame(w, h);
     const float px = safe.x + safe.w * 0.00f;
@@ -4785,8 +4871,9 @@ static int handle_video_menu_mouse(app* a, int mouse_x, int mouse_y, int set_val
     if (!a) {
         return 0;
     }
-    const float w = (float)a->swapchain_extent.width;
-    const float h = (float)a->swapchain_extent.height;
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    const float w = (float)scene_extent.width;
+    const float h = (float)scene_extent.height;
     float mx = 0.0f;
     float my = 0.0f;
     map_mouse_to_scene_coords(a, mouse_x, mouse_y, &mx, &my);
@@ -4902,8 +4989,9 @@ static int handle_video_menu_mouse(app* a, int mouse_x, int mouse_y, int set_val
 
 static void planetarium_node_center(const app* a, int idx, float* out_x, float* out_y) {
     static const int k_primes[PLANETARIUM_MAX_SYSTEMS] = {2, 3, 5, 7, 11, 13, 17, 19};
-    const float w = (float)a->swapchain_extent.width;
-    const float h = (float)a->swapchain_extent.height;
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    const float w = (float)scene_extent.width;
+    const float h = (float)scene_extent.height;
     const vg_rect panel = make_ui_safe_frame(w, h);
     const vg_rect map = {panel.x + panel.w * 0.03f, panel.y + panel.h * 0.08f, panel.w * 0.56f, panel.h * 0.85f};
     const float cx = map.x + map.w * 0.50f;
@@ -4938,8 +5026,9 @@ static int handle_controls_menu_mouse(app* a, int mouse_x, int mouse_y, int set_
     float mx = 0.0f;
     float my = 0.0f;
     map_mouse_to_scene_coords(a, mouse_x, mouse_y, &mx, &my);
-    const float w = (float)a->swapchain_extent.width;
-    const float h = (float)a->swapchain_extent.height;
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    const float w = (float)scene_extent.width;
+    const float h = (float)scene_extent.height;
     const vg_rect panel = make_ui_safe_frame(w, h);
     const float table_x = panel.x + panel.w * 0.04f;
     const float table_y0 = panel.y + panel.h * 0.74f;
@@ -5199,8 +5288,9 @@ static int handle_shipyard_mouse(app* a, int mouse_x, int mouse_y, int set_value
     float mx = 0.0f;
     float my = 0.0f;
     map_mouse_to_scene_coords(a, mouse_x, mouse_y, &mx, &my);
-    const float w = (float)a->swapchain_extent.width;
-    const float h = (float)a->swapchain_extent.height;
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    const float w = (float)scene_extent.width;
+    const float h = (float)scene_extent.height;
     const vg_rect panel = make_ui_safe_frame(w, h);
     const vg_rect links_box = {panel.x + panel.w * 0.005f, panel.y + panel.h * 0.17f, panel.w * 0.19f, panel.h * 0.66f};
     const vg_rect weap_box = {panel.x + panel.w * 0.855f, panel.y + panel.h * 0.18f, panel.w * 0.13f, panel.h * 0.64f};
@@ -5249,8 +5339,9 @@ static int handle_opening_mouse(app* a, int mouse_x, int mouse_y, int set_value)
     float mx = 0.0f;
     float my = 0.0f;
     map_mouse_to_scene_coords(a, mouse_x, mouse_y, &mx, &my);
-    const float w = (float)a->swapchain_extent.width;
-    const float h = (float)a->swapchain_extent.height;
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    const float w = (float)scene_extent.width;
+    const float h = (float)scene_extent.height;
     const vg_rect panel = make_ui_safe_frame(w, h);
     const vg_rect links_box = {panel.x + panel.w * 0.005f, panel.y + panel.h * 0.17f, panel.w * 0.19f, panel.h * 0.66f};
     const float btn_h = links_box.h * 0.165f;
@@ -5275,8 +5366,9 @@ static int handle_planetarium_mouse(app* a, int mouse_x, int mouse_y, int set_va
     if (!a) {
         return 0;
     }
-    const float w = (float)a->swapchain_extent.width;
-    const float h = (float)a->swapchain_extent.height;
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    const float w = (float)scene_extent.width;
+    const float h = (float)scene_extent.height;
     float mx = 0.0f;
     float my = 0.0f;
     map_mouse_to_scene_coords(a, mouse_x, mouse_y, &mx, &my);
@@ -5337,8 +5429,8 @@ static int handle_level_editor_mouse(app* a, int mouse_x, int mouse_y, int mouse
         &a->level_editor,
         mx,
         my,
-        (float)a->swapchain_extent.width,
-        (float)a->swapchain_extent.height,
+        (float)app_scene_extent(a).width,
+        (float)app_scene_extent(a).height,
         mouse_down,
         mouse_pressed
     );
@@ -8730,11 +8822,23 @@ static VkImageAspectFlags image_aspect_mask_for_format(VkFormat fmt) {
     return VK_IMAGE_ASPECT_COLOR_BIT;
 }
 
-static void set_viewport_scissor(VkCommandBuffer cmd, uint32_t w, uint32_t h) {
-    VkViewport vp = {.x = 0.0f, .y = 0.0f, .width = (float)w, .height = (float)h, .minDepth = 0.0f, .maxDepth = 1.0f};
-    VkRect2D sc = {.offset = {0, 0}, .extent = {w, h}};
+static void set_viewport_scissor_rect(VkCommandBuffer cmd, VkRect2D rect) {
+    VkViewport vp = {
+        .x = (float)rect.offset.x,
+        .y = (float)rect.offset.y,
+        .width = (float)rect.extent.width,
+        .height = (float)rect.extent.height,
+        .minDepth = 0.0f,
+        .maxDepth = 1.0f
+    };
+    VkRect2D sc = rect;
     vkCmdSetViewport(cmd, 0, 1, &vp);
     vkCmdSetScissor(cmd, 0, 1, &sc);
+}
+
+static void set_viewport_scissor(VkCommandBuffer cmd, uint32_t w, uint32_t h) {
+    VkRect2D rect = {.offset = {0, 0}, .extent = {w, h}};
+    set_viewport_scissor_rect(cmd, rect);
 }
 
 static void clear_scene_depth(VkCommandBuffer cmd, VkExtent2D extent) {
@@ -9832,7 +9936,7 @@ static int recreate_render_runtime(app* a) {
     if (have_crt) {
         vg_set_crt_profile(a->vg, &saved_crt);
     }
-    game_set_world_size(&a->game, (float)a->swapchain_extent.width, (float)a->swapchain_extent.height);
+    game_set_world_size(&a->game, (float)a->scene_extent.width, (float)a->scene_extent.height);
     reset_grid_sim_state(a);
     a->force_clear_frames = 2;
     return sync_structure_tile_resources_for_current_state(a);
@@ -10255,6 +10359,7 @@ static int create_swapchain(app* a) {
     a->swapchain_color_space = fmt.colorSpace;
     a->offscreen_color_format = choose_offscreen_color_format(a);
     a->swapchain_extent = extent;
+    a->scene_extent = app_compute_scene_extent(extent);
     if (a->offscreen_color_format == VK_FORMAT_UNDEFINED) {
         fprintf(stderr, "No supported linear offscreen color format found\n");
         return 0;
@@ -10262,13 +10367,15 @@ static int create_swapchain(app* a) {
 
     fprintf(
         stderr,
-        "swapchain format=%s colorSpace=%s offscreen=%s presentEncode=%s extent=%ux%u drawable=%dx%d currentExtent=%ux%u presentMode=%s images=%u\n",
+        "swapchain format=%s colorSpace=%s offscreen=%s presentEncode=%s extent=%ux%u scene=%ux%u drawable=%dx%d currentExtent=%ux%u presentMode=%s images=%u\n",
         vk_format_name(a->swapchain_format),
         vk_color_space_name(a->swapchain_color_space),
         vk_format_name(a->offscreen_color_format),
         present_output_encode_name(a),
         extent.width,
         extent.height,
+        a->scene_extent.width,
+        a->scene_extent.height,
         drawable_w,
         drawable_h,
         caps.currentExtent.width,
@@ -10449,8 +10556,9 @@ static int create_render_passes(app* a) {
 }
 
 static int create_offscreen_targets(app* a) {
-    uint32_t w = a->swapchain_extent.width;
-    uint32_t h = a->swapchain_extent.height;
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    uint32_t w = scene_extent.width;
+    uint32_t h = scene_extent.height;
     const VkFormat grid_state_format = VK_FORMAT_R16G16B16A16_SFLOAT;
     a->bloom_w = (w > 1u) ? (w / 2u) : 1u;
     a->bloom_h = (h > 1u) ? (h / 2u) : 1u;
@@ -14313,8 +14421,9 @@ static void update_gpu_high_plains_vertices(app* a) {
         return;
     }
     terrain_vertex* vtx = (terrain_vertex*)a->terrain_vertex_map;
-    const float w = (float)a->swapchain_extent.width;
-    const float h = (float)a->swapchain_extent.height;
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    const float w = (float)scene_extent.width;
+    const float h = (float)scene_extent.height;
     const float y_near = h * 0.04f;
     const float y_far = h * 0.34f;
     const float cam = a->game.camera_x * 1.75f;
@@ -15411,14 +15520,15 @@ static void record_gpu_particles(
     if (a->particle_instance_count == 0) {
         return;
     }
-    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    set_viewport_scissor(cmd, scene_extent.width, scene_extent.height);
     if (opt_scissor) {
         vkCmdSetScissor(cmd, 0, 1, opt_scissor);
     }
     particle_pc pc;
     memset(&pc, 0, sizeof(pc));
-    pc.params[0] = (float)a->swapchain_extent.width;
-    pc.params[1] = (float)a->swapchain_extent.height;
+    pc.params[0] = (float)scene_extent.width;
+    pc.params[1] = (float)scene_extent.height;
     pc.params[2] = a->particle_core_gain;
     pc.params[3] = a->particle_trail_gain;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->particle_pipeline);
@@ -15443,10 +15553,11 @@ static void record_gpu_particles_bloom(app* a, VkCommandBuffer cmd, int emit_run
         return;
     }
     set_viewport_scissor(cmd, a->bloom_w, a->bloom_h);
+    const VkExtent2D scene_extent = app_scene_extent(a);
     particle_pc pc;
     memset(&pc, 0, sizeof(pc));
-    pc.params[0] = (float)a->swapchain_extent.width;
-    pc.params[1] = (float)a->swapchain_extent.height;
+    pc.params[0] = (float)scene_extent.width;
+    pc.params[1] = (float)scene_extent.height;
     pc.params[2] = a->particle_core_gain;
     pc.params[3] = a->particle_trail_gain;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->particle_bloom_pipeline);
@@ -15470,13 +15581,14 @@ static void record_gpu_sphere_particles(app* a, VkCommandBuffer cmd) {
         return;
     }
     update_gpu_sphere_particle_instances(a);
-    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    set_viewport_scissor(cmd, scene_extent.width, scene_extent.height);
     {
         sphere_particle_pc pc;
         VkDeviceSize off = 0;
         memset(&pc, 0, sizeof(pc));
-        pc.p0[0] = (float)a->swapchain_extent.width;
-        pc.p0[1] = (float)a->swapchain_extent.height;
+        pc.p0[0] = (float)scene_extent.width;
+        pc.p0[1] = (float)scene_extent.height;
         pc.p0[2] = a->game.t;
         pc.p0[3] = 1.03f;
         pc.p1[0] = 2.50f;
@@ -15519,12 +15631,13 @@ static void record_gpu_sphere_particles_bloom(app* a, VkCommandBuffer cmd) {
     }
     update_gpu_sphere_particle_instances(a);
     set_viewport_scissor(cmd, a->bloom_w, a->bloom_h);
+    const VkExtent2D scene_extent = app_scene_extent(a);
     {
         sphere_particle_pc pc;
         VkDeviceSize off = 0;
         memset(&pc, 0, sizeof(pc));
-        pc.p0[0] = (float)a->swapchain_extent.width;
-        pc.p0[1] = (float)a->swapchain_extent.height;
+        pc.p0[0] = (float)scene_extent.width;
+        pc.p0[1] = (float)scene_extent.height;
         pc.p0[2] = a->game.t;
         pc.p0[3] = 1.80f;
         pc.p1[0] = 1.65f;
@@ -15558,9 +15671,10 @@ static void sphere_style_fill_common_pc(const app* a, sphere_style_pc* pc, float
     if (!a || !pc) {
         return;
     }
+    const VkExtent2D scene_extent = app_scene_extent(a);
     memset(pc, 0, sizeof(*pc));
-    pc->p0[0] = (float)a->swapchain_extent.width;
-    pc->p0[1] = (float)a->swapchain_extent.height;
+    pc->p0[0] = (float)scene_extent.width;
+    pc->p0[1] = (float)scene_extent.height;
     pc->p0[2] = a->game.t;
     pc->p0[3] = style_gain;
     pc->p1[0] = a->game.world_w * 0.5f;
@@ -15643,7 +15757,8 @@ static void record_gpu_sphere_hologram(app* a, VkCommandBuffer cmd) {
     VkDeviceSize off = 0;
     sphere_style_pc pc;
     const float sweep_phase = fmodf(a->game.t * 0.036f, 1.0f);
-    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    set_viewport_scissor(cmd, scene_extent.width, scene_extent.height);
     begin_gpu_label(a, cmd, "sphere hologram", 0.28f, 0.86f, 1.00f);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->sphere_style_layout, 0, 1, &a->sphere_style_desc_set, 0, NULL);
 
@@ -15762,7 +15877,8 @@ static void record_gpu_sphere_ion_storm(app* a, VkCommandBuffer cmd) {
 
     VkDeviceSize off = 0;
     const uint32_t shell_count = (uint32_t)(sizeof(shell_offsets) / sizeof(shell_offsets[0]));
-    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    set_viewport_scissor(cmd, scene_extent.width, scene_extent.height);
     begin_gpu_label(a, cmd, "sphere ion storm", 0.44f, 0.86f, 0.96f);
     vkCmdBindVertexBuffers(cmd, 0, 1, &a->sphere_style_shell_vertex_buffer, &off);
     vkCmdBindIndexBuffer(cmd, a->sphere_style_shell_index_buffer, 0, VK_INDEX_TYPE_UINT16);
@@ -15820,13 +15936,14 @@ static void record_gpu_wormhole(app* a, VkCommandBuffer cmd) {
     if (a->wormhole_tri_vertex_count < 3u) {
         return;
     }
-    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    set_viewport_scissor(cmd, scene_extent.width, scene_extent.height);
     VkDeviceSize off = 0;
 
     wormhole_line_pc pc;
     memset(&pc, 0, sizeof(pc));
-    pc.params[0] = (float)a->swapchain_extent.width;
-    pc.params[1] = (float)a->swapchain_extent.height;
+    pc.params[0] = (float)scene_extent.width;
+    pc.params[1] = (float)scene_extent.height;
     const int palette_mode = gameplay_palette_mode(a);
     float primary[3];
     float primary_dim[3];
@@ -15910,7 +16027,8 @@ static void record_gpu_radar(app* a, VkCommandBuffer cmd) {
         return;
     }
 
-    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    set_viewport_scissor(cmd, scene_extent.width, scene_extent.height);
     vkCmdBindDescriptorSets(
         cmd,
         VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -15924,8 +16042,8 @@ static void record_gpu_radar(app* a, VkCommandBuffer cmd) {
 
     wormhole_line_pc pc;
     memset(&pc, 0, sizeof(pc));
-    pc.params[0] = (float)a->swapchain_extent.width;
-    pc.params[1] = (float)a->swapchain_extent.height;
+    pc.params[0] = (float)scene_extent.width;
+    pc.params[1] = (float)scene_extent.height;
     pc.params[3] = 0.55f; /* very flat z darkening: far-z stays close to foreground brightness */
     const float dpi_scale = drawable_scale_y(a);
     const float px = 0.55f * dpi_scale;
@@ -16014,10 +16132,11 @@ static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t) {
     const float world_h = a->game.world_h;
     const float cx = a->game.camera_x;
     const float cy = a->game.camera_y;
-    const float viewport_h = (float)a->swapchain_extent.height;
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    const float viewport_h = (float)scene_extent.height;
     const float to_shader_y = viewport_h; /* helper for top-left world -> shader frag space */
-    pc.p0[0] = (float)a->swapchain_extent.width;
-    pc.p0[1] = (float)a->swapchain_extent.height;
+    pc.p0[0] = (float)scene_extent.width;
+    pc.p0[1] = (float)scene_extent.height;
     pc.p0[2] = t;
     pc.p0[3] = a->fog_alpha_scale;
     const int palette_mode = gameplay_palette_mode(a);
@@ -16087,7 +16206,7 @@ static void record_gpu_fog(app* a, VkCommandBuffer cmd, float t) {
     }
     pc.p2[3] = (float)emit_n;
 
-    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    set_viewport_scissor(cmd, scene_extent.width, scene_extent.height);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->fog_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->fog_layout, 0, 1, &a->fog_desc_set, 0, NULL);
     vkCmdPushConstants(cmd, a->fog_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
@@ -16115,8 +16234,9 @@ static void record_gpu_underwater(app* a, VkCommandBuffer cmd, float t) {
     const float world_h = a->game.world_h;
     const float cx = a->game.camera_x;
     const float cy = a->game.camera_y;
-    pc.p0[0] = (float)a->swapchain_extent.width;
-    pc.p0[1] = (float)a->swapchain_extent.height;
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    pc.p0[0] = (float)scene_extent.width;
+    pc.p0[1] = (float)scene_extent.height;
     pc.p0[2] = t;
     pc.p0[3] = fmaxf(lvl->underwater_density, 0.0f);
     const int palette_mode = gameplay_palette_mode(a);
@@ -16146,15 +16266,15 @@ static void record_gpu_underwater(app* a, VkCommandBuffer cmd, float t) {
     pc.p5[2] = fmaxf(lvl->underwater_kelp_sway_speed, 0.0f);
     pc.p5[3] = fmaxf(lvl->underwater_kelp_height, 0.1f);
     pc.p6[0] = fmaxf(lvl->underwater_kelp_parallax_strength, 0.0f);
-    pc.p6[1] = (float)a->swapchain_extent.width;
-    pc.p6[2] = (float)a->swapchain_extent.height;
+    pc.p6[1] = (float)scene_extent.width;
+    pc.p6[2] = (float)scene_extent.height;
     pc.p6[3] = video_quality_uses_shader_high_quality(a->video_menu_quality) ? 1.0f : 0.0f;
     pc.p7[0] = lvl->underwater_kelp_tint_r;
     pc.p7[1] = lvl->underwater_kelp_tint_g;
     pc.p7[2] = lvl->underwater_kelp_tint_b;
     pc.p7[3] = lvl->underwater_kelp_tint_strength;
 
-    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    set_viewport_scissor(cmd, scene_extent.width, scene_extent.height);
     begin_gpu_label(a, cmd, "bg underwater", 0.15f, 0.55f, 0.70f);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_layout, 0, 1, &a->underwater_desc_set, 0, NULL);
@@ -16186,8 +16306,9 @@ static void record_gpu_fire(app* a, VkCommandBuffer cmd, float t) {
     const float cy = a->game.camera_y;
     const int palette_mode = gameplay_palette_mode(a);
 
-    pc.p0[0] = (float)a->swapchain_extent.width;
-    pc.p0[1] = (float)a->swapchain_extent.height;
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    pc.p0[0] = (float)scene_extent.width;
+    pc.p0[1] = (float)scene_extent.height;
     pc.p0[2] = t;
     pc.p0[3] = fmaxf(lvl->fire_magma_scale, 0.05f);
 
@@ -16231,7 +16352,7 @@ static void record_gpu_fire(app* a, VkCommandBuffer cmd, float t) {
         pc.p6[1] += 0.04f;
     }
 
-    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    set_viewport_scissor(cmd, scene_extent.width, scene_extent.height);
     begin_gpu_label(a, cmd, "bg fire", 0.78f, 0.30f, 0.12f);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->fire_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_layout, 0, 1, &a->underwater_desc_set, 0, NULL);
@@ -16264,8 +16385,9 @@ static void record_gpu_ice(app* a, VkCommandBuffer cmd, float t) {
     const int palette_mode = gameplay_palette_mode(a);
     const float snow_angle_rad = lvl->ice_snow_angle_deg * (3.14159265358979323846f / 180.0f);
 
-    pc.p0[0] = (float)a->swapchain_extent.width;
-    pc.p0[1] = (float)a->swapchain_extent.height;
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    pc.p0[0] = (float)scene_extent.width;
+    pc.p0[1] = (float)scene_extent.height;
     pc.p0[2] = t;
     pc.p0[3] = fmaxf(lvl->ice_voronoi_scale, 0.1f);
 
@@ -16295,7 +16417,7 @@ static void record_gpu_ice(app* a, VkCommandBuffer cmd, float t) {
     pc.p5[0] = snow_angle_rad;
     pc.p5[1] = fmaxf(lvl->ice_snow_speed, 0.0f);
 
-    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    set_viewport_scissor(cmd, scene_extent.width, scene_extent.height);
     begin_gpu_label(a, cmd, "bg ice", 0.45f, 0.70f, 0.90f);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->ice_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_layout, 0, 1, &a->underwater_desc_set, 0, NULL);
@@ -16454,8 +16576,9 @@ static void record_gpu_forest(app* a, VkCommandBuffer cmd, float t) {
     const float cy = a->game.camera_y;
     const int palette_mode = gameplay_palette_mode(a);
 
-    pc.p0[0] = (float)a->swapchain_extent.width;
-    pc.p0[1] = (float)a->swapchain_extent.height;
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    pc.p0[0] = (float)scene_extent.width;
+    pc.p0[1] = (float)scene_extent.height;
     pc.p0[2] = t;
     pc.p0[3] = clampf(lvl->forest_spore_density, 0.0f, 4.0f);
 
@@ -16508,7 +16631,7 @@ static void record_gpu_forest(app* a, VkCommandBuffer cmd, float t) {
         pc.p2[1] += 0.020f;
     }
 
-    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    set_viewport_scissor(cmd, scene_extent.width, scene_extent.height);
     begin_gpu_label(a, cmd, "bg forest main", 0.18f, 0.48f, 0.22f);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->forest_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->underwater_layout, 0, 1, &a->underwater_desc_set, 0, NULL);
@@ -16538,8 +16661,9 @@ static void record_gpu_underwater_kelp(app* a, VkCommandBuffer cmd, float t) {
     const float world_h = a->game.world_h;
     const float cx = a->game.camera_x;
     const float cy = a->game.camera_y;
-    pc.p0[0] = (float)a->swapchain_extent.width;
-    pc.p0[1] = (float)a->swapchain_extent.height;
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    pc.p0[0] = (float)scene_extent.width;
+    pc.p0[1] = (float)scene_extent.height;
     pc.p0[2] = t;
     pc.p0[3] = fmaxf(lvl->underwater_density, 0.0f);
     const int palette_mode = gameplay_palette_mode(a);
@@ -16609,7 +16733,8 @@ static int gather_grid_sim_sources(const app* a, float out_src[GRID_SIM_MAX_SOUR
     const float world_h = a->game.world_h;
     const float cx = a->game.camera_x;
     const float cy = a->game.camera_y;
-    const float viewport_h = (float)a->swapchain_extent.height;
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    const float viewport_h = (float)scene_extent.height;
 
     const float x_min = cx - world_w * 0.75f;
     const float x_max = cx + world_w * 0.75f;
@@ -16627,7 +16752,7 @@ static int gather_grid_sim_sources(const app* a, float out_src[GRID_SIM_MAX_SOUR
         const float sdy = a->game.sphere_scroll_dy;
         const float speed = sqrtf(sdx * sdx + sdy * sdy);
         if (speed > 0.15f) {
-            out_src[n][0] = (float)a->swapchain_extent.width * 0.5f - sdx * 2.2f;
+            out_src[n][0] = (float)scene_extent.width * 0.5f - sdx * 2.2f;
             out_src[n][1] = viewport_h * 0.5f + sdy * 2.2f;
             out_src[n][2] = clampf(110.0f + speed * 9.0f, 110.0f, 320.0f);
             out_src[n][3] = fmaxf(world_h * 0.22f, 120.0f);
@@ -16814,10 +16939,11 @@ static void record_gpu_grid_sim(app* a, VkCommandBuffer cmd, float dt) {
         pc.p2[1] = a->grid_sim_max_vel_px_s;
         pc.p2[2] = a->grid_sim_epsilon;
         pc.p2[3] = (float)src_n;
-        pc.p3[0] = (step == 0) ? (cam_dx * ((float)GRID_STATE_W / fmaxf((float)a->swapchain_extent.width, 1.0f))) : 0.0f;
-        pc.p3[1] = (step == 0) ? ((-cam_dy) * ((float)GRID_STATE_H / fmaxf((float)a->swapchain_extent.height, 1.0f))) : 0.0f;
-        pc.p3[2] = (float)a->swapchain_extent.width;
-        pc.p3[3] = (float)a->swapchain_extent.height;
+        const VkExtent2D scene_extent = app_scene_extent(a);
+        pc.p3[0] = (step == 0) ? (cam_dx * ((float)GRID_STATE_W / fmaxf((float)scene_extent.width, 1.0f))) : 0.0f;
+        pc.p3[1] = (step == 0) ? ((-cam_dy) * ((float)GRID_STATE_H / fmaxf((float)scene_extent.height, 1.0f))) : 0.0f;
+        pc.p3[2] = (float)scene_extent.width;
+        pc.p3[3] = (float)scene_extent.height;
         vkCmdPushConstants(cmd, a->grid_sim_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
         vkCmdDraw(cmd, 3, 1, 0, 0);
         vkCmdEndRenderPass(cmd);
@@ -16850,8 +16976,9 @@ static void record_gpu_grid(app* a, VkCommandBuffer cmd) {
     memset(&pc, 0, sizeof(pc));
     const float world_w = a->game.world_w;
     const float world_h = a->game.world_h;
-    pc.p0[0] = (float)a->swapchain_extent.width;
-    pc.p0[1] = (float)a->swapchain_extent.height;
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    pc.p0[0] = (float)scene_extent.width;
+    pc.p0[1] = (float)scene_extent.height;
     {
         const float base = fmaxf(fminf(world_w, world_h) / 24.0f, 24.0f);
         pc.p0[2] = base;
@@ -16905,7 +17032,7 @@ static void record_gpu_grid(app* a, VkCommandBuffer cmd) {
         pc.p7[3] = 2.10f;
     }
 
-    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    set_viewport_scissor(cmd, scene_extent.width, scene_extent.height);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->grid_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->grid_layout, 0, 1, &a->grid_state_desc_set[a->grid_state_curr], 0, NULL);
     vkCmdPushConstants(cmd, a->grid_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
@@ -16940,7 +17067,8 @@ static void record_gpu_arc_beam(app* a, VkCommandBuffer cmd, float t) {
     if (g->arc_node_count < 2 || g->render_style == LEVEL_RENDER_CYLINDER) {
         return;
     }
-    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    set_viewport_scissor(cmd, scene_extent.width, scene_extent.height);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->arc_beam_pipeline);
 
     const int palette_mode = gameplay_palette_mode(a);
@@ -16975,8 +17103,8 @@ static void record_gpu_arc_beam(app* a, VkCommandBuffer cmd, float t) {
         }
         arc_beam_pc pc;
         memset(&pc, 0, sizeof(pc));
-        pc.p0[0] = (float)a->swapchain_extent.width;
-        pc.p0[1] = (float)a->swapchain_extent.height;
+        pc.p0[0] = (float)scene_extent.width;
+        pc.p0[1] = (float)scene_extent.height;
         pc.p0[2] = gt;
         pc.p0[3] = 1.20f + 0.40f * pulse;
         pc.color_dim[0] = col_dim[0];
@@ -16986,9 +17114,9 @@ static void record_gpu_arc_beam(app* a, VkCommandBuffer cmd, float t) {
         pc.color_hot[1] = col_hot[1];
         pc.color_hot[2] = col_hot[2];
         pc.seg[0] = n0->x + g->world_w * 0.5f - g->camera_x;
-        pc.seg[1] = (float)a->swapchain_extent.height - (n0->y + g->world_h * 0.5f - g->camera_y);
+        pc.seg[1] = (float)scene_extent.height - (n0->y + g->world_h * 0.5f - g->camera_y);
         pc.seg[2] = n1->x + g->world_w * 0.5f - g->camera_x;
-        pc.seg[3] = (float)a->swapchain_extent.height - (n1->y + g->world_h * 0.5f - g->camera_y);
+        pc.seg[3] = (float)scene_extent.height - (n1->y + g->world_h * 0.5f - g->camera_y);
         pc.p1[0] = clampf(n0->radius * 0.16f, 4.0f, 22.0f);
         pc.p1[1] = clampf(n0->radius * 0.40f, 5.0f, 30.0f);
         pc.p1[2] = (float)i * 0.173f + 0.37f;
@@ -17010,11 +17138,12 @@ static void record_gpu_industry(app* a, VkCommandBuffer cmd, float t) {
     if (a->game.render_style != LEVEL_RENDER_DEFENDER) {
         return;
     }
-    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    set_viewport_scissor(cmd, scene_extent.width, scene_extent.height);
     industry_pc pc;
     memset(&pc, 0, sizeof(pc));
-    pc.p0[0] = (float)a->swapchain_extent.width;
-    pc.p0[1] = (float)a->swapchain_extent.height;
+    pc.p0[0] = (float)scene_extent.width;
+    pc.p0[1] = (float)scene_extent.height;
     pc.p0[2] = t;
     pc.p0[3] = 1.0f;
     const int palette_mode = gameplay_palette_mode(a);
@@ -17178,8 +17307,9 @@ static void structure_tile_emit(
             flip_x,
             flip_y
         );
-        pc.p0[0] = (float)a->swapchain_extent.width;
-        pc.p0[1] = (float)a->swapchain_extent.height;
+        const VkExtent2D scene_extent = app_scene_extent(a);
+        pc.p0[0] = (float)scene_extent.width;
+        pc.p0[1] = (float)scene_extent.height;
         pc.p0[2] = dst_x;
         pc.p0[3] = dst_y;
         pc.p1[0] = dst_w;
@@ -17208,7 +17338,8 @@ static void record_gpu_structure_tiles(app* a, VkCommandBuffer cmd, int pass) {
     if (!a || !cmd || !a->use_gpu_structure_tiles || !a->structure_tile_pipeline || !a->structure_tile_layout || !a->structure_tile_desc_set) {
         return;
     }
-    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    set_viewport_scissor(cmd, scene_extent.width, scene_extent.height);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->structure_tile_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->structure_tile_layout, 0, 1, &a->structure_tile_desc_set, 0, NULL);
 
@@ -17263,7 +17394,7 @@ static void record_gpu_structure_tiles(app* a, VkCommandBuffer cmd, int pass) {
             const int gy_steps = (((LEVELDEF_STRUCTURE_GRID_H - 1) / LEVELDEF_STRUCTURE_GRID_SCALE) < 1)
                 ? 1
                 : ((LEVELDEF_STRUCTURE_GRID_H - 1) / LEVELDEF_STRUCTURE_GRID_SCALE);
-            level_editor_compute_layout((float)a->swapchain_extent.width, (float)a->swapchain_extent.height, &layout);
+            level_editor_compute_layout((float)app_scene_extent(a).width, (float)app_scene_extent(a).height, &layout);
             if (a->level_editor.level_texture_atlas_id != a->current_structure_tile_atlas_id) {
                 return;
             }
@@ -17327,7 +17458,7 @@ static void record_gpu_structure_tiles(app* a, VkCommandBuffer cmd, int pass) {
             cols <= 0 || rows <= 0) {
             return;
         }
-        level_editor_compute_layout((float)a->swapchain_extent.width, (float)a->swapchain_extent.height, &layout);
+        level_editor_compute_layout((float)app_scene_extent(a).width, (float)app_scene_extent(a).height, &layout);
         picker = level_editor_tile_picker_rect(&layout);
         for (int gy = 0; gy < rows; ++gy) {
             for (int gx = 0; gx < cols; ++gx) {
@@ -17366,14 +17497,15 @@ static void record_gpu_revolver(app* a, VkCommandBuffer cmd, float t, int front_
     if (a->game.level_style != LEVEL_STYLE_REVOLVER) {
         return;
     }
-    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    set_viewport_scissor(cmd, scene_extent.width, scene_extent.height);
     if (opt_scissor) {
         vkCmdSetScissor(cmd, 0, 1, opt_scissor);
     }
     industry_pc pc;
     memset(&pc, 0, sizeof(pc));
-    pc.p0[0] = (float)a->swapchain_extent.width;
-    pc.p0[1] = (float)a->swapchain_extent.height;
+    pc.p0[0] = (float)scene_extent.width;
+    pc.p0[1] = (float)scene_extent.height;
     pc.p0[2] = t;
     pc.p0[3] = 1.0f;
     const int palette_mode = gameplay_palette_mode(a);
@@ -17410,7 +17542,8 @@ static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd) {
         return;
     }
     update_gpu_high_plains_vertices(a);
-    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    const VkExtent2D scene_extent = app_scene_extent(a);
+    set_viewport_scissor(cmd, scene_extent.width, scene_extent.height);
     VkDeviceSize vb_off = 0;
     vkCmdBindVertexBuffers(cmd, 0, 1, &a->terrain_vertex_buffer, &vb_off);
 
@@ -17424,8 +17557,8 @@ static void record_gpu_high_plains_terrain(app* a, VkCommandBuffer cmd) {
     } else {
         pc.color[0] = 0.20f; pc.color[1] = 0.90f; pc.color[2] = 0.34f; pc.color[3] = 1.0f;
     }
-    pc.params[0] = (float)a->swapchain_extent.width;
-    pc.params[1] = (float)a->swapchain_extent.height;
+    pc.params[0] = (float)scene_extent.width;
+    pc.params[1] = (float)scene_extent.height;
     pc.params[2] = 1.0f;
     pc.params[3] = a->terrain_tuning.hue_shift;
     pc.tune[0] = a->terrain_tuning.brightness;
@@ -17559,7 +17692,7 @@ static int record_submit_present(
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
         .renderPass = a->scene_render_pass,
         .framebuffer = a->scene_fb,
-        .renderArea = {.offset = {0, 0}, .extent = a->swapchain_extent},
+        .renderArea = {.offset = {0, 0}, .extent = a->scene_extent},
         .clearValueCount = scene_clear_count,
         .pClearValues = scene_clear
     };
@@ -17568,7 +17701,7 @@ static int record_submit_present(
     }
     vkCmdBeginRenderPass(cmd, &scene_rp, VK_SUBPASS_CONTENTS_INLINE);
 
-    vg_frame_desc vg_frame = {.width = a->swapchain_extent.width, .height = a->swapchain_extent.height, .delta_time_s = dt, .command_buffer = (void*)cmd};
+    vg_frame_desc vg_frame = {.width = a->scene_extent.width, .height = a->scene_extent.height, .delta_time_s = dt, .command_buffer = (void*)cmd};
     vg_result vr = vg_begin_frame(a->vg, &vg_frame);
     if (vr != VG_OK) {
         fprintf(stderr, "VG failure: vg_begin_frame -> %s (%d)\n", vg_result_string(vr), (int)vr);
@@ -17745,7 +17878,7 @@ static int record_submit_present(
         int my = 0;
         (void)SDL_GetMouseState(&mx, &my);
         const uint32_t wf = SDL_GetWindowFlags(a->window);
-        metrics.mouse_in_window = ((wf & SDL_WINDOW_MOUSE_FOCUS) != 0u) ? 1 : 0;
+        metrics.mouse_in_window = (((wf & SDL_WINDOW_MOUSE_FOCUS) != 0u) && mouse_in_scene_rect(a, mx, my)) ? 1 : 0;
         map_mouse_to_scene_coords(a, mx, my, &metrics.mouse_x, &metrics.mouse_y);
     }
     for (int i = 0; i < ACOUSTICS_SLOT_COUNT; ++i) {
@@ -17936,11 +18069,11 @@ static int record_submit_present(
             metrics.use_gpu_radar = 0;
             metrics.use_gpu_arc = use_gpu_arc ? 1 : 0;
             metrics.use_gpu_industry = 0;
-            clear_scene_color_depth(cmd, a->swapchain_extent);
+            clear_scene_color_depth(cmd, a->scene_extent);
             {
                 record_gpu_high_plains_terrain(a, cmd);
             }
-            clear_scene_depth(cmd, a->swapchain_extent);
+            clear_scene_depth(cmd, a->scene_extent);
             if (use_gpu_arc) {
                 record_gpu_arc_beam(a, cmd, t);
             }
@@ -17963,9 +18096,9 @@ static int record_submit_present(
             metrics.use_gpu_radar = 0;
             metrics.use_gpu_arc = use_gpu_arc ? 1 : 0;
             metrics.use_gpu_industry = 1;
-            clear_scene_color_depth(cmd, a->swapchain_extent);
+            clear_scene_color_depth(cmd, a->scene_extent);
             record_gpu_industry(a, cmd, t);
-            clear_scene_depth(cmd, a->swapchain_extent);
+            clear_scene_depth(cmd, a->scene_extent);
             if (use_gpu_arc) {
                 record_gpu_arc_beam(a, cmd, t);
             }
@@ -17991,9 +18124,9 @@ static int record_submit_present(
             metrics.use_gpu_radar = 0;
             metrics.use_gpu_arc = use_gpu_arc ? 1 : 0;
             metrics.use_gpu_industry = 0;
-            clear_scene_color_depth(cmd, a->swapchain_extent);
+            clear_scene_color_depth(cmd, a->scene_extent);
             record_gpu_sphere_ion_storm(a, cmd);
-            clear_scene_depth(cmd, a->swapchain_extent);
+            clear_scene_depth(cmd, a->scene_extent);
             if (use_gpu_arc) {
                 record_gpu_arc_beam(a, cmd, t);
             }
@@ -18024,7 +18157,7 @@ static int record_submit_present(
             if (stable_underwater_overlay) {
                 /* Underwater flickers in split background/foreground mode.
                    Keep terrain-style stable ordering for this path. */
-                clear_scene_color_depth(cmd, a->swapchain_extent);
+                clear_scene_color_depth(cmd, a->scene_extent);
             } else {
                 metrics.scene_phase = 1; /* background-only */
                 {
@@ -18037,7 +18170,7 @@ static int record_submit_present(
             }
             if (use_gpu_terrain) {
                 record_gpu_high_plains_terrain(a, cmd);
-                clear_scene_depth(cmd, a->swapchain_extent);
+                clear_scene_depth(cmd, a->scene_extent);
             }
             if (use_gpu_wormhole) {
                 record_gpu_wormhole(a, cmd);
@@ -18057,8 +18190,8 @@ static int record_submit_present(
             if (use_gpu_revolver) {
                 if (use_gpu_particles) {
                     /* Draw revolver smoke behind cylinder surfaces. */
-                    const uint32_t sw = a->swapchain_extent.width;
-                    const uint32_t sh = a->swapchain_extent.height;
+                    const uint32_t sw = a->scene_extent.width;
+                    const uint32_t sh = a->scene_extent.height;
                     const int32_t sc_x = (int32_t)(sw * 0.375f);
                     const uint32_t sc_w = (uint32_t)fmaxf(1.0f, floorf((float)sw * 0.25f));
                     VkRect2D smoke_scissor = {
@@ -18071,8 +18204,8 @@ static int record_submit_present(
                     record_gpu_particles(a, cmd, 0, 1, &smoke_scissor);
                 }
                 {
-                    const uint32_t sw = a->swapchain_extent.width;
-                    const uint32_t sh = a->swapchain_extent.height;
+                    const uint32_t sw = a->scene_extent.width;
+                    const uint32_t sh = a->scene_extent.height;
                     const int32_t y0 = (int32_t)(sh * 0.25f);
                     VkRect2D rev_scissor = {
                         .offset = {0, y0},
@@ -18105,7 +18238,7 @@ static int record_submit_present(
             }
 
             /* Keep foreground pass depth ordering deterministic after split background/GPU passes. */
-            clear_scene_depth(cmd, a->swapchain_extent);
+            clear_scene_depth(cmd, a->scene_extent);
             record_gpu_structure_tiles(a, cmd, STRUCTURE_TILE_PASS_WORLD);
             metrics.scene_phase = stable_underwater_overlay ? 3 : 2;
             {
@@ -18199,7 +18332,7 @@ static int record_submit_present(
     bloom_pc.p1[3] = post_noise;
     bloom_pc.p2[0] = t;
     bloom_pc.p2[1] = a->show_crt_ui ? 1.0f : 0.0f;
-    bloom_pc.p2[2] = 24.0f / (float)a->swapchain_extent.width;
+    bloom_pc.p2[2] = 24.0f / (float)a->scene_extent.width;
     bloom_pc.p2[3] = 0.12f;
     bloom_pc.p3[0] = 0.44f;
     bloom_pc.p3[1] = 0.76f;
@@ -18246,12 +18379,12 @@ static int record_submit_present(
         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, frame->gpu_timestamp_query_pool, GPU_TS_COMPOSITE_START);
     }
     vkCmdBeginRenderPass(cmd, &present_rp, VK_SUBPASS_CONTENTS_INLINE);
-    set_viewport_scissor(cmd, a->swapchain_extent.width, a->swapchain_extent.height);
+    set_viewport_scissor_rect(cmd, app_scene_display_rect(a));
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->composite_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, a->post_layout, 0, 1, &a->post_desc_set, 0, NULL);
     post_pc comp_pc = {0};
-    comp_pc.p0[0] = 1.0f / (float)a->swapchain_extent.width;
-    comp_pc.p0[1] = 1.0f / (float)a->swapchain_extent.height;
+    comp_pc.p0[0] = 1.0f / (float)a->scene_extent.width;
+    comp_pc.p0[1] = 1.0f / (float)a->scene_extent.height;
     comp_pc.p0[2] = post_bloom_strength;
     comp_pc.p0[3] = post_bloom_radius;
     comp_pc.p1[0] = post_vignette;
@@ -18260,7 +18393,7 @@ static int record_submit_present(
     comp_pc.p1[3] = post_noise;
     comp_pc.p2[0] = t;
     comp_pc.p2[1] = a->show_crt_ui ? 1.0f : 0.0f;
-    comp_pc.p2[2] = 24.0f / (float)a->swapchain_extent.width;
+    comp_pc.p2[2] = 24.0f / (float)a->scene_extent.width;
     comp_pc.p2[3] = 0.12f;
     comp_pc.p3[0] = 0.44f;
     comp_pc.p3[1] = 0.76f;
@@ -18560,7 +18693,7 @@ int main(void) {
         return 1;
     }
 
-    game_init(&a.game, (float)a.swapchain_extent.width, (float)a.swapchain_extent.height);
+    game_init(&a.game, (float)a.scene_extent.width, (float)a.scene_extent.height);
     sync_shipyard_weapon_to_game(&a);
     apply_video_lab_controls(&a);
     vg_text_fx_typewriter_set_rate(&a.wave_tty, 0.038f);
@@ -19103,8 +19236,8 @@ int main(void) {
                         &a.level_editor,
                         mx,
                         my,
-                        (float)a.swapchain_extent.width,
-                        (float)a.swapchain_extent.height
+                        (float)a.scene_extent.width,
+                        (float)a.scene_extent.height
                     );
                 }
                 if (menu_is_screen(&a.menu, APP_SCREEN_VIDEO)) {
